@@ -214,12 +214,15 @@ Three things it must not do:
    the active generation and delete `generation <= N`. This preserves the
    all-or-nothing property the eng review required, without the lock.
 
-**Unverified precondition.** Every action in `xtream-api-reference.md` is
-category-scoped. Xtream generally supports `get_vod_streams` with no
-`category_id`, but that is **not verified against this panel**, and the whole
-tier rests on it. Verify in Phase 0. If unavailable, the sync becomes ~120
-sequential requests per content type, which changes the progress model but not
-the design.
+**Precondition, verified 2026-09-07.** `get_vod_streams` with no `category_id`
+returns the full VOD catalog on this panel. The tier therefore stands as
+designed, and the fallback — ~120 sequential per-category requests, which would
+change the progress model but not the design — is not needed for movies.
+
+`get_live_streams` and `get_series` have **not** been checked the same way. Both
+are synced in full too, so if either rejects a missing `category_id`, that
+content type falls back to per-category fetches on its own, without affecting
+movies. Check before building Phase 3 and Phase 4.
 
 **Gating.** `ALL`, `RECENTLY ADDED` and search are disabled until
 `catalog_sync.state = complete` for that content type. A partially indexed
@@ -408,12 +411,11 @@ when a catalog refresh overlaps active playback.
 
 ## Build sequencing
 
-0. **Skeleton + install loop** — Gradle/Kotlin, TV manifest, network security
-   config. Plus: `adb connect` workflow, a **stable debug signing key** (an
-   unstable key wipes stored credentials on every install), a one-time
-   `adb shell dumpsys media.codec` probe to record what the target box can
-   actually decode, and — new — **verify whether `get_vod_streams` works with
-   no `category_id`**. The full-catalog sync tier depends on it.
+0. **Skeleton + install loop** — ✅ done 2026-09-07. Gradle/Kotlin, TV manifest,
+   network security config, stable debug signing key (an unstable key wipes
+   stored credentials on every install), install loop verified on an Android TV
+   API 34 emulator (`tvivo_tv34`), codec probe recorded, and `get_vod_streams`
+   confirmed to answer with no `category_id`.
 
    **`dumpsys media.codec` does not exist on API 34** — the service was removed,
    and `adb shell dumpsys media.codec` answers `Can't find service: media.codec`.

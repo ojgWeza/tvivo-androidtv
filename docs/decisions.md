@@ -249,8 +249,10 @@ heap against a limit that may be 96 MB); chunked transactions with a generation
 counter instead of one multi-second write lock; virtual entries that own no
 `sync_meta` row; and a `catalog_sync` state machine gating anything requiring
 completeness.
-**Unverified precondition:** that `get_vod_streams` accepts no `category_id` on
-this panel. Verify in Phase 0 — the whole tier rests on it.
+**Precondition, verified 2026-09-07:** `get_vod_streams` with no `category_id`
+returns the full VOD catalog on this panel, so the tier stands as designed and
+the ~120-sequential-requests fallback is not needed for movies. `get_live_streams`
+and `get_series` were not tested the same way — assume nothing until they are.
 
 ## Search scoped to content type, superseding category-scoped search
 

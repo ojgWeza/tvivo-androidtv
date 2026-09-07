@@ -133,6 +133,25 @@ Example item:
 }
 ```
 
+### List the entire VOD catalog in one call
+
+```
+GET .../player_api.php?username={u}&password={p}&action=get_vod_streams
+```
+
+**Verified 2026-09-07:** omitting `category_id` returns every VOD item across all
+categories, not an error and not an empty list. Each item still carries its own
+`category_id`, so one response populates every category at once. This is what the
+full-catalog sync tier is built on — see `docs/architecture.md`.
+
+The response is large (~15 MB for ~48,751 items) and must be **stream-parsed**
+from the OkHttp `BufferedSource` with a `JsonReader` and inserted in chunks.
+Materialising it into a `List<T>` is 30–50 MB of heap on a box whose per-app
+limit may be 96 MB.
+
+The equivalent call has **not** been verified for `get_live_streams` or
+`get_series` — check before relying on it for those types.
+
 ### Playback URL
 ```
 http://{server}:{port}/movie/{user}/{pass}/{stream_id}.{container_extension}
