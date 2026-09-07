@@ -23,10 +23,18 @@ using the confirmed API contract in `docs/xtream-api-reference.md`.
 - **Room** for local caching with a 24h TTL, plus a manual refresh button
   that bypasses the TTL. See `docs/architecture.md` for the exact caching
   logic.
-- **Credentials** (server, username, password) must be stored in
-  `EncryptedSharedPreferences`, never in plaintext, never committed to the
-  repo. `max_connections` on this account is `1` — only one stream can play
-  at a time across all devices/apps, which matters for testing.
+- **Credentials** (server, port, username, password) must be **encrypted at
+  rest** and never in plaintext, never committed to the repo. Current
+  implementation is DataStore + Tink — `EncryptedSharedPreferences` is
+  deprecated, does synchronous crypto on the main thread, and has
+  keyset-corruption crashes on the OEMs most Android TV boxes come from. The
+  constraint is the encryption, not the library.
+- **Cleartext HTTP must be explicitly permitted** via
+  `network_security_config.xml`, or the app cannot reach the panel at all on
+  `targetSdk 28+`. Never disable certificate validation to work around a bad
+  cert — permit cleartext, keep system trust anchors.
+- `max_connections` on this account is `1` — only one stream can play at a
+  time across all devices/apps. No automated test may open a stream.
 - **Provider-agnostic.** No panel hostname, port, provider name, or account
   detail is ever hardcoded or committed — this repo is public. The server and
   port are user-entered at runtime and read back from `server_info`, so the
@@ -39,12 +47,31 @@ using the confirmed API contract in `docs/xtream-api-reference.md`.
 
 ## Build order
 
-1. Auth screen (server/user/pass entry, validate via `player_api.php`)
+0. Skeleton + install loop (TV manifest, network security config, `adb connect`
+   workflow, **stable debug signing key**, one-time `dumpsys media.codec` probe)
+1. Auth screen (server/port/user/pass entry, validate via `player_api.php`)
 2. Movies vertical slice end-to-end (categories → list → player) — this is
    the pattern every other content type follows
 3. Live TV (same pattern, reuses category/list UI)
 4. Series (one extra layer: category → shows → `get_series_info` →
    season/episode picker → play)
+
+## Testing
+
+Emulator-first. Create the AVD at the **same API level as the physical TV**
+(`adb shell getprop ro.build.version.sdk`).
+
+- Local unit tests: JUnit + kotlinx-coroutines-test + Turbine (repositories),
+  Room in-memory DB (DAO + transaction behaviour), MockWebServer (API contract
+  and the season-keyed-object parsing), Robolectric where framework classes
+  are unavoidable. Run with `./gradlew test`.
+- Instrumented: Compose D-pad focus traversal on the Android TV emulator.
+- **No automated test may open a stream** — `max_connections` is `1`.
+- Physical-TV validation happens once, after Phase 5. Accepted risk; the live
+  `.ts` path carries the most exposure under that choice.
+
+Full coverage map and edge cases:
+`~/.gstack/projects/ojgWeza-tvivo-androidtv/Dell-main-eng-review-test-plan-*.md`
 
 ## Conventions
 
