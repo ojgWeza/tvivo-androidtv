@@ -22,7 +22,12 @@ import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.auth.LoginScreen
 import com.dev.Tvivo.diagnostics.CodecProbe
+import com.dev.Tvivo.ui.browse.BrowseScreen
+import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
+import com.dev.Tvivo.ui.player.PlayerActivity
+import com.dev.Tvivo.data.StreamUrlBuilder
+import android.content.Intent
 import com.dev.Tvivo.ui.theme.Palette
 
 class MainActivity : ComponentActivity() {
@@ -46,6 +51,7 @@ private sealed interface Route {
     data object Loading : Route
     data object Login : Route
     data class Home(val credentials: Credentials) : Route
+    data class Browse(val credentials: Credentials, val type: ContentType) : Route
 }
 
 @Composable
@@ -72,6 +78,23 @@ private fun TvivoApp() {
             onAuthenticated = { account -> route = Route.Home(account.credentials) }
         )
 
-        is Route.Home -> HomeScreen(onSelect = { /* Phase 2: browse */ })
+        is Route.Home -> HomeScreen(
+            onSelect = { type -> route = Route.Browse(current.credentials, type) }
+        )
+
+        is Route.Browse -> BrowseScreen(
+            onPlay = { item ->
+                val url = StreamUrlBuilder.movie(
+                    current.credentials,
+                    item.streamId,
+                    item.containerExtension ?: "mp4"
+                )
+                context.startActivity(
+                    Intent(context, PlayerActivity::class.java)
+                        .putExtra(PlayerActivity.EXTRA_URL, url)
+                        .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
+                )
+            }
+        )
     }
 }
