@@ -9,9 +9,20 @@ Insights / Medica Cloud Care work.
 
 ## Current state
 
-Nothing built yet. This repo currently contains only discovery docs. Your
-job, when picked up, is to start implementing against `docs/architecture.md`
-using the confirmed API contract in `docs/xtream-api-reference.md`.
+**Phases 0, 1 and 2 are built and working against the real panel** (as of
+2026-09-07). The app authenticates, browses movies by category, and plays them.
+48,754 VOD rows are synced and cached; 66 unit tests pass.
+
+**Start here:** `TODOS.md`. It carries the open QA defects (Part 1), the missing
+test coverage (Part 2), the remaining phases (Part 3), and the emulator
+environment gotchas that each cost real time to rediscover (Part 5).
+
+**Fix Q-2 (no in-app back stack) before starting Phase 3** — Back currently
+exits the app from Browse, and every screen Phases 3-5 add inherits that.
+
+Run the emulator with `tools/emulator.sh`, never bare `emulator.exe`: it stops
+the Gradle daemons first and passes the two flags this machine requires. Details
+in `TODOS.md` Part 5.
 
 ## Non-negotiable constraints
 
@@ -83,6 +94,14 @@ Emulator-first. Create the AVD at the **same API level as the physical TV**
 - **No automated test may open a stream** — `max_connections` is `1`.
 - Physical-TV validation happens once, after Phase 5. Accepted risk; the live
   `.ts` path carries the most exposure under that choice.
+
+**Unit tests are necessary and nowhere near sufficient here.** Every defect
+found so far — the login focus trap that made the app unusable on a remote, the
+password leaking into the IME suggestion strip, the crushed Home tile, the
+missing back stack — passed a green build and 66 green unit tests. All of them
+were found by driving the emulator over `adb` and looking at a screenshot.
+Budget for that on every UI change, and treat "it compiles and launches" as
+saying nothing about whether the screen is usable.
 
 Full coverage map and edge cases:
 `~/.gstack/projects/ojgWeza-tvivo-androidtv/Dell-main-eng-review-test-plan-*.md`

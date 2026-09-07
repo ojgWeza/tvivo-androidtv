@@ -427,10 +427,17 @@ when a catalog refresh overlaps active playback.
 
    First result (Android TV emulator, API 34, `android-tv;x86`): AVC, HEVC, VP9
    and MPEG-2 all decode, HEVC to 4096×4096 hardware. **No AC3 and no E-AC3
-   decoder.** A large share of `.mkv` movie files carry AC3/E-AC3 audio, so on
-   the emulator those play as video with silence — a missing-audio bug there is
-   the emulator's codec set, not necessarily the app. Re-run the probe on the
-   real TV before drawing conclusions about audio.
+   decoder.** A share of `.mkv` movie files carry AC3/E-AC3 audio, so on the
+   emulator those would play as video with silence. Re-run the probe on the real
+   TV before drawing conclusions about audio.
+
+   **Do not reach for that explanation first.** Silent playback was observed on
+   2026-09-07 and it was *not* the codec set: logcat showed the stream was AAC
+   (`audio/mp4a-latm`), `c2.android.aac.decoder` initialised cleanly, and no
+   `DecoderInitializationException` was thrown. The emulator's media volume was
+   simply at 3/15. Check `dumpsys audio` for `streamVolume` and confirm the
+   actual track MIME in logcat before blaming the decoder — the probe result
+   above makes a wrong diagnosis very easy to reach for.
 
    `debug.keystore` is generated locally and gitignored (`*.keystore`), not
    committed — regenerate identically on a new machine with:
@@ -439,20 +446,43 @@ when a catalog refresh overlaps active playback.
    -validity 10950 -dname "CN=Tvivo Debug, OU=Dev, O=Tvivo, L=NA, ST=NA, C=US"`
    — same alias/passwords every time is what keeps the signature stable across
    machines, not the file itself being shared.
-1. **Auth** — DataStore+Tink credentials, validate via `player_api.php`
-   (`auth: 1` and `status: "Active"`), four distinguishable failure states.
-   One server field parsing `host:port`, show-password toggle, form never
-   cleared on failure.
-2. **Movies vertical slice** — the reference implementation every other content
-   type copies: `CachedFetch`, paged list, player, resume positions. Because
-   everything copies it, four things must land here rather than in Phase 5:
+1. **Auth** — ✅ done 2026-09-07. DataStore+Tink credentials, validated via
+   `player_api.php`, one server field parsing `host:port`, show-password toggle,
+   form never cleared on failure.
+
+   Three defects here were found only by driving the emulator with deliberately
+   wrong credentials, after the code compiled, launched and passed 66 unit
+   tests: D-pad focus was trapped in the text fields so **Sign in was
+   unreachable and the app was unusable on a remote**; Enter was consumed by the
+   IME so nothing submitted; and the password leaked into the IME suggestion
+   strip because the field never declared `KeyboardType.Password`. Fixed in
+   `c89424e`. The lesson generalises to every screen: on a D-pad device,
+   "compiles and launches" proves almost nothing.
+
+2. **Movies vertical slice** — ✅ done 2026-09-07. The reference implementation
+   every other content type copies: `CachedFetch`, paged grid, player, resume
+   positions, favourites, full-catalog sync. All four required items landed:
    `enablePlaceholders = true` with stable keys, focus restoration by item ID,
-   the focus frame plus last-active state, and the long-press context menu.
-3. **Live** — same pattern; note `ext`, not `container_extension`; no seek.
+   the focus frame, and the long-press context menu.
+
+   Verified against the real panel: 48,754 VOD rows synced to
+   `catalog_sync.state = complete`, one generation with no orphans, 118
+   categories with live counts, posters, Arabic RTL, and playback end to end.
+
+   Open defects from the QA pass are in `TODOS.md` Part 1. **Q-2 (no in-app
+   back stack) must be fixed before Phase 3** — every later screen inherits it.
+
+3. **Live** — same pattern; note `ext`, not `container_extension`; no seek; and
+   the **`CHANNEL(220×124)` 16:9 card**, not the poster card.
 4. **Series** — extra layer; `get_series` (not `get_series_streams`); episodes
    arrive as an object keyed by season number as a string.
 5. **Hardening** — manual refresh, RTL verification, empty/loading/error states,
    `RefreshWorker`, on-device diagnostic log.
+
+**Whether `get_live_streams` and `get_series` accept a missing `category_id` is
+still unverified** — only `get_vod_streams` was confirmed. Check before building
+Phase 3 and Phase 4; if either rejects it, that content type falls back to
+per-category fetches without affecting movies.
 
 ## Testing
 
