@@ -1,0 +1,15 @@
+# Normalize text files to LF in the repository
+* text=auto eol=lf
+
+# Gradle wrapper scripts
+gradlew text eol=lf
+*.bat text eol=crlf
+
+# Binary
+*.png binary
+*.jpg binary
+*.jar binary
+*.apk binary
+*.aab binary
+*.keystore binary
+*.jks binary

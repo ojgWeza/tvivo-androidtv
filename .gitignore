@@ -1,0 +1,25 @@
+# Android / Gradle
+*.iml
+.gradle/
+.kotlin/
+build/
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# IDE
+/.idea/
+.DS_Store
+
+# Local config — never commit
+local.properties
+/local.properties
+secrets.properties
+*.env
+
+# Build artifacts & signing material
+*.apk
+*.aab
+*.jks
+*.keystore
