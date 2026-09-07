@@ -24,7 +24,8 @@ unit suite, and all of them passed "compiles and launches" — the same pattern 
 the three login bugs found the same way earlier that day.
 
 ## Q-1 — Home screen: third tile crushed, wrong colours, unreadable labels
-**Severity: Critical.** `ui/home/HomeScreen.kt`
+**Severity: Critical. Fixed in code (`a407bad`), not yet verified on-emulator.**
+`ui/home/HomeScreen.kt`
 
 "Live TV" and "Movies" render full size; "Series" is squeezed to a narrow sliver
 with its label broken one letter per line. This is the first screen after login.
@@ -39,7 +40,8 @@ Three defects in one screen, all needing separate fixes:
   The screen bypasses the WCAG-measured colour system entirely.
 
 ## Q-2 — No in-app back stack; Back exits the app from Browse
-**Severity: High.** `MainActivity.kt`
+**Severity: High. Fixed in code (`a407bad`), not yet verified on-emulator.**
+`MainActivity.kt`
 
 Back on the Browse screen leaves the app to the launcher. There is no way from
 Movies back to the Live/Movies/Series chooser without relaunching.
@@ -49,7 +51,12 @@ Structural, not cosmetic: `MainActivity` holds its route in a plain
 Activity. **Every screen Phases 3-5 add inherits this**, so fix it before Live TV.
 
 ## Q-3 — Focus is not identifiable on buttons and Home tiles
-**Severity: High.** `ui/home/HomeScreen.kt`, `auth/LoginScreen.kt`
+**Severity: High. Fixed in code (`a407bad`), not yet verified on-emulator.**
+`ui/home/HomeScreen.kt`, `auth/LoginScreen.kt`
+
+Hoisted into `ui/common/TvFocusFrame.kt` (`Modifier.tvFocusFrame()`), reusing
+the grid's static accent-border pattern, and applied to Home tiles and the
+Login buttons.
 
 On a D-pad device, "where am I" is the only navigational state the user has. The
 focused Home tile shows only a faint grey border; the login screen's
@@ -61,7 +68,8 @@ component type. Consider hoisting it into one shared modifier so a third
 component type cannot diverge again.
 
 ## Q-4 — Player has no visible way back
-**Severity: Medium.** `ui/player/PlayerActivity.kt`
+**Severity: Medium. Fixed in code (`a407bad`), not yet verified on-emulator.**
+`ui/player/PlayerActivity.kt`
 
 Back *works* (verified: `KEYCODE_BACK` moves `PlayerActivity` → `MainActivity`).
 The defect is discoverability — nothing on screen communicates how to leave, so
