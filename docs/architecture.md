@@ -149,6 +149,32 @@ list screens consume `LazyPagingItems`; inserts are chunked inside the
 transaction above. Memory stays flat regardless of category size — necessary on
 a 1–2 GB TV box.
 
+## Search
+
+Scoped deliberately — there is **no catalog-wide item search**. The Xtream API
+has no search endpoint, so global search would require syncing and indexing the
+whole catalog locally. Declined for the POC.
+
+Two local queries, both over data already cached:
+
+- **Category filter** — filters the cached category list for the current
+  content type. A plain `LIKE` over ~120 rows.
+- **In-category item search** — filters items of the *selected* category.
+  DAOs expose a query-bearing `PagingSource` variant so search results page
+  exactly like unfiltered ones; scope is always
+  `(account_id, content_type, category_id)`.
+
+**Match against a normalized column, not `name`.** Store `name_normalized`
+alongside `name`: lowercased, Arabic diacritics stripped, whitespace collapsed,
+and quality prefixes (`HD`, `4K`, `FHD`) removed. Raw titles carry `"HD  "`
+prefixes with doubled spaces and mixed RTL/LTR runs, so matching the raw string
+is erratic. Normalize on insert, inside the same transaction as the write.
+
+FTS is deliberately not used: a single category is at most a few thousand rows,
+where `LIKE` on a normalized column is fast enough, and SQLite FTS tokenizers
+handle Arabic poorly without careful `unicode61` configuration. Revisit only if
+catalog-wide search is ever taken on.
+
 ## Images
 
 One shared Coil `ImageLoader`, downsampling posters to the actual card

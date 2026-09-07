@@ -153,3 +153,30 @@ Phase 0 `dumpsys media.codec` probe is a partial mitigation only — it reports
 advertised decoders, not whether real files render.
 **Revisit if:** the Phase 0 probe shows the box lacks a working HEVC decoder,
 or the Phase 5 session surfaces more than one hardware-specific failure.
+
+## Search is scoped to the selected category, not the catalog
+
+**Decision:** Two local searches — a filter over the ~120 category names, and
+an item search within the *currently selected* category. No catalog-wide item
+search.
+**Why:** The Xtream API has no search endpoint at all (the full action list is
+`get_*_categories`, `get_*_streams`, `get_series`, `get_series_info`,
+`get_short_epg`, `get_simple_data_table`, `get_vod_info`), so any search must
+run locally. Catalog-wide search would therefore require syncing and indexing
+the entire catalog — a second sync tier on top of the per-category cache. A
+naive middle option, searching only whatever categories happened to be visited,
+was rejected outright: a silently partial result set is worse than no search,
+because a missing result is indistinguishable from a missing title.
+Category-scoped search needs no new infrastructure, since those items are
+already cached, and it keeps the caching design from Issue 5 unchanged.
+**Accepted cost:** finding a title requires knowing roughly which category it
+lives in. The category filter is what makes that workable.
+**Design requirement:** the search field must always name its scope
+("Search in Action Movies"), never a bare "Search" — hiding the boundary
+reintroduces the misleading-omission problem the scoping avoids.
+**Implementation:** match against a `name_normalized` column (lowercased,
+diacritics stripped, whitespace collapsed, quality prefixes removed), populated
+on insert. `LIKE` rather than FTS — a category is at most a few thousand rows,
+and SQLite FTS tokenizers handle Arabic poorly without careful configuration.
+**Revisit if:** users repeatedly fail to find titles they know exist, which
+would indicate the category taxonomy is too opaque to navigate by.
