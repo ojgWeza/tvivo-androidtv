@@ -1,8 +1,11 @@
 package com.dev.Tvivo.ui.player
 
+import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -68,7 +71,43 @@ class PlayerActivity : ComponentActivity() {
             setShowPreviousButton(false)
             useController = !isLive
         }
-        setContentView(playerView)
+
+        // Back *works* here — the defect was discoverability, not the mechanism (Q-4).
+        // A plain corner label, tied to the same visibility as the controller so it
+        // never fights the video for attention once the user has seen it.
+        val backHint = TextView(this).apply {
+            text = "Back to exit"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.argb(140, 0, 0, 0))
+            setPadding(24, 12, 24, 12)
+            textSize = 14f
+        }
+        val root = FrameLayout(this).apply {
+            addView(playerView)
+            addView(
+                backHint,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    topMargin = 32
+                    marginStart = 32
+                }
+            )
+        }
+        setContentView(root)
+
+        if (isLive) {
+            // No controller to piggyback on, so the hint gets its own timeout.
+            backHint.postDelayed({ backHint.visibility = android.view.View.GONE }, BACK_HINT_TIMEOUT_MS)
+        } else {
+            playerView.setControllerVisibilityListener(
+                PlayerView.ControllerVisibilityListener { visibility ->
+                    backHint.visibility = visibility
+                }
+            )
+        }
 
         // These flags are silent failures, not exceptions. Without them a `.ts` lacking
         // access unit delimiters hangs in BUFFERING forever with no error, and a
@@ -217,5 +256,6 @@ class PlayerActivity : ComponentActivity() {
         /** A progressive `.mkv` can legitimately take 3–10 s to open. */
         private const val FIRST_FRAME_TIMEOUT_MS = 20_000L
         private const val BUFFERING_TIMEOUT_MS = 25_000L
+        private const val BACK_HINT_TIMEOUT_MS = 4_000L
     }
 }

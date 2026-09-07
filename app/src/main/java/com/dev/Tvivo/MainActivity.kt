@@ -2,6 +2,7 @@ package com.dev.Tvivo
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -65,6 +66,12 @@ private fun TvivoApp() {
     // thread and lands straight on Home.
     LaunchedEffect(Unit) {
         route = store.load()?.let { Route.Home(it) } ?: Route.Login
+    }
+
+    // Browse is the only screen with somewhere to go back to; Home and Login are the
+    // top of the stack and fall through to the default (exit-to-launcher) behaviour.
+    BackHandler(enabled = route is Route.Browse) {
+        (route as? Route.Browse)?.let { route = Route.Home(it.credentials) }
     }
 
     when (val current = route) {

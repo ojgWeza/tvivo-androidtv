@@ -47,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
 
 /**
@@ -197,12 +198,16 @@ fun LoginScreen(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(onClick = viewModel::onTogglePasswordVisibility) {
+                Button(
+                    onClick = viewModel::onTogglePasswordVisibility,
+                    modifier = Modifier.tvFocusFrame()
+                ) {
                     Text(if (state.showPassword) "Hide password" else "Show password")
                 }
                 Button(
                     onClick = { submit() },
-                    enabled = state.canSubmit
+                    enabled = state.canSubmit,
+                    modifier = Modifier.tvFocusFrame()
                 ) {
                     Text(if (state.isSubmitting) "Signing in…" else "Sign in")
                 }
