@@ -1,7 +1,7 @@
 package com.dev.Tvivo.data.remote
 
-import android.util.JsonReader
-import android.util.JsonToken
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import okhttp3.ResponseBody
@@ -14,6 +14,9 @@ import java.io.InputStreamReader
  * heap on a box whose per-app limit may be 96 MB, *while* a Paging grid and a Coil bitmap
  * cache are live. So nothing here ever holds the whole response — [parse] hands each chunk
  * to [onChunk] and forgets it.
+ *
+ * Uses Gson's streaming reader rather than `android.util.JsonReader` so the parsing
+ * rules — which is where the panel's field quirks live — are testable off-device.
  *
  * Fields are read defensively: `category_id` is a string on VOD items but an int on series
  * objects, `custom_sid` can be null, and `rating` is frequently 0 or absent.
