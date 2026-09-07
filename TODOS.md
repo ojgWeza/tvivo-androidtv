@@ -44,17 +44,11 @@ design against, and before Phase 5 hardening.
 
 ---
 
-## T-D2 — Decide list behaviour: sort order, key-repeat, jump affordance
+## T-D2 — Decide list behaviour: key-repeat, jump affordance
 
-Three related gaps, all affecting every list in the app.
-
-**T-D2a — Sort order within a category.** The panel returns items in `num`
-order, which is arbitrary to a viewer: a 660-item category in `num` order is a
-shuffle. No sort order is specified anywhere in the plan. Options are `num`
-(what the panel gives), `added` descending (newest first), or alphabetical on
-`name_normalized` — which is the only one that makes an Arabic/English mixed
-catalog scannable, and also the only one that needs a decision about where
-Arabic sorts relative to Latin.
+Two related gaps, both affecting every list in the app. (A third,
+sort-order-within-a-category, was decided 2026-09-07 — alphabetical on
+`name_normalized`, plain code-unit order — see `docs/decisions.md`.)
 
 **T-D2b — Key-repeat and fast-scroll.** Undefined, and the full-catalog sync
 makes it matter: holding DOWN in `ALL` traverses 9,750 rows. Needs a decision on
@@ -67,16 +61,44 @@ affordance the end of a 9,750-row list is unreachable in practice, so the first
 screen of `ALL` is effectively a random 10 of 48,751. Revisit if `ALL` proves to
 be a dead end in use.
 
-**Why:** These are cheap to decide while no code exists and expensive to retrofit
-once a grid component has shipped and three content types copy it.
+**Why:** Both affect every screen, so deciding once avoids inconsistent answers
+per content type — but both are genuinely hard to judge without the real box.
 
-**Pros:** Affects every screen; deciding once avoids three inconsistent answers.
+**Pros:** Affects every screen; deciding once avoids inconsistent answers.
 
 **Cons:** Fast-scroll feel is genuinely hard to judge without the real box, and
 physical-TV validation is deliberately deferred to Phase 5.
 
-**Depends on:** T-D2b and T-D2c are best judged on hardware, so realistically
-they land with the Phase 5 physical-TV session. T-D2a can be decided now.
+**Depends on:** Both are best judged on hardware, so realistically they land
+with the Phase 5 physical-TV session.
+
+---
+
+## T-D3 — Newest-first sort toggle for category grids
+
+**What:** Add a second sort option — `added` descending — alongside the
+alphabetical default (T-D2a decision above), reachable per category.
+
+**Why:** Alphabetical fixes scanability but loses "what's new in this
+category," which a viewer may still want. Unlike `ALL` (48,751 items, where
+newest-first was tried and declined — see `decisions.md`), a single category
+is small enough that either ordering is usable, so this is a real toggle worth
+having, not just a discarded option.
+
+**Context:** `RECENTLY ADDED` already exists as a separate bounded virtual
+rail (30 items, catalog-wide) — this is not that. This is per-category, inside
+a grid a viewer has already drilled into.
+
+**Pros:** Cheap once the grid and long-press context menu exist (Phase 2) to
+hang a sort control off; no schema change, just an alternate `ORDER BY`.
+
+**Cons:** Needs a UI affordance (where does it live, how is it D-pad-reached)
+and a decision on whether the choice persists per category, globally, or for
+the session only — not worth designing before there is a real grid to react
+to.
+
+**Depends on:** Phase 2 (movies vertical slice) shipping the grid and context
+menu. **Blocks:** Nothing.
 
 ---
 

@@ -430,6 +430,9 @@ From real panel responses, not assumptions:
 - **`ALL` renders a grid in panel order.** Accepted cost: with 9,750 rows and
   no jump affordance, the first screen of `ALL` is effectively a random 10 of
   48,751, and the end of the list is unreachable in practice.
+- **Category grids sort alphabetically on `name_normalized`**, plain code-unit
+  order (no ICU collator). Latin-named titles group before Arabic-named ones
+  rather than interleaving. See `decisions.md`.
 
 ## Continue watching
 
@@ -490,10 +493,8 @@ Design decisions considered and explicitly deferred:
 1. **Motion.** No durations, no easing curves, no reduced-motion policy. Focus
    is deliberately static, so this only matters for transitions between screens.
 2. **Iconography and wordmark.** The rail shows a text wordmark as a placeholder.
-3. **Sort order within a category.** The panel returns `num` order, which is
-   arbitrary to a viewer. Affects every list in the app.
-4. **Idle behaviour.** A static rail on an OLED panel needs a dim or
+3. **Idle behaviour.** A static rail on an OLED panel needs a dim or
    screensaver after ~5 minutes.
-5. **Where the manual refresh control lives**, and how it is reached by D-pad.
-6. **Key-repeat and fast-scroll behaviour** when holding a direction on a long
+4. **Where the manual refresh control lives**, and how it is reached by D-pad.
+5. **Key-repeat and fast-scroll behaviour** when holding a direction on a long
    list.

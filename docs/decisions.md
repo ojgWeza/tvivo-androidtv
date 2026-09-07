@@ -420,3 +420,21 @@ the evidence. Nothing decorative uses the accent.
 **Revisit if:** `/design-consultation` runs and produces a fuller system. This
 decision covers colour and contrast only — motion, iconography and the wordmark
 remain open, tracked in `TODOS.md`.
+
+## Category grids sort alphabetically on `name_normalized`
+
+**Decision:** Every category grid (Live, Movies, Series) orders rows ascending
+on `name_normalized`, compared as plain UTF-16 code units — SQLite's default
+`BINARY` collation on that column. No ICU collator, no per-locale rules.
+**Why:** The panel's native `num` order is arbitrary to a viewer — see "`ALL`
+renders a grid in panel order" above for what that costs at scale. Alphabetical
+on `name_normalized` is the only ordering that makes a mixed Arabic/English
+catalog scannable, and the column already exists for search matching (see
+"`name_display` as a third name column"), so this is a query change, not a
+schema change.
+**Accepted cost:** Binary comparison sorts by code point, so the Latin block
+sorts before the Arabic block — Latin-named titles precede Arabic-named ones as
+a group, rather than interleaving by a shared alphabet. Good enough for a POC;
+a real per-script collator is more machinery than a sort order needs right now.
+**Revisit if:** Physical-TV validation (Phase 5) shows the Latin/Arabic
+grouping reads as broken rather than as a reasonable two-block split.
