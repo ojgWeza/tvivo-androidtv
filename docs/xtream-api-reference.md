@@ -7,9 +7,10 @@ this specific panel actually returns.
 ## Base configuration
 
 The panel host, ports, username, and password are **entered by the user at
-runtime** and stored in `EncryptedSharedPreferences`. No provider, host, or
-port is hardcoded anywhere in the app — the same build must work against any
-Xtream Codes panel the user points it at.
+runtime** and stored encrypted via **DataStore + Tink** (see
+`docs/architecture.md`). No provider, host, or port is hardcoded anywhere in
+the app — the same build must work against any Xtream Codes panel the user
+points it at.
 
 ```
 Server:      user-entered hostname

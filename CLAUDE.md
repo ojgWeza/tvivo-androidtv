@@ -21,8 +21,12 @@ using the confirmed API contract in `docs/xtream-api-reference.md`.
   files (not HLS manifests) for movie/series/live — progressive download,
   not adaptive streaming.
 - **Room** for local caching with a 24h TTL, plus a manual refresh button
-  that bypasses the TTL. See `docs/architecture.md` for the exact caching
-  logic.
+  that bypasses the TTL. The TTL is tracked **per category**, and there is a
+  **full-catalog sync tier** on top of it that must never block the UI. See
+  `docs/architecture.md` for the exact caching logic.
+- **Card sizes are an image-pipeline input, not styling.** `POSTER(220×330 px)`
+  and `CHANNEL(220×124 px)`. Posters are downsampled to card size before
+  caching, so changing either means re-encoding the whole cache.
 - **Credentials** (server, port, username, password) must be **encrypted at
   rest** and never in plaintext, never committed to the repo. Current
   implementation is DataStore + Tink — `EncryptedSharedPreferences` is
@@ -48,13 +52,23 @@ using the confirmed API contract in `docs/xtream-api-reference.md`.
 ## Build order
 
 0. Skeleton + install loop (TV manifest, network security config, `adb connect`
-   workflow, **stable debug signing key**, one-time `dumpsys media.codec` probe)
-1. Auth screen (server/port/user/pass entry, validate via `player_api.php`)
-2. Movies vertical slice end-to-end (categories → list → player) — this is
-   the pattern every other content type follows
-3. Live TV (same pattern, reuses category/list UI)
+   workflow, **stable debug signing key**, one-time `dumpsys media.codec` probe,
+   and verify whether `get_vod_streams` works with no `category_id` — the
+   full-catalog sync tier depends on it)
+1. Auth screen (one server field parsing `host:port`, user, pass; validate via
+   `player_api.php`) then the Home screen (Live / Movies / Series)
+2. Movies vertical slice end-to-end (rail → grid → player) — this is
+   the pattern every other content type follows. Four things must land here
+   rather than in Phase 5 because everything copies them:
+   `enablePlaceholders = true` with stable keys, focus restoration by item ID,
+   the focus frame plus last-active state, and the long-press context menu
+3. Live TV (same pattern; note the **16:9 channel card**, not the poster card)
 4. Series (one extra layer: category → shows → `get_series_info` →
    season/episode picker → play)
+
+**For any UI work, start from `docs/ui-scope.md`.** It carries the layout
+system, card sizes, focus contract, state table and error copy. `architecture.md`
+is the implementation view and deliberately says nothing about how screens look.
 
 ## Testing
 

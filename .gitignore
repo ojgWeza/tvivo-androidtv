@@ -23,3 +23,9 @@ secrets.properties
 *.aab
 *.jks
 *.keystore
+
+# Reference screenshots of third-party apps — this repo is public,
+# and these carry other providers' branding. Keep them local.
+docs/*.jpeg
+docs/*.jpg
+docs/*.png

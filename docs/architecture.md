@@ -37,17 +37,23 @@ app/
 │   ├── AccountIdentity.kt            // stable id derived from server+port+user
 │   └── LoginScreen.kt
 ├── ui/                               // Compose for TV (androidx.tv:tv-material)
-│   ├── categories/                   // category grid per content type
-│   ├── streamlist/                   // paged VOD/Live list within a category
+│   ├── home/                         // three big buttons: Live / Movies / Series
+│   ├── browse/                       // rail + grid: THE main screen
+│   │   ├── CategoryRail.kt           // categories + 4 virtual entries + filter
+│   │   ├── ContentGrid.kt            // paged poster/channel grid, 2 view modes
+│   │   └── ItemContextMenu.kt        // long-press OK: play / favourite / resume
 │   ├── seriesdetail/                 // season/episode picker
 │   ├── common/
-│   │   ├── ErrorState.kt             // ONE error component for all screens
-│   │   └── ImageLoader.kt            // shared Coil ImageLoader
+│   │   ├── ErrorState.kt             // full-screen: refresh-time failure
+│   │   ├── ErrorFooter.kt            // inline focusable: paging append failure
+│   │   ├── FocusSpec.kt              // focus frame + last-active, one place
+│   │   └── ImageLoader.kt            // shared Coil ImageLoader (sized, see below)
 │   └── player/
 │       └── PlayerActivity.kt         // Media3 PlayerView via AndroidView
 ├── diagnostics/
 │   └── ErrorLog.kt                   // on-device redacted ring buffer
 ├── sync/
+│   ├── CatalogSyncer.kt              // full-catalog tier: streamed parse + generations
 │   └── RefreshWorker.kt              // WorkManager — best-effort warm-up ONLY
 └── MainActivity.kt / Navigation.kt
 
@@ -96,9 +102,47 @@ resume positions. On account change, wipe atomically.
 - `vod_streams`, `live_streams`
 - `series` — show metadata only (from `get_series`)
 - `series_episodes` — lazy per `series_id`, with its **own** TTL
-- `resume_positions(account_id, content_type, item_id, position_ms)` — the
-  composite key matters; `item_id` alone collides across accounts
-- `sync_meta(account_id, content_type, category_id, last_synced_at)`
+- `resume_positions(account_id, content_type, item_id, position_ms, updated_at)`
+  — the composite key matters; `item_id` alone collides across accounts
+- `favourites(account_id, content_type, item_id, added_at)` — same composite-key
+  discipline. Required by the FAVOURITES rail entry, which otherwise has no
+  source of data at all
+- `sync_meta(account_id, content_type, category_id, last_synced_at, generation)`
+- `catalog_sync(account_id, content_type, state, done, total, updated_at)` —
+  state is `not_started | indexing | complete | failed | stale`
+
+### Three name columns, not one
+
+Every stream row stores:
+
+| Column | Purpose |
+|---|---|
+| `name` | exactly as the panel returned it. Diagnostics only, never rendered |
+| `name_display` | quality tokens stripped, whitespace collapsed, **case and diacritics preserved**. This is what the UI renders |
+| `name_normalized` | additionally lowercased and diacritics-stripped. Matching only |
+
+`name_display` exists because rendering raw `name` breaks truncation. A title
+like `"HD  للعدالة وجه آخر"` opens with a strong LTR run, so Compose's default
+`TextDirection.Content` resolves the whole paragraph as LTR; the Arabic then
+lays out RTL inside a left-aligned box and the ellipsis appears on the wrong
+visual edge. Truncation looks random across a large fraction of the catalog.
+All three columns are written in the same transaction as the row.
+
+### Virtual rail entries own no sync state
+
+`ALL`, `FAVOURITES`, `CONTINUE WATCHING` and `RECENTLY ADDED` are **views over
+existing rows**. They must never get a `sync_meta` row, not even a sentinel
+`category_id`. Giving `ALL` a sentinel reintroduces exactly the data-loss bug
+the per-category key was introduced to fix: refreshing `ALL` stamps everything
+fresh, and per-category refreshes then stop happening for 24 h. `ALL`'s
+displayed freshness is the *oldest* category stamp, and manual refresh inside
+`ALL` re-fetches only the categories that are actually stale.
+
+Rail counts come from one grouped
+`SELECT category_id, COUNT(*) … GROUP BY category_id` exposed as a `Flow`, so
+they fill in live as the background sync lands. Note `category_id` is a
+**string** on VOD and live items but an **int** on series objects — normalise
+the type on insert or the grouped count silently misses series.
 
 ### Why `category_id` is in `sync_meta`
 
@@ -142,45 +186,153 @@ and newly-empty categories, plus streams that move between categories.
 **Series episodes** get their own TTL and manual refresh. Cached "outside the
 TTL cycle" would mean stale forever, and new episodes would never appear.
 
-## Large lists
+### Full-catalog sync tier
 
-Category payloads can run to thousands of items. DAOs return `PagingSource`;
-list screens consume `LazyPagingItems`; inserts are chunked inside the
-transaction above. Memory stays flat regardless of category size — necessary on
-a 1–2 GB TV box.
+The app syncs **all three content types in full** (~48,751 VOD rows, plus live
+and series), because the rail's `ALL` and `RECENTLY ADDED` entries and
+content-type-wide search all require completeness. This reverses the earlier
+decision to avoid a second sync tier; see `decisions.md`.
+
+Three things it must not do:
+
+1. **Must not block.** Categories are one fast call, so a content type is
+   browsable in about a second. The catalog syncs behind it with a visible
+   percentage that dismisses at 100%. Blocking on data the user does not need
+   yet is the most visible kind of slowness, and it would recur every time the
+   24 h cache expires, not just on first run.
+2. **Must not materialise the response.** A 48,751-item VOD payload is roughly
+   15 MB of JSON; parsed into a `List<T>` that is 30–50 MB of heap on a box
+   whose per-app limit may be 96 MB, *while* a Paging grid and a Coil bitmap
+   cache are live. `CachedFetch` therefore takes a `Flow<T>` or a callback sink
+   and never returns a `List<T>`: stream-parse from the OkHttp `BufferedSource`
+   with a `JsonReader`, inserting in chunks of ~500.
+3. **Must not hold one giant write lock.** The single-`@Transaction`
+   delete-then-insert is right for a 400-item category and wrong for 48,751
+   rows, where it becomes a multi-second write that blocks every read and
+   freezes the grid. Use **chunked transactions plus a generation counter**:
+   write rows with `generation = N+1`, then in one small final transaction flip
+   the active generation and delete `generation <= N`. This preserves the
+   all-or-nothing property the eng review required, without the lock.
+
+**Unverified precondition.** Every action in `xtream-api-reference.md` is
+category-scoped. Xtream generally supports `get_vod_streams` with no
+`category_id`, but that is **not verified against this panel**, and the whole
+tier rests on it. Verify in Phase 0. If unavailable, the sync becomes ~120
+sequential requests per content type, which changes the progress model but not
+the design.
+
+**Gating.** `ALL`, `RECENTLY ADDED` and search are disabled until
+`catalog_sync.state = complete` for that content type. A partially indexed
+catalog answering a search returns a confident "no results" for a title that
+exists — the precise failure the original scoped-search decision existed to
+prevent, relocated rather than solved. Ordinary category browsing works
+throughout. Sync resumes safely after process death, and never downloads poster
+art as part of the sync.
+
+The daily re-sync of 48,751 rows should be staggered via WorkManager at low
+priority rather than fired all at once on the first foreground of the day.
+
+## Large lists and paging
+
+Category payloads run to thousands of items, and `ALL` to tens of thousands.
+DAOs return `PagingSource`; list screens consume `LazyPagingItems`; inserts are
+chunked. Memory stays flat regardless of category size — necessary on a
+1–2 GB TV box.
+
+**Paging configuration is a focus requirement, not a performance tuning knob.**
+These are not optional:
+
+- **`enablePlaceholders = true`.** With placeholders off, if the played item is
+  at index 800 the list *does not contain index 800* until the user scrolls
+  there — so focus restoration cannot find it and silently degrades to "top of
+  grid". No amount of UI code fixes this afterwards. Room's `PagingSource`
+  supports it because it knows `COUNT(*)`. The cost is that every item
+  composable must have a placeholder rendering.
+- **Stable keys**: `items(lazyPagingItems, key = { it.streamId })`. Without
+  them, recomposition after an append rebinds focus onto the wrong item.
+- **The loading footer must not be focusable**
+  (`Modifier.focusProperties { canFocus = false }`), or the user D-pads onto a
+  spinner and cannot get past it.
+- **Placeholders are focusable but inert** — they render the skeleton and OK is
+  a no-op. Non-focusable placeholders make traversal skip a hole and jump
+  unpredictably.
+- **`prefetchDistance` ≥ 2 rows**, which is 10 items in poster mode and 4 in
+  names-only. It differs per view mode.
+- `Modifier.focusGroup()` on the grid plus `focusRestorer()`, so
+  LEFT-to-rail-and-back returns to the same card.
 
 ## Search
 
-Scoped deliberately — there is **no catalog-wide item search**. The Xtream API
-has no search endpoint, so global search would require syncing and indexing the
-whole catalog locally. Declined for the POC.
+Scoped to the **content type**, not to a category and not across the catalog.
+The Home screen picks Live, Movies or Series, and search inside that content
+type covers all of it. Three searches exist and each is complete within its own
+scope, so the boundary is visible in the navigation rather than in a label.
 
-Two local queries, both over data already cached:
+This supersedes the earlier category-scoped design; see `decisions.md`.
 
-- **Category filter** — filters the cached category list for the current
-  content type. A plain `LIKE` over ~120 rows.
-- **In-category item search** — filters items of the *selected* category.
-  DAOs expose a query-bearing `PagingSource` variant so search results page
-  exactly like unfiltered ones; scope is always
-  `(account_id, content_type, category_id)`.
+- **Content-type search** — over every row of that type. Requires
+  `catalog_sync.state = complete` for the type; disabled and labelled until then.
+- **Category filter** — filters the ~120 cached category names in the rail. A
+  plain `LIKE` over ~120 rows, always available.
 
-**Match against a normalized column, not `name`.** Store `name_normalized`
-alongside `name`: lowercased, Arabic diacritics stripped, whitespace collapsed,
-and quality prefixes (`HD`, `4K`, `FHD`) removed. Raw titles carry `"HD  "`
-prefixes with doubled spaces and mixed RTL/LTR runs, so matching the raw string
-is erratic. Normalize on insert, inside the same transaction as the write.
+**All three content types are synced in full.** If only VOD were synced,
+someone searching for a channel or a show would get a confident "no results"
+for something that exists — the exact failure the original decision rejected.
+Live is ~10–20k rows and series is metadata only, so the cost over movies is
+marginal. Series *episodes* remain lazy per show, so selecting a series result
+triggers `get_series_info` and needs its own loading state on the detail screen.
 
-FTS is deliberately not used: a single category is at most a few thousand rows,
-where `LIKE` on a normalized column is fast enough, and SQLite FTS tokenizers
-handle Arabic poorly without careful `unicode61` configuration. Revisit only if
-catalog-wide search is ever taken on.
+**Match against `name_normalized`, render `name_display`.** Normalisation is
+lowercase, Arabic diacritics stripped, whitespace collapsed, quality tokens
+(`HD`, `FHD`, `4K`) removed — applied on insert, in the same transaction as the
+write.
+
+**Query mechanics.** Debounce 300 ms, run on `Dispatchers.IO` through the
+paging source. DAOs expose a query-bearing `PagingSource` variant so results
+page exactly like unfiltered ones.
+
+**FTS remains deferred, but the reasoning has changed and must be measured.**
+The original argument was that a category is only a few thousand rows. Content-
+type search is ~48,751, and `LIKE '%query%'` has a leading wildcard so no index
+applies — it is a full scan with UTF-8 comparison on every keystroke, on an
+A53-class CPU. Keep `LIKE` for now, because SQLite's default tokenizers still
+handle Arabic poorly, but add a covering index on
+`(account_id, content_type, name_normalized)` so prefix queries stay indexed,
+and instrument it on the real box. If p95 per keystroke exceeds ~200 ms,
+revisit with `unicode61 remove_diacritics=2`.
 
 ## Images
 
-One shared Coil `ImageLoader`, downsampling posters to the actual card
-dimensions before caching, with explicitly sized memory and disk caches. Full-
-size poster decode is a known cause of grid stutter and OOM on a constrained
-TV heap.
+One shared Coil `ImageLoader`, downsampling to the actual card dimensions before
+caching. Full-size poster decode is a known cause of grid stutter and OOM on a
+constrained TV heap.
+
+**Two downsample targets**, because live channel art is not a poster:
+
+| Target | Size | Used by | Scaling |
+|---|---|---|---|
+| `POSTER` | 220 × 330 px | movies, series | crop to fill |
+| `CHANNEL` | 220 × 124 px | live TV | **fit**, letterboxed on a neutral tile — never crop |
+
+Cropping a channel logo to 2:3 destroys it. Both sizes must be decided together
+because they are inputs to the pipeline, not styling.
+
+**Cache limits — these need numbers, not adjectives.** At ~25–35 KB per
+downsampled poster, browsing a third of a 48,751-title catalog reaches ~500 MB
+and the full catalog ~1.5 GB, on a box that may have 8 GB of total flash.
+
+```
+disk cache      250 MB hard cap, LRU
+memory cache    maxMemory / 8, hard-capped at 32 MB
+bitmap config   RGB_565   (halves memory; posters are photographic and
+                           banding is invisible at 3 m)
+crossfade       disabled  (animated fades during D-pad scroll read as
+                           flicker at distance)
+prefetch        visible viewport + 1 row only. Aggressive prefetch over a
+                9,750-row list fills 250 MB in minutes
+```
+
+Poster art is **never** downloaded as part of the catalog sync.
 
 ## Playback URL construction
 
@@ -233,7 +385,18 @@ Progressive live streams cannot seek at all — **hide the scrub bar for live**.
 
 One sealed `AppError`: `Unreachable`, `AuthFailed`, `AccountExpired`,
 `ConnectionLimitReached`, `StreamUnavailable`, `Timeout`, `Empty`. Mapped once
-at the network/player boundary, rendered by one shared `ErrorState` component.
+at the network/player boundary.
+
+**One taxonomy, two renderers.** `ErrorState` is full-screen and correct for
+refresh-time failure. `ErrorFooter` is inline, focusable and one line, and is
+required for Paging's *append* failure — a failed append must never take over
+the screen and destroy 400 items the user is already reading. Paging has three
+error surfaces (`refresh`, `append`, `prepend`); only `refresh` gets the
+full-screen treatment.
+
+**Each error carries its own action**, rather than a generic retry. A retry
+button on `AuthFailed` or `AccountExpired` cannot fix anything and teaches the
+user the app is broken. The action table is in `ui-scope.md`.
 
 `ConnectionLimitReached` is a **probable** classification, not a definitive one
 — panels signal an exhausted slot inconsistently (HTTP error, HTML body,
@@ -247,13 +410,19 @@ when a catalog refresh overlaps active playback.
 
 0. **Skeleton + install loop** — Gradle/Kotlin, TV manifest, network security
    config. Plus: `adb connect` workflow, a **stable debug signing key** (an
-   unstable key wipes stored credentials on every install), and a one-time
+   unstable key wipes stored credentials on every install), a one-time
    `adb shell dumpsys media.codec` probe to record what the target box can
-   actually decode.
+   actually decode, and — new — **verify whether `get_vod_streams` works with
+   no `category_id`**. The full-catalog sync tier depends on it.
 1. **Auth** — DataStore+Tink credentials, validate via `player_api.php`
    (`auth: 1` and `status: "Active"`), four distinguishable failure states.
+   One server field parsing `host:port`, show-password toggle, form never
+   cleared on failure.
 2. **Movies vertical slice** — the reference implementation every other content
-   type copies: `CachedFetch`, paged list, player, resume positions.
+   type copies: `CachedFetch`, paged list, player, resume positions. Because
+   everything copies it, four things must land here rather than in Phase 5:
+   `enablePlaceholders = true` with stable keys, focus restoration by item ID,
+   the focus frame plus last-active state, and the long-press context menu.
 3. **Live** — same pattern; note `ext`, not `container_extension`; no seek.
 4. **Series** — extra layer; `get_series` (not `get_series_streams`); episodes
    arrive as an object keyed by season number as a string.
