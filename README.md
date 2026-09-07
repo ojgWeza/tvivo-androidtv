@@ -23,8 +23,11 @@ implementation.
   contract: auth, all endpoints used, response shapes, playback URL patterns.
 - [`docs/architecture.md`](docs/architecture.md) — module layout, caching
   strategy, player integration, build sequencing.
+- [`docs/ui-scope.md`](docs/ui-scope.md) — design handoff: screens and their
+  states, D-pad/10-foot constraints, the content realities that break naive
+  layouts, what is already locked, and the open design questions.
 - [`docs/decisions.md`](docs/decisions.md) — key decisions made during
-  discovery and why.
+  discovery and during plan review, and why.
 
 ## Entry point for Claude Code
 

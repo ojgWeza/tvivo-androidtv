@@ -2,6 +2,8 @@
 
 > Revised 2026-09-07 after `/plan-eng-review`. Decisions and rationale are in
 > `docs/decisions.md`; this file describes the target design only.
+> For UI/UX work start from `docs/ui-scope.md` instead — this file is the
+> implementation view and deliberately says nothing about how screens look.
 
 ## Package structure
 
