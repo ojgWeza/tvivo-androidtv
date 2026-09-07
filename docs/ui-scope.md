@@ -227,6 +227,14 @@ things depending on rail state is the fastest route to accidental app exit:
   to the grid without changing category. Focus alone never changes category —
   loading on every focus tick makes rail scrolling feel heavy.
 
+**RIGHT out of the rail must be declared, not inferred** (Q-9). Compose's 2D
+focus search has no notion of "the grid is the content and the header is not",
+so it resolved RIGHT to the header's `Refresh` and left the grid unreachable by
+D-pad. The rail rows carry an explicit `focusProperties { right = ... }` at the
+grid. The override only takes effect on the **focused node itself** — on the
+rail's parent focus group it is silently ignored, and the symptom is identical
+to never having written it.
+
 **Focus restoration** — by stable item ID, never by index. A background refresh
 can reorder or remove rows while the player is foregrounded.
 

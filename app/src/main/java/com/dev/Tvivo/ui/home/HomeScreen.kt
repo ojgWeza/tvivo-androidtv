@@ -16,13 +16,18 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
 
-enum class ContentType { LIVE, MOVIES, SERIES }
+enum class ContentType(val label: String) {
+    LIVE("Live TV"),
+    MOVIES("Movies"),
+    SERIES("Series")
+}
 
 /**
  * Three destinations, nothing else. Search is scoped by content type, so the choice
@@ -30,9 +35,12 @@ enum class ContentType { LIVE, MOVIES, SERIES }
  * label the user has to read.
  */
 @Composable
-fun HomeScreen(onSelect: (ContentType) -> Unit) {
-    val firstCard = remember { FocusRequester() }
-    LaunchedEffect(Unit) { firstCard.requestFocus() }
+fun HomeScreen(lastSelected: ContentType?, onSelect: (ContentType) -> Unit) {
+    // Focus lands on the tile the user last opened, so Back out of Browse returns them
+    // where they were rather than resetting to the left edge every time.
+    val restore = remember { FocusRequester() }
+    val focusTarget = lastSelected ?: ContentType.LIVE
+    LaunchedEffect(Unit) { restore.requestFocus() }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 96.dp, vertical = 64.dp),
@@ -45,9 +53,15 @@ fun HomeScreen(onSelect: (ContentType) -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(32.dp)
         ) {
-            HomeTile("Live TV", Modifier.weight(1f).focusRequester(firstCard)) { onSelect(ContentType.LIVE) }
-            HomeTile("Movies", Modifier.weight(1f)) { onSelect(ContentType.MOVIES) }
-            HomeTile("Series", Modifier.weight(1f)) { onSelect(ContentType.SERIES) }
+            ContentType.entries.forEach { type ->
+                HomeTile(
+                    label = type.label,
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(if (type == focusTarget) Modifier.focusRequester(restore) else Modifier),
+                    onClick = { onSelect(type) }
+                )
+            }
         }
     }
 }
@@ -57,6 +71,9 @@ private fun HomeTile(label: String, modifier: Modifier = Modifier, onClick: () -
     Card(
         onClick = onClick,
         colors = CardDefaults.colors(containerColor = Palette.Elevated),
+        // tv-material3 draws its own grey focus outline. Left on, the tile shows two
+        // competing rings; the app has exactly one focus indicator (Q-3).
+        border = CardDefaults.border(focusedBorder = Border.None),
         modifier = modifier.height(180.dp).tvFocusFrame()
     ) {
         Column(

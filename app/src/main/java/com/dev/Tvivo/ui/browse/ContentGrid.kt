@@ -29,9 +29,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.paging.compose.LazyPagingItems
@@ -39,34 +41,40 @@ import androidx.paging.compose.itemKey
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.ui.common.TvivoImageLoader
 import com.dev.Tvivo.ui.theme.Palette
 
 /**
- * The reference implementation every other content type copies. Four things live here
- * rather than in hardening, because everything copies them: placeholders on with stable
- * keys, focus restoration by item ID, the static focus frame, and the long-press menu.
+ * The one grid, for every content type. Four things live here rather than in hardening,
+ * because everything reuses them: placeholders on with stable keys, focus restoration by
+ * item ID, the static focus frame, and the long-press menu.
+ *
+ * [cardShape] is the only thing live changes — a 16:9 channel tile instead of a 2:3
+ * poster. It is a pixel size fed to the image pipeline, not styling; see
+ * [TvivoImageLoader].
  */
 @Composable
 fun ContentGrid(
-    items: LazyPagingItems<VodStreamEntity>,
-    pendingFocusStreamId: Int?,
-    onPlay: (VodStreamEntity) -> Unit,
-    onContextMenu: (VodStreamEntity) -> Unit,
-    onFocused: (VodStreamEntity) -> Unit,
+    items: LazyPagingItems<BrowseItem>,
+    pendingFocusItemId: Int?,
+    cardShape: CardShape,
+    /** The rail's RIGHT target; a focus group forwards it to its first focusable card. */
+    gridFocusRequester: FocusRequester,
+    onPlay: (BrowseItem) -> Unit,
+    onContextMenu: (BrowseItem) -> Unit,
+    onFocused: (BrowseItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
     val restoreRequester = remember { FocusRequester() }
-    var restored by remember(pendingFocusStreamId) { mutableStateOf(pendingFocusStreamId == null) }
+    var restored by remember(pendingFocusItemId) { mutableStateOf(pendingFocusItemId == null) }
 
     // Restoration is by stable item ID with a nearest-index fallback, never by raw index:
     // the list can have shifted under us while a stream was playing.
-    LaunchedEffect(pendingFocusStreamId, items.itemCount) {
-        if (restored || pendingFocusStreamId == null || items.itemCount == 0) return@LaunchedEffect
+    LaunchedEffect(pendingFocusItemId, items.itemCount) {
+        if (restored || pendingFocusItemId == null || items.itemCount == 0) return@LaunchedEffect
         val index = (0 until items.itemCount).firstOrNull { i ->
-            items.peek(i)?.streamId == pendingFocusStreamId
+            items.peek(i)?.id == pendingFocusItemId
         }
         if (index != null) {
             gridState.scrollToItem(index)
@@ -77,7 +85,7 @@ fun ContentGrid(
     LazyVerticalGrid(
         columns = GridCells.Fixed(5),
         state = gridState,
-        modifier = modifier.fillMaxSize().focusGroup(),
+        modifier = modifier.fillMaxSize().focusRequester(gridFocusRequester).focusGroup(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -86,12 +94,13 @@ fun ContentGrid(
             count = items.itemCount,
             // Without stable keys, recomposition after an append rebinds focus onto the
             // wrong item.
-            key = items.itemKey { it.streamId }
+            key = items.itemKey { it.id }
         ) { index ->
             val item = items[index]
-            PosterCard(
+            StreamCard(
                 item = item,
-                modifier = if (item?.streamId == pendingFocusStreamId) {
+                cardShape = cardShape,
+                modifier = if (item?.id == pendingFocusItemId) {
                     Modifier.focusRequester(restoreRequester)
                 } else {
                     Modifier
@@ -108,7 +117,7 @@ fun ContentGrid(
                 // spinner and cannot get past it.
                 Box(
                     modifier = Modifier
-                        .height(posterHeightDp())
+                        .height(cardShape.heightDp())
                         .focusProperties { canFocus = false },
                     contentAlignment = Alignment.Center
                 ) {
@@ -121,8 +130,9 @@ fun ContentGrid(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PosterCard(
-    item: VodStreamEntity?,
+private fun StreamCard(
+    item: BrowseItem?,
+    cardShape: CardShape,
     modifier: Modifier = Modifier,
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
@@ -134,7 +144,7 @@ private fun PosterCard(
     Column(modifier = modifier) {
         Box(
             modifier = Modifier
-                .size(width = posterWidthDp(), height = posterHeightDp())
+                .size(width = cardShape.widthDp(), height = cardShape.heightDp())
                 .background(Palette.Elevated)
                 // Static frame, no scale: a scaling card at 3 m reads as wobble, and
                 // reflowing neighbours makes the grid feel unstable under fast scroll.
@@ -153,22 +163,28 @@ private fun PosterCard(
                     onLongClick = { if (item != null) onLongPress() }
                 )
         ) {
-            if (item?.streamIcon != null) {
+            if (item?.imageUrl != null) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
-                        .data(item.streamIcon)
+                        .data(item.imageUrl)
                         // Downsample to the card's pixel size before caching.
-                        .size(TvivoImageLoader.POSTER_WIDTH_PX, TvivoImageLoader.POSTER_HEIGHT_PX)
+                        .size(cardShape.widthPx, cardShape.heightPx)
                         .build(),
                     imageLoader = TvivoImageLoader.get(context),
-                    contentDescription = item.nameDisplay,
+                    contentDescription = item.title,
+                    // Fit for channel logos, which must letterbox on the tile rather
+                    // than lose their edges to a crop.
+                    contentScale = when (cardShape) {
+                        CardShape.POSTER -> ContentScale.Crop
+                        CardShape.CHANNEL -> ContentScale.Fit
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
         }
 
         Text(
-            text = item?.nameDisplay ?: "",
+            text = item?.title ?: "",
             color = if (focused) Palette.Ink else Palette.Dim,
             fontSize = 14.sp,
             maxLines = 2,
@@ -179,10 +195,20 @@ private fun PosterCard(
 }
 
 /** Card sizes are specified in pixels because they are image-pipeline inputs. */
-@Composable
-private fun posterWidthDp() =
-    with(LocalDensity.current) { TvivoImageLoader.POSTER_WIDTH_PX.toDp() }
+private val CardShape.widthPx: Int
+    get() = when (this) {
+        CardShape.POSTER -> TvivoImageLoader.POSTER_WIDTH_PX
+        CardShape.CHANNEL -> TvivoImageLoader.CHANNEL_WIDTH_PX
+    }
+
+private val CardShape.heightPx: Int
+    get() = when (this) {
+        CardShape.POSTER -> TvivoImageLoader.POSTER_HEIGHT_PX
+        CardShape.CHANNEL -> TvivoImageLoader.CHANNEL_HEIGHT_PX
+    }
 
 @Composable
-private fun posterHeightDp() =
-    with(LocalDensity.current) { TvivoImageLoader.POSTER_HEIGHT_PX.toDp() }
+private fun CardShape.widthDp(): Dp = with(LocalDensity.current) { widthPx.toDp() }
+
+@Composable
+private fun CardShape.heightDp(): Dp = with(LocalDensity.current) { heightPx.toDp() }

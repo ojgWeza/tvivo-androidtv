@@ -149,8 +149,14 @@ from the OkHttp `BufferedSource` with a `JsonReader` and inserted in chunks.
 Materialising it into a `List<T>` is 30–50 MB of heap on a box whose per-app
 limit may be 96 MB.
 
-The equivalent call has **not** been verified for `get_live_streams` or
-`get_series` — check before relying on it for those types.
+**Verified 2026-09-08 for `get_live_streams` as well:** omitting `category_id`
+returns the whole live catalog (6,425 channels in one call on this panel), same
+shape, same streaming requirement. Still **not** verified for `get_series`.
+
+A panel that rejects the no-`category_id` form answers with a JSON *object*
+rather than an array. The parser reports that as zero rows, so callers must
+treat "zero rows" as "no answer" and leave the existing per-category rows
+alone — see `CatalogSyncer`.
 
 ### Playback URL
 ```

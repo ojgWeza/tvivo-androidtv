@@ -19,14 +19,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
-import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.ui.common.tvFocusFrame
+import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.theme.Palette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
@@ -34,21 +40,33 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun BrowseScreen(
-    onPlay: (VodStreamEntity, Long) -> Unit,
-    viewModel: BrowseViewModel = viewModel()
+    contentType: ContentType,
+    onPlay: (BrowseItem, Long) -> Unit
 ) {
+    val application = LocalContext.current.applicationContext as android.app.Application
+    // Keyed by content type: Live and Movies are separate screens with separate
+    // categories, selection and focus, and must not share one instance.
+    val viewModel: BrowseViewModel = viewModel(
+        key = "browse:" + contentType.name,
+        factory = viewModelFactory {
+            initializer {
+                BrowseViewModel(application, createSavedStateHandle(), contentType)
+            }
+        }
+    )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val items = viewModel.items.collectAsLazyPagingItems()
-    var contextMenuItem by remember { mutableStateOf<VodStreamEntity?>(null) }
-    var resumePromptItem by remember { mutableStateOf<Pair<VodStreamEntity, Long>?>(null) }
+    var contextMenuItem by remember { mutableStateOf<BrowseItem?>(null) }
+    var resumePromptItem by remember { mutableStateOf<Pair<BrowseItem, Long>?>(null) }
     val scope = rememberCoroutineScope()
+    val gridFocusRequester = remember { FocusRequester() }
 
     // OK plays. If a resume point exists the prompt comes first, so neither resuming nor
     // starting over happens silently.
-    fun launch(item: VodStreamEntity) {
+    fun launch(item: BrowseItem) {
         scope.launch {
-            val resumeMs = viewModel.resumePositionMs(item.streamId)
-            viewModel.pendingFocusStreamId = item.streamId
+            val resumeMs = viewModel.resumePositionMs(item.id)
+            viewModel.pendingFocusItemId = item.id
             if (resumeMs != null && resumeMs > 0) {
                 resumePromptItem = item to resumeMs
             } else {
@@ -69,7 +87,8 @@ fun BrowseScreen(
             categories = state.categories,
             counts = state.counts,
             selectedCategoryId = state.selectedCategoryId,
-            onSelect = { viewModel.selectCategory(it.categoryId) }
+            onSelect = { viewModel.selectCategory(it.categoryId) },
+            gridFocusRequester = gridFocusRequester
         )
 
         Column(modifier = Modifier.fillMaxSize()) {
@@ -96,21 +115,23 @@ fun BrowseScreen(
 
                 else -> ContentGrid(
                     items = items,
-                    pendingFocusStreamId = viewModel.pendingFocusStreamId,
+                    pendingFocusItemId = viewModel.pendingFocusItemId,
+                    cardShape = viewModel.cardShape,
+                    gridFocusRequester = gridFocusRequester,
                     onPlay = { item -> launch(item) },
                     onContextMenu = { contextMenuItem = it },
-                    onFocused = { viewModel.pendingFocusStreamId = it.streamId }
+                    onFocused = { viewModel.pendingFocusItemId = it.id }
                 )
             }
         }
     }
 
     contextMenuItem?.let { item ->
-        val isFavourite by (viewModel.isFavourite(item.streamId) ?: flowOf(false))
+        val isFavourite by (viewModel.isFavourite(item.id) ?: flowOf(false))
             .collectAsStateWithLifecycle(initialValue = false)
-        var hasResume by remember(item.streamId) { mutableStateOf(false) }
-        LaunchedEffect(item.streamId) {
-            hasResume = (viewModel.resumePositionMs(item.streamId) ?: 0L) > 0
+        var hasResume by remember(item.id) { mutableStateOf(false) }
+        LaunchedEffect(item.id) {
+            hasResume = (viewModel.resumePositionMs(item.id) ?: 0L) > 0
         }
 
         ItemContextMenu(
@@ -123,11 +144,11 @@ fun BrowseScreen(
                 launch(item)
             },
             onToggleFavourite = {
-                viewModel.toggleFavourite(item.streamId, !isFavourite)
+                viewModel.toggleFavourite(item.id, !isFavourite)
                 contextMenuItem = null
             },
             onClearResume = {
-                viewModel.clearResume(item.streamId)
+                viewModel.clearResume(item.id)
                 contextMenuItem = null
             }
         )
@@ -135,7 +156,7 @@ fun BrowseScreen(
 
     resumePromptItem?.let { (item, positionMs) ->
         ResumePrompt(
-            title = item.nameDisplay,
+            title = item.title,
             positionMs = positionMs,
             onResume = {
                 resumePromptItem = null
@@ -183,11 +204,14 @@ private fun Header(
                     Text(text = it, color = Palette.Dim, fontSize = 14.sp,
                         modifier = Modifier.padding(end = 16.dp))
                 }
+                // Reached by pressing UP from the grid's top row, and carrying the same
+                // focus frame as every other focusable thing in the app (Q-3).
                 Text(
                     text = "Refresh",
                     color = Palette.AccentText,
                     fontSize = 16.sp,
                     modifier = Modifier
+                        .tvFocusFrame()
                         .clickable { onRefresh() }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 )

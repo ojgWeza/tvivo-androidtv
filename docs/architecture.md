@@ -40,7 +40,8 @@ app/
 │   ├── home/                         // three big buttons: Live / Movies / Series
 │   ├── browse/                       // rail + grid: THE main screen
 │   │   ├── CategoryRail.kt           // categories + 4 virtual entries + filter
-│   │   ├── ContentGrid.kt            // paged poster/channel grid, 2 view modes
+│   │   ├── BrowseItem.kt             // what the grid renders, for every type
+│   │   ├── ContentGrid.kt            // paged grid, CardShape = POSTER | CHANNEL
 │   │   └── ItemContextMenu.kt        // long-press OK: play / favourite / resume
 │   ├── seriesdetail/                 // season/episode picker
 │   ├── common/
@@ -219,10 +220,15 @@ returns the full VOD catalog on this panel. The tier therefore stands as
 designed, and the fallback — ~120 sequential per-category requests, which would
 change the progress model but not the design — is not needed for movies.
 
-`get_live_streams` and `get_series` have **not** been checked the same way. Both
-are synced in full too, so if either rejects a missing `category_id`, that
-content type falls back to per-category fetches on its own, without affecting
-movies. Check before building Phase 3 and Phase 4.
+**Verified 2026-09-08 for `get_live_streams` too** — 6,425 channels in one call.
+`get_series` is still unchecked; if it rejects a missing `category_id`, series
+falls back to per-category fetches on its own, without affecting the other types.
+
+**A zero-row response must never flip the generation.** A panel that rejects the
+call answers with a JSON object rather than an array, which the parser reports as
+zero rows — indistinguishable from a genuinely empty catalog, and in both cases
+flipping generations would delete every per-category row the user already has.
+Both paths instead record `partial` and leave the existing rows alone.
 
 **Gating.** `ALL`, `RECENTLY ADDED` and search are disabled until
 `catalog_sync.state = complete` for that content type. A partially indexed
@@ -479,10 +485,17 @@ when a catalog refresh overlaps active playback.
 5. **Hardening** — manual refresh, RTL verification, empty/loading/error states,
    `RefreshWorker`, on-device diagnostic log.
 
-**Whether `get_live_streams` and `get_series` accept a missing `category_id` is
-still unverified** — only `get_vod_streams` was confirmed. Check before building
-Phase 3 and Phase 4; if either rejects it, that content type falls back to
-per-category fetches without affecting movies.
+**Only `get_series` is still unverified** for a missing `category_id`;
+`get_vod_streams` (2026-09-07) and `get_live_streams` (2026-09-08) both answer.
+If series rejects it, that type falls back to per-category fetches without
+affecting the others.
+
+**Phases 3-5 share one browse screen, not three.** The grid renders `BrowseItem`
+and takes a `CardShape`; one `BrowseViewModel` picks a `CatalogSource` from the
+content type. `StreamListParser` holds the streaming JSON reader and absorbs the
+`ext` / `container_extension` difference, with `VodStreamParser` and
+`LiveStreamParser` as field mappings over it. Series adds a `CatalogSource`
+factory, not a screen.
 
 ## Testing
 

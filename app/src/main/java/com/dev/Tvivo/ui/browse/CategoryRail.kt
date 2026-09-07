@@ -19,6 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,6 +42,10 @@ fun CategoryRail(
     counts: Map<String?, Int>,
     selectedCategoryId: String?,
     onSelect: (CategoryEntity) -> Unit,
+    /** Where RIGHT goes. Without this, Compose's 2D focus search picks the header's
+     *  Refresh — it is also to the right, and further from the rail than the first card
+     *  only in a way the search does not weigh. The rail must reach the grid. */
+    gridFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -55,7 +61,8 @@ fun CategoryRail(
                 name = category.name,
                 count = counts[category.categoryId],
                 selected = category.categoryId == selectedCategoryId,
-                onSelect = { onSelect(category) }
+                onSelect = { onSelect(category) },
+                gridFocusRequester = gridFocusRequester
             )
         }
     }
@@ -66,7 +73,8 @@ private fun RailRow(
     name: String,
     count: Int?,
     selected: Boolean,
-    onSelect: () -> Unit
+    onSelect: () -> Unit,
+    gridFocusRequester: FocusRequester
 ) {
     var focused by remember { mutableStateOf(false) }
 
@@ -82,6 +90,10 @@ private fun RailRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // The override belongs on the focused node itself: declared on the parent
+            // focus group it is not consulted, and the 2D search picks the header's
+            // Refresh instead — also to the right, and nothing weighs it as further.
+            .focusProperties { right = gridFocusRequester }
             .background(background)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onSelect() }

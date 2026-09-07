@@ -9,16 +9,20 @@ Insights / Medica Cloud Care work.
 
 ## Current state
 
-**Phases 0, 1 and 2 are built and working against the real panel** (as of
-2026-09-07). The app authenticates, browses movies by category, and plays them.
-48,754 VOD rows are synced and cached; 66 unit tests pass.
+**Phases 0-3 are built and working against the real panel** (as of 2026-09-08).
+The app authenticates, browses movies and live channels by category, and plays
+movies. 48,761 VOD rows and 6,425 live channels are synced and cached; 76 unit
+tests pass. Live playback is the one path never exercised — `max_connections`
+is 1, so no automated test may open a stream.
 
 **Start here:** `TODOS.md`. It carries the open QA defects (Part 1), the missing
 test coverage (Part 2), the remaining phases (Part 3), and the emulator
 environment gotchas that each cost real time to rediscover (Part 5).
 
-**Fix Q-2 (no in-app back stack) before starting Phase 3** — Back currently
-exits the app from Browse, and every screen Phases 3-5 add inherits that.
+**Phase 4 (Series) is next.** Phase 3 generalised the movies slice rather than
+copying it, so Series adds one `CatalogSource` factory in `BrowseViewModel`, a
+`series` table and the `get_series_info` season parsing — not another screen.
+The browse UI is typed to `BrowseItem`, not to any entity.
 
 Run the emulator with `tools/emulator.sh`, never bare `emulator.exe`: it stops
 the Gradle daemons first and passes the two flags this machine requires. Details
@@ -68,12 +72,13 @@ in `TODOS.md` Part 5.
    full-catalog sync tier depends on it)
 1. Auth screen (one server field parsing `host:port`, user, pass; validate via
    `player_api.php`) then the Home screen (Live / Movies / Series)
-2. Movies vertical slice end-to-end (rail → grid → player) — this is
+2. Movies vertical slice end-to-end (rail → grid → player) — done; this is
    the pattern every other content type follows. Four things must land here
    rather than in Phase 5 because everything copies them:
    `enablePlaceholders = true` with stable keys, focus restoration by item ID,
    the focus frame plus last-active state, and the long-press context menu
-3. Live TV (same pattern; note the **16:9 channel card**, not the poster card)
+3. Live TV — done; **16:9 channel card**, not the poster card, and `ext` not
+   `container_extension`
 4. Series (one extra layer: category → shows → `get_series_info` →
    season/episode picker → play)
 

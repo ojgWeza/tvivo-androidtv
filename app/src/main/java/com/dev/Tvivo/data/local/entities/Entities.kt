@@ -109,3 +109,35 @@ data class FavouriteEntity(
     val itemId: String,
     val addedAt: Long
 )
+
+/**
+ * Live channels get their own table rather than a `type` column on [VodStreamEntity]:
+ * `stream_id` is only unique *within* a content type on this panel, so a shared
+ * `(accountId, streamId)` key would let a channel and a film overwrite each other.
+ *
+ * `ext` here is the live equivalent of `container_extension` — a different field name
+ * for the same job, normalised at the parser boundary.
+ */
+@Entity(
+    tableName = "live_streams",
+    primaryKeys = ["accountId", "streamId"],
+    indices = [
+        Index(value = ["accountId", "categoryId", "nameNormalized"]),
+        Index(value = ["accountId", "nameNormalized"])
+    ]
+)
+data class LiveStreamEntity(
+    val accountId: String,
+    val streamId: Int,
+    val categoryId: String?,
+    val name: String,
+    val nameDisplay: String,
+    val nameNormalized: String,
+    val streamIcon: String?,
+    val ext: String?,
+    val added: Long?,
+    /** Panel channel number. Kept for diagnostics; grids sort alphabetically
+     *  (`docs/decisions.md`, "Category grids sort alphabetically"). */
+    val num: Int?,
+    val generation: Long
+)

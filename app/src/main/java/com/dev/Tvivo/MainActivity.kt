@@ -19,6 +19,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
+import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.auth.LoginScreen
@@ -28,6 +29,7 @@ import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import android.content.Intent
 import com.dev.Tvivo.ui.theme.Palette
@@ -68,6 +70,10 @@ private fun TvivoApp() {
         route = store.load()?.let { Route.Home(it) } ?: Route.Login
     }
 
+    // The tile Home returns focus to. Kept out of Route.Home so Back restores it
+    // without the Home route having to carry navigation history.
+    var lastOpened by remember { mutableStateOf<ContentType?>(null) }
+
     // Browse is the only screen with somewhere to go back to; Home and Login are the
     // top of the stack and fall through to the default (exit-to-launcher) behaviour.
     BackHandler(enabled = route is Route.Browse) {
@@ -87,26 +93,53 @@ private fun TvivoApp() {
         )
 
         is Route.Home -> HomeScreen(
-            onSelect = { type -> route = Route.Browse(current.credentials, type) }
-        )
-
-        is Route.Browse -> BrowseScreen(
-            onPlay = { item, resumeFromMs ->
-                val url = StreamUrlBuilder.movie(
-                    current.credentials,
-                    item.streamId,
-                    item.containerExtension ?: "mp4"
-                )
-                context.startActivity(
-                    Intent(context, PlayerActivity::class.java)
-                        .putExtra(PlayerActivity.EXTRA_URL, url)
-                        .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
-                        .putExtra(PlayerActivity.EXTRA_ITEM_ID, item.streamId.toString())
-                        .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_VOD)
-                        .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, item.accountId)
-                        .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
-                )
+            lastSelected = lastOpened,
+            onSelect = { type ->
+                lastOpened = type
+                route = Route.Browse(current.credentials, type)
             }
         )
+
+        // Series is Phase 4. Routing it to the movies repository would show a grid of
+        // films under a Series header, which is worse than saying so.
+        is Route.Browse -> if (current.type == ContentType.SERIES) {
+            ComingSoon("Series")
+        } else {
+            val isLive = current.type == ContentType.LIVE
+            val accountId = remember(current.credentials) {
+                AccountIdentity.of(current.credentials)
+            }
+            BrowseScreen(
+                contentType = current.type,
+                onPlay = { item, resumeFromMs ->
+                    // Live and movies differ in the URL path segment and in the default
+                    // extension — `ts` for live, `mp4` for a film — and in nothing else.
+                    val url = if (isLive) {
+                        StreamUrlBuilder.live(current.credentials, item.id, item.extension ?: "ts")
+                    } else {
+                        StreamUrlBuilder.movie(current.credentials, item.id, item.extension ?: "mp4")
+                    }
+                    context.startActivity(
+                        Intent(context, PlayerActivity::class.java)
+                            .putExtra(PlayerActivity.EXTRA_URL, url)
+                            .putExtra(PlayerActivity.EXTRA_IS_LIVE, isLive)
+                            .putExtra(PlayerActivity.EXTRA_ITEM_ID, item.id.toString())
+                            .putExtra(
+                                PlayerActivity.EXTRA_CONTENT_TYPE,
+                                if (isLive) TYPE_LIVE else TYPE_VOD
+                            )
+                            .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
+                            .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComingSoon(label: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(text = "$label is not built yet. Press Back.", color = Palette.Dim)
     }
 }

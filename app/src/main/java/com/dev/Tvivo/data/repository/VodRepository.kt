@@ -7,10 +7,10 @@ import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
+import com.dev.Tvivo.data.remote.CategoryListParser
 import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
-import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -60,7 +60,11 @@ class VodRepository(
                             ErrorMapper.fromHttpCode(response.code())
                         )
                     }
-                    parseCategories(response.body()?.string().orEmpty())
+                    CategoryListParser.parse(
+                        response.body()?.string().orEmpty(),
+                        accountId,
+                        TYPE_VOD
+                    )
                 },
                 write = { rows -> db.categoryDao().replaceAll(accountId, TYPE_VOD, rows) }
             )
@@ -99,25 +103,4 @@ class VodRepository(
                 write = { rows -> db.vodDao().replaceCategory(accountId, categoryId, rows) }
             )
         }
-
-    private fun parseCategories(json: String): List<CategoryEntity> {
-        if (json.isBlank()) return emptyList()
-        val root = JsonParser.parseString(json)
-        if (!root.isJsonArray) return emptyList()
-        return root.asJsonArray.mapIndexedNotNull { index, element ->
-            val obj = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapIndexedNotNull null
-            // `category_id` is a string on VOD/live and an int on series objects —
-            // normalise on insert or grouped counts silently miss rows.
-            val id = obj.get("category_id")?.takeIf { !it.isJsonNull }?.asString
-                ?: return@mapIndexedNotNull null
-            val name = obj.get("category_name")?.takeIf { !it.isJsonNull }?.asString ?: id
-            CategoryEntity(
-                accountId = accountId,
-                type = TYPE_VOD,
-                categoryId = id,
-                name = name,
-                ordering = index
-            )
-        }
-    }
 }

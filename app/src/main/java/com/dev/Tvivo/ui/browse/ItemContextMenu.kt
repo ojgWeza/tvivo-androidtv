@@ -17,17 +17,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
-import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.ui.theme.Palette
 
 /**
- * Long-press OK. There is no movie detail screen — OK plays immediately, and everything
- * a detail screen would have offered lives here instead. Lands in Phase 2 rather than
- * hardening because live and series both copy it.
+ * Long-press OK. There is no detail screen — OK plays immediately, and everything a
+ * detail screen would have offered lives here instead. Typed to [BrowseItem], so live
+ * and series reuse it rather than copying it.
  */
 @Composable
 fun ItemContextMenu(
-    item: VodStreamEntity,
+    item: BrowseItem,
     isFavourite: Boolean,
     hasResumePoint: Boolean,
     onDismiss: () -> Unit,
@@ -43,7 +42,7 @@ fun ItemContextMenu(
                 .padding(24.dp)
         ) {
             Text(
-                text = item.nameDisplay,
+                text = item.title,
                 color = Palette.Ink,
                 fontSize = 20.sp,
                 maxLines = 2,

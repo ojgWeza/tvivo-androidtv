@@ -7,10 +7,11 @@ ideas.
 Everything that was *not* deferred is folded into `docs/ui-scope.md`,
 `docs/architecture.md` and `docs/decisions.md`.
 
-**Status as of 2026-09-07:** Phases 0, 1 and 2 are built and running against the
-real panel on the API 34 Android TV emulator. 66 unit tests pass. The full
-catalog synced (48,754 rows) and playback works end to end. Phases 3-5 are not
-started. The defects below were found by hands-on testing after Phase 2.
+**Status as of 2026-09-08:** Phases 0-3 are built and running against the real
+panel on the API 34 Android TV emulator. 76 unit tests pass. VOD (48,761 rows)
+and live (6,425 channels) both sync in full, and movie playback works end to
+end. Q-1 through Q-4 are fixed and Q-1/Q-2/Q-3 are verified on-emulator.
+Phase 4 (Series) and Phase 5 (hardening) are not started.
 
 ---
 
@@ -24,56 +25,64 @@ unit suite, and all of them passed "compiles and launches" — the same pattern 
 the three login bugs found the same way earlier that day.
 
 ## Q-1 — Home screen: third tile crushed, wrong colours, unreadable labels
-**Severity: Critical. Fixed in code (`a407bad`), not yet verified on-emulator.**
+**Severity: Critical. FIXED — verified on-emulator 2026-09-08.**
 `ui/home/HomeScreen.kt`
 
 "Live TV" and "Movies" render full size; "Series" is squeezed to a narrow sliver
 with its label broken one letter per line. This is the first screen after login.
 
-Three defects in one screen, all needing separate fixes:
+Three defects in one screen, each fixed separately:
 - **Overflow.** Three tiles fixed at 320×180 dp plus 32 dp gaps and 96 dp side
-  padding exceed the available width at this density, so `Row` compresses the
-  last child. Needs weight-based or responsive sizing, not fixed `.size()`.
-- **Wrong surface colour.** Tiles use the default `tv-material3` `Card`
+  padding exceeded the available width at this density, so `Row` compressed the
+  last child. Now weight-based, not fixed `.size()`.
+- **Wrong surface colour.** Tiles used the default `tv-material3` `Card`
   container colour instead of `Palette.Elevated`.
-- **Contrast failure.** `Palette.Ink` on that near-white card is barely legible.
-  The screen bypasses the WCAG-measured colour system entirely.
+- **Contrast failure.** `Palette.Ink` on that near-white card was barely legible.
+  The screen bypassed the WCAG-measured colour system entirely.
 
 ## Q-2 — No in-app back stack; Back exits the app from Browse
-**Severity: High. Fixed in code (`a407bad`), not yet verified on-emulator.**
-`MainActivity.kt`
+**Severity: High. FIXED — verified on-emulator 2026-09-08.** `MainActivity.kt`
 
-Back on the Browse screen leaves the app to the launcher. There is no way from
-Movies back to the Live/Movies/Series chooser without relaunching.
+Back from Browse returns to Home, and Home restores focus to the tile the user
+opened rather than resetting to the left edge.
 
-Structural, not cosmetic: `MainActivity` holds its route in a plain
-`mutableStateOf` with no `BackHandler`, so Back falls through to finishing the
-Activity. **Every screen Phases 3-5 add inherits this**, so fix it before Live TV.
+Was: Back on Browse left the app to the launcher, with no way from Movies back
+to the Live/Movies/Series chooser without relaunching.
+
+Structural, not cosmetic — `MainActivity` held its route in a plain
+`mutableStateOf` with no `BackHandler`, so Back fell through to finishing the
+Activity. Fixing it before Phase 3 was the right call: Live inherited a working
+back stack instead of a broken one.
 
 ## Q-3 — Focus is not identifiable on buttons and Home tiles
-**Severity: High. Fixed in code (`a407bad`), not yet verified on-emulator.**
-`ui/home/HomeScreen.kt`, `auth/LoginScreen.kt`
+**Severity: High. FIXED — verified on-emulator 2026-09-08.**
+`ui/home/HomeScreen.kt`, `auth/LoginScreen.kt`, `ui/browse/BrowseScreen.kt`
+
+The Home tile also showed *two* competing rings — `tv-material3`'s own grey card
+outline plus the app frame; the card's is now switched off. The browse header's
+`Refresh` was focusable with no frame at all and now carries the shared one.
 
 Hoisted into `ui/common/TvFocusFrame.kt` (`Modifier.tvFocusFrame()`), reusing
-the grid's static accent-border pattern, and applied to Home tiles and the
-Login buttons.
+the grid's static accent-border pattern, and applied to Home tiles, the Login
+buttons and the browse header.
 
 On a D-pad device, "where am I" is the only navigational state the user has. The
-focused Home tile shows only a faint grey border; the login screen's
-`Show password` / `Sign in` buttons give no clear focused state.
-
-The grid cards implement the static accent frame from `ui-scope.md` correctly —
-buttons and tiles do not. The focus contract is applied inconsistently by
-component type. Consider hoisting it into one shared modifier so a third
-component type cannot diverge again.
+focus contract had been applied inconsistently by component type — grid cards
+correct, buttons and tiles not — which is exactly what the shared modifier now
+prevents. Q-9 is the same failure one layer up: the *traversal*, not the
+indicator.
 
 ## Q-4 — Player has no visible way back
-**Severity: Medium. Fixed in code (`a407bad`), not yet verified on-emulator.**
+**Severity: Medium. Fixed in code (`a407bad`); still unverified on-emulator.**
 `ui/player/PlayerActivity.kt`
 
+Verifying the hint means opening a stream, and `max_connections` is 1, so this
+stays code-reviewed only until the Phase 5 physical-TV session.
+
 Back *works* (verified: `KEYCODE_BACK` moves `PlayerActivity` → `MainActivity`).
-The defect is discoverability — nothing on screen communicates how to leave, so
-the exit depends on the user already knowing about the remote's Back button.
+The defect is discoverability — nothing on screen communicated how to leave, so
+the exit depended on the user already knowing about the remote's Back button.
+A corner hint now rides the controller's visibility.
 
 Distinct from Q-2: the mechanism is fine here, the affordance is missing.
 
@@ -112,6 +121,22 @@ bottom-anchored IME covering roughly the lower half of the screen.
 Titles render below the poster on up to two lines, so long Arabic titles push
 the grid rhythm around.
 
+## Q-9 — D-pad RIGHT from the category rail landed on `Refresh`, not the grid
+**Severity: High. FIXED — verified on-emulator 2026-09-08.**
+`ui/browse/CategoryRail.kt`, `ui/browse/ContentGrid.kt`, `ui/browse/BrowseScreen.kt`
+
+Found while testing Live TV, but it was never live-specific — Movies had it from
+Phase 2 and nobody had pressed RIGHT from the rail. The grid was unreachable by
+D-pad from the rail; the only way into it was the header.
+
+Compose's 2D focus search picked the header's `Refresh` because it is also to
+the right, and nothing in the search weighs "past the content" as worse. The fix
+is an explicit `focusProperties { right = gridFocusRequester }`.
+
+**Worth remembering:** the override only works on the **focused node itself**.
+Declared on the rail's parent focus group it was silently ignored, and the
+symptom was identical to not having written it — verified both ways on-emulator.
+
 ---
 
 # Part 2 — Missing test coverage
@@ -119,8 +144,9 @@ the grid rhythm around.
 ## T-T1 — Room DAO and transaction tests
 **`CLAUDE.md` asks for these and they do not exist.**
 
-66 unit tests cover `ServerAddress`, `StreamUrlBuilder`, `NameNormalizer`,
-`VodStreamParser`, `ErrorMapper` and `CachedFetch`. Missing: in-memory Room
+76 unit tests cover `ServerAddress`, `StreamUrlBuilder`, `NameNormalizer`,
+`VodStreamParser`, `LiveStreamParser`, `CategoryListParser`, `ErrorMapper` and
+`CachedFetch`. Missing: in-memory Room
 tests for DAO behaviour and, more importantly, **transaction** behaviour —
 `replaceCategory`'s delete-then-insert, and the generation flip in
 `CatalogSyncer`. Those are exactly the paths where a silent bug loses a user's
@@ -129,28 +155,55 @@ whole catalog.
 Needs Robolectric, so slower to write than the pure-logic tests.
 
 ## T-T2 — Instrumented D-pad focus traversal tests
-Compose focus tests on the emulator, per `CLAUDE.md`. Q-1 through Q-3 are all
-focus/layout defects that shipped despite a green build — this is the class of
-test that would catch them.
+Compose focus tests on the emulator, per `CLAUDE.md`. Q-1, Q-2, Q-3 and Q-9 are
+all focus/layout defects that shipped despite a green build — this is the class
+of test that would catch them. Q-9 raises the value further: it was invisible in
+code review twice over, since the first fix compiled, read correctly, and did
+nothing.
 
 ---
 
 # Part 3 — Remaining build phases
 
-## Phase 3 — Live TV
-Copies the Phase 2 movies pattern with three documented differences:
-- **`CHANNEL(220×124 px)` 16:9 card**, not the poster card. Fit and letterbox on
-  a neutral tile, never crop — cropping a channel logo to 2:3 destroys it.
-- **`ext`**, not `container_extension`.
-- **No seek** — progressive live streams cannot seek, so hide the scrub bar.
+## Phase 3 — Live TV — **DONE 2026-09-08**
 
-**Do Q-2 first.** Live TV would otherwise inherit the missing back stack.
+Built, and everything except playback verified on the emulator. All three
+documented differences landed: the `CHANNEL(220×124 px)` 16:9 card fitted and
+letterboxed (never cropped), `ext` in place of `container_extension`, and no
+scrub bar (`useController = !isLive`).
 
-**Unverified precondition:** whether `get_live_streams` answers with no
-`category_id`. Confirmed for `get_vod_streams` only. If it rejects, live falls
-back to per-category fetches without affecting movies.
+**Playback is the one thing not verified** — `max_connections` is 1, so no
+automated test may open a stream. The live `.ts` path stays the highest-exposure
+item for the Phase 5 physical-TV session.
 
-## Phase 4 — Series
+**The unverified precondition is now answered:** `get_live_streams` *does* answer
+with no `category_id` — 6,425 channels in one call, same shape as VOD. Recorded
+in `docs/xtream-api-reference.md`.
+
+Rather than copy the movies slice, Phase 3 **generalised** it, because Phase 4
+would otherwise be a third copy:
+- `StreamListParser` holds the streaming JSON reader; `VodStreamParser` and
+  `LiveStreamParser` are thin field mappings over it. `ext` and
+  `container_extension` are absorbed there.
+- `CategoryListParser` replaces the per-repository category parsing.
+- The grid renders `BrowseItem`, not `VodStreamEntity`, with `CardShape` as the
+  only per-type input. One `BrowseViewModel` serves every type via a
+  `CatalogSource`; **Phase 4 adds one factory there, not another ViewModel.**
+- Live gets its own `live_streams` table: `stream_id` is unique only *within* a
+  content type, so a shared key would let a channel and a film overwrite each
+  other.
+
+**Fixed in passing:** a zero-row full-catalog response used to flip generations
+and delete the whole cached catalog. A panel that rejects the no-`category_id`
+call answers with an object, which the parser reports as zero rows — so the
+rejection path and the "catalog is genuinely empty" path both wiped the catalog.
+Both now record `partial` and leave the existing rows alone. This was latent in
+the VOD path too, not something live introduced.
+
+## Phase 4 — Series — **NEXT**
+Home routes Series to a "not built yet" placeholder rather than to the movies
+repository, which would have shown a grid of films under a Series header.
+
 One extra layer: category → shows (`get_series`, **not** `get_series_streams`)
 → `get_series_info` → season/episode picker → play. Episodes arrive as an object
 keyed by season number **as a string** — the parser must handle that shape, and
