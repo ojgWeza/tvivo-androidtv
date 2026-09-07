@@ -2,38 +2,30 @@ package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
-import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.ui.theme.Palette
 
 /**
- * Long-press OK. There is no movie detail screen — OK plays immediately, and everything
- * a detail screen would have offered lives here instead. Lands in Phase 2 rather than
- * hardening because live and series both copy it.
+ * Offered when a resume position exists. Starting over silently would lose the user's
+ * place; resuming silently would surprise anyone who wanted the beginning.
  */
 @Composable
-fun ItemContextMenu(
-    item: VodStreamEntity,
-    isFavourite: Boolean,
-    hasResumePoint: Boolean,
-    onDismiss: () -> Unit,
-    onPlay: () -> Unit,
-    onToggleFavourite: () -> Unit,
-    onClearResume: () -> Unit
+fun ResumePrompt(
+    title: String,
+    positionMs: Long,
+    onResume: () -> Unit,
+    onStartOver: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -43,28 +35,20 @@ fun ItemContextMenu(
                 .padding(24.dp)
         ) {
             Text(
-                text = item.nameDisplay,
+                text = title,
                 color = Palette.Ink,
                 fontSize = 20.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-
-            MenuAction(label = "Play", onClick = onPlay)
-            MenuAction(
-                label = if (isFavourite) "Remove from favourites" else "Add to favourites",
-                onClick = onToggleFavourite
-            )
-            if (hasResumePoint) {
-                MenuAction(label = "Remove from continue watching", onClick = onClearResume)
-            }
-            MenuAction(label = "Close", onClick = onDismiss)
+            PromptAction("Resume from ${formatPosition(positionMs)}", onResume)
+            PromptAction("Start over", onStartOver)
         }
     }
 }
 
 @Composable
-private fun MenuAction(label: String, onClick: () -> Unit) {
+private fun PromptAction(label: String, onClick: () -> Unit) {
     Text(
         text = label,
         color = Palette.Ink,
@@ -74,4 +58,17 @@ private fun MenuAction(label: String, onClick: () -> Unit) {
             .clickable { onClick() }
             .padding(vertical = 14.dp)
     )
+}
+
+/** `34:12`, or `1:34:12` once past an hour. */
+internal fun formatPosition(positionMs: Long): String {
+    val totalSeconds = positionMs / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(minutes, seconds)
+    }
 }

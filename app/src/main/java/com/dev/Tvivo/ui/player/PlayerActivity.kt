@@ -14,6 +14,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.repository.PlaybackStateRepository
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -29,15 +32,30 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     private var firstFrameWatchdog: Job? = null
     private var bufferingWatchdog: Job? = null
+    private var positionTicker: Job? = null
+    private var playbackState: PlaybackStateRepository? = null
+    private var itemId: String? = null
+    private var contentType: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val url = intent.getStringExtra(EXTRA_URL)
         val isLive = intent.getBooleanExtra(EXTRA_IS_LIVE, false)
+        val accountId = intent.getStringExtra(EXTRA_ACCOUNT_ID)
+        val resumeFromMs = intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L)
+        itemId = intent.getStringExtra(EXTRA_ITEM_ID)
+        contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
+
         if (url == null) {
             finish()
             return
+        }
+
+        // Live is excluded from resume tracking entirely — a live stream has no
+        // meaningful resume point.
+        if (accountId != null && !isLive) {
+            playbackState = PlaybackStateRepository(AppDatabase.get(this), accountId)
         }
 
         val playerView = PlayerView(this).apply {
@@ -100,9 +118,36 @@ class PlayerActivity : ComponentActivity() {
 
         exo.setMediaItem(MediaItem.fromUri(url))
         exo.prepare()
+        if (resumeFromMs > 0) exo.seekTo(resumeFromMs)
         exo.playWhenReady = true
 
         startFirstFrameWatchdog()
+        startPositionTicker()
+    }
+
+    /**
+     * Position is persisted while playing, not only on exit: the browse Activity and this
+     * one can both be killed under memory pressure on a 1-2 GB box, and a resume point
+     * that only survives a clean exit is a resume point that mostly does not survive.
+     */
+    private fun startPositionTicker() {
+        positionTicker?.cancel()
+        positionTicker = lifecycleScope.launch {
+            while (isActive) {
+                delay(POSITION_SAVE_INTERVAL_MS)
+                savePosition()
+            }
+        }
+    }
+
+    private suspend fun savePosition() {
+        val exo = player ?: return
+        val repo = playbackState ?: return
+        val id = itemId ?: return
+        val type = contentType ?: return
+        val position = exo.currentPosition
+        val duration = exo.duration.takeIf { it > 0 } ?: 0L
+        repo.savePosition(type, id, position, duration)
     }
 
     private fun startFirstFrameWatchdog() {
@@ -132,6 +177,16 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        val exo = player
+        val repo = playbackState
+        val id = itemId
+        val type = contentType
+        if (exo != null && repo != null && id != null && type != null) {
+            val position = exo.currentPosition
+            val duration = exo.duration.takeIf { it > 0 } ?: 0L
+            // The Activity is going away, so this cannot ride on lifecycleScope.
+            kotlinx.coroutines.runBlocking { repo.savePosition(type, id, position, duration) }
+        }
         release()
     }
 
@@ -143,6 +198,7 @@ class PlayerActivity : ComponentActivity() {
     private fun release() {
         firstFrameWatchdog?.cancel()
         bufferingWatchdog?.cancel()
+        positionTicker?.cancel()
         player?.release()
         player = null
     }
@@ -151,6 +207,12 @@ class PlayerActivity : ComponentActivity() {
         private const val TAG = "TvivoPlayer"
         const val EXTRA_URL = "url"
         const val EXTRA_IS_LIVE = "is_live"
+        const val EXTRA_ACCOUNT_ID = "account_id"
+        const val EXTRA_ITEM_ID = "item_id"
+        const val EXTRA_CONTENT_TYPE = "content_type"
+        const val EXTRA_RESUME_FROM_MS = "resume_from_ms"
+
+        private const val POSITION_SAVE_INTERVAL_MS = 10_000L
 
         /** A progressive `.mkv` can legitimately take 3–10 s to open. */
         private const val FIRST_FRAME_TIMEOUT_MS = 20_000L

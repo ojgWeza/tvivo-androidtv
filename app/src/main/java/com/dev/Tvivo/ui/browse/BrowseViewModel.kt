@@ -15,7 +15,10 @@ import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
+import com.dev.Tvivo.data.local.entities.TYPE_VOD
+import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.VodRepository
+import com.dev.Tvivo.sync.CatalogSyncer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,7 +40,10 @@ data class BrowseUiState(
     val error: AppError? = null,
     /** Shown for 2 s after a manual refresh: a refresh that changes nothing is
      *  visually identical to a broken button. */
-    val refreshConfirmation: String? = null
+    val refreshConfirmation: String? = null,
+    /** Full-catalog progress. Dismisses at 100%; gates ALL, RECENTLY ADDED and search. */
+    val catalogSyncState: String? = null,
+    val catalogSyncDone: Int = 0
 )
 
 class BrowseViewModel(
@@ -63,6 +69,11 @@ class BrowseViewModel(
         set(value) { savedState["pendingFocusStreamId"] = value }
 
     private var repository: VodRepository? = null
+    private var playbackState: PlaybackStateRepository? = null
+    private var catalogSyncer: CatalogSyncer? = null
+
+    var accountId: String? = null
+        private set
 
     init {
         viewModelScope.launch {
@@ -71,9 +82,24 @@ class BrowseViewModel(
                 _state.update { it.copy(isLoadingCategories = false, error = AppError.AuthFailed) }
                 return@launch
             }
-            val accountId = AccountIdentity.of(credentials)
-            val repo = VodRepository(db, credentials, accountId)
+            val id = AccountIdentity.of(credentials)
+            accountId = id
+            val repo = VodRepository(db, credentials, id)
             repository = repo
+            playbackState = PlaybackStateRepository(db, id)
+            val syncer = CatalogSyncer(db, credentials, id)
+            catalogSyncer = syncer
+
+            viewModelScope.launch {
+                syncer.observeProgress().collect { progress ->
+                    _state.update {
+                        it.copy(
+                            catalogSyncState = progress?.state,
+                            catalogSyncDone = progress?.done ?: 0
+                        )
+                    }
+                }
+            }
 
             viewModelScope.launch {
                 repo.observeCategories().collect { categories ->
@@ -101,6 +127,10 @@ class BrowseViewModel(
 
             repo.refreshCategories()
                 .onFailure { t -> _state.update { it.copy(error = t.toAppError()) } }
+
+            // Behind the categories, never in front of them: the grid is usable while
+            // this runs, and it must not be what the user waits on.
+            viewModelScope.launch { syncer.syncVod() }
         }
     }
 
@@ -154,6 +184,23 @@ class BrowseViewModel(
     }
 
     fun dismissRefreshConfirmation() = _state.update { it.copy(refreshConfirmation = null) }
+
+    /** Resume prompt data: null when there is nothing to resume from. */
+    suspend fun resumePositionMs(streamId: Int): Long? =
+        playbackState?.resumePosition(TYPE_VOD, streamId.toString())?.positionMs
+
+    fun isFavourite(streamId: Int): Flow<Boolean>? =
+        playbackState?.isFavourite(TYPE_VOD, streamId.toString())
+
+    fun toggleFavourite(streamId: Int, makeFavourite: Boolean) {
+        viewModelScope.launch {
+            playbackState?.toggleFavourite(TYPE_VOD, streamId.toString(), makeFavourite)
+        }
+    }
+
+    fun clearResume(streamId: Int) {
+        viewModelScope.launch { playbackState?.clearResume(TYPE_VOD, streamId.toString()) }
+    }
 
     private fun Throwable.toAppError(): AppError =
         (this as? AppErrorException)?.error ?: AppError.Unreachable

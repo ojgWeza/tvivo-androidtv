@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,15 +29,33 @@ import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.theme.Palette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 
 @Composable
 fun BrowseScreen(
-    onPlay: (VodStreamEntity) -> Unit,
+    onPlay: (VodStreamEntity, Long) -> Unit,
     viewModel: BrowseViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val items = viewModel.items.collectAsLazyPagingItems()
     var contextMenuItem by remember { mutableStateOf<VodStreamEntity?>(null) }
+    var resumePromptItem by remember { mutableStateOf<Pair<VodStreamEntity, Long>?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // OK plays. If a resume point exists the prompt comes first, so neither resuming nor
+    // starting over happens silently.
+    fun launch(item: VodStreamEntity) {
+        scope.launch {
+            val resumeMs = viewModel.resumePositionMs(item.streamId)
+            viewModel.pendingFocusStreamId = item.streamId
+            if (resumeMs != null && resumeMs > 0) {
+                resumePromptItem = item to resumeMs
+            } else {
+                onPlay(item, 0L)
+            }
+        }
+    }
 
     LaunchedEffect(state.refreshConfirmation) {
         if (state.refreshConfirmation != null) {
@@ -61,6 +80,8 @@ fun BrowseScreen(
                     .orEmpty(),
                 isRefreshing = state.isRefreshing,
                 confirmation = state.refreshConfirmation,
+                syncState = state.catalogSyncState,
+                syncDone = state.catalogSyncDone,
                 onRefresh = viewModel::refreshSelected
             )
 
@@ -76,10 +97,7 @@ fun BrowseScreen(
                 else -> ContentGrid(
                     items = items,
                     pendingFocusStreamId = viewModel.pendingFocusStreamId,
-                    onPlay = { item ->
-                        viewModel.pendingFocusStreamId = item.streamId
-                        onPlay(item)
-                    },
+                    onPlay = { item -> launch(item) },
                     onContextMenu = { contextMenuItem = it },
                     onFocused = { viewModel.pendingFocusStreamId = it.streamId }
                 )
@@ -88,14 +106,46 @@ fun BrowseScreen(
     }
 
     contextMenuItem?.let { item ->
+        val isFavourite by (viewModel.isFavourite(item.streamId) ?: flowOf(false))
+            .collectAsStateWithLifecycle(initialValue = false)
+        var hasResume by remember(item.streamId) { mutableStateOf(false) }
+        LaunchedEffect(item.streamId) {
+            hasResume = (viewModel.resumePositionMs(item.streamId) ?: 0L) > 0
+        }
+
         ItemContextMenu(
             item = item,
+            isFavourite = isFavourite,
+            hasResumePoint = hasResume,
             onDismiss = { contextMenuItem = null },
             onPlay = {
                 contextMenuItem = null
-                viewModel.pendingFocusStreamId = item.streamId
-                onPlay(item)
+                launch(item)
+            },
+            onToggleFavourite = {
+                viewModel.toggleFavourite(item.streamId, !isFavourite)
+                contextMenuItem = null
+            },
+            onClearResume = {
+                viewModel.clearResume(item.streamId)
+                contextMenuItem = null
             }
+        )
+    }
+
+    resumePromptItem?.let { (item, positionMs) ->
+        ResumePrompt(
+            title = item.nameDisplay,
+            positionMs = positionMs,
+            onResume = {
+                resumePromptItem = null
+                onPlay(item, positionMs)
+            },
+            onStartOver = {
+                resumePromptItem = null
+                onPlay(item, 0L)
+            },
+            onDismiss = { resumePromptItem = null }
         )
     }
 }
@@ -105,6 +155,8 @@ private fun Header(
     title: String,
     isRefreshing: Boolean,
     confirmation: String?,
+    syncState: String?,
+    syncDone: Int,
     onRefresh: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -117,6 +169,16 @@ private fun Header(
             Text(text = title, color = Palette.Ink, fontSize = 24.sp)
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Visible progress that dismisses at 100%. The rail counts filling in
+                // category by category are the secondary signal.
+                if (syncState == "indexing") {
+                    Text(
+                        text = "Indexing $syncDone…",
+                        color = Palette.Dim,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(end = 16.dp)
+                    )
+                }
                 confirmation?.let {
                     Text(text = it, color = Palette.Dim, fontSize = 14.sp,
                         modifier = Modifier.padding(end = 16.dp))

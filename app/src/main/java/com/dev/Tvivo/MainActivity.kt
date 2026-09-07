@@ -27,6 +27,7 @@ import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import android.content.Intent
 import com.dev.Tvivo.ui.theme.Palette
 
@@ -83,7 +84,7 @@ private fun TvivoApp() {
         )
 
         is Route.Browse -> BrowseScreen(
-            onPlay = { item ->
+            onPlay = { item, resumeFromMs ->
                 val url = StreamUrlBuilder.movie(
                     current.credentials,
                     item.streamId,
@@ -93,6 +94,10 @@ private fun TvivoApp() {
                     Intent(context, PlayerActivity::class.java)
                         .putExtra(PlayerActivity.EXTRA_URL, url)
                         .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
+                        .putExtra(PlayerActivity.EXTRA_ITEM_ID, item.streamId.toString())
+                        .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_VOD)
+                        .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, item.accountId)
+                        .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
                 )
             }
         )
