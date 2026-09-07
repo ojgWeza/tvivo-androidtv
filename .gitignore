@@ -29,3 +29,6 @@ secrets.properties
 docs/*.jpeg
 docs/*.jpg
 docs/*.png
+
+# Local scratch: screenshots, probe dumps, device logs
+.local/

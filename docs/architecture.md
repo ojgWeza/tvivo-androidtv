@@ -414,6 +414,29 @@ when a catalog refresh overlaps active playback.
    `adb shell dumpsys media.codec` probe to record what the target box can
    actually decode, and — new — **verify whether `get_vod_streams` works with
    no `category_id`**. The full-catalog sync tier depends on it.
+
+   **`dumpsys media.codec` does not exist on API 34** — the service was removed,
+   and `adb shell dumpsys media.codec` answers `Can't find service: media.codec`.
+   The probe therefore runs in-process (`diagnostics/CodecProbe.kt`) against
+   `MediaCodecList`, logged under the `TvivoCodecProbe` tag and read with
+   `adb logcat -s TvivoCodecProbe`. This is strictly better than the dumpsys
+   route: it reports what ExoPlayer itself will see, and it runs unchanged on
+   the physical box.
+
+   First result (Android TV emulator, API 34, `android-tv;x86`): AVC, HEVC, VP9
+   and MPEG-2 all decode, HEVC to 4096×4096 hardware. **No AC3 and no E-AC3
+   decoder.** A large share of `.mkv` movie files carry AC3/E-AC3 audio, so on
+   the emulator those play as video with silence — a missing-audio bug there is
+   the emulator's codec set, not necessarily the app. Re-run the probe on the
+   real TV before drawing conclusions about audio.
+
+   `debug.keystore` is generated locally and gitignored (`*.keystore`), not
+   committed — regenerate identically on a new machine with:
+   `keytool -genkeypair -v -keystore debug.keystore -storepass android
+   -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048
+   -validity 10950 -dname "CN=Tvivo Debug, OU=Dev, O=Tvivo, L=NA, ST=NA, C=US"`
+   — same alias/passwords every time is what keeps the signature stable across
+   machines, not the file itself being shared.
 1. **Auth** — DataStore+Tink credentials, validate via `player_api.php`
    (`auth: 1` and `status: "Active"`), four distinguishable failure states.
    One server field parsing `host:port`, show-password toggle, form never
