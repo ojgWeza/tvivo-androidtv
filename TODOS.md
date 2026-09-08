@@ -16,64 +16,38 @@ Every defect except Q-4, Q-5 and Q-8 is fixed and verified on-emulator. Q-4 and
 Q-5 both need an open stream, and `max_connections` is 1. Phase 4 (Series) is
 next; Phase 5 (hardening) after it.
 
+## Suggested order for the next session
+
+1. **T-T1 (Room/transaction tests) before Phase 4.** The zero-row generation-flip
+   bug deleted the entire cached catalog, shipped in the movies path behind 66
+   green tests, and was found only by building live. Series makes it a third
+   caller of that logic.
+2. **T-T2 (instrumented focus tests).** Four of ten defects were focus/layout,
+   all behind green builds. Q-9 is the sharpest case: the first fix compiled,
+   read correctly, and did nothing.
+3. **Phase 4 — Series.** Small now: a `CatalogSource` factory, a table, and the
+   season-keyed-object parsing.
+4. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback,
+   `max_connections` behaviour and remote key-repeat (T-D2b) are all
+   unverifiable on the emulator, and live playback is shipped-but-never-executed
+   code. This retires more risk than further emulator work.
+
+`DESIGN.md` (T-D1) can wait — the shared `tvFocusFrame` and `BrowseItem` /
+`CardShape` now enforce most of what it would have said. Multi-account (T-A1) is
+speculative until a second panel actually exists.
+
 ---
 
-# Part 1 — Open defects (QA pass, 2026-09-07)
+# Part 1 — Open defects
 
-Full report with evidence and screenshots:
-`.gstack/qa-reports/qa-report-tvivo-2026-09-07.md`. Health score 70/100.
+Ten defects have been found on this project. **Every one of them passed a green
+build and a green unit suite**, and every one was found by driving the emulator
+over `adb` and looking at a screenshot. Budget for that on every UI change.
 
-Every one of these is a UI or interaction defect. None were catchable by the
-unit suite, and all of them passed "compiles and launches" — the same pattern as
-the three login bugs found the same way earlier that day.
-
-## Q-1 — Home screen: third tile crushed, wrong colours, unreadable labels
-**Severity: Critical. FIXED — verified on-emulator 2026-09-08.**
-`ui/home/HomeScreen.kt`
-
-"Live TV" and "Movies" render full size; "Series" is squeezed to a narrow sliver
-with its label broken one letter per line. This is the first screen after login.
-
-Three defects in one screen, each fixed separately:
-- **Overflow.** Three tiles fixed at 320×180 dp plus 32 dp gaps and 96 dp side
-  padding exceeded the available width at this density, so `Row` compressed the
-  last child. Now weight-based, not fixed `.size()`.
-- **Wrong surface colour.** Tiles used the default `tv-material3` `Card`
-  container colour instead of `Palette.Elevated`.
-- **Contrast failure.** `Palette.Ink` on that near-white card was barely legible.
-  The screen bypassed the WCAG-measured colour system entirely.
-
-## Q-2 — No in-app back stack; Back exits the app from Browse
-**Severity: High. FIXED — verified on-emulator 2026-09-08.** `MainActivity.kt`
-
-Back from Browse returns to Home, and Home restores focus to the tile the user
-opened rather than resetting to the left edge.
-
-Was: Back on Browse left the app to the launcher, with no way from Movies back
-to the Live/Movies/Series chooser without relaunching.
-
-Structural, not cosmetic — `MainActivity` held its route in a plain
-`mutableStateOf` with no `BackHandler`, so Back fell through to finishing the
-Activity. Fixing it before Phase 3 was the right call: Live inherited a working
-back stack instead of a broken one.
-
-## Q-3 — Focus is not identifiable on buttons and Home tiles
-**Severity: High. FIXED — verified on-emulator 2026-09-08.**
-`ui/home/HomeScreen.kt`, `auth/LoginScreen.kt`, `ui/browse/BrowseScreen.kt`
-
-The Home tile also showed *two* competing rings — `tv-material3`'s own grey card
-outline plus the app frame; the card's is now switched off. The browse header's
-`Refresh` was focusable with no frame at all and now carries the shared one.
-
-Hoisted into `ui/common/TvFocusFrame.kt` (`Modifier.tvFocusFrame()`), reusing
-the grid's static accent-border pattern, and applied to Home tiles, the Login
-buttons and the browse header.
-
-On a D-pad device, "where am I" is the only navigational state the user has. The
-focus contract had been applied inconsistently by component type — grid cards
-correct, buttons and tiles not — which is exactly what the shared modifier now
-prevents. Q-9 is the same failure one layer up: the *traversal*, not the
-indicator.
+Seven are fixed and verified (Q-1, Q-2, Q-3, Q-6, Q-7, Q-9, and the two Home
+nits found while verifying them). What is left is below. The durable lessons
+from the fixed ones live in `docs/ui-scope.md` and `docs/decisions.md`, not
+here — this file is for what is still open.
 
 ## Q-4 — Player has no visible way back
 **Severity: Medium. Fixed in code (`a407bad`); still unverified on-emulator.**
@@ -103,45 +77,17 @@ chased. Two candidates to distinguish first:
 Check `Player.getCurrentTracks()` language tags against the file before touching
 any code.
 
-## Q-6 — Show password sits away from the field it controls
-**Severity: Medium. FIXED — verified on-emulator 2026-09-08.**
-
-The toggle now sits beside the password field, and the row beneath the form
-carries `Clear` and `Sign in`. `Clear` is explicit and never automatic: a
-rejected login keeps every field, because re-typing a ~44-character credential
-set on a D-pad is 200+ directional presses.
-
-## Q-7 — Action buttons hidden by the IME while typing the password
-**Severity: Medium. FIXED — verified on-emulator 2026-09-08.**
-`auth/LoginScreen.kt`
-
-`imePadding` and a scrollable column were never going to win a 440 dp column
-against a bottom-anchored IME covering half the screen. What actually fixed it
-is dismissing the IME the moment the action row takes focus — the keyboard has
-nothing left to edit once focus has left every field. Verified: the
-`Clear` / `Sign in` row sits fully clear of the open keyboard.
-
 ## Q-8 — Movie title block consumes excessive vertical space
 **Severity: Low. User asked to defer.**
 
 Titles render below the poster on up to two lines, so long Arabic titles push
 the grid rhythm around.
 
-## Q-9 — D-pad RIGHT from the category rail landed on `Refresh`, not the grid
-**Severity: High. FIXED — verified on-emulator 2026-09-08.**
-`ui/browse/CategoryRail.kt`, `ui/browse/ContentGrid.kt`, `ui/browse/BrowseScreen.kt`
+---
 
-Found while testing Live TV, but it was never live-specific — Movies had it from
-Phase 2 and nobody had pressed RIGHT from the rail. The grid was unreachable by
-D-pad from the rail; the only way into it was the header.
+# Part 1b — Platform constraints, not defects
 
-Compose's 2D focus search picked the header's `Refresh` because it is also to
-the right, and nothing in the search weighs "past the content" as worse. The fix
-is an explicit `focusProperties { right = gridFocusRequester }`.
-
-**Worth remembering:** the override only works on the **focused node itself**.
-Declared on the rail's parent focus group it was silently ignored, and the
-symptom was identical to not having written it — verified both ways on-emulator.
+Recorded so they are not re-investigated as bugs.
 
 ## Q-10 — The TV IME owns the D-pad, so in-form navigation is keyboard-only
 **Severity: Low. Not a defect — a platform constraint, recorded so it is not
@@ -163,7 +109,6 @@ Consequences, both acceptable:
 came from fighting the same platform behaviour.
 
 ---
-
 # Part 2 — Missing test coverage
 
 ## T-T1 — Room DAO and transaction tests
@@ -189,41 +134,27 @@ nothing.
 ---
 
 # Part 3 — Remaining build phases
+## Phases 0-3 + Account screen — **DONE**
 
-## Phase 3 — Live TV — **DONE 2026-09-08**
+Full detail is in git (`96051c8`, `a75931e`) and the docs. What a new session
+needs to know:
 
-Built, and everything except playback verified on the emulator. All three
-documented differences landed: the `CHANNEL(220×124 px)` 16:9 card fitted and
-letterboxed (never cropped), `ext` in place of `container_extension`, and no
-scrub bar (`useController = !isLive`).
-
-**Playback is the one thing not verified** — `max_connections` is 1, so no
-automated test may open a stream. The live `.ts` path stays the highest-exposure
-item for the Phase 5 physical-TV session.
-
-**The unverified precondition is now answered:** `get_live_streams` *does* answer
-with no `category_id` — 6,425 channels in one call, same shape as VOD. Recorded
-in `docs/xtream-api-reference.md`.
-
-Rather than copy the movies slice, Phase 3 **generalised** it, because Phase 4
-would otherwise be a third copy:
-- `StreamListParser` holds the streaming JSON reader; `VodStreamParser` and
-  `LiveStreamParser` are thin field mappings over it. `ext` and
-  `container_extension` are absorbed there.
-- `CategoryListParser` replaces the per-repository category parsing.
-- The grid renders `BrowseItem`, not `VodStreamEntity`, with `CardShape` as the
-  only per-type input. One `BrowseViewModel` serves every type via a
-  `CatalogSource`; **Phase 4 adds one factory there, not another ViewModel.**
-- Live gets its own `live_streams` table: `stream_id` is unique only *within* a
-  content type, so a shared key would let a channel and a film overwrite each
-  other.
-
-**Fixed in passing:** a zero-row full-catalog response used to flip generations
-and delete the whole cached catalog. A panel that rejects the no-`category_id`
-call answers with an object, which the parser reports as zero rows — so the
-rejection path and the "catalog is genuinely empty" path both wiped the catalog.
-Both now record `partial` and leave the existing rows alone. This was latent in
-the VOD path too, not something live introduced.
+- **The browse screen is generic.** The grid renders `BrowseItem` with
+  `CardShape` as the only per-type input, and one `BrowseViewModel` picks a
+  `CatalogSource`. `StreamListParser` holds the streaming JSON reader;
+  `VodStreamParser` / `LiveStreamParser` are field mappings over it.
+  **Phase 4 adds a `CatalogSource` factory, not a screen.**
+- **Each content type gets its own table.** `stream_id` is unique only *within*
+  a type, so a shared `(accountId, streamId)` key would let a channel and a film
+  overwrite each other. Series needs the same.
+- **A zero-row full-catalog response must never flip the generation.** A panel
+  that rejects the no-`category_id` call answers with an object, which the
+  parser reports as zero rows — indistinguishable from an empty catalog, and
+  flipping on it deletes everything cached. Both paths record `partial` instead.
+  This was latent in the VOD path and only found while building live.
+- `get_live_streams` **does** answer with no `category_id` (6,425 channels in one
+  call). `get_series` is the last unverified endpoint.
+- Live playback is shipped but **never executed** — `max_connections` is 1.
 
 ## Phase 4 — Series — **NEXT**
 Home routes Series to a "not built yet" placeholder rather than to the movies
@@ -243,23 +174,17 @@ carries the most exposure under that choice.
 **Manual refresh is done**, at both scopes: per-category in the browse header,
 and `Refresh everything` on the Account screen (every category plus both
 catalogs, TTL ignored).
+## Account screen — done, and it is how you test login
 
-## Account screen — **DONE 2026-09-08**, was not previously scoped
+`ui/settings/` carries signed-in user, server, status, expiry (highlighted
+inside 7 days), `active/max` connections, and the actions: refresh everything,
+sign in to a different account, sign out, exit.
 
-Home had no way out of the app, no way to sign out, no way to see when the
-subscription ends, and no global refresh. `ui/settings/` now carries all of it:
-signed-in user, server, status, expiry (highlighted inside 7 days), and
-`active/max` connections — the last one worth surfacing because
-`max_connections` is 1, so a second device playing makes this one fail in a way
-that otherwise reads as a broken app.
-
-Actions: refresh everything, sign in to a different account, sign out, exit.
-
-**It is also what makes the login screen testable.** Login was previously
-unreachable without clearing app data, which meant re-entering credentials that
-cannot be recovered. `Sign in to a different account` reaches it
-non-destructively, keeping the current account signed in until a new one is
-accepted, with Back returning to Home.
+**To reach the login screen, use Account → "Sign in to a different account".**
+It keeps the current account signed in until a new one is accepted, and Back
+returns to Home. Clearing app data instead destroys credentials that **cannot be
+recovered** — the Tink keyset is not exportable, so a backup of the credential
+blob would not decrypt.
 
 ## T-A1 — Multiple saved accounts (follow-up)
 
