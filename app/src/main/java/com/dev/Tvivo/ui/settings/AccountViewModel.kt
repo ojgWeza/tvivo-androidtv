@@ -141,8 +141,13 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
             )
             // The catalogs are the slow part and the reason this is a screen action
             // rather than something that happens on every launch.
-            val vodRows = syncer.syncVod().getOrDefault(0)
-            val liveRows = syncer.syncLive().getOrDefault(0)
+            // force = true: this button exists precisely to ignore the TTL. It is also
+            // now the only way to re-sync inside the 24 h window, so it has to cover
+            // every content type — series included, or a stale series catalog would have
+            // no manual escape hatch at all.
+            val vodRows = syncer.syncVod(force = true).getOrDefault(0)
+            val liveRows = syncer.syncLive(force = true).getOrDefault(0)
+            val seriesRows = syncer.syncSeries(force = true).getOrDefault(0)
 
             val failed = categories.any { it.isFailure }
             _state.update {
@@ -151,7 +156,7 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                     refreshMessage = if (failed) {
                         "Could not reach the panel"
                     } else {
-                        "Refreshed $vodRows movies and $liveRows channels"
+                        "Refreshed $vodRows movies, $liveRows channels and $seriesRows shows"
                     }
                 )
             }

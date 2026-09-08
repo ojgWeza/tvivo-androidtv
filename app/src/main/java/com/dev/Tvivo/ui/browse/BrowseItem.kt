@@ -1,5 +1,6 @@
 package com.dev.Tvivo.ui.browse
 
+import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
 import com.dev.Tvivo.data.local.entities.SeriesEntity
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
@@ -18,7 +19,14 @@ data class BrowseItem(
     val title: String,
     val imageUrl: String?,
     /** `container_extension` for movies/episodes, `ext` for live, null for a show. */
-    val extension: String?
+    val extension: String?,
+    /**
+     * `"HD"`, `"SD"`, `"4K"` — the quality token stripped out of [title], or null.
+     *
+     * The panel publishes the same show at several qualities as separate rows. Without
+     * this the grid renders both as the same string and they read as duplicates.
+     */
+    val quality: String? = null
 )
 
 /**
@@ -31,14 +39,16 @@ fun VodStreamEntity.toBrowseItem() = BrowseItem(
     id = streamId,
     title = nameDisplay,
     imageUrl = streamIcon,
-    extension = containerExtension
+    extension = containerExtension,
+    quality = NameNormalizer.qualityOf(name)
 )
 
 fun LiveStreamEntity.toBrowseItem() = BrowseItem(
     id = streamId,
     title = nameDisplay,
     imageUrl = streamIcon,
-    extension = ext
+    extension = ext,
+    quality = NameNormalizer.qualityOf(name)
 )
 
 /**
@@ -50,5 +60,6 @@ fun SeriesEntity.toBrowseItem() = BrowseItem(
     id = seriesId,
     title = nameDisplay,
     imageUrl = streamIcon,
-    extension = null
+    extension = null,
+    quality = NameNormalizer.qualityOf(name)
 )

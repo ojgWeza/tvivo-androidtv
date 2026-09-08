@@ -103,7 +103,7 @@ fun SettingsScreen(
 
         ActionRow(
             label = if (state.isRefreshing) "Refreshing everything…" else "Refresh everything",
-            hint = "Re-fetches every category and both catalogs, ignoring the 24h cache",
+            hint = "Re-fetches every category and all three catalogs, ignoring the 24h cache",
             modifier = Modifier.focusRequester(firstAction),
             onClick = { viewModel.refreshEverything() }
         )

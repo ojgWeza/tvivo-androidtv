@@ -246,4 +246,98 @@ class CatalogSyncerTest {
         // Live has not run, so it must have no state of its own rather than inheriting VOD's.
         assertNull(state(TYPE_LIVE))
     }
+
+    // ---- TTL gate -------------------------------------------------------------
+    //
+    // BrowseViewModel constructs a syncer and calls sync* in `init`, so every entry into
+    // a listing hit this path. With no freshness check that re-downloaded the whole
+    // catalog each time: verified on-emulator at 13,264 series rows rewritten 11 minutes
+    // after a `complete` run, with the progress line reading "Indexing" over data that
+    // was already there.
+
+    @Test
+    fun a_second_sync_inside_the_ttl_does_not_refetch() = runTest {
+        server.enqueue(MockResponse().setBody(vodJson(1, 2)))
+        assertEquals(2, syncer.syncVod().getOrThrow())
+        assertEquals(1, server.requestCount)
+
+        // No second response is enqueued: if this call reached the network at all, it
+        // would block or fail rather than return 0.
+        assertEquals(0, syncer.syncVod().getOrThrow())
+        assertEquals(1, server.requestCount)
+        assertEquals(CatalogSyncer.STATE_COMPLETE, state(TYPE_VOD))
+        // The cached rows are untouched.
+        assertNotNull(db.vodDao().byId(account, 1))
+        assertNotNull(db.vodDao().byId(account, 2))
+    }
+
+    @Test
+    fun force_ignores_the_ttl() = runTest {
+        server.enqueue(MockResponse().setBody(vodJson(1)))
+        syncer.syncVod().getOrThrow()
+        assertEquals(1, server.requestCount)
+
+        // `Refresh everything` on the Account screen is the caller that must still fetch.
+        server.enqueue(MockResponse().setBody(vodJson(9)))
+        assertEquals(1, syncer.syncVod(force = true).getOrThrow())
+        assertEquals(2, server.requestCount)
+        assertNotNull(db.vodDao().byId(account, 9))
+        assertNull(db.vodDao().byId(account, 1))
+    }
+
+    @Test
+    fun the_ttl_expiring_lets_the_next_sync_through() = runTest {
+        server.enqueue(MockResponse().setBody(vodJson(1)))
+        syncer.syncVod().getOrThrow()
+
+        // Age the completed run past the window.
+        val row = db.catalogSyncDao().get(account, TYPE_VOD)!!
+        db.catalogSyncDao().upsert(
+            row.copy(updatedAt = row.updatedAt - CatalogSyncer.TTL_MILLIS - 1)
+        )
+
+        server.enqueue(MockResponse().setBody(vodJson(7)))
+        assertEquals(1, syncer.syncVod().getOrThrow())
+        assertEquals(2, server.requestCount)
+        assertNotNull(db.vodDao().byId(account, 7))
+    }
+
+    @Test
+    fun a_partial_run_is_not_treated_as_fresh() = runTest {
+        db.vodDao().insertAll(listOf(existingVodRow(1)))
+        // A rejecting panel records `partial`, never `complete`.
+        server.enqueue(MockResponse().setBody("""{"user_info":{"auth":0}}"""))
+        assertEquals(0, syncer.syncVod().getOrThrow())
+        assertEquals(CatalogSyncer.STATE_PARTIAL, state(TYPE_VOD))
+
+        // The catalog is not known to be whole, so the next entry must retry rather than
+        // sit on a partial cache for 24 h.
+        server.enqueue(MockResponse().setBody(vodJson(4, 5)))
+        assertEquals(2, syncer.syncVod().getOrThrow())
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun a_failed_run_is_not_treated_as_fresh() = runTest {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertTrue(syncer.syncVod().isFailure)
+        assertEquals(CatalogSyncer.STATE_FAILED, state(TYPE_VOD))
+
+        server.enqueue(MockResponse().setBody(vodJson(3)))
+        assertEquals(1, syncer.syncVod().getOrThrow())
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun the_ttl_is_tracked_per_content_type() = runTest {
+        server.enqueue(MockResponse().setBody(vodJson(1)))
+        syncer.syncVod().getOrThrow()
+
+        // A fresh VOD catalog must not make series look fresh: they are separate rows in
+        // `catalog_sync`, and conflating them would leave series permanently unsynced.
+        server.enqueue(MockResponse().setBody("""[{"series_id":8,"name":"A Show"}]"""))
+        assertEquals(1, syncer.syncSeries().getOrThrow())
+        assertEquals(2, server.requestCount)
+        assertNotNull(db.seriesDao().byId(account, 8))
+    }
 }

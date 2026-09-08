@@ -53,7 +53,8 @@ class CatalogSyncer(
     fun observeProgress(contentType: String = TYPE_VOD): Flow<CatalogSyncEntity?> =
         db.catalogSyncDao().observe(accountId, contentType)
 
-    suspend fun syncVod(): Result<Int> = syncCatalog(
+    suspend fun syncVod(force: Boolean = false): Result<Int> = syncCatalog(
+        force = force,
         contentType = TYPE_VOD,
         request = { api.getVodStreams(credentials.username, credentials.password, categoryId = null) },
         parse = { body, generation, onChunk ->
@@ -72,7 +73,8 @@ class CatalogSyncer(
      * (`docs/xtream-api-reference.md`). The zero-row guard in [syncCatalog] is what makes
      * that difference survivable rather than destructive.
      */
-    suspend fun syncLive(): Result<Int> = syncCatalog(
+    suspend fun syncLive(force: Boolean = false): Result<Int> = syncCatalog(
+        force = force,
         contentType = TYPE_LIVE,
         request = { api.getLiveStreams(credentials.username, credentials.password, categoryId = null) },
         parse = { body, generation, onChunk ->
@@ -89,7 +91,8 @@ class CatalogSyncer(
      * `SeriesRepository`; pulling every show's episodes here would be tens of megabytes
      * for content nobody has opened.
      */
-    suspend fun syncSeries(): Result<Int> = syncCatalog(
+    suspend fun syncSeries(force: Boolean = false): Result<Int> = syncCatalog(
+        force = force,
         contentType = TYPE_SERIES,
         request = { api.getSeries(credentials.username, credentials.password, categoryId = null) },
         parse = { body, generation, onChunk ->
@@ -103,11 +106,22 @@ class CatalogSyncer(
 
     private suspend fun syncCatalog(
         contentType: String,
+        force: Boolean = false,
         request: suspend () -> Response<ResponseBody>,
         /** Streams the body straight into Room; reports each chunk's size, never its rows. */
         parse: suspend (ResponseBody, Long, suspend (Int) -> Unit) -> Unit,
         flip: suspend (Long) -> Unit
     ): Result<Int> = withContext(Dispatchers.IO) {
+        // The TTL gate. Without it every construction of BrowseViewModel re-downloaded
+        // and re-wrote the whole catalog: opening Series twice in one minute cost 13,264
+        // rows and a full ~15 MB body each time, with the progress line reading
+        // "Indexing" over data that was already complete. The per-category tier has had
+        // this since it was written (`CachedFetch.ensureFresh`); this tier never did.
+        if (!force && isFresh(contentType)) {
+            Log.i(TAG, "$contentType catalog sync: within TTL, keeping cached generation")
+            return@withContext Result.success(0)
+        }
+
         val generation = System.currentTimeMillis()
         setState(STATE_INDEXING, done = 0, total = 0, contentType = contentType)
 
@@ -159,6 +173,19 @@ class CatalogSyncer(
         }
     }
 
+    /**
+     * Only a `complete` run inside the TTL counts. `partial`, `failed` and an
+     * interrupted `indexing` all mean the catalog on disk is not known to be whole, and
+     * re-running is exactly what should happen the next time a screen asks for it.
+     */
+    private suspend fun isFresh(contentType: String): Boolean {
+        val row = db.catalogSyncDao().get(accountId, contentType) ?: return false
+        if (row.state != STATE_COMPLETE) return false
+        val age = System.currentTimeMillis() - row.updatedAt
+        // A clock that moved backwards would otherwise pin the catalog as fresh forever.
+        return age in 0 until TTL_MILLIS
+    }
+
     private suspend fun setState(
         state: String,
         done: Int,
@@ -179,6 +206,9 @@ class CatalogSyncer(
 
     companion object {
         private const val TAG = "TvivoCatalogSync"
+
+        /** Same 24 h window the per-category tier uses, for one answer to "is it stale". */
+        const val TTL_MILLIS: Long = 24L * 60 * 60 * 1000
 
         const val STATE_NOT_STARTED = "not_started"
         const val STATE_INDEXING = "indexing"

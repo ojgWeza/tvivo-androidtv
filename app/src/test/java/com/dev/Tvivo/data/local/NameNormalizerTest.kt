@@ -76,6 +76,65 @@ class NameNormalizerTest {
         assertTrue(names.display.isNotEmpty())
     }
 
+    // ---- quality badge --------------------------------------------------------
+    //
+    // Stripping the quality token is what makes mixed-direction titles truncate
+    // correctly, but on this panel the same show is published once per quality, so two
+    // distinct rows collapsed to the same display string and read as duplicates.
+    // Observed live: `RAMADAN EGYPT 2026 SD` (25 rows) and `RAMADAN EGYPT 2026 HD`
+    // (43 rows) are separate categories of the same titles.
+
+    @Test
+    fun `two qualities of one title are distinguishable again`() {
+        val hd = NameNormalizer.of("بطل العالم HD")
+        val sd = NameNormalizer.of("بطل العالم SD")
+
+        // The display string is still identical - that is the strip doing its job.
+        assertEquals(hd.display, sd.display)
+        // The badge is what tells them apart.
+        assertEquals("HD", NameNormalizer.qualityOf("بطل العالم HD"))
+        assertEquals("SD", NameNormalizer.qualityOf("بطل العالم SD"))
+    }
+
+    @Test
+    fun `quality is read from either edge`() {
+        assertEquals("HD", NameNormalizer.qualityOf("HD Some Movie"))
+        assertEquals("FHD", NameNormalizer.qualityOf("Some Movie FHD"))
+    }
+
+    @Test
+    fun `a title with no quality token has no badge`() {
+        assertEquals(null, NameNormalizer.qualityOf("Some Movie"))
+    }
+
+    @Test
+    fun `a quality token inside the title is not a badge`() {
+        // Same boundary the display strip honours: this is a real word, not a tag.
+        assertEquals(null, NameNormalizer.qualityOf("The HD Story"))
+    }
+
+    @Test
+    fun `bracketed and punctuated tokens are recognised and normalised`() {
+        assertEquals("4K", NameNormalizer.qualityOf("Some Movie [4k]"))
+        assertEquals("HD", NameNormalizer.qualityOf("(HD) Some Movie"))
+    }
+
+    @Test
+    fun `the highest quality token wins when a title carries two`() {
+        // One caption line, one badge - and 4K is the one that describes the stream.
+        assertEquals("4K", NameNormalizer.qualityOf("4K Some Movie HD"))
+    }
+
+    @Test
+    fun `badge and display are derived consistently from the same strip`() {
+        val raw = "FHD  مسلسل  الاختيار  SD"
+        val names = NameNormalizer.of(raw)
+        // Whatever the strip removed is what the badge reports, and the display keeps none of it.
+        assertEquals("FHD", NameNormalizer.qualityOf(raw))
+        assertTrue(!names.display.contains("FHD"))
+        assertTrue(!names.display.contains("SD"))
+    }
+
     @Test
     fun `normalized form is stable for sorting comparisons`() {
         // Alphabetical ordering is on this column, so equal titles must normalize equally

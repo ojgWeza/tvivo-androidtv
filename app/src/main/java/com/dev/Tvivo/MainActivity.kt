@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -43,6 +44,13 @@ import com.dev.Tvivo.ui.theme.Palette
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Without this `Modifier.imePadding()` is a no-op: Compose reads `WindowInsets.ime`,
+        // and while the decor still fits system windows the framework consumes the inset
+        // itself and reports zero to Compose. `adjustResize` in the manifest is necessary
+        // but not sufficient. The symptom was the login screen's Sign in / Clear row
+        // sitting under the TV keyboard, which covers roughly the lower half of a 1080p
+        // panel, and only appearing once focus reached the row and dismissed the IME.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         if (BuildConfig.DEBUG) CodecProbe.log()
         setContent {
             MaterialTheme {

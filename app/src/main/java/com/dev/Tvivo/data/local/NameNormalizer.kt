@@ -20,6 +20,11 @@ object NameNormalizer {
         "hd", "fhd", "sd", "uhd", "4k", "1080p", "720p", "480p", "2160p", "hevc", "h265"
     )
 
+    /** Best first. Drives which single badge a multi-token title shows. */
+    private val QUALITY_RANK = listOf(
+        "4K", "2160P", "UHD", "FHD", "1080P", "HD", "720P", "HEVC", "H265", "SD", "480P"
+    )
+
     private val ARABIC_DIACRITICS = Regex("[\\u064B-\\u0652\\u0670\\u0640]")
     private val WHITESPACE = Regex("\\s+")
     private val COMBINING_MARKS = Regex("\\p{Mn}+")
@@ -29,31 +34,62 @@ object NameNormalizer {
         return Names(raw = raw, display = display, normalized = toNormalized(display))
     }
 
-    private fun toDisplay(raw: String): String {
+    private fun toDisplay(raw: String): String = strip(raw).display
+
+    /**
+     * The quality tokens [toDisplay] removed, normalised for display — `"HD"`, `"4K"`,
+     * `null` when the title carried none.
+     *
+     * Stripping the token is what makes mixed-direction titles truncate correctly, but on
+     * a panel that publishes the same title at several qualities it also made two genuinely
+     * different rows render as the same string: `"بطل العالم HD"` and `"بطل العالم SD"`
+     * both display as `"بطل العالم"`, so a category looks full of duplicates that are not
+     * duplicates. Surfacing the token as a separate badge keeps both properties.
+     *
+     * Derived from the raw name at map time rather than stored, so this costs no schema
+     * change and cannot drift out of sync with `nameDisplay`.
+     */
+    fun qualityOf(raw: String): String? = strip(raw).quality
+
+    private data class Stripped(val display: String, val quality: String?)
+
+    private fun strip(raw: String): Stripped {
         var s = raw.replace(ARABIC_DIACRITICS, "")
         s = WHITESPACE.replace(s, " ").trim()
 
         // Quality tokens are stripped from the edges only. Removing them mid-title would
         // mangle real names that happen to contain "4K" or "HD".
+        val found = mutableListOf<String>()
         var changed = true
         while (changed) {
             changed = false
             val head = s.substringBefore(' ', s)
             if (isQualityToken(head) && head.length < s.length) {
+                found += canonicalQuality(head)
                 s = s.removePrefix(head).trim()
                 changed = true
             }
             val tail = s.substringAfterLast(' ', s)
             if (isQualityToken(tail) && tail.length < s.length) {
+                found += canonicalQuality(tail)
                 s = s.removeSuffix(tail).trim()
                 changed = true
             }
         }
-        return s.ifEmpty { raw.trim() }
+        // Highest-fidelity token wins: "MOVIE 4K HD" is a 4K stream, and one badge is all
+        // a poster caption has room for.
+        val quality = found.minByOrNull { QUALITY_RANK.indexOf(it).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+        return Stripped(display = s.ifEmpty { raw.trim() }, quality = quality)
     }
 
+    private fun canonicalQuality(token: String): String =
+        cleanToken(token).uppercase(Locale.ROOT)
+
+    private fun cleanToken(token: String): String =
+        token.trim().trim('[', ']', '(', ')', '-', '|', ':').lowercase(Locale.ROOT)
+
     private fun isQualityToken(token: String): Boolean {
-        val cleaned = token.trim().trim('[', ']', '(', ')', '-', '|', ':').lowercase(Locale.ROOT)
+        val cleaned = cleanToken(token)
         return cleaned.isNotEmpty() && cleaned in QUALITY_TOKENS
     }
 

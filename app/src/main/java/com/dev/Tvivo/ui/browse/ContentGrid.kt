@@ -181,6 +181,24 @@ private fun StreamCard(
                     modifier = Modifier.fillMaxSize()
                 )
             }
+
+            // The panel lists the same title once per quality, and `nameDisplay` has the
+            // quality token stripped out of it (that strip is what makes mixed-direction
+            // titles truncate correctly). Without this badge the two rows render as the
+            // same string and read as duplicates that the user cannot tell apart.
+            // Top-start because the provider watermark on this panel's art sits top-end.
+            item?.quality?.let { quality ->
+                Text(
+                    text = quality,
+                    color = Palette.Ink,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .background(Palette.Bg.copy(alpha = 0.78f))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
         }
 
         Text(
