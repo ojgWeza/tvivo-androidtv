@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -30,12 +32,22 @@ enum class ContentType(val label: String) {
 }
 
 /**
- * Three destinations, nothing else. Search is scoped by content type, so the choice
+ * Three destinations, plus the account. Search is scoped by content type, so the choice
  * made here is what makes the search boundary visible in navigation rather than in a
  * label the user has to read.
+ *
+ * [accountSummary] is the account and its expiry on one line. It sits on the first
+ * screen after login on purpose: a lapsed subscription otherwise presents as "every
+ * stream is broken", which is a much longer thing to work out.
  */
 @Composable
-fun HomeScreen(lastSelected: ContentType?, onSelect: (ContentType) -> Unit) {
+fun HomeScreen(
+    lastSelected: ContentType?,
+    accountSummary: String?,
+    accountWarning: Boolean,
+    onSelect: (ContentType) -> Unit,
+    onOpenSettings: () -> Unit
+) {
     // Focus lands on the tile the user last opened, so Back out of Browse returns them
     // where they were rather than resetting to the left edge every time.
     val restore = remember { FocusRequester() }
@@ -46,7 +58,36 @@ fun HomeScreen(lastSelected: ContentType?, onSelect: (ContentType) -> Unit) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 96.dp, vertical = 64.dp),
         verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "Tvivo", color = Palette.Ink, fontSize = 40.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "Tvivo", color = Palette.Ink, fontSize = 40.sp)
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                accountSummary?.let {
+                    Text(
+                        text = it,
+                        color = if (accountWarning) Palette.AccentText else Palette.Dim,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(end = 20.dp)
+                    )
+                }
+                // Sign out, switch account, refresh everything and exit all live behind
+                // this. Reached by pressing UP from the tiles.
+                Text(
+                    text = "Account",
+                    color = Palette.AccentText,
+                    fontSize = 18.sp,
+                    modifier = Modifier
+                        .tvFocusFrame()
+                        .clickable { onOpenSettings() }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+        }
+
         Spacer(Modifier.height(48.dp))
 
         Row(

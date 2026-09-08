@@ -15,6 +15,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -27,6 +29,8 @@ import com.dev.Tvivo.diagnostics.CodecProbe
 import com.dev.Tvivo.ui.browse.BrowseScreen
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
+import com.dev.Tvivo.ui.settings.AccountViewModel
+import com.dev.Tvivo.ui.settings.SettingsScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -56,6 +60,7 @@ private sealed interface Route {
     data object Login : Route
     data class Home(val credentials: Credentials) : Route
     data class Browse(val credentials: Credentials, val type: ContentType) : Route
+    data class Settings(val credentials: Credentials) : Route
 }
 
 @Composable
@@ -74,10 +79,29 @@ private fun TvivoApp() {
     // without the Home route having to carry navigation history.
     var lastOpened by remember { mutableStateOf<ContentType?>(null) }
 
-    // Browse is the only screen with somewhere to go back to; Home and Login are the
-    // top of the stack and fall through to the default (exit-to-launcher) behaviour.
-    BackHandler(enabled = route is Route.Browse) {
-        (route as? Route.Browse)?.let { route = Route.Home(it.credentials) }
+    // Set when Login was opened from Settings with an account still signed in, so Back
+    // returns to Home instead of exiting an app the user is still signed into.
+    var switchingAccount by remember { mutableStateOf<Credentials?>(null) }
+
+    val account: AccountViewModel = viewModel()
+    val accountState by account.state.collectAsStateWithLifecycle()
+
+    // Browse and Settings both go back to Home; Home and Login are the top of the stack
+    // and fall through to the default (exit-to-launcher) behaviour.
+    BackHandler(
+        enabled = route is Route.Browse ||
+            route is Route.Settings ||
+            (route is Route.Login && switchingAccount != null)
+    ) {
+        when (val current = route) {
+            is Route.Browse -> route = Route.Home(current.credentials)
+            is Route.Settings -> route = Route.Home(current.credentials)
+            is Route.Login -> switchingAccount?.let {
+                switchingAccount = null
+                route = Route.Home(it)
+            }
+            else -> Unit
+        }
     }
 
     when (val current = route) {
@@ -89,15 +113,36 @@ private fun TvivoApp() {
         }
 
         Route.Login -> LoginScreen(
-            onAuthenticated = { account -> route = Route.Home(account.credentials) }
+            onAuthenticated = { authenticated ->
+                // Re-read the account: after a sign-out or a switch, the strip on Home
+                // would otherwise still describe the previous subscription.
+                switchingAccount = null
+                account.load()
+                route = Route.Home(authenticated.credentials)
+            }
         )
 
         is Route.Home -> HomeScreen(
             lastSelected = lastOpened,
+            accountSummary = accountState.summary,
+            accountWarning = accountState.expiringSoon,
             onSelect = { type ->
                 lastOpened = type
                 route = Route.Browse(current.credentials, type)
-            }
+            },
+            onOpenSettings = { route = Route.Settings(current.credentials) }
+        )
+
+        is Route.Settings -> SettingsScreen(
+            viewModel = account,
+            onSignedOut = { route = Route.Login },
+            // Switching keeps the current account signed in until the new sign-in is
+            // accepted, so a mistyped server does not strand the user signed out.
+            onSwitchAccount = {
+                switchingAccount = current.credentials
+                route = Route.Login
+            },
+            onExit = { (context as? android.app.Activity)?.finish() }
         )
 
         // Series is Phase 4. Routing it to the movies repository would show a grid of

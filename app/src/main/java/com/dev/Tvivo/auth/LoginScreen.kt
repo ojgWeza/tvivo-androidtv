@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -27,6 +28,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -77,6 +79,14 @@ fun LoginScreen(
 
     LaunchedEffect(state.authenticated) {
         state.authenticated?.let(onAuthenticated)
+    }
+
+    // `Clear` lives in the ViewModel, but the password field holds its own
+    // TextFieldValue for the select-all-on-reject behaviour, so it has to follow.
+    LaunchedEffect(state.password) {
+        if (state.password.isEmpty() && passwordField.text.isNotEmpty()) {
+            passwordField = TextFieldValue("")
+        }
     }
 
     // On a rejected login, keep every field, focus the password and select all of it so
@@ -163,6 +173,11 @@ fun LoginScreen(
                     .dpadFieldNavigation(focusManager)
             )
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
             androidx.compose.material3.OutlinedTextField(
                 value = passwordField,
                 onValueChange = {
@@ -186,9 +201,25 @@ fun LoginScreen(
                 keyboardActions = KeyboardActions(onDone = { submit() }),
                 colors = fieldColors(),
                 modifier = Modifier
+                    .weight(1f)
                     .focusRequester(passwordFocus)
                     .dpadFieldNavigation(focusManager)
             )
+
+                // Adjacent to the field it controls (Q-6), so revealing the password
+                // is a glance away from it rather than a scroll away.
+                //
+                // Reachable only once the IME is dismissed, and that is not fixable
+                // here: while the TV keyboard is up it owns the D-pad outright, and
+                // every arrow press goes to the keyboard rather than to the app. The
+                // IME's own Next/Done keys are the only in-keyboard navigation.
+                Button(
+                    onClick = viewModel::onTogglePasswordVisibility,
+                    modifier = Modifier.tvFocusFrame()
+                ) {
+                    Text(if (state.showPassword) "Hide" else "Show")
+                }
+            }
 
             // Above the buttons, not below them: an error under the fold is an error the
             // user never sees.
@@ -197,12 +228,19 @@ fun LoginScreen(
                 Text(text = copy.message, color = Palette.AccentText, fontSize = 16.sp)
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Q-7: `imePadding` alone could not win a 440 dp column against a
+            // bottom-anchored IME covering half the screen. Dismissing the IME the
+            // moment this row takes focus is what actually makes it visible — the
+            // keyboard has nothing to edit once focus has left every field.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.onFocusChanged { if (it.hasFocus) keyboard?.hide() }
+            ) {
                 Button(
-                    onClick = viewModel::onTogglePasswordVisibility,
+                    onClick = viewModel::onClear,
                     modifier = Modifier.tvFocusFrame()
                 ) {
-                    Text(if (state.showPassword) "Hide password" else "Show password")
+                    Text("Clear")
                 }
                 Button(
                     onClick = { submit() },

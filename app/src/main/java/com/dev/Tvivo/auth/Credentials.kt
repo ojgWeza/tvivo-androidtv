@@ -20,6 +20,9 @@ data class Credentials(
     }
 
     fun playerApiUrl(): String = "${baseUrl()}/player_api.php"
+
+    /** Displayable server identity. Carries no credentials — safe to put on screen. */
+    fun hostAndPort(): String = port?.let { "$host:$it" } ?: host
 }
 
 /**

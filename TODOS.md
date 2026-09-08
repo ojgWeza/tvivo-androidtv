@@ -8,10 +8,13 @@ Everything that was *not* deferred is folded into `docs/ui-scope.md`,
 `docs/architecture.md` and `docs/decisions.md`.
 
 **Status as of 2026-09-08:** Phases 0-3 are built and running against the real
-panel on the API 34 Android TV emulator. 76 unit tests pass. VOD (48,761 rows)
-and live (6,425 channels) both sync in full, and movie playback works end to
-end. Q-1 through Q-4 are fixed and Q-1/Q-2/Q-3 are verified on-emulator.
-Phase 4 (Series) and Phase 5 (hardening) are not started.
+panel on the API 34 Android TV emulator, plus an Account screen that was not in
+the original plan. 76 unit tests pass. VOD (48,761 rows) and live (6,425
+channels) both sync in full, and movie playback works end to end.
+
+Every defect except Q-4, Q-5 and Q-8 is fixed and verified on-emulator. Q-4 and
+Q-5 both need an open stream, and `max_connections` is 1. Phase 4 (Series) is
+next; Phase 5 (hardening) after it.
 
 ---
 
@@ -101,19 +104,22 @@ Check `Player.getCurrentTracks()` language tags against the file before touching
 any code.
 
 ## Q-6 — Show password sits away from the field it controls
-**Severity: Medium.** Design change, not a defect.
+**Severity: Medium. FIXED — verified on-emulator 2026-09-08.**
 
-User asked for the toggle to sit adjacent to the password field, and for the row
-beneath the form to carry `Clear` and `Sign in`. Belongs in `ui-scope.md` before
-implementation.
+The toggle now sits beside the password field, and the row beneath the form
+carries `Clear` and `Sign in`. `Clear` is explicit and never automatic: a
+rejected login keeps every field, because re-typing a ~44-character credential
+set on a D-pad is 200+ directional presses.
 
 ## Q-7 — Action buttons hidden by the IME while typing the password
-**Severity: Medium.** `auth/LoginScreen.kt`
+**Severity: Medium. FIXED — verified on-emulator 2026-09-08.**
+`auth/LoginScreen.kt`
 
-Partially addressed (`imePadding`, scrollable column, error moved above the
-buttons, keyboard dismissed on submit), but the button row can still sit behind
-the IME at that field position. The tension is a 440 dp column against a
-bottom-anchored IME covering roughly the lower half of the screen.
+`imePadding` and a scrollable column were never going to win a 440 dp column
+against a bottom-anchored IME covering half the screen. What actually fixed it
+is dismissing the IME the moment the action row takes focus — the keyboard has
+nothing left to edit once focus has left every field. Verified: the
+`Clear` / `Sign in` row sits fully clear of the open keyboard.
 
 ## Q-8 — Movie title block consumes excessive vertical space
 **Severity: Low. User asked to defer.**
@@ -136,6 +142,25 @@ is an explicit `focusProperties { right = gridFocusRequester }`.
 **Worth remembering:** the override only works on the **focused node itself**.
 Declared on the rail's parent focus group it was silently ignored, and the
 symptom was identical to not having written it — verified both ways on-emulator.
+
+## Q-10 — The TV IME owns the D-pad, so in-form navigation is keyboard-only
+**Severity: Low. Not a defect — a platform constraint, recorded so it is not
+re-investigated as one.**
+
+While the TV keyboard is up, **every** arrow press goes to the keyboard, not to
+the app. `dpadFieldNavigation` never sees them, and no amount of
+`focusProperties` changes that. Confirmed on-emulator: pressing RIGHT from the
+password field moved the highlight around the on-screen keyboard, not to the
+adjacent `Show` button.
+
+Consequences, both acceptable:
+- Moving between fields with the IME open is the keyboard's own `Next` / `Done`
+  keys, which the form already wires up through `imeAction`.
+- `Show`, `Clear` and `Sign in` are reachable once the IME is dismissed with
+  Back. This is the standard Android TV model, not something to work around.
+
+**Do not "fix" this by intercepting keys harder.** The earlier login focus trap
+came from fighting the same platform behaviour.
 
 ---
 
@@ -211,9 +236,39 @@ it needs a MockWebServer test. `get_series_info` is fetched lazily per show, wit
 its own TTL. Same unverified `category_id` question as Phase 3.
 
 ## Phase 5 — Hardening
-Manual refresh, RTL verification, empty/loading/error states, `RefreshWorker`,
-on-device diagnostic log. Physical-TV validation happens once here — the live
-`.ts` path carries the most exposure under that choice.
+RTL verification, empty/loading/error states, `RefreshWorker`, on-device
+diagnostic log. Physical-TV validation happens once here — the live `.ts` path
+carries the most exposure under that choice.
+
+**Manual refresh is done**, at both scopes: per-category in the browse header,
+and `Refresh everything` on the Account screen (every category plus both
+catalogs, TTL ignored).
+
+## Account screen — **DONE 2026-09-08**, was not previously scoped
+
+Home had no way out of the app, no way to sign out, no way to see when the
+subscription ends, and no global refresh. `ui/settings/` now carries all of it:
+signed-in user, server, status, expiry (highlighted inside 7 days), and
+`active/max` connections — the last one worth surfacing because
+`max_connections` is 1, so a second device playing makes this one fail in a way
+that otherwise reads as a broken app.
+
+Actions: refresh everything, sign in to a different account, sign out, exit.
+
+**It is also what makes the login screen testable.** Login was previously
+unreachable without clearing app data, which meant re-entering credentials that
+cannot be recovered. `Sign in to a different account` reaches it
+non-destructively, keeping the current account signed in until a new one is
+accepted, with Back returning to Home.
+
+## T-A1 — Multiple saved accounts (follow-up)
+
+Today the store holds **one** credential set: switching accounts replaces it, so
+coming back means re-typing. The cached catalog is already account-scoped by
+`accountId`, so the data layer needs nothing — what is missing is a list of
+credential sets in `CredentialsStore` plus a "current" pointer, and a picker.
+
+Worth doing if more than one panel is genuinely in use; not before.
 
 ---
 

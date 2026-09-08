@@ -9,11 +9,17 @@ Insights / Medica Cloud Care work.
 
 ## Current state
 
-**Phases 0-3 are built and working against the real panel** (as of 2026-09-08).
-The app authenticates, browses movies and live channels by category, and plays
-movies. 48,761 VOD rows and 6,425 live channels are synced and cached; 76 unit
-tests pass. Live playback is the one path never exercised — `max_connections`
-is 1, so no automated test may open a stream.
+**Phases 0-3 are built and working against the real panel** (as of 2026-09-08),
+plus an Account screen (`ui/settings/`) carrying sign out, switch account,
+refresh everything, exit, and the subscription expiry. The app authenticates,
+browses movies and live channels by category, and plays movies. 48,761 VOD rows
+and 6,425 live channels are synced and cached; 76 unit tests pass. Live playback
+is the one path never exercised — `max_connections` is 1, so no automated test
+may open a stream.
+
+**To test the login screen, use Account → "Sign in to a different account".**
+Clearing app data instead destroys credentials that cannot be recovered — the
+Tink keyset is not exportable.
 
 **Start here:** `TODOS.md`. It carries the open QA defects (Part 1), the missing
 test coverage (Part 2), the remaining phases (Part 3), and the emulator

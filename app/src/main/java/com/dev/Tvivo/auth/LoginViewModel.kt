@@ -51,6 +51,15 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(showPassword = !it.showPassword) }
 
     /**
+     * Explicit, and never automatic. A rejected login keeps every field — re-typing a
+     * ~44-character credential set on a D-pad is 200+ directional presses — so the only
+     * way the form empties is the user asking for it.
+     */
+    fun onClear() = _state.update {
+        LoginUiState(showPassword = it.showPassword)
+    }
+
+    /**
      * Validate incrementally: a typo in the server field surfaces when the field is
      * committed, before a 44-character credential set is typed on a D-pad.
      */
