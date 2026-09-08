@@ -10,10 +10,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
 
 /**
  * Offered when a resume position exists. Starting over silently would lose the user's
@@ -37,7 +37,7 @@ fun ResumePrompt(
             Text(
                 text = title,
                 color = Palette.Ink,
-                fontSize = 20.sp,
+                style = TvType.title,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -52,7 +52,7 @@ private fun PromptAction(label: String, onClick: () -> Unit) {
     Text(
         text = label,
         color = Palette.Ink,
-        fontSize = 18.sp,
+        style = TvType.title,
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }

@@ -605,3 +605,45 @@ were rejected for a visible Netflix logo, recorded in
 **Why:** shipping a competitor's trademark inside the app is a legal problem, and
 it was only caught by opening the downloaded files rather than trusting the
 search result titles.
+
+## Exit is guarded by a confirm dialog, not by position alone
+
+**Decision (2026-09-08):** `Exit` sits last in the Home icon row **and** opens a
+two-option confirm whose default focus is `Stay in Tvivo`. Position alone was
+the alternative and was rejected.
+
+**Why:** moving Exit onto Home (D-7/D-17) is right — quitting is a global action
+and does not belong on the Account screen — but it makes Exit one press from the
+first screen, on a household remote. Position alone only makes an accidental
+press less likely; it does not make it recoverable. The dialog costs one press
+on a deliberate exit and makes the reflex press after any accidental one
+harmless, which is the same trade already accepted for `Sign out`. Having one
+confirm treatment for both also means there is a single component
+(`ui/common/ConfirmDialog.kt`) enforcing the safe-default-focus rule, rather than
+two screens each remembering it.
+
+## The login screen is fixed by layout, not by insets
+
+**Decision:** the login form is a fixed ~290 dp top-anchored column. No
+`verticalScroll`, no `imePadding()` on the screen itself.
+
+**Why:** Q-11 was fixed twice and survived both times.
+`WindowCompat.setDecorFitsSystemWindows(window, false)` was a real bug fix — it
+is what stopped `imePadding()` being a silent no-op — but it did not save the
+screen, because a `verticalScroll` column only brings the *focused* child into
+view and the action row sat below it. As long as anything focusable is
+*positioned* below the IME ceiling, some mechanism has to rescue it at runtime,
+and each such mechanism is another thing that can quietly do nothing. Laying the
+whole form out above y = 297 dp removes the need for a rescue. The insets fix
+stays in `MainActivity` because it is a precondition for every other screen.
+
+## The login error line is reserved whether or not there is an error
+
+**Decision:** a fixed 22 dp box holds the error, always laid out, holding at most
+one line (`ErrorCopy.forLogin`, budget asserted in `ErrorCopyTest`).
+
+**Why:** an error that *appears* pushes the action row 22 dp further down — that
+is, toward the keyboard — at exactly the moment the user needs to press it. A
+reserved line makes the ceiling arithmetic static instead of state-dependent, and
+the one-line budget means copy can never make it worse by wrapping. Copy that
+does not fit is rewritten, not wrapped.

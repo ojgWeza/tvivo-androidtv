@@ -214,9 +214,12 @@ Top to bottom, one scrolling list:
   panel. They sit above a divider so it is clear which is which.
 - **Counts show blank, never `0`, until that category has synced.** `0` is a
   claim that the category is empty, which is a different and false statement.
-- Category names truncate with ellipsis; the count column is fixed width so
-  numbers never move. Panel names are arbitrary length and language, and are
-  routinely longer than the app's own labels, so truncation is unavoidable.
+- **Category names wrap to two lines and are never ellipsised** (D-3); the count
+  column is fixed width so numbers never move. Panel names are arbitrary length
+  and language and are routinely longer than the app's own labels, but
+  truncating them recreates Q-12 — this panel ships `RAMADAN EGYPT 2026 SD` and
+  `... HD`, which ellipsise to the same string. A name that overflows even two
+  lines gets a focus tooltip, conditionally. See "Typography".
 - Counts come from one grouped `COUNT(*)` over Room, exposed as a `Flow`, so
   they fill in live as the background sync lands. This doubles as the sync
   progress indicator.

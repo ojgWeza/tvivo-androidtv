@@ -103,6 +103,103 @@ the grid rhythm around.
 
 ---
 
+## Q-14 — Sideloaded APK crashes on launch on a phone
+**Severity: Unknown until triaged. Reported 2026-09-08, not yet investigated.**
+
+The debug APK installs on an Android **phone**, and crashes immediately on
+"Open". No logcat captured yet, so there is no root cause here — only the report.
+
+**First step is a stack trace, not a fix:** `adb logcat -c` before launching,
+then `adb logcat -d AndroidRuntime:E *:S` right after the crash. Everything below
+is a candidate list to check the trace against, not a diagnosis.
+
+- **Verified in `AndroidManifest.xml`:** `MainActivity`'s only intent filter is
+  `LEANBACK_LAUNCHER` — there is no `android.intent.category.LAUNCHER` — and
+  `android.software.leanback` is declared `required="true"`. So the app has no
+  home-screen icon on a phone at all, and the installer's `Open` is reaching the
+  activity by a different route than a normal launch would.
+- `androidx.tv.material3` is a TV surface library; nothing guarantees it behaves
+  on a handset form factor.
+- Layouts are built to a fixed 1920x1080 10-foot geometry (`docs/ui-scope.md`),
+  so a phone is outside every measurement in the design.
+
+**Phone is not a target.** `PRODUCT.md` scopes this to Android TV, so the
+outcome may legitimately be "the phone is unsupported, and the failure should be
+a clear message rather than a crash" — but that is a decision to make *after*
+reading the trace, not instead of reading it.
+
+---
+
+## Q-15 — The icon pill draws a second, rectangular focus indicator
+**Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**
+`ui/common/IconPill.kt`
+
+The focused pill shows the accent stadium fill *and* a black rectangle behind it,
+squared off at the pill's layout bounds. Two competing focus indicators on one
+control is exactly what Q-3 fixed, and `HomeScreen` even carries a comment about
+suppressing `tv-material3`'s own outline for the same reason.
+
+**Cause:** `Modifier.clickable` supplies a default indication, which paints to the
+node's rectangular bounds and does not follow the `RoundedCornerShape(50%)` the
+pill draws its background with. It went unnoticed on every other control in the
+app because they are all rectangular, so the indication coincides with their
+edges.
+
+**Fix:** `clickable(interactionSource = …, indication = null)`, leaving
+`tvFocusFrame` as the only indicator. Worth auditing the other `clickable` call
+sites at the same time — they are all latent instances of this, and any of them
+gaining a rounded shape reintroduces it.
+
+## Q-16 — The Exit pill's glyph renders as tofu
+**Severity: Medium. Found 2026-09-08 on-emulator.**
+`ui/common/IconPill.kt`
+
+`⏻` (U+23FB POWER SYMBOL) has no glyph in the emulator's font stack and draws as
+a missing-character box. `◔` (Account) does render but is small and reads as
+nothing in particular at ten feet; `↻` (Refresh) is fine.
+
+These are documented placeholders pending the real icon set (T-D1), but a
+placeholder that renders as a box is worse than one that renders as a wrong
+picture — the pill's whole premise is that a glyph is legible at rest.
+
+**Interim fix:** restrict placeholders to glyphs that actually exist in Roboto /
+Noto on Android TV, and verify each one on-device rather than assuming.
+
+## Q-17 — RIGHT from a pill sometimes lands on a tile instead of the next pill
+**Severity: Medium. Intermittent — reproduced once, not on cold start.**
+`ui/home/HomeScreen.kt`
+
+With focus on `Refresh everything`, RIGHT moved focus **down to the Series tile**
+rather than across to `Account`, leaving Account and Exit reachable only by
+accident. From a cold start the same press moves correctly to `Account`.
+
+**Suspected cause:** the pill row is a plain `Row` with no `focusGroup()` and no
+explicit direction overrides, and `animateContentSize` changes each pill's bounds
+while the expand animation runs. Compose's 2D focus search scores candidates on
+current bounds, so a press landing mid-animation can find a tile a better match
+than the neighbouring pill. This is the same failure the rail already needed
+`focusProperties { right = … }` to fix, and the same lesson: on this project the
+2D search must be overridden, not trusted.
+
+**Fix:** explicit `focusProperties` wiring across the row, and re-test with a
+press sent during the animation window rather than after it.
+
+## Q-18 — Overlaid card titles are hard to read over bright artwork
+**Severity: Low. Found 2026-09-08 on-emulator.** `ui/browse/ContentGrid.kt`
+
+D-6 works structurally — titles are on the poster, two lines, and the grid gained
+back its row — but the scrim is too weak. Over bright posters the title competes
+with the artwork rather than sitting on top of it.
+
+**Cause:** the gradient starts at 45% of the overlay box and tops out at 94%
+alpha over a box only as tall as the text plus 6 dp. Both the start point and the
+box are too small.
+
+**Fix:** start the gradient higher and give the scrim its own height independent
+of the text.
+
+---
+
 # Part 1b — Platform constraints, not defects
 
 Recorded so they are not re-investigated as bugs.
@@ -126,7 +223,7 @@ Consequences, both acceptable:
 **Do not "fix" this by intercepting keys harder.** The earlier login focus trap
 came from fighting the same platform behaviour.
 
-## Q-11 — Sign in / Clear sit under the TV keyboard — **PARTIALLY FIXED**
+## Q-11 — Sign in / Clear sit under the TV keyboard — **FIXED (D-1), verified 2026-09-08**
 
 **Severity: High.** Focusing the password field made the `Sign in` and `Clear`
 buttons disappear; they returned only once focus reached the button row.
@@ -156,7 +253,16 @@ are **still off-screen**, because a `verticalScroll` Column only brings the
 *focused* child into view and the button row sits below it. The remaining ~590 px
 above the keyboard cannot hold title + subtitle + three fields + error + buttons.
 
-**What is left is a layout change, not an inset fix.** The form is a 440 dp
+**Closed by D-1 and verified on-emulator 2026-09-08.** With the IME up, the whole
+form — server, username, password and the complete action row — is visible above
+the keyboard. The fix was the layout, not the insets: a fixed ~290 dp top-anchored
+column with no `verticalScroll` and no `imePadding()`. **Margin is ~0 px**, so any
+added padding or a taller header re-breaks it; the reserved one-line error row and
+`ErrorCopyTest`'s 48-char budget are what hold it.
+
+**Original analysis, kept because it is why the first two fixes failed:**
+
+**What was left was a layout change, not an inset fix.** The form is a 440 dp
 column on a 1920 px screen, so the entire right half is empty. Moving the button
 row beside the fields rather than below them takes it out of the IME's path
 entirely. That is a design decision, so it is not made here.
@@ -245,6 +351,12 @@ is settled** — rationale in `docs/decisions.md`, specification in
 `docs/ui-scope.md`, visual reference in **`docs/design/comps.html`** (open it in
 a browser before touching UI). Nothing here is built yet.
 
+**Status 2026-09-08: D-1 through D-8, D-12 and D-15..D-17 are written and
+uncommitted, compiled only as far as D-5.** Nothing below has been run on the
+emulator yet — every build is gated on the owner's approval. What is left is
+D-9 (tile photographs), D-10 (splash), D-11 (app mark + banner), D-13 (category
+filter) and D-14 (item filter).
+
 Sequencing: **D-4 and D-5 touch nearly every screen.** Land them first so
 everything else is built against the real scale and roles rather than twice.
 
@@ -252,34 +364,36 @@ everything else is built against the real scale and roles rather than twice.
 
 | id | Change | Files | Note |
 |---|---|---|---|
-| **D-1** | Login: centred 820 px column, server full-width, username+password paired, one action row. Everything focusable above the IME ceiling. | `auth/LoginScreen.kt` | Supersedes the partial Q-11 fix |
-| **D-2** | Login error copy to a hard **one line** | `ui/common/ErrorCopy.kt`, `LoginScreen.kt` | Two lines push buttons into the IME |
-| **D-3** | Rail 360 dp → **280 dp**; labels wrap to 2 lines, never ellipsised; tooltip only past 2 lines | `ui/browse/CategoryRail.kt` | Truncation recreates Q-12 |
-| **D-4** | **Type scale as roles** (`display`/`headline`/`title`/`body`/`label`/`caption`), 12 dp floor. Retires every hand-picked `sp`, including the 10 dp quality badge | new `ui/theme/Type.kt` + ~6 UI files | Wide blast radius |
-| **D-5** | Map `Palette` onto **Material colour roles** so contrast variants resolve | `ui/theme/Palette.kt`, theme setup | Wide blast radius |
-| **D-6** | **Card titles overlaid** on the poster over a bottom scrim, 2 lines then ellipsise. Live TV keeps titles below (card too short) | `ui/browse/ContentGrid.kt` | **Closes Q-8.** Already in `ui-scope.md`, never implemented |
-| **D-7** | **Icon row on Home**: Refresh / Account / Exit as 88 dp pills, label revealed on focus | `ui/home/HomeScreen.kt`, new `ui/common/IconPill.kt` | |
-| **D-8** | Browse header uses the **same** icon pill component | `ui/browse/BrowseScreen.kt` | Refresh is a bare text link today |
+| **D-1** | Login: centred 820 px column, server full-width, username+password paired, one action row. Everything focusable above the IME ceiling. | `auth/LoginScreen.kt` | Supersedes the partial Q-11 fix **Built.** Content is ~290 dp, top-anchored, no scroll and no `imePadding()` — above the ceiling by layout |
+| **D-2** | Login error copy to a hard **one line** | `ui/common/ErrorCopy.kt`, `LoginScreen.kt` | Two lines push buttons into the IME **Built.** `ErrorCopy.forLogin` + `ErrorCopyTest` holds the 48-char budget |
+| **D-3** | Rail 360 dp → **280 dp**; labels wrap to 2 lines, never ellipsised; tooltip only past 2 lines | `ui/browse/CategoryRail.kt` | Truncation recreates Q-12 **Built.** 280 dp, `title` role, 2 lines, conditional tooltip on overflow |
+| **D-4** | **Type scale as roles** (`display`/`headline`/`title`/`body`/`label`/`caption`), 12 dp floor. Retires every hand-picked `sp`, including the 10 dp quality badge | new `ui/theme/Type.kt` + ~6 UI files | Wide blast radius **Built.** `ui/theme/Type.kt`; all 40 hand-picked `sp` call sites now name a role |
+| **D-5** | Map `Palette` onto **Material colour roles** so contrast variants resolve | `ui/theme/Palette.kt`, theme setup | Wide blast radius **Built.** `ui/theme/Theme.kt`; `TvivoTheme` installed in `MainActivity` |
+| **D-6** | **Card titles overlaid** on the poster over a bottom scrim, 2 lines then ellipsise. Live TV keeps titles below (card too short) | `ui/browse/ContentGrid.kt` | **Closes Q-8.** Already in `ui-scope.md`, never implemented **Built. Closes Q-8.** Poster titles overlaid on a gradient scrim; live keeps titles below |
+| **D-7** | **Icon row on Home**: Refresh / Account / Exit as 88 dp pills, label revealed on focus | `ui/home/HomeScreen.kt`, new `ui/common/IconPill.kt` | **Built.** `ui/common/IconPill.kt`; Exit is last in the row *and* behind a confirm |
+| **D-8** | Browse header uses the **same** icon pill component | `ui/browse/BrowseScreen.kt` | Refresh is a bare text link today **Built.** Same `IconPill`; label says `Refresh this category` to name the scope |
 | **D-9** | **Home tiles get photographs** (520×300, `docs/design/img/`) under a scrim | `ui/home/HomeScreen.kt`, `res/drawable*` | Screen for brand marks |
-| **D-10** | **Splash screen** — mark, wordmark, real progress bar | `res/`, `MainActivity.kt` | |
-| **D-11** | **App mark + 320×180 TV banner** from `docs/design/img/*.svg` | `res/drawable/`, manifest `android:banner` | |
-| **D-12** | `Sign out` below a divider, consequence in the hint, confirm dialog with **default focus on the safe option** | `ui/settings/SettingsScreen.kt` | |
+| **D-10** | **Splash screen** — mark, wordmark, real progress bar | `res/`, `MainActivity.kt` |  |
+| **D-11** | **App mark + 320×180 TV banner** from `docs/design/img/*.svg` | `res/drawable/`, manifest `android:banner` |  |
+| **D-12** | `Sign out` below a divider, consequence in the hint, confirm dialog with **default focus on the safe option** | `ui/settings/SettingsScreen.kt` | **Built.** Divider, consequence in the hint, `ui/common/ConfirmDialog.kt` with safe-option default focus |
 
 ## Feature work
 
-| id | Change | Files |
-|---|---|---|
-| **D-13** | **Category filter** — persistent bar pinned above the rail, filters category names live | `CategoryRail.kt`, `BrowseViewModel.kt` |
-| **D-14** | **Item filter** — grid-header search icon expanding in place into a pill with a clear button; filters the current category while typing, debounced 300 ms on `Dispatchers.IO`; header reports `N of M` | `ContentGrid.kt`, `BrowseViewModel.kt`, DAO query per content type |
-| **D-15** | **Subscription** as its own read-only screen behind `Show subscription`; Account keeps only account actions | new `ui/settings/SubscriptionScreen.kt`, `SettingsScreen.kt`, `MainActivity.kt` |
-| **D-16** | Subscription copy **reports** `max_connections`, never asserts a limit | `SubscriptionScreen.kt` |
-| **D-17** | Move Refresh and Exit **off** Account (they become D-7) | `SettingsScreen.kt` |
+| id | Change | Files | Note |
+|---|---|---|---|
+| **D-13** | **Category filter** — persistent bar pinned above the rail, filters category names live | `CategoryRail.kt`, `BrowseViewModel.kt` | |
+| **D-14** | **Item filter** — grid-header search icon expanding in place into a pill with a clear button; filters the current category while typing, debounced 300 ms on `Dispatchers.IO`; header reports `N of M` | `ContentGrid.kt`, `BrowseViewModel.kt`, DAO query per content type |  |
+| **D-15** | **Subscription** as its own read-only screen behind `Show subscription`; Account keeps only account actions | new `ui/settings/SubscriptionScreen.kt`, `SettingsScreen.kt`, `MainActivity.kt` | new `ui/settings/SubscriptionScreen.kt`, `SettingsScreen.kt`, `MainActivity.kt` — **Built** |
+| **D-16** | Subscription copy **reports** `max_connections`, never asserts a limit | `SubscriptionScreen.kt` | **Built.** Reports the number and stops |
+| **D-17** | Move Refresh and Exit **off** Account (they become D-7) | `SettingsScreen.kt` | **Built.** Both now live in Home's icon row |
 
 ## Open questions — answer before or during the build
 
-- **Exit placement.** It becomes one press from the first screen, easy to hit by
-  accident on a household remote. Confirm dialog, or last position in the row?
-  *Unanswered.*
+- **Exit placement — answered 2026-09-08: confirm dialog.** It is one press from
+  the first screen and easy to hit by accident on a household remote, so it
+  carries the same treatment as Sign out: a two-option dialog with default focus
+  on `Stay in Tvivo`. Built that way, and it also sits last in the row, so the
+  reflex press after opening it is harmless and reaching it takes travel.
 - **Icon set.** The glyphs in the comps are Unicode placeholders. The mark now
   gives a visual language (one accent stroke, rounded caps) to draw a real set
   against — this is `T-D1`; D-7/D-8 ship with placeholders until it lands.

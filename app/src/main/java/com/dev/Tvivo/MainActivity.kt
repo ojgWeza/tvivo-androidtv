@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
@@ -33,6 +32,7 @@ import com.dev.Tvivo.ui.home.HomeScreen
 import com.dev.Tvivo.ui.settings.AccountViewModel
 import com.dev.Tvivo.ui.series.SeriesDetailScreen
 import com.dev.Tvivo.ui.settings.SettingsScreen
+import com.dev.Tvivo.ui.settings.SubscriptionScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -40,6 +40,7 @@ import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import android.content.Intent
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvivoTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,7 +54,7 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (BuildConfig.DEBUG) CodecProbe.log()
         setContent {
-            MaterialTheme {
+            TvivoTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     colors = SurfaceDefaults.colors(containerColor = Palette.Bg)
@@ -75,6 +76,10 @@ private sealed interface Route {
      *  one opens its season/episode picker rather than the player. */
     data class SeriesDetail(val credentials: Credentials, val seriesId: Int) : Route
     data class Settings(val credentials: Credentials) : Route
+
+    /** D-15. Read-only, and its own screen: Account keeps the actions, this keeps the
+     *  facts. Back returns to Account, not to Home. */
+    data class Subscription(val credentials: Credentials) : Route
 }
 
 @Composable
@@ -106,6 +111,7 @@ private fun TvivoApp() {
         enabled = route is Route.Browse ||
             route is Route.SeriesDetail ||
             route is Route.Settings ||
+            route is Route.Subscription ||
             (route is Route.Login && switchingAccount != null)
     ) {
         when (val current = route) {
@@ -115,6 +121,9 @@ private fun TvivoApp() {
             is Route.SeriesDetail ->
                 route = Route.Browse(current.credentials, ContentType.SERIES)
             is Route.Settings -> route = Route.Home(current.credentials)
+            // Back out of Subscription returns to Account, which is where it was opened
+            // from — skipping to Home would lose the user's place in the action list.
+            is Route.Subscription -> route = Route.Settings(current.credentials)
             is Route.Login -> switchingAccount?.let {
                 switchingAccount = null
                 route = Route.Home(it)
@@ -145,11 +154,16 @@ private fun TvivoApp() {
             lastSelected = lastOpened,
             accountSummary = accountState.summary,
             accountWarning = accountState.expiringSoon,
+            // D-7/D-17: Refresh and Exit are global actions and live in Home's icon row.
+            isRefreshing = accountState.isRefreshing,
+            refreshMessage = accountState.refreshMessage,
+            onRefreshEverything = account::refreshEverything,
             onSelect = { type ->
                 lastOpened = type
                 route = Route.Browse(current.credentials, type)
             },
-            onOpenSettings = { route = Route.Settings(current.credentials) }
+            onOpenSettings = { route = Route.Settings(current.credentials) },
+            onExit = { (context as? android.app.Activity)?.finish() }
         )
 
         is Route.Settings -> SettingsScreen(
@@ -161,8 +175,10 @@ private fun TvivoApp() {
                 switchingAccount = current.credentials
                 route = Route.Login
             },
-            onExit = { (context as? android.app.Activity)?.finish() }
+            onShowSubscription = { route = Route.Subscription(current.credentials) }
         )
+
+        is Route.Subscription -> SubscriptionScreen(viewModel = account)
 
         is Route.Browse -> {
             val isLive = current.type == ContentType.LIVE

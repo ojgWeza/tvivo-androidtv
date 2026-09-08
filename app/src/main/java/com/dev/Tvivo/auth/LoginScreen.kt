@@ -4,15 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -42,8 +38,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Button
@@ -51,6 +47,7 @@ import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
 
 /**
  * The first impression, on the worst input device. A realistic credential set is ~44
@@ -106,31 +103,45 @@ fun LoginScreen(
         viewModel.submit()
     }
 
-    // The TV IME is a bottom-anchored panel that covers roughly the lower half of a
-    // 1080p screen. Left-aligned and scrollable keeps every field reachable: Compose
-    // brings a focused field into view rather than leaving it under the keyboard.
+    // **D-1 — the layout is the fix, not the insets.**
+    //
+    // Everything focusable is positioned above the IME ceiling (y = 297 dp) by layout,
+    // rather than scrolled into view after the fact. That distinction is the whole of
+    // Q-11: a `verticalScroll` column only brings the *focused* child into view, so the
+    // action row below it stayed under the keyboard no matter how correct the insets
+    // were. There is no scroll here and no `imePadding()` — the content is ~290 dp tall,
+    // top-anchored, and simply never reaches the keyboard.
+    //
+    // `WindowCompat.setDecorFitsSystemWindows(window, false)` stays in `MainActivity`:
+    // it is a precondition for insets working anywhere in the app, and it is what made
+    // `imePadding()` stop being a silent no-op. It is just not what saves this screen.
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 32.dp)
-            .imePadding(),
-        contentAlignment = Alignment.TopStart
+            .padding(horizontal = 48.dp, vertical = 24.dp),
+        // Centred, not left-aligned against an empty right half.
+        contentAlignment = Alignment.TopCenter
     ) {
         Column(
-            modifier = Modifier
-                .width(440.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = Modifier.width(FORM_WIDTH),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(text = "Tvivo", color = Palette.Ink, fontSize = 32.sp)
-            Text(
-                text = "Sign in to your provider",
-                color = Palette.Dim,
-                fontSize = 16.sp
-            )
+            // Wordmark and subtitle share a baseline rather than stacking. Stacking costs
+            // 26 dp, and the budget to the ceiling is only a few dp wide once the fields
+            // and the action row have taken their share.
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
+                Text(
+                    text = "Sign in to your provider",
+                    color = Palette.Dim,
+                    style = TvType.body,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                )
+            }
 
-            Spacer(Modifier.height(4.dp))
-
+            // Full-width row of its own: one field accepting `host:port`,
+            // `http://host:port` or a bare host. Two fields would add a numeric keyboard
+            // on TVs whose IME ignores `KeyboardType.Number`.
             androidx.compose.material3.OutlinedTextField(
                 value = state.server,
                 onValueChange = viewModel::onServerChanged,
@@ -138,9 +149,6 @@ fun LoginScreen(
                 placeholder = { Text("host:port", color = Palette.Dim) },
                 singleLine = true,
                 isError = state.serverFieldError != null,
-                supportingText = state.serverFieldError?.let {
-                    { Text(it, color = Palette.AccentText) }
-                },
                 keyboardOptions = KeyboardOptions(
                     // A server address is not prose; autocorrect would rewrite it.
                     keyboardType = KeyboardType.Uri,
@@ -153,95 +161,98 @@ fun LoginScreen(
                 }),
                 colors = fieldColors(),
                 modifier = Modifier
+                    .fillMaxWidth()
                     .focusRequester(serverFocus)
                     .dpadFieldNavigation(focusManager)
             )
 
-            androidx.compose.material3.OutlinedTextField(
-                value = state.username,
-                onValueChange = viewModel::onUsernameChanged,
-                label = { Text("Username", color = Palette.Dim) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    autoCorrect = false,
-                    imeAction = ImeAction.Next
-                ),
-                keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
-                colors = fieldColors(),
-                modifier = Modifier
-                    .focusRequester(usernameFocus)
-                    .dpadFieldNavigation(focusManager)
-            )
-
+            // Username and password share one row. They are the two halves of a single
+            // credential, and pairing them buys back a whole 56 dp row of ceiling budget.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-            androidx.compose.material3.OutlinedTextField(
-                value = passwordField,
-                onValueChange = {
-                    passwordField = it
-                    viewModel.onPasswordChanged(it.text)
-                },
-                label = { Text("Password", color = Palette.Dim) },
-                singleLine = true,
-                visualTransformation = if (state.showPassword) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                keyboardOptions = KeyboardOptions(
-                    // Password type even when revealed: it stops the IME offering the
-                    // password back as a suggestion and learning it into its dictionary.
-                    keyboardType = KeyboardType.Password,
-                    autoCorrect = false,
-                    imeAction = ImeAction.Done
-                ),
-                keyboardActions = KeyboardActions(onDone = { submit() }),
-                colors = fieldColors(),
-                modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(passwordFocus)
-                    .dpadFieldNavigation(focusManager)
-            )
+                androidx.compose.material3.OutlinedTextField(
+                    value = state.username,
+                    onValueChange = viewModel::onUsernameChanged,
+                    label = { Text("Username", color = Palette.Dim) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrect = false,
+                        imeAction = ImeAction.Next
+                    ),
+                    keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
+                    colors = fieldColors(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(usernameFocus)
+                        .dpadFieldNavigation(focusManager)
+                )
 
-                // Adjacent to the field it controls (Q-6), so revealing the password
-                // is a glance away from it rather than a scroll away.
-                //
-                // Reachable only once the IME is dismissed, and that is not fixable
-                // here: while the TV keyboard is up it owns the D-pad outright, and
-                // every arrow press goes to the keyboard rather than to the app. The
-                // IME's own Next/Done keys are the only in-keyboard navigation.
-                Button(
-                    onClick = viewModel::onTogglePasswordVisibility,
-                    modifier = Modifier.tvFocusFrame()
-                ) {
-                    Text(if (state.showPassword) "Hide" else "Show")
+                androidx.compose.material3.OutlinedTextField(
+                    value = passwordField,
+                    onValueChange = {
+                        passwordField = it
+                        viewModel.onPasswordChanged(it.text)
+                    },
+                    label = { Text("Password", color = Palette.Dim) },
+                    singleLine = true,
+                    visualTransformation = if (state.showPassword) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        // Password type even when revealed: it stops the IME offering the
+                        // password back as a suggestion and learning it into its
+                        // dictionary.
+                        keyboardType = KeyboardType.Password,
+                        autoCorrect = false,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    colors = fieldColors(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(passwordFocus)
+                        .dpadFieldNavigation(focusManager)
+                )
+            }
+
+            // **The error line is always laid out, even when there is no error.** An
+            // error that appears and pushes the action row down 22 dp pushes it toward
+            // the keyboard at exactly the moment the user needs to press it. Reserving
+            // the row costs nothing and keeps the ceiling arithmetic static.
+            //
+            // One line, hard: see `ErrorCopy.forLogin`. The server field's own validation
+            // message shares this line rather than claiming a `supportingText` row under
+            // the field, which would be a second variable-height element.
+            Box(modifier = Modifier.fillMaxWidth().height(ERROR_LINE_HEIGHT)) {
+                val message = state.error?.let { ErrorCopy.forLogin(it).message }
+                    ?: state.serverFieldError
+                if (message != null) {
+                    Text(
+                        text = message,
+                        color = Palette.AccentText,
+                        style = TvType.body,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
-            // Above the buttons, not below them: an error under the fold is an error the
-            // user never sees.
-            state.error?.let { error ->
-                val copy = ErrorCopy.of(error)
-                Text(text = copy.message, color = Palette.AccentText, fontSize = 16.sp)
-            }
-
-            // Q-7: `imePadding` alone could not win a 440 dp column against a
-            // bottom-anchored IME covering half the screen. Dismissing the IME the
-            // moment this row takes focus is what actually makes it visible — the
-            // keyboard has nothing to edit once focus has left every field.
+            // One action row, centred. `Show` moves here from beside the password field:
+            // Q-6 put it there so it sat next to what it controls, but it was never
+            // reachable while the IME was up either way (Q-10 — the keyboard owns the
+            // D-pad), and one row of three uniform actions is what the comps specify.
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.onFocusChanged { if (it.hasFocus) keyboard?.hide() }
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // The keyboard has nothing to edit once focus has left every field,
+                    // and dismissing it here is what makes this row usable at all.
+                    .onFocusChanged { if (it.hasFocus) keyboard?.hide() },
+                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)
             ) {
-                Button(
-                    onClick = viewModel::onClear,
-                    modifier = Modifier.tvFocusFrame()
-                ) {
-                    Text("Clear")
-                }
                 Button(
                     onClick = { submit() },
                     enabled = state.canSubmit,
@@ -249,10 +260,28 @@ fun LoginScreen(
                 ) {
                     Text(if (state.isSubmitting) "Signing in…" else "Sign in")
                 }
+                Button(
+                    onClick = viewModel::onTogglePasswordVisibility,
+                    modifier = Modifier.tvFocusFrame()
+                ) {
+                    Text(if (state.showPassword) "Hide password" else "Show password")
+                }
+                Button(
+                    onClick = viewModel::onClear,
+                    modifier = Modifier.tvFocusFrame()
+                ) {
+                    Text("Clear")
+                }
             }
         }
     }
 }
+
+/** 820 px at 1 dp = 2 px. */
+private val FORM_WIDTH = 410.dp
+
+/** One line of `body`, reserved whether or not there is an error to put in it. */
+private val ERROR_LINE_HEIGHT = 22.dp
 
 /**
  * Without this the Sign in button is unreachable and the app is unusable on a remote.

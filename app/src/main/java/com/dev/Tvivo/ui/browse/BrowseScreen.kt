@@ -22,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -31,9 +30,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
-import com.dev.Tvivo.ui.common.tvFocusFrame
+import com.dev.Tvivo.ui.common.IconPill
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -187,7 +187,7 @@ private fun Header(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // The header shows the category name immediately, before any row arrives.
-            Text(text = title, color = Palette.Ink, fontSize = 24.sp)
+            Text(text = title, color = Palette.Ink, style = TvType.headline)
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Visible progress that dismisses at 100%. The rail counts filling in
@@ -196,24 +196,26 @@ private fun Header(
                     Text(
                         text = "Indexing $syncDone…",
                         color = Palette.Dim,
-                        fontSize = 14.sp,
+                        style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp)
                     )
                 }
                 confirmation?.let {
-                    Text(text = it, color = Palette.Dim, fontSize = 14.sp,
+                    Text(text = it, color = Palette.Dim, style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp))
                 }
-                // Reached by pressing UP from the grid's top row, and carrying the same
-                // focus frame as every other focusable thing in the app (Q-3).
-                Text(
-                    text = "Refresh",
-                    color = Palette.AccentText,
-                    fontSize = 16.sp,
-                    modifier = Modifier
-                        .tvFocusFrame()
-                        .clickable { onRefresh() }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                // D-8 — the same component Home uses. This was a bare text link, which
+                // made one global action look like two different things depending on
+                // which screen you met it on. Reached by pressing UP from the grid's top
+                // row.
+                //
+                // Note the scope difference the label has to carry: this refreshes the
+                // *current category*, Home's pill refreshes everything.
+                IconPill(
+                    glyph = "↻",
+                    label = "Refresh this category",
+                    enabled = !isRefreshing,
+                    onClick = onRefresh
                 )
             }
         }
@@ -237,12 +239,12 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
     val copy = ErrorCopy.of(error)
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = copy.message, color = Palette.Ink, fontSize = 20.sp)
+            Text(text = copy.message, color = Palette.Ink, style = TvType.title)
             copy.primaryAction?.let {
                 Text(
                     text = it,
                     color = Palette.AccentText,
-                    fontSize = 16.sp,
+                    style = TvType.body,
                     modifier = Modifier.padding(top = 16.dp)
                 )
             }
@@ -254,11 +256,11 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
 private fun EmptyState(onRefresh: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "Nothing in this category", color = Palette.Ink, fontSize = 20.sp)
+            Text(text = "Nothing in this category", color = Palette.Ink, style = TvType.title)
             Text(
                 text = "Refresh",
                 color = Palette.AccentText,
-                fontSize = 16.sp,
+                style = TvType.body,
                 modifier = Modifier.clickable { onRefresh() }.padding(top = 16.dp)
             )
         }

@@ -41,3 +41,7 @@ docs/*.png
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Local QA screenshots. These capture the live panel hostname and account, and this
+# repo is public and provider-agnostic — they must never be committed.
+.qa/

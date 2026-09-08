@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,12 +21,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
+
+/** D-3. Was 360 dp, which bought nothing: no panel name fits on one line at either
+ *  width, so the extra 80 dp only narrowed the grid. */
+private val RAIL_WIDTH = 280.dp
+
+/** Fixed so the numbers never move as the sync fills them in. 96 px at 1 dp = 2 px. */
+private val COUNT_COLUMN = 48.dp
 
 /**
  * Categories as the panel lists them. Inventing a curated hierarchy over ~120 arbitrary
@@ -50,7 +58,7 @@ fun CategoryRail(
 ) {
     LazyColumn(
         modifier = modifier
-            .width(360.dp)
+            .width(RAIL_WIDTH)
             .fillMaxHeight()
             .background(Palette.Surface)
             .focusGroup(),
@@ -77,6 +85,7 @@ private fun RailRow(
     gridFocusRequester: FocusRequester
 ) {
     var focused by remember { mutableStateOf(false) }
+    var overflowed by remember { mutableStateOf(false) }
 
     val background = when {
         focused -> Palette.Accent
@@ -101,19 +110,47 @@ private fun RailRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        // **Never ellipsised.** This panel publishes `RAMADAN EGYPT 2026 SD` and
+        // `RAMADAN EGYPT 2026 HD`, which truncate to the same string — ellipsising the
+        // rail recreates exactly the false-duplicate defect Q-12 fixed in the grid.
+        // Wrap to two lines instead, and only if a name still does not fit do we fall
+        // back to showing it in full on focus.
         Text(
             text = name,
             color = textColor,
-            fontSize = 16.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            style = TvType.title,
+            maxLines = 2,
+            onTextLayout = { overflowed = it.hasVisualOverflow },
             modifier = Modifier.weight(1f)
         )
         Text(
+            // Blank, never `0`: `0` claims the category is empty, which is a different
+            // and false statement while the sync is still running.
             text = count?.toString() ?: "",
             color = if (focused) Palette.OnAccent else Palette.Dim,
-            fontSize = 14.sp,
-            modifier = Modifier.padding(start = 12.dp)
+            style = TvType.caption,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier
+                .padding(start = 12.dp)
+                .width(COUNT_COLUMN)
         )
+    }
+
+    // Conditional, never unconditional: the tooltip appears only for the small number
+    // of names that overflow even two lines, so it is a genuine signal rather than a
+    // panel that pops up on every row the user passes through.
+    if (focused && overflowed) {
+        Popup(offset = IntOffset(x = 0, y = 0)) {
+            Text(
+                text = name,
+                color = Palette.Ink,
+                style = TvType.title,
+                modifier = Modifier
+                    .width(RAIL_WIDTH)
+                    .background(Palette.Elevated)
+                    .padding(horizontal = 24.dp, vertical = 14.dp)
+            )
+        }
     }
 }

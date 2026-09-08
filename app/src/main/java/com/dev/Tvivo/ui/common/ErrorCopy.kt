@@ -59,6 +59,31 @@ object ErrorCopy {
         )
     }
 
+    /**
+     * D-2 — the **login** rendering of the same taxonomy, with a hard one-line budget.
+     *
+     * On the login screen a second line pushes the action row down into the TV keyboard,
+     * which is the Q-11 failure. The screen has no room to absorb wrapping, so copy that
+     * does not fit is **rewritten shorter**, never wrapped: [LOGIN_LINE_BUDGET] is the
+     * width of the 820 px form column at `body`, and `ErrorCopyTest` holds every message
+     * to it so a future edit cannot quietly reintroduce the second line.
+     *
+     * Only `Unreachable` needs shortening. It loses "Check the address and port." —
+     * which is no loss, because the `Edit server` action says the same thing and is the
+     * thing the user has to press anyway.
+     */
+    fun forLogin(error: AppError): ErrorPresentation = when (error) {
+        AppError.Unreachable -> ErrorPresentation(
+            message = "Can't reach that server.",
+            primaryAction = "Retry",
+            secondaryAction = "Edit server"
+        )
+        else -> of(error)
+    }
+
+    /** Characters that fit one line of `body` in the 820 px login column. */
+    const val LOGIN_LINE_BUDGET = 48
+
     private fun formatDate(epochSeconds: Long): String =
         SimpleDateFormat("d MMMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
 }

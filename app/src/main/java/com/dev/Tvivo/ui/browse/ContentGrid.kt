@@ -28,6 +28,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -35,7 +36,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
 import androidx.tv.material3.Text
@@ -43,6 +43,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.dev.Tvivo.ui.common.TvivoImageLoader
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
 
 /**
  * The one grid, for every content type. Four things live here rather than in hardening,
@@ -191,7 +192,7 @@ private fun StreamCard(
                 Text(
                     text = quality,
                     color = Palette.Ink,
-                    fontSize = 10.sp,
+                    style = TvType.caption,
                     maxLines = 1,
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -199,18 +200,68 @@ private fun StreamCard(
                         .padding(horizontal = 4.dp, vertical = 1.dp)
                 )
             }
+
+            // **D-6 — poster titles are overlaid, not placed underneath.** Underneath
+            // costs ~90 px of every card on every row and drops the grid from 2.46
+            // visible rows to 1.85. Overlaying costs the bottom ~15% of the artwork
+            // instead, which is affordable only because the quality badge is a separate
+            // element top-start and does not compete with it. This is what closes Q-8.
+            if (cardShape == CardShape.POSTER) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        // The scrim is taller than the text and fades rather than
+                        // butting: a hard edge over artwork reads as a bug, and two
+                        // lines of title need the gradient to have finished by the top
+                        // of the first line.
+                        .background(
+                            Brush.verticalGradient(
+                                0f to Color.Transparent,
+                                0.45f to Palette.Bg.copy(alpha = 0.72f),
+                                1f to Palette.Bg.copy(alpha = 0.94f)
+                            )
+                        )
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = item?.title ?: "",
+                        // Always full-strength ink: the title sits on its own scrim, so
+                        // dimming it unfocused would fight the scrim rather than the
+                        // artwork, and the focus frame already says where focus is.
+                        color = Palette.Ink,
+                        style = TvType.label,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
 
-        Text(
-            text = item?.title ?: "",
-            color = if (focused) Palette.Ink else Palette.Dim,
-            fontSize = 14.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-        )
+        // Live keeps its title below the card: the 220x124 channel tile is too short to
+        // give up its bottom to a scrim, and channel logos put their mark dead centre
+        // where an overlay would land.
+        if (cardShape == CardShape.CHANNEL) {
+            Text(
+                text = item?.title ?: "",
+                color = if (focused) Palette.Ink else Palette.Dim,
+                style = TvType.label,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // Fixed two-line box. Roboto and the Noto Naskh Arabic fallback have
+                    // different metrics, so a row of one- and two-line titles would
+                    // otherwise change height as the user scrolls through it.
+                    .height(TITLE_BLOCK_HEIGHT)
+                    .padding(top = 8.dp)
+            )
+        }
     }
 }
+
+/** Two lines of `label` (20 sp line height) plus its 8 dp offset from the card. */
+private val TITLE_BLOCK_HEIGHT = 48.dp
 
 /** Card sizes are specified in pixels because they are image-pipeline inputs. */
 private val CardShape.widthPx: Int

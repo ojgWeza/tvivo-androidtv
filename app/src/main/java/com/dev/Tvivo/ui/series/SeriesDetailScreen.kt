@@ -31,7 +31,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -43,6 +42,7 @@ import com.dev.Tvivo.ui.browse.ResumePrompt
 import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.launch
 
 /**
@@ -197,7 +197,7 @@ private fun SeasonRail(
                 Text(
                     text = season.label,
                     color = if (focused) Palette.OnAccent else Palette.Ink,
-                    fontSize = 16.sp,
+                    style = TvType.body,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -205,7 +205,7 @@ private fun SeasonRail(
                 Text(
                     text = season.episodeCount.toString(),
                     color = if (focused) Palette.OnAccent else Palette.Dim,
-                    fontSize = 14.sp,
+                    style = TvType.label,
                     modifier = Modifier.padding(start = 12.dp)
                 )
             }
@@ -227,13 +227,13 @@ private fun Header(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f).padding(end = 24.dp)) {
-                Text(text = title, color = Palette.Ink, fontSize = 24.sp, maxLines = 2,
+                Text(text = title, color = Palette.Ink, style = TvType.headline, maxLines = 2,
                     overflow = TextOverflow.Ellipsis)
                 plot?.let {
                     Text(
                         text = it,
                         color = Palette.Dim,
-                        fontSize = 14.sp,
+                        style = TvType.label,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 6.dp)
@@ -243,7 +243,7 @@ private fun Header(
             Text(
                 text = "Refresh",
                 color = Palette.AccentText,
-                fontSize = 16.sp,
+                style = TvType.body,
                 modifier = Modifier
                     .tvFocusFrame()
                     .clickable { onRefresh() }
@@ -332,13 +332,13 @@ private fun EpisodeRow(
         Text(
             text = episode.episodeNum.toString().padStart(2, '0'),
             color = Palette.Dim,
-            fontSize = 16.sp,
+            style = TvType.body,
             modifier = Modifier.width(48.dp)
         )
         Text(
             text = episode.title,
             color = Palette.Ink,
-            fontSize = 18.sp,
+            style = TvType.title,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -347,7 +347,7 @@ private fun EpisodeRow(
             Text(
                 text = "${it / 60} min",
                 color = Palette.Dim,
-                fontSize = 14.sp,
+                style = TvType.label,
                 modifier = Modifier.padding(start = 16.dp)
             )
         }
@@ -357,6 +357,6 @@ private fun EpisodeRow(
 @Composable
 private fun Message(text: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = text, color = Palette.Ink, fontSize = 20.sp)
+        Text(text = text, color = Palette.Ink, style = TvType.title)
     }
 }

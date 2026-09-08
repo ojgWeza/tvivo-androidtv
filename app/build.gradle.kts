@@ -66,6 +66,10 @@ dependencies {
     implementation("androidx.tv:tv-foundation:1.0.0-alpha11")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.compose.material3:material3")
+    // `animateContentSize` on the icon pill (D-7/D-8). It arrives transitively through
+    // material3, but the pill is the only thing that needs it and a transitive animation
+    // dependency is not something to build a component on.
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
