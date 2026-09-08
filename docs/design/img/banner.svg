@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180">
+  <!-- Android TV launcher banner, 320x180. Horizontal lockup: pulse mark + wordmark. -->
+  <rect width="320" height="180" fill="#0A1619"/>
+  <g transform="translate(26,52)">
+    <rect x="0" y="0" width="104" height="68" rx="9" fill="none" stroke="#1E4149" stroke-width="6"/>
+    <path d="M13 34 H30 L41 12 L52 58 L64 22 L72 34 H91"
+          fill="none" stroke="#D97757" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="152" y="103" font-family="Roboto,Segoe UI,sans-serif" font-size="44" font-weight="500" fill="#E8F1F2">Tvivo</text>
+</svg>

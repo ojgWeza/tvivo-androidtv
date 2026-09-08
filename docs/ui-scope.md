@@ -11,6 +11,26 @@ independent Claude reviewer). Rationale for every locked call is in
 Full review findings, the 23-task build list, and mockups:
 `~/.gstack/projects/ojgWeza-tvivo-androidtv/Dell-main-design-review-20260907.md`
 
+## Comps — open these before doing UI work
+
+**`docs/design/comps.html`** is the approved visual reference, produced
+2026-09-08 in an `/impeccable` pass and revised across four rounds with the
+owner. Open it in a browser: 12 frames rendered at true 1920×1080, using the
+verbatim `Palette.kt` hex values, real Arabic titles from the live catalog, and
+1 dp = 2 px throughout, so every measurement in it is the measurement to build.
+
+It covers Home, login (entry and error), browse (rail filter, item filter,
+overlaid titles), Account, the confirm dialog, read-only Subscription, the type
+scale, splash, and the app mark.
+
+Three things it is not: it is HTML, so Compose font metrics and line breaking
+will differ slightly — the *layout* is binding, exact line breaks are not; the
+icon glyphs in it are Unicode placeholders pending a real icon set (`T-D1`); and
+tile photographs are the real shipping assets, in `docs/design/img/`.
+
+**Product truth lives in `PRODUCT.md`** (users, operating context, constraints).
+This file stays the UI authority; `PRODUCT.md` does not restate layout.
+
 ## The device shapes everything
 
 - **Ten-foot UI.** Viewed from ~3 m on a large panel. Touch targets are
@@ -35,11 +55,11 @@ All numbers are at 1920×1080, which on Android TV is **960×540 dp at density
 Safe area (5% action-safe)   96 px / 48 dp left+right, 54 px / 27 dp top+bottom
 Usable content area          1728 × 972 px
 
-Rail (open)                  600 px wide. Background bleeds to x=0;
+Rail (open)                  560 px / 280 dp wide. Background bleeds to x=0;
                              content starts at x=96 (inside safe area).
-                             Content width 464 px = label 344 + gap 24 + count 96.
+                             Content width 424 px = label 304 + gap 24 + count 96.
 Rail-to-grid gap             32 px
-Grid pane, rail open         x 632 → 1824, usable 1192 px
+Grid pane, rail open         x 592 → 1824, usable 1232 px
 Grid pane, rail closed       x 96 → 1824, usable 1728 px
 
 Header                       76 px tall, starts at y=54
@@ -117,14 +137,33 @@ it.
 There is no design system yet (see "What does not exist"). This is the minimum
 type scale required to build against.
 
-| Role | Size | Line height | Notes |
+Sizes are **roles**, not numbers picked per screen. Text maps to a role; no
+composable hand-picks an `sp` value. **12 dp is the floor** — below it nothing is
+legible at ten feet, which is the only reason any of these numbers are what they
+are.
+
+| Role | dp / sp | px | Used for |
 |---|---|---|---|
-| Card title (overlaid) | 32 px / 16sp | 40 px | 2 lines max, over a scrim |
-| Rail label | 32 px / 16sp | 40 px | 1 line, ellipsised |
-| Rail count | 28 px / 14sp | — | tabular figures, fixed 96 px column |
-| Header / screen title | 38 px / 19sp | — | start-aligned to the grid's first column |
-| Names-only row | 32 px / 16sp | 40 px | 1 line |
-| Body, metadata | 32 px / 16sp | 40 px | |
+| `display` | 32 | 64 | Screen wordmark, `Account`, `Subscription` |
+| `headline` | 24 | 48 | Screen title, category name in the grid header |
+| `title` | 18 | 36 | Rail labels, action rows, dialog title |
+| `body` | 16 | 32 | Field values, hints, metadata |
+| `label` | 14 | 28 | Card titles, buttons, icon-pill labels |
+| `caption` | 12 | 24 | Quality badge, field labels. **Floor — never go under.** |
+
+| Element | Role | Notes |
+|---|---|---|
+| Card title (overlaid) | `label` | 2 lines max, over a scrim, then ellipsise |
+| Rail label | `title` | up to 2 lines, **never ellipsised** — see below |
+| Rail count | `caption` | tabular figures, fixed 96 px column |
+| Quality badge | `caption` | was 10 dp, below the floor. Corrected. |
+
+**Rail labels wrap; they must never be truncated.** This panel publishes
+`RAMADAN EGYPT 2026 SD` and `RAMADAN EGYPT 2026 HD` as separate categories, and
+both truncate to the same string. Ellipsising the rail recreates exactly the
+false-duplicate defect that Q-12 fixed in the grid. Wrap to two lines, and only
+if a label still overflows two lines does the focus tooltip appear — conditional,
+never unconditional.
 
 **Roboto has no Arabic.** Android falls back to Noto Naskh, whose metrics
 differ, so an English and an Arabic title in the same grid row will not share a
@@ -322,9 +361,27 @@ Search is entered from inside a content type and covers **only** that type.
 Three searches exist: Live, Movies, Series. The Home screen is what makes this
 unambiguous — you chose Movies, so "Search Movies" means what it says.
 
-- **The field always names its scope.** "Search Movies", never a bare "Search".
+**Search is never a screen, and never global.** It exists only where there is
+something to browse, as two independent filters on the browse screen:
+
+1. **Category filter — persistent, pinned above the rail.** Always visible, no
+   icon to find first, placeholder `Filter categories`. Filters the ~120 category
+   names live. It sits inside the rail because that is the list it filters.
+2. **Item filter — the search icon in the grid header, expanding in place.** The
+   collapsed icon expands into a pill *beside itself*, placeholder `Search`, with
+   a clear button inside the field. It filters the current category's items while
+   typing. The grid stays visible behind it and re-filters live; there is no
+   navigation and nothing to come back from.
+
+The grid header reports the effect (`EGYPT SERIES NEW · 4 of 35`) so a filtered
+grid can never be mistaken for an empty one.
+
+**There is no search on Home.** Home has nothing to search; adding it there
+would mean choosing a content type inside search rather than before it.
+
 - Filtering as you type, debounced 300 ms, run on `Dispatchers.IO`.
-- A separate **category filter** in the rail filters the ~120 category names.
+- Clearing the item filter restores focus to the item that was focused before it
+  opened, not to the top of the grid.
 
 **All three content types must be fully synced for this to be honest.** If
 only movies were synced, someone searching for a channel would get a confident
@@ -335,6 +392,70 @@ the cost over movies is marginal.
 **ALL, global search, and RECENTLY ADDED stay disabled until the first full
 index completes.** A half-synced catalog answering a search is the same lie in
 a different place.
+
+## Global chrome — the icon row
+
+Refresh, Account and Exit are **global actions and live on Home**, as one row of
+uniform icon pills in the top-right. None of them belongs on the Account screen:
+refreshing the catalog is not account business, and neither is quitting the app.
+
+- **88 dp pill, collapsed to the glyph.** On focus the pill expands and reveals
+  its label (`Refresh everything`, `Account`, `Exit`). Nothing stays a mystery
+  glyph at ten feet, and nothing costs a permanent row of text either.
+- **The browse header uses the same component**, so Refresh looks and behaves
+  identically in both places. It was previously a bare text link, which made one
+  global action look like two different things.
+- Refresh reports progress inline (`Refreshing — 12,480 of 48,761 movies. You can
+  keep browsing.`) and never blocks the screen.
+
+**Exit is one press from the first screen**, which on a household remote is easy
+to hit by accident. It carries the same confirm treatment as any other
+irreversible-feeling action, or sits last in the row — see `TODOS.md`.
+
+## Destructive actions
+
+`Sign out` wipes a **non-exportable** Tink keyset. There is no recovery, only
+re-typing ~44 characters on a D-pad. So:
+
+- It is separated from everything reversible by a divider, and is the last item.
+- Its hint states the consequence, not the mechanism: *"Erases the saved
+  credentials from this device. They cannot be recovered."*
+- It opens a confirm dialog naming the account, and **default focus is on the
+  safe option** (`Keep me signed in`), never on the destructive one.
+
+`Sign in to a different account` is **not** destructive and must never be
+described as if it were: it keeps the current credentials until a new sign-in is
+accepted. It is also the correct way to QA the login screen.
+
+## Home tiles
+
+Live TV, Movies and Series each carry a distinct photograph under a bottom-up
+scrim, at 520×300 px — the exact tile size, so nothing is rescaled at runtime.
+The three read as different *ideas*, not three pictures of screens: broadcast
+(a wall of sets showing a colour test card), the big screen (an empty
+auditorium), episodes in sequence (a film strip).
+
+**No third-party brand marks, ever.** Two otherwise good candidates were
+rejected for a visible Netflix logo. Provenance and licences are in
+`docs/design/img/CREDITS.md`.
+
+## Brand mark
+
+Tvivo is **TV + vivo** (*vivre*: alive, quick, vivid). The mark is therefore a
+live signal inside a screen, **not a monogram** — an earlier `T` letterform
+encoded the spelling instead of the meaning and was discarded. The pulse spikes
+and cuts a sharp V trough, so the V of *vivo* falls out of the signal rather than
+being spelled, and it reads as heartbeat and broadcast waveform at once.
+
+- One stroke, so it survives being shrunk to launcher size where lettering would
+  not. Vector, so it is sharp at every density.
+- Android TV wants a **320×180 banner**, not a round launcher icon. A horizontal
+  lockup (mark + wordmark) exists for it.
+- The splash screen is the mark, the wordmark, and a **real progress bar** —
+  shown while credentials are decrypted and the cached catalog opens. Not a
+  spinner: the wait has a known length.
+
+Source files: `docs/design/img/icon.svg`, `banner.svg`, `splash.svg`.
 
 ## States
 
@@ -412,6 +533,34 @@ The first impression, on the worst input device. A realistic credential set is
 4. **Validate incrementally.** Resolve the host when the server field is
    committed, so a typo surfaces inline before a password is typed.
 5. Open the IME automatically on the first field; OK advances to the next.
+6. **Everything focusable lives above the IME ceiling.** See the rule below; this
+   is what Q-11 was.
+7. **Centred single column, 820 px wide.** Not left-aligned against an empty right
+   half. Server takes a full-width row; username and password share the row below
+   it; `Sign in` / `Show` / `Clear` sit in one centred action row.
+8. **The error is one line.** Two lines push the action row into the keyboard.
+   Error copy for this screen has a hard one-line budget; anything longer is
+   rewritten, not wrapped.
+9. **No live "subscription preview" beside the form.** Considered and rejected:
+   while typing it can only show placeholder values, which is decoration
+   pretending to be feedback. Subscription facts belong on their own screen,
+   after authentication, where they are real.
+
+### The IME ceiling — the rule Q-11 existed for
+
+The TV IME is a bottom-anchored panel covering roughly the lower half of a 1080p
+screen, and while it is up it owns every arrow press (Q-10). Therefore:
+
+**Nothing focusable may be positioned below y = 594 px / 297 dp on any screen
+that opens a keyboard.** Not "should be scrolled into view" — positioned above
+it, by layout.
+
+`Modifier.imePadding()` is necessary but was silently doing nothing until
+`WindowCompat.setDecorFitsSystemWindows(window, false)` was called;
+`adjustResize` in the manifest is not sufficient on its own. Even with insets
+working, a `verticalScroll` column only brings the *focused* child into view, so
+anything below it stays hidden. Layout above the ceiling is the fix; insets are
+a precondition, not the fix.
 
 ## Cold start and sync
 

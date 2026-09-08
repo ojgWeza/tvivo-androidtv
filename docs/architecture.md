@@ -186,6 +186,23 @@ exactly one place without one class owning three content types.
 `PeriodicWorkRequest` is opportunistic — WorkManager may run it late or not at
 all — so it is a best-effort warm-up, never the mechanism freshness depends on.
 
+**Both tiers are gated, and this is not optional.** `CachedFetch.ensureFresh`
+gates the per-category tier; `CatalogSyncer.isFresh` gates the full-catalog tier
+against the *same* 24 h window. The full-catalog tier shipped ungated, and
+because `BrowseViewModel.init` calls `sync*` on every construction, every entry
+into a listing re-downloaded and rewrote the entire catalog (Q-13, measured at
+13,264 rows rewritten 11 minutes after a completed sync).
+
+Only `STATE_COMPLETE` counts as fresh. `STATE_PARTIAL`, `STATE_FAILED` and an
+interrupted `STATE_INDEXING` all mean the catalog on disk is not known to be
+whole, so the next screen that asks for it must re-run. A negative age (a clock
+that moved backwards) is also treated as stale, or the catalog would pin fresh
+forever.
+
+Because the gate makes automatic re-sync impossible inside the window,
+**`Refresh everything` is the only manual escape hatch and must cover every
+content type** — it previously omitted series entirely.
+
 **Category invalidation:** the category list itself is cached under a sentinel
 `category_id` and refreshed on the same TTL. Handle renamed, removed, reordered,
 and newly-empty categories, plus streams that move between categories.

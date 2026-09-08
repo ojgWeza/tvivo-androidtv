@@ -504,3 +504,104 @@ generation flip.
 building live. Series would have been a third copy of it. Three copies of a
 rule that silently deletes a user's whole catalog when it is got wrong is three
 places to get it wrong.
+
+---
+
+# 2026-09-08 — QA findings and the `/impeccable` design pass
+
+## The full-catalog tier is TTL-gated, like the per-category tier
+
+**Decision:** `CatalogSyncer` gained a `force` flag and an `isFresh` gate using
+the same 24 h window as `CachedFetch`. Only `complete` counts as fresh;
+`partial`, `failed` and an interrupted `indexing` all re-run.
+**Why:** `BrowseViewModel.init` called `sync*` unconditionally, and the syncer
+had no freshness check of its own, so **every entry into a listing
+re-downloaded and rewrote the whole catalog**. Measured: 13,264 series rows
+rewritten 11 minutes after a `complete` run, ~15 MB per entry, with the progress
+line reading "Indexing" over data that was already there.
+**The real lesson:** two caching tiers existed and only one knew the rule. When
+a second tier is added, the freshness rule is stated once for both or they
+diverge silently.
+**Consequence:** `Refresh everything` is now the only way to re-sync inside the
+window, so it had to start covering **series**, which it never did.
+
+## Quality is a badge, not a name
+
+**Decision:** `NameNormalizer.qualityOf(raw)` re-derives the stripped quality
+token at map time; `BrowseItem` carries it; the grid draws it as a corner badge.
+**Why:** stripping `HD`/`SD` into `name_display` is what makes mixed-direction
+titles truncate correctly, but this panel publishes the same title once per
+quality, so two genuinely different rows rendered as the same string and read as
+duplicates. Confirmed by the rail itself: `RAMADAN EGYPT 2026 SD` (25) and
+`RAMADAN EGYPT 2026 HD` (43) are separate categories of the same titles.
+**Why derived, not stored:** the raw `name` is already on all three entities, so
+there is no schema change and the badge cannot drift out of sync with
+`name_display`.
+**Revisit if:** a panel appears whose quality tokens are not edge-anchored.
+
+## Concurrent streams are an account property, never an app rule
+
+**Decision:** the UI **reports** `max_connections` from `server_info` and never
+states a limit as a product fact. Copy reads "This account allows N stream(s) at
+a time. Other accounts may allow more."
+**Why:** `max_connections` is 1 on the development account, and an earlier draft
+wrote "one stream at a time" into the product record as a constraint. This app is
+provider-agnostic by construction; asserting a per-account value as a rule would
+be wrong for most panels it ships against.
+
+## Search is two filters on the browse screen, not a screen or a global action
+
+**Decision:** a persistent category filter pinned above the rail, plus an item
+filter that expands in place from the grid header's search icon. No search on
+Home, no global search surface.
+**Why:** Home has nothing to search — putting it there means choosing a content
+type *inside* search rather than before it, which is the ambiguity the Home
+screen exists to remove. Filtering in place also keeps the grid visible and
+needs no back-navigation.
+
+## Rail labels wrap and are never truncated
+
+**Decision:** category labels wrap to two lines; a focus tooltip appears **only**
+if a label still overflows two lines.
+**Why:** `RAMADAN EGYPT 2026 SD` and `...HD` truncate to identical strings.
+Ellipsising the rail recreates the false-duplicate defect that the quality badge
+was introduced to fix. This was caught twice — once designing the 240 dp rail,
+once in a mock that hardcoded a truncated label — which is why it is written down
+rather than remembered. The rail settles at **280 dp**, not the 240 dp a TV
+convention would suggest, because 240 could not hold these names.
+
+## `Sign out` is guarded; `Sign in to a different account` is not destructive
+
+**Decision:** `Sign out` sits below a divider, states its consequence, and opens
+a confirm dialog with default focus on the safe option. The switch-account path
+gets none of that.
+**Why:** `signOut()` calls `store.wipe()`, destroying a non-exportable Tink
+keyset — unrecoverable, and the app is used by a household where others hold the
+remote. `onSwitchAccount` only routes to Login and keeps the current credentials
+until a new sign-in is *accepted*; conflating the two led to a wrong conclusion
+in-session that reaching the login screen costs the credentials. It does not.
+
+## Subscription is a separate read-only screen
+
+**Decision:** `Show subscription` opens its own screen. Nothing on it is
+editable.
+**Why:** read-only means no field, so no IME, so the whole class of
+keyboard-occlusion defects (Q-10, Q-11) cannot occur there at all. It also frees
+the Account screen to hold only account actions.
+
+## The brand mark is a pulse, not a monogram
+
+**Decision:** the mark is a live signal inside a screen; the beat cuts a V
+trough. An earlier `T` letterform was discarded.
+**Why:** Tvivo is TV + *vivo* (*vivre*: alive, quick, vivid). A `T` encodes the
+spelling, not the meaning. One stroke also survives launcher-size reduction,
+which lettering does not.
+
+## No third-party brand marks in shipped assets
+
+**Decision:** tile photography is screened for logos before use; two candidates
+were rejected for a visible Netflix logo, recorded in
+`docs/design/img/CREDITS.md`.
+**Why:** shipping a competitor's trademark inside the app is a legal problem, and
+it was only caught by opening the downloaded files rather than trusting the
+search result titles.

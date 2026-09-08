@@ -18,9 +18,12 @@ series shows are synced and cached; 132 unit tests pass. Live and episode
 playback are the paths never exercised — `max_connections` is 1, so no automated
 test may open a stream.
 
-**To test the login screen, use Account → "Sign in to a different account".**
-Clearing app data instead destroys credentials that cannot be recovered — the
-Tink keyset is not exportable.
+**To test the login screen, use Account → "Sign in to a different account" and
+enter a deliberately wrong account.** That path does **not** wipe anything: it
+routes to Login and keeps the current credentials until a new sign-in is
+*accepted*. Only the separate `Sign out` button calls `store.wipe()`. Clearing
+app data destroys credentials that cannot be recovered — the Tink keyset is not
+exportable.
 
 **Start here:** `TODOS.md`. It carries the open QA defects (Part 1), the missing
 test coverage (Part 2), the remaining phases (Part 3), and the emulator
@@ -51,6 +54,11 @@ in `TODOS.md` Part 5.
 - **Card sizes are an image-pipeline input, not styling.** `POSTER(220×330 px)`
   and `CHANNEL(220×124 px)`. Posters are downsampled to card size before
   caching, so changing either means re-encoding the whole cache.
+- **`max_connections` is an account property, never an app rule.** It is `1` on
+  the development account; other panels differ. The UI reports the value read
+  from `server_info` and must never state a stream limit as a product fact.
+- **No third-party brand marks in shipped assets.** Screen stock imagery for
+  logos before use; see `docs/design/img/CREDITS.md`.
 - **Credentials** (server, port, username, password) must be **encrypted at
   rest** and never in plaintext, never committed to the repo. Current
   implementation is DataStore + Tink — `EncryptedSharedPreferences` is
@@ -94,9 +102,34 @@ in `TODOS.md` Part 5.
    result must never wipe a cached season
 5. Hardening — RTL, empty/loading/error states, `RefreshWorker`, physical TV
 
-**For any UI work, start from `docs/ui-scope.md`.** It carries the layout
-system, card sizes, focus contract, state table and error copy. `architecture.md`
-is the implementation view and deliberately says nothing about how screens look.
+**Design pass (2026-09-08), decided and unbuilt — `TODOS.md` Part 2b.** Sits
+alongside Phase 5 rather than inside it: D-1..D-12 are UI (login layout, type
+scale, colour roles, rail width, overlaid card titles, Home icon row, tiles,
+splash, app mark, guarded sign-out), D-13..D-17 are features (category filter,
+item filter, read-only Subscription screen).
+
+**For any UI work, start from `docs/ui-scope.md`, then open
+`docs/design/comps.html` in a browser.** `ui-scope.md` carries the layout system,
+type scale, card sizes, focus contract, state table and error copy.
+`comps.html` is the approved visual reference from the 2026-09-08 `/impeccable`
+pass: 12 frames at true 1920x1080, real palette hex, real catalog titles,
+1 dp = 2 px, so its measurements are the ones to build.
+`architecture.md` is the implementation view and deliberately says nothing about
+how screens look. `PRODUCT.md` holds product truth (users, operating context,
+constraints) and does not restate layout.
+
+**A whole design pass is decided and unbuilt.** `TODOS.md` Part 2b lists it as
+D-1..D-17, split into UI and feature work, with rationale in `docs/decisions.md`.
+Land D-4 (type scale) and D-5 (Material colour roles) first — they touch nearly
+every screen, and building anything else before them means building it twice.
+
+**Two rules that were each violated twice and are now written down:**
+- **Nothing focusable may sit below y = 297 dp** on a screen that opens a
+  keyboard. The TV IME owns the lower half of the display and every arrow press
+  while it is up. `imePadding()` alone does not achieve this.
+- **Never truncate a category label.** This panel ships
+  `RAMADAN EGYPT 2026 SD` and `... HD`, which truncate to the same string and
+  recreate the false-duplicate defect. Wrap to two lines instead.
 
 ## Testing
 

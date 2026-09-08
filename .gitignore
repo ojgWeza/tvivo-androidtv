@@ -38,3 +38,6 @@ docs/*.png
 
 # Local scratch: screenshots, probe dumps, device logs
 .local/
+
+# Playwright MCP scratch output
+.playwright-mcp/

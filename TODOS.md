@@ -9,18 +9,22 @@ Everything that was *not* deferred is folded into `docs/ui-scope.md`,
 
 **Status as of 2026-09-08:** Phases 0-4 are built and running against the real
 panel on the API 34 Android TV emulator, plus an Account screen that was not in
-the original plan. **132 unit tests pass.** VOD (48,761 rows), live (6,425
+the original plan. **145 unit tests pass.** VOD (48,761 rows), live (6,425
 channels) and series (13,264 shows) all sync in full; movie playback works end to
 end and the season/episode picker was driven on-emulator.
 
-Every defect except Q-4, Q-5 and Q-8 is fixed and verified on-emulator. Q-4 and
-Q-5 both need an open stream, and `max_connections` is 1. Phase 5 (hardening) is
-next.
+Every defect except Q-4, Q-5, Q-8 and Q-11 is fixed and verified on-emulator.
+Q-4 and Q-5 both need an open stream, and `max_connections` is 1. Q-11's inset
+bug is fixed and verified, but the buttons still fall below the fold — what is
+left there is a layout decision. Phase 5 (hardening) is next.
 
-**The emulator has no credentials on it right now.** App data was cleared during
-the Phase 4 session, which destroyed the stored credential set — the Tink keyset
-is not exportable, so nothing could be restored. Sign in again on the emulator
-before any further QA. This is exactly the failure the warning below is about.
+**Credentials were re-entered by hand on 2026-09-08** after the Phase 4 session
+cleared app data and destroyed the previous set. Do not clear app data.
+
+**To QA the login screen, use Account → "Sign in to a different account" and
+enter a deliberately wrong account.** That path does not wipe anything: it routes
+to Login and keeps the current credentials until a new sign-in is *accepted*.
+Only the separate `Sign out` button calls `store.wipe()`.
 
 ## Suggested order for the next session
 
@@ -122,6 +126,98 @@ Consequences, both acceptable:
 **Do not "fix" this by intercepting keys harder.** The earlier login focus trap
 came from fighting the same platform behaviour.
 
+## Q-11 — Sign in / Clear sit under the TV keyboard — **PARTIALLY FIXED**
+
+**Severity: High.** Focusing the password field made the `Sign in` and `Clear`
+buttons disappear; they returned only once focus reached the button row.
+
+**Root cause:** `Modifier.imePadding()` in `LoginScreen` was a **no-op**.
+`android:windowSoftInputMode="adjustResize"` was set in the manifest, but
+`WindowCompat.setDecorFitsSystemWindows(window, false)` was never called, so the
+framework consumed the IME inset itself and reported zero to Compose. The button
+row therefore stayed where it was, under a keyboard that covers roughly the lower
+half of a 1080p panel. It reappeared on Tab only because the row's
+`onFocusChanged { keyboard?.hide() }` (the Q-7 workaround) dismissed the IME —
+that workaround was masking the real bug rather than fixing it.
+
+**Fix:** `WindowCompat.setDecorFitsSystemWindows(window, false)` in
+`MainActivity.onCreate`. One line; `imePadding()` then does what it always read
+as doing.
+
+**Distinct from Q-10.** Q-10 is about *reachability* (the IME owns the D-pad, so
+arrows cannot move focus out) and remains an accepted platform constraint. This
+was about *visibility* — the buttons were off-screen, not merely unfocusable.
+
+**Verified on-emulator 2026-09-08, and the fix is not sufficient.** With the
+password field focused and the IME up: the form now scrolls (the title scrolls
+off) and the `Show` button is visible beside the field, neither of which happened
+before — `imePadding()` is demonstrably working now. But `Clear` and `Sign in`
+are **still off-screen**, because a `verticalScroll` Column only brings the
+*focused* child into view and the button row sits below it. The remaining ~590 px
+above the keyboard cannot hold title + subtitle + three fields + error + buttons.
+
+**What is left is a layout change, not an inset fix.** The form is a 440 dp
+column on a 1920 px screen, so the entire right half is empty. Moving the button
+row beside the fields rather than below them takes it out of the IME's path
+entirely. That is a design decision, so it is not made here.
+
+**Not blocking sign-in:** the IME's own Done key submits, which is how this was
+tested, and dismissing the IME reveals the row.
+
+**Testing note that cost time:** Account → "Sign in to a different account" does
+**not** wipe anything — it only routes to Login and keeps `current.credentials`
+until a new sign-in is accepted. Only the separate `Sign out` button calls
+`store.wipe()`. Entering a deliberately wrong account is therefore a free way to
+QA the login screen, and was used for this. Do not conflate the two paths.
+
+## Q-12 — HD/SD stripping made distinct titles look like duplicates — **FIXED**
+
+**Severity: Medium.** Categories appeared full of duplicated posters. They were
+not duplicates: the panel publishes the same show once per quality, and
+`NameNormalizer` strips the quality token out of `nameDisplay`, so two genuinely
+different rows rendered as the same string. Confirmed by the rail itself, which
+carries `RAMADAN EGYPT 2026 SD` (25) and `RAMADAN EGYPT 2026 HD` (43).
+
+**The strip must stay** — it is what makes mixed-direction titles truncate
+correctly (see the `name_display` reasoning in `docs/architecture.md`). So the
+fix restores the distinction alongside it rather than by undoing it:
+`NameNormalizer.qualityOf(raw)` re-derives the stripped token, `BrowseItem`
+carries it, and `ContentGrid` draws it as a corner badge (top-**start**; this
+panel's watermark sits top-end).
+
+**No schema change.** The raw `name` is already stored on all three entities, so
+the badge is derived at map time and cannot drift out of sync with `nameDisplay`.
+
+## Q-13 — Opening any listing re-downloaded the whole catalog — **FIXED**
+
+**Severity: High.** Entering Movies/Live/Series re-ran the full-catalog sync
+every time, with the progress line reading "Indexing" over data that was already
+complete.
+
+**Root cause:** `BrowseViewModel.init` called `syncer.syncVod()/syncLive()/
+syncSeries()` unconditionally, and `CatalogSyncer` had **no freshness check of
+its own**. The per-category tier had been TTL-gated since it was written
+(`CachedFetch.ensureFresh`, `force = false`); the full-catalog tier never was.
+The two tiers simply disagreed, and nothing failed loudly enough to show it.
+
+**Measured on-emulator before the fix:** `complete`/13,264 rows at 07:02:42 →
+re-entered the listing 11 minutes later → `indexing` and all 13,264 rows
+rewritten. Every entry cost a fresh ~15 MB body.
+
+**Fix:** a `force` parameter plus an `isFresh` gate in `CatalogSyncer`, using the
+same 24 h window as `CachedFetch`. Only `complete` counts as fresh — `partial`,
+`failed` and an interrupted `indexing` must all re-run — and a backwards clock
+cannot pin the catalog fresh forever. `Refresh everything` passes `force = true`.
+
+**`refreshEverything` also now syncs series**, which it never did. That was
+latent before and load-bearing after: with the gate in place it is the only way
+to re-sync inside the 24 h window, so a series catalog would otherwise have had
+no manual escape hatch at all.
+
+**Verified on-emulator after the fix:** entering the listing logged
+`series catalog sync: within TTL, keeping cached generation`, `updatedAt` stayed
+at 07:13:54, and no rows were rewritten.
+
 ---
 # Part 2 — Missing test coverage
 
@@ -139,6 +235,57 @@ all focus/layout defects that shipped despite a green build — this is the clas
 of test that would catch them. Q-9 raises the value further: it was invisible in
 code review twice over, since the first fix compiled, read correctly, and did
 nothing.
+
+---
+
+# Part 2b — The 2026-09-08 design pass: decided and unbuilt
+
+`/impeccable` pass, four revision rounds with the owner. **Every decision below
+is settled** — rationale in `docs/decisions.md`, specification in
+`docs/ui-scope.md`, visual reference in **`docs/design/comps.html`** (open it in
+a browser before touching UI). Nothing here is built yet.
+
+Sequencing: **D-4 and D-5 touch nearly every screen.** Land them first so
+everything else is built against the real scale and roles rather than twice.
+
+## UI work
+
+| id | Change | Files | Note |
+|---|---|---|---|
+| **D-1** | Login: centred 820 px column, server full-width, username+password paired, one action row. Everything focusable above the IME ceiling. | `auth/LoginScreen.kt` | Supersedes the partial Q-11 fix |
+| **D-2** | Login error copy to a hard **one line** | `ui/common/ErrorCopy.kt`, `LoginScreen.kt` | Two lines push buttons into the IME |
+| **D-3** | Rail 360 dp → **280 dp**; labels wrap to 2 lines, never ellipsised; tooltip only past 2 lines | `ui/browse/CategoryRail.kt` | Truncation recreates Q-12 |
+| **D-4** | **Type scale as roles** (`display`/`headline`/`title`/`body`/`label`/`caption`), 12 dp floor. Retires every hand-picked `sp`, including the 10 dp quality badge | new `ui/theme/Type.kt` + ~6 UI files | Wide blast radius |
+| **D-5** | Map `Palette` onto **Material colour roles** so contrast variants resolve | `ui/theme/Palette.kt`, theme setup | Wide blast radius |
+| **D-6** | **Card titles overlaid** on the poster over a bottom scrim, 2 lines then ellipsise. Live TV keeps titles below (card too short) | `ui/browse/ContentGrid.kt` | **Closes Q-8.** Already in `ui-scope.md`, never implemented |
+| **D-7** | **Icon row on Home**: Refresh / Account / Exit as 88 dp pills, label revealed on focus | `ui/home/HomeScreen.kt`, new `ui/common/IconPill.kt` | |
+| **D-8** | Browse header uses the **same** icon pill component | `ui/browse/BrowseScreen.kt` | Refresh is a bare text link today |
+| **D-9** | **Home tiles get photographs** (520×300, `docs/design/img/`) under a scrim | `ui/home/HomeScreen.kt`, `res/drawable*` | Screen for brand marks |
+| **D-10** | **Splash screen** — mark, wordmark, real progress bar | `res/`, `MainActivity.kt` | |
+| **D-11** | **App mark + 320×180 TV banner** from `docs/design/img/*.svg` | `res/drawable/`, manifest `android:banner` | |
+| **D-12** | `Sign out` below a divider, consequence in the hint, confirm dialog with **default focus on the safe option** | `ui/settings/SettingsScreen.kt` | |
+
+## Feature work
+
+| id | Change | Files |
+|---|---|---|
+| **D-13** | **Category filter** — persistent bar pinned above the rail, filters category names live | `CategoryRail.kt`, `BrowseViewModel.kt` |
+| **D-14** | **Item filter** — grid-header search icon expanding in place into a pill with a clear button; filters the current category while typing, debounced 300 ms on `Dispatchers.IO`; header reports `N of M` | `ContentGrid.kt`, `BrowseViewModel.kt`, DAO query per content type |
+| **D-15** | **Subscription** as its own read-only screen behind `Show subscription`; Account keeps only account actions | new `ui/settings/SubscriptionScreen.kt`, `SettingsScreen.kt`, `MainActivity.kt` |
+| **D-16** | Subscription copy **reports** `max_connections`, never asserts a limit | `SubscriptionScreen.kt` |
+| **D-17** | Move Refresh and Exit **off** Account (they become D-7) | `SettingsScreen.kt` |
+
+## Open questions — answer before or during the build
+
+- **Exit placement.** It becomes one press from the first screen, easy to hit by
+  accident on a household remote. Confirm dialog, or last position in the row?
+  *Unanswered.*
+- **Icon set.** The glyphs in the comps are Unicode placeholders. The mark now
+  gives a visual language (one accent stroke, rounded caps) to draw a real set
+  against — this is `T-D1`; D-7/D-8 ship with placeholders until it lands.
+- **Title overlay coverage.** Overlaying costs the bottom ~15% of the artwork,
+  more on two-line titles. Capped at 2 lines + ellipsis, safe here only because
+  the quality badge is a separate element.
 
 ---
 
@@ -290,6 +437,22 @@ Recorded because each cost real time to diagnose and will recur.
   and the app ignores it. Fix is environmental: Extended Controls → Settings →
   General → "Send keyboard shortcuts to" = Emulator controls. **Do not add a
   `KEYCODE_ESCAPE` handler to app code** — no real TV remote sends that key.
+- **Physical-keyboard typing needs `forwardShortcutsToDevice`, and it is stored
+  outside the repo and outside the AVD.** It lives in the Windows registry at
+  `HKCU\Software\Android Open Source Project\Emulator\set`, value
+  `forwardShortcutsToDevice` (REG_SZ `true`/`false`) — the backing store for
+  Extended Controls → Settings → General → "Send keyboard shortcuts to". It is
+  absent by default, so a fresh emulator profile silently loses it and the host
+  keyboard stops typing into the guest. Restore with:
+  `Set-ItemProperty -Path 'HKCU:\Software\Android Open Source Project\Emulator\set' -Name forwardShortcutsToDevice -Value true -Type String`
+  Takes effect only on emulator restart.
+  **This directly conflicts with the Esc-as-Back note above** — `true` sends keys
+  to the device (host keyboard types, Esc arrives as `KEYCODE_ESCAPE` and Back
+  breaks); `false` keeps emulator shortcuts (Esc is Back, host keyboard does not
+  type). Pick per task; they cannot both be satisfied.
+- **Prefer pasting over typing for credentials.** `clipboardSharing` is already
+  `true` in that same registry key, and `adb shell input text '<value>'` works
+  regardless of either setting. Neither needs the host keyboard.
 - **`-gpu swiftshader_indirect` is required.** The host GPU path paints a black
   window while the guest renders correctly.
 - **`-memory 1536`, and stop the Gradle daemons first.** 16 GB total does not fit
