@@ -440,3 +440,67 @@ a group, rather than interleaving by a shared alphabet. Good enough for a POC;
 a real per-script collator is more machinery than a sort order needs right now.
 **Revisit if:** Physical-TV validation (Phase 5) shows the Latin/Arabic
 grouping reads as broken rather than as a reasonable two-block split.
+**Exception, added 2026-09-08:** the series **episode list** sorts by season then
+`episode_num`. It is the one list in the app where the panel's own numbering is
+meaningful, and alphabetical there would be actively wrong.
+
+---
+
+# Decisions from Phase 4 (Series), 2026-09-08
+
+## A show is not a playable item, and the UI says so structurally
+
+**Decision:** `series_id` addresses no stream endpoint, so a show carries no
+extension in `BrowseItem` and activating one opens `ui/series/` — the
+season/episode picker — instead of the player. `MainActivity` routes on content
+type; the grid stays type-agnostic.
+**Why:** The alternative was a `isPlayable` flag on `BrowseItem` that every
+consumer has to remember to check. Routing on the type puts the decision in one
+place, and the grid keeps knowing nothing about content types.
+**Accepted cost:** `BrowseScreen`'s `onPlay` callback now means "the user
+activated this item", which is slightly wider than its name. Documented at both
+ends rather than renamed, because for two of the three types it does play.
+
+## Episodes are a table with a string key and no generation column
+
+**Decision:** `series_episodes` is keyed `(accountId, seriesId, episodeId)` with
+`episodeId` a **string**, and has no `generation`. Its `replaceEpisodes` is a
+plain delete-then-insert, and it **refuses an empty list**.
+**Why:** The panel quotes the episode id and it is what goes in the playback
+URL — round-tripping it through Int buys nothing and risks a broken URL. The
+generation mechanism exists for 48,751-row writes that would otherwise hold a
+multi-second write lock; a single show's episodes are hundreds of rows, where
+delete-then-insert is the simpler correct thing. The empty-list guard is the
+same reasoning as the catalog zero-row guard: a rejected `get_series_info`
+parses to zero episodes, and wiping a cached season on that makes an
+already-cached show unplayable offline.
+**Revisit if:** a panel is found whose per-show episode counts run to thousands.
+
+## Episode freshness is stamped under its own content type
+
+**Decision:** `refreshSeriesInfo` reuses `CachedFetch` with the **show id in the
+category slot**, under the content type `series_info` rather than `series`.
+**Why:** `sync_meta` is keyed `(account, contentType, categoryId)`. Filing shows
+and categories under one type would let show 770 and category 770 share a stamp,
+and each would make the other look fresh for 24 h.
+
+## `duration` beats `duration_secs` on this panel
+
+**Decision:** the episode runtime is read from `duration` (`HH:MM:SS`) first,
+with `duration_secs` as the fallback.
+**Why:** Verified 2026-09-08 — a 60-episode drama reported 9-190 "seconds" per
+episode in `duration_secs`. `duration` is the human-authored field and it is the
+one a viewer can check against the player.
+**Accepted cost:** a panel that populates only `duration_secs` correctly and
+leaves `duration` malformed would be worse off. Not observed; the fallback
+covers it.
+
+## One `syncCatalog` body for all three content types
+
+**Decision:** `CatalogSyncer`'s three public methods delegate to a single private
+`syncCatalog`, parameterised by the request, the parse-and-insert step and the
+generation flip.
+**Why:** The zero-row guard was latent in the VOD path and only found while
+building live. Series would have been a third copy of it. Three copies of a
+rule that silently deletes a user's whole catalog when it is got wrong is three
+places to get it wrong.

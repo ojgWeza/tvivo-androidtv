@@ -9,13 +9,16 @@ import com.dev.Tvivo.data.local.dao.CategoryDao
 import com.dev.Tvivo.data.local.dao.FavouriteDao
 import com.dev.Tvivo.data.local.dao.LiveDao
 import com.dev.Tvivo.data.local.dao.ResumeDao
+import com.dev.Tvivo.data.local.dao.SeriesDao
 import com.dev.Tvivo.data.local.dao.SyncMetaDao
 import com.dev.Tvivo.data.local.dao.VodDao
 import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.data.local.entities.FavouriteEntity
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
 import com.dev.Tvivo.data.local.entities.ResumePositionEntity
+import com.dev.Tvivo.data.local.entities.SeriesEntity
 import com.dev.Tvivo.data.local.entities.SyncMetaEntity
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
 
@@ -24,12 +27,14 @@ import com.dev.Tvivo.data.local.entities.VodStreamEntity
         CategoryEntity::class,
         VodStreamEntity::class,
         LiveStreamEntity::class,
+        SeriesEntity::class,
+        EpisodeEntity::class,
         SyncMetaEntity::class,
         CatalogSyncEntity::class,
         ResumePositionEntity::class,
         FavouriteEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +42,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryDao(): CategoryDao
     abstract fun vodDao(): VodDao
     abstract fun liveDao(): LiveDao
+    abstract fun seriesDao(): SeriesDao
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun catalogSyncDao(): CatalogSyncDao
     abstract fun resumeDao(): ResumeDao

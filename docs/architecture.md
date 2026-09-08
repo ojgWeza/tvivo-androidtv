@@ -27,8 +27,7 @@ app/
 │   │   ├── CachedFetch.kt            // THE shared cache primitive — see below
 │   │   ├── VodRepository.kt          // thin: field mapping + playback rules only
 │   │   ├── LiveRepository.kt         // thin
-│   │   ├── SeriesRepository.kt       // thin
-│   │   └── SeriesEpisodeRepository.kt// lazy per-show, own TTL
+│   │   └── SeriesRepository.kt       // thin catalog half + lazy per-show episodes
 │   ├── model/                        // shared DTOs (network + UI)
 │   ├── AppError.kt                   // sealed error taxonomy
 │   └── StreamUrlBuilder.kt           // URL construction + redact()
@@ -43,7 +42,8 @@ app/
 │   │   ├── BrowseItem.kt             // what the grid renders, for every type
 │   │   ├── ContentGrid.kt            // paged grid, CardShape = POSTER | CHANNEL
 │   │   └── ItemContextMenu.kt        // long-press OK: play / favourite / resume
-│   ├── seriesdetail/                 // season/episode picker
+│   ├── series/                       // season/episode picker (the layer only
+│   │                                 // series has; a show is not playable)
 │   ├── common/
 │   │   ├── ErrorState.kt             // full-screen: refresh-time failure
 │   │   ├── ErrorFooter.kt            // inline focusable: paging append failure
@@ -102,7 +102,13 @@ resume positions. On account change, wipe atomically.
 - `categories(account_id, type, id, name)` — `type` distinguishes live/vod/series
 - `vod_streams`, `live_streams`
 - `series` — show metadata only (from `get_series`)
-- `series_episodes` — lazy per `series_id`, with its **own** TTL
+- `series_episodes` — lazy per `series_id`, with its **own** TTL. `episode_id` is
+  a **string**: the panel quotes it, it is what goes in the playback URL, and
+  nothing is gained by round-tripping it through Int. No `generation` column —
+  episodes arrive one show at a time, so plain delete-then-insert is right here
+  where it is wrong at catalog scale. That delete-then-insert **refuses an empty
+  list**: a rejected `get_series_info` parses to zero episodes, and wiping a
+  cached season on that makes an already-cached show unplayable offline
 - `resume_positions(account_id, content_type, item_id, position_ms, updated_at)`
   — the composite key matters; `item_id` alone collides across accounts
 - `favourites(account_id, content_type, item_id, added_at)` — same composite-key
@@ -187,6 +193,11 @@ and newly-empty categories, plus streams that move between categories.
 **Series episodes** get their own TTL and manual refresh. Cached "outside the
 TTL cycle" would mean stale forever, and new episodes would never appear.
 
+Their freshness reuses `CachedFetch` with the **show id in the category slot**,
+under a distinct content type (`series_info`). Filing them under `series` would
+let show 770 and category 770 share one stamp and each make the other look
+fresh.
+
 ### Full-catalog sync tier
 
 The app syncs **all three content types in full** (~48,751 VOD rows, plus live
@@ -220,9 +231,11 @@ returns the full VOD catalog on this panel. The tier therefore stands as
 designed, and the fallback — ~120 sequential per-category requests, which would
 change the progress model but not the design — is not needed for movies.
 
-**Verified 2026-09-08 for `get_live_streams` too** — 6,425 channels in one call.
-`get_series` is still unchecked; if it rejects a missing `category_id`, series
-falls back to per-category fetches on its own, without affecting the other types.
+**Verified 2026-09-08 for `get_live_streams` and `get_series` too** — 6,425
+channels and 13,264 shows, each in one call. All three content types now use the
+tier, and they share **one** `syncCatalog` body in `CatalogSyncer` rather than
+three copies: the zero-row guard below was latent in the VOD path and only found
+while building live, and a third copy is a third place to get it wrong.
 
 **A zero-row response must never flip the generation.** A panel that rejects the
 call answers with a JSON object rather than an array, which the parser reports as
@@ -482,20 +495,35 @@ when a catalog refresh overlaps active playback.
    the **`CHANNEL(220×124)` 16:9 card**, not the poster card.
 4. **Series** — extra layer; `get_series` (not `get_series_streams`); episodes
    arrive as an object keyed by season number as a string.
+
+   Built 2026-09-08. Three things the design did not anticipate, all found by
+   driving the emulator: `duration_secs` is wrong on this panel (a 60-episode
+   drama reported 9-190 "seconds", so `duration` / `HH:MM:SS` is read first),
+   episode titles repeat the show's leading quality token and need the same
+   `NameNormalizer` display pass the grid uses, and the detail screen opened
+   with focus on nothing until it requested it explicitly.
 5. **Hardening** — manual refresh, RTL verification, empty/loading/error states,
    `RefreshWorker`, on-device diagnostic log.
 
-**Only `get_series` is still unverified** for a missing `category_id`;
-`get_vod_streams` (2026-09-07) and `get_live_streams` (2026-09-08) both answer.
-If series rejects it, that type falls back to per-category fetches without
-affecting the others.
+**All three list endpoints answer without a `category_id`** — `get_vod_streams`
+(2026-09-07), `get_live_streams` and `get_series` (both 2026-09-08). The
+per-category fallback is still the behaviour on a zero-row answer, and still the
+right one, but no content type depends on it today.
 
 **Phases 3-5 share one browse screen, not three.** The grid renders `BrowseItem`
 and takes a `CardShape`; one `BrowseViewModel` picks a `CatalogSource` from the
 content type. `StreamListParser` holds the streaming JSON reader and absorbs the
 `ext` / `container_extension` difference, with `VodStreamParser` and
-`LiveStreamParser` as field mappings over it. Series adds a `CatalogSource`
-factory, not a screen.
+`LiveStreamParser` as field mappings over it. Series added a `CatalogSource`
+factory, not a browse screen — `SeriesListParser` is a third field mapping over
+the same reader, which also absorbs `series_id` / `cover` / `last_modified`.
+
+The one screen series does add is `ui/series/`: a show is **not playable**
+(`series_id` addresses no stream endpoint), so activating one opens the
+season/episode picker and `MainActivity` routes on content type. The picker
+reuses the browse screen's layout and LEFT/RIGHT focus contract deliberately —
+a viewer arriving from the Movies grid should not have to learn a second set of
+navigation rules for the same D-pad.
 
 ## Testing
 

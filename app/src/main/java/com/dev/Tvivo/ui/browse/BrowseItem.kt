@@ -1,6 +1,7 @@
 package com.dev.Tvivo.ui.browse
 
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
+import com.dev.Tvivo.data.local.entities.SeriesEntity
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
 
 /**
@@ -16,7 +17,7 @@ data class BrowseItem(
     val id: Int,
     val title: String,
     val imageUrl: String?,
-    /** `container_extension` for movies/episodes, `ext` for live. */
+    /** `container_extension` for movies/episodes, `ext` for live, null for a show. */
     val extension: String?
 )
 
@@ -38,4 +39,16 @@ fun LiveStreamEntity.toBrowseItem() = BrowseItem(
     title = nameDisplay,
     imageUrl = streamIcon,
     extension = ext
+)
+
+/**
+ * A show is not playable — `series_id` addresses no stream endpoint — so it carries no
+ * extension, and activating it opens the season/episode picker instead of the player.
+ * The grid does not need to know that; `MainActivity` routes on the content type.
+ */
+fun SeriesEntity.toBrowseItem() = BrowseItem(
+    id = seriesId,
+    title = nameDisplay,
+    imageUrl = streamIcon,
+    extension = null
 )

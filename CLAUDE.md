@@ -9,13 +9,14 @@ Insights / Medica Cloud Care work.
 
 ## Current state
 
-**Phases 0-3 are built and working against the real panel** (as of 2026-09-08),
+**Phases 0-4 are built and working against the real panel** (as of 2026-09-08),
 plus an Account screen (`ui/settings/`) carrying sign out, switch account,
 refresh everything, exit, and the subscription expiry. The app authenticates,
-browses movies and live channels by category, and plays movies. 48,761 VOD rows
-and 6,425 live channels are synced and cached; 76 unit tests pass. Live playback
-is the one path never exercised — `max_connections` is 1, so no automated test
-may open a stream.
+browses movies, live channels and series by category, plays movies, and shows a
+season/episode picker per show. 48,761 VOD rows, 6,425 live channels and 13,264
+series shows are synced and cached; 132 unit tests pass. Live and episode
+playback are the paths never exercised — `max_connections` is 1, so no automated
+test may open a stream.
 
 **To test the login screen, use Account → "Sign in to a different account".**
 Clearing app data instead destroys credentials that cannot be recovered — the
@@ -25,10 +26,12 @@ Tink keyset is not exportable.
 test coverage (Part 2), the remaining phases (Part 3), and the emulator
 environment gotchas that each cost real time to rediscover (Part 5).
 
-**Phase 4 (Series) is next.** Phase 3 generalised the movies slice rather than
-copying it, so Series adds one `CatalogSource` factory in `BrowseViewModel`, a
-`series` table and the `get_series_info` season parsing — not another screen.
-The browse UI is typed to `BrowseItem`, not to any entity.
+**Phase 5 (hardening) is next.** Phase 4 landed as one `CatalogSource` factory in
+`BrowseViewModel`, a `series` table and the `get_series_info` season parsing —
+not another browse screen. The one thing series does add is `ui/series/`: a show
+is not playable (`series_id` addresses no stream endpoint), so activating one
+opens the season/episode picker and `MainActivity` routes on content type. The
+browse UI stays typed to `BrowseItem`, not to any entity.
 
 Run the emulator with `tools/emulator.sh`, never bare `emulator.exe`: it stops
 the Gradle daemons first and passes the two flags this machine requires. Details
@@ -85,8 +88,11 @@ in `TODOS.md` Part 5.
    the focus frame plus last-active state, and the long-press context menu
 3. Live TV — done; **16:9 channel card**, not the poster card, and `ext` not
    `container_extension`
-4. Series (one extra layer: category → shows → `get_series_info` →
-   season/episode picker → play)
+4. Series — done; one extra layer (category → shows → `get_series_info` →
+   season/episode picker → play). Episode ids are **strings**, `duration_secs`
+   is wrong on this panel (read `duration`), and an empty `get_series_info`
+   result must never wipe a cached season
+5. Hardening — RTL, empty/loading/error states, `RefreshWorker`, physical TV
 
 **For any UI work, start from `docs/ui-scope.md`.** It carries the layout
 system, card sizes, focus contract, state table and error copy. `architecture.md`

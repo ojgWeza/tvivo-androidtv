@@ -7,30 +7,40 @@ ideas.
 Everything that was *not* deferred is folded into `docs/ui-scope.md`,
 `docs/architecture.md` and `docs/decisions.md`.
 
-**Status as of 2026-09-08:** Phases 0-3 are built and running against the real
+**Status as of 2026-09-08:** Phases 0-4 are built and running against the real
 panel on the API 34 Android TV emulator, plus an Account screen that was not in
-the original plan. 76 unit tests pass. VOD (48,761 rows) and live (6,425
-channels) both sync in full, and movie playback works end to end.
+the original plan. **132 unit tests pass.** VOD (48,761 rows), live (6,425
+channels) and series (13,264 shows) all sync in full; movie playback works end to
+end and the season/episode picker was driven on-emulator.
 
 Every defect except Q-4, Q-5 and Q-8 is fixed and verified on-emulator. Q-4 and
-Q-5 both need an open stream, and `max_connections` is 1. Phase 4 (Series) is
-next; Phase 5 (hardening) after it.
+Q-5 both need an open stream, and `max_connections` is 1. Phase 5 (hardening) is
+next.
+
+**The emulator has no credentials on it right now.** App data was cleared during
+the Phase 4 session, which destroyed the stored credential set — the Tink keyset
+is not exportable, so nothing could be restored. Sign in again on the emulator
+before any further QA. This is exactly the failure the warning below is about.
 
 ## Suggested order for the next session
 
-1. **T-T1 (Room/transaction tests) before Phase 4.** The zero-row generation-flip
-   bug deleted the entire cached catalog, shipped in the movies path behind 66
-   green tests, and was found only by building live. Series makes it a third
-   caller of that logic.
-2. **T-T2 (instrumented focus tests).** Four of ten defects were focus/layout,
-   all behind green builds. Q-9 is the sharpest case: the first fix compiled,
-   read correctly, and did nothing.
-3. **Phase 4 — Series.** Small now: a `CatalogSource` factory, a table, and the
-   season-keyed-object parsing.
-4. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback,
-   `max_connections` behaviour and remote key-repeat (T-D2b) are all
-   unverifiable on the emulator, and live playback is shipped-but-never-executed
-   code. This retires more risk than further emulator work.
+1. **T-T2 (instrumented focus tests).** Now the highest-value gap. Five of the
+   defects found on this project were focus/layout, all behind green builds, and
+   Phase 4 added two more of the same class (initial focus on the detail screen,
+   and the season rail's RIGHT target) that only a screenshot caught. Q-9 is the
+   sharpest case: the first fix compiled, read correctly, and did nothing.
+2. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback, the
+   `/series/` episode path, `max_connections` behaviour and remote key-repeat
+   (T-D2b) are all unverifiable on the emulator, and both live and episode
+   playback are shipped-but-never-executed code. This retires more risk than
+   further emulator work.
+3. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
+   `RefreshWorker`, on-device diagnostic log.
+
+**T-T1 is done.** `CatalogDaoTest` (16 tests) covers `replaceCategory`, the
+generation flip, account scoping and the per-type table separation;
+`CatalogSyncerTest` (11) drives the full-catalog tier over MockWebServer against
+in-memory Room, including the zero-row guard for all three content types.
 
 `DESIGN.md` (T-D1) can wait — the shared `tvFocusFrame` and `BrowseItem` /
 `CardShape` now enforce most of what it would have said. Multi-account (T-A1) is
@@ -45,7 +55,11 @@ build and a green unit suite**, and every one was found by driving the emulator
 over `adb` and looking at a screenshot. Budget for that on every UI change.
 
 Seven are fixed and verified (Q-1, Q-2, Q-3, Q-6, Q-7, Q-9, and the two Home
-nits found while verifying them). What is left is below. The durable lessons
+nits found while verifying them). Phase 4 found three more the same way and all
+three are fixed: the detail screen opened with focus on nothing, the picker
+showed "1 min" for 40-minute episodes because this panel's `duration_secs` is
+wrong, and episode titles carried the `HD` token the grid strips. What is left
+is below. The durable lessons
 from the fixed ones live in `docs/ui-scope.md` and `docs/decisions.md`, not
 here — this file is for what is still open.
 
@@ -111,18 +125,13 @@ came from fighting the same platform behaviour.
 ---
 # Part 2 — Missing test coverage
 
-## T-T1 — Room DAO and transaction tests
-**`CLAUDE.md` asks for these and they do not exist.**
+## T-T1 — Room DAO and transaction tests — **DONE**
 
-76 unit tests cover `ServerAddress`, `StreamUrlBuilder`, `NameNormalizer`,
-`VodStreamParser`, `LiveStreamParser`, `CategoryListParser`, `ErrorMapper` and
-`CachedFetch`. Missing: in-memory Room
-tests for DAO behaviour and, more importantly, **transaction** behaviour —
-`replaceCategory`'s delete-then-insert, and the generation flip in
-`CatalogSyncer`. Those are exactly the paths where a silent bug loses a user's
-whole catalog.
-
-Needs Robolectric, so slower to write than the pure-logic tests.
+`CatalogDaoTest` and `CatalogSyncerTest` (Robolectric + in-memory Room, the
+latter with MockWebServer). They cover `replaceCategory`'s delete-then-insert,
+the generation flip, account scoping, the per-content-type table separation, and
+the zero-row guard for VOD, live and series. `SeriesRepositoryTest` adds the
+per-show `get_series_info` TTL and its own empty-result guard.
 
 ## T-T2 — Instrumented D-pad focus traversal tests
 Compose focus tests on the emulator, per `CLAUDE.md`. Q-1, Q-2, Q-3 and Q-9 are
@@ -156,15 +165,33 @@ needs to know:
   call). `get_series` is the last unverified endpoint.
 - Live playback is shipped but **never executed** — `max_connections` is 1.
 
-## Phase 4 — Series — **NEXT**
-Home routes Series to a "not built yet" placeholder rather than to the movies
-repository, which would have shown a grid of films under a Series header.
+## Phase 4 — Series — **DONE**
 
-One extra layer: category → shows (`get_series`, **not** `get_series_streams`)
-→ `get_series_info` → season/episode picker → play. Episodes arrive as an object
-keyed by season number **as a string** — the parser must handle that shape, and
-it needs a MockWebServer test. `get_series_info` is fetched lazily per show, with
-its own TTL. Same unverified `category_id` question as Phase 3.
+Built as predicted: one `CatalogSource` factory, a `series` table, and the
+season-keyed-object parsing. No second browse screen. What a new session needs:
+
+- **`get_series` answers with no `category_id`** — 13,264 shows in one call.
+  That was the last unverified endpoint; the full-catalog tier now covers all
+  three content types, and all three run through **one** `syncCatalog` body in
+  `CatalogSyncer` rather than three copies of the zero-row guard.
+- **A show is not playable.** `series_id` addresses no stream endpoint, so
+  activating a show opens `SeriesDetailScreen` (season rail + episode list,
+  deliberately the browse screen's layout) instead of the player. `MainActivity`
+  routes on content type; the grid stays type-agnostic.
+- **Episodes are their own table**, keyed `(accountId, seriesId, episodeId)` with
+  `episodeId` a **string** — it is what goes in the playback URL, and nothing is
+  gained by round-tripping it through Int. No generation column: episodes are
+  fetched one show at a time, so plain delete-then-insert is right.
+- `replaceEpisodes` **refuses an empty list**. A rejected `get_series_info`
+  parses to zero episodes, and wiping a cached season on that makes an
+  already-cached show unplayable offline. Same reasoning as the catalog guard.
+- Episode freshness reuses `CachedFetch` under a distinct content type
+  (`series_info`) with the show id in the category slot, so show 770 and
+  category 770 cannot make each other look fresh.
+- **`duration_secs` is not trustworthy on this panel** — a 60-episode drama
+  reported 9–190 "seconds" per episode. `duration` (`HH:MM:SS`) is read first.
+- Episode titles go through the same `NameNormalizer` display pass as the grid;
+  without it the picker reads `HD` on every row.
 
 ## Phase 5 — Hardening
 RTL verification, empty/loading/error states, `RefreshWorker`, on-device

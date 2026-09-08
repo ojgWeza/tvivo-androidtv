@@ -6,12 +6,15 @@ import okhttp3.ResponseBody
 import java.io.InputStreamReader
 
 /**
- * The streaming JSON reader behind both `get_vod_streams` and `get_live_streams`.
+ * The streaming JSON reader behind `get_vod_streams`, `get_live_streams` and
+ * `get_series`.
  *
- * The two responses are the same shape with one field renamed — VOD carries
- * `container_extension`, live carries `ext` — so the difference is absorbed here and
- * neither caller learns about it. [VodStreamParser] and [LiveStreamParser] are the
- * typed wrappers; this holds the parsing rules and the memory contract.
+ * The three responses are the same shape with fields renamed — VOD carries
+ * `container_extension`, live carries `ext`; VOD and live carry `stream_id` and
+ * `stream_icon`, series carries `series_id` and `cover` — so the differences are
+ * absorbed here and no caller learns about them. [VodStreamParser], [LiveStreamParser]
+ * and [SeriesListParser] are the typed wrappers; this holds the parsing rules and the
+ * memory contract.
  *
  * A full-catalog response is ~15 MB of JSON; parsed into a `List<T>` that is 30–50 MB of
  * heap on a box whose per-app limit may be 96 MB, *while* a Paging grid and a Coil bitmap
@@ -26,8 +29,9 @@ import java.io.InputStreamReader
  */
 object StreamListParser {
 
-    /** One panel list item, before it becomes a VOD or live entity. */
+    /** One panel list item, before it becomes a VOD, live or series entity. */
     data class RawStream(
+        /** `stream_id` on VOD/live, `series_id` on series. */
         val streamId: Int,
         val categoryId: String?,
         val name: String,
@@ -35,7 +39,9 @@ object StreamListParser {
         /** `container_extension` on VOD, `ext` on live — whichever the item carried. */
         val extension: String?,
         val added: Long?,
-        val num: Int?
+        val num: Int?,
+        /** Series only; absent on VOD and live items. */
+        val plot: String? = null
     )
 
     suspend fun <T> parse(
@@ -86,17 +92,21 @@ object StreamListParser {
         var extension: String? = null
         var added: Long? = null
         var num: Int? = null
+        var plot: String? = null
 
         reader.beginObject()
         while (reader.hasNext()) {
             when (reader.nextName()) {
-                "stream_id" -> streamId = reader.nextIntOrNull()
+                // Series breaks the naming pattern on three fields and matches on the
+                // rest, so it is aliases here rather than a second reader.
+                "stream_id", "series_id" -> streamId = reader.nextIntOrNull()
                 "category_id" -> categoryId = reader.nextStringOrNull()
                 "name" -> name = reader.nextStringOrNull()
-                "stream_icon" -> icon = reader.nextStringOrNull()
+                "stream_icon", "cover" -> icon = reader.nextStringOrNull()
                 "container_extension", "ext" -> extension = reader.nextStringOrNull()
-                "added" -> added = reader.nextStringOrNull()?.toLongOrNull()
+                "added", "last_modified" -> added = reader.nextStringOrNull()?.toLongOrNull()
                 "num" -> num = reader.nextIntOrNull()
+                "plot" -> plot = reader.nextStringOrNull()
                 else -> reader.skipValue()
             }
         }
@@ -111,7 +121,8 @@ object StreamListParser {
             streamIcon = icon,
             extension = extension,
             added = added,
-            num = num
+            num = num,
+            plot = plot
         )
     }
 

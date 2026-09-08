@@ -5,8 +5,10 @@ import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
+import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.remote.LiveStreamParser
+import com.dev.Tvivo.data.remote.SeriesListParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import okhttp3.ResponseBody
+import retrofit2.Response
 
 /**
  * The full-catalog tier. `ALL`, `RECENTLY ADDED` and content-type search all need
@@ -26,12 +30,16 @@ import kotlinx.coroutines.withContext
  *    yet would recur every time the 24 h cache expires, not just on first run.
  * 2. **Must not materialise the response.** ~15 MB of JSON becomes 30–50 MB of heap
  *    against a limit that may be 96 MB, while a Paging grid and a bitmap cache are live.
- *    Rows arrive here in chunks from [VodStreamParser] and are never accumulated.
+ *    Rows arrive here in chunks from the parsers and are never accumulated.
  * 3. **Must not hold one giant write lock.** Delete-then-insert in a single transaction is
  *    right for a 400-item category and wrong for 48,751 rows, where it becomes a
  *    multi-second write that blocks every read and freezes the grid. Instead rows are
  *    written at `generation = N+1` and one small final transaction flips over and deletes
  *    `generation <= N` — the same all-or-nothing property without the lock.
+ *
+ * All three content types run through one [syncCatalog] body rather than three copies:
+ * the zero-row guard below was latent in the VOD path and only found while building live,
+ * and a third copy is a third place for it to be got wrong.
  *
  * Poster art is never downloaded as part of this.
  */
@@ -45,38 +53,83 @@ class CatalogSyncer(
     fun observeProgress(contentType: String = TYPE_VOD): Flow<CatalogSyncEntity?> =
         db.catalogSyncDao().observe(accountId, contentType)
 
-    suspend fun syncVod(): Result<Int> = withContext(Dispatchers.IO) {
-        val generation = System.currentTimeMillis()
+    suspend fun syncVod(): Result<Int> = syncCatalog(
+        contentType = TYPE_VOD,
+        request = { api.getVodStreams(credentials.username, credentials.password, categoryId = null) },
+        parse = { body, generation, onChunk ->
+            VodStreamParser.parse(body, accountId, generation) { chunk ->
+                db.vodDao().insertAll(chunk)
+                onChunk(chunk.size)
+            }
+        },
+        flip = { generation -> db.vodDao().deleteGenerationsUpTo(accountId, generation - 1) }
+    )
 
-        setState(STATE_INDEXING, done = 0, total = 0)
+    /**
+     * The same tier for live, with one difference that is a fact about the panel rather
+     * than a design choice: `get_vod_streams` with no `category_id` is **verified** to
+     * return the whole catalog, `get_live_streams` and `get_series` are not
+     * (`docs/xtream-api-reference.md`). The zero-row guard in [syncCatalog] is what makes
+     * that difference survivable rather than destructive.
+     */
+    suspend fun syncLive(): Result<Int> = syncCatalog(
+        contentType = TYPE_LIVE,
+        request = { api.getLiveStreams(credentials.username, credentials.password, categoryId = null) },
+        parse = { body, generation, onChunk ->
+            LiveStreamParser.parse(body, accountId, generation) { chunk ->
+                db.liveDao().insertAll(chunk)
+                onChunk(chunk.size)
+            }
+        },
+        flip = { generation -> db.liveDao().deleteGenerationsUpTo(accountId, generation - 1) }
+    )
+
+    /**
+     * Shows only — never episodes. `get_series_info` is per show and fetched lazily by
+     * `SeriesRepository`; pulling every show's episodes here would be tens of megabytes
+     * for content nobody has opened.
+     */
+    suspend fun syncSeries(): Result<Int> = syncCatalog(
+        contentType = TYPE_SERIES,
+        request = { api.getSeries(credentials.username, credentials.password, categoryId = null) },
+        parse = { body, generation, onChunk ->
+            SeriesListParser.parse(body, accountId, generation) { chunk ->
+                db.seriesDao().insertAll(chunk)
+                onChunk(chunk.size)
+            }
+        },
+        flip = { generation -> db.seriesDao().deleteGenerationsUpTo(accountId, generation - 1) }
+    )
+
+    private suspend fun syncCatalog(
+        contentType: String,
+        request: suspend () -> Response<ResponseBody>,
+        /** Streams the body straight into Room; reports each chunk's size, never its rows. */
+        parse: suspend (ResponseBody, Long, suspend (Int) -> Unit) -> Unit,
+        flip: suspend (Long) -> Unit
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        val generation = System.currentTimeMillis()
+        setState(STATE_INDEXING, done = 0, total = 0, contentType = contentType)
 
         try {
-            val response = api.getVodStreams(
-                credentials.username,
-                credentials.password,
-                categoryId = null
-            )
+            val response = request()
             if (!response.isSuccessful) {
-                setState(STATE_FAILED, done = 0, total = 0)
-                return@withContext Result.failure(
-                    IllegalStateException("HTTP ${response.code()}")
-                )
+                setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
+                return@withContext Result.failure(IllegalStateException("HTTP ${response.code()}"))
             }
 
-            val body = response.body()
-                ?: run {
-                    setState(STATE_FAILED, done = 0, total = 0)
-                    return@withContext Result.failure(IllegalStateException("empty body"))
-                }
+            val body = response.body() ?: run {
+                setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
+                return@withContext Result.failure(IllegalStateException("empty body"))
+            }
 
             var written = 0
-            VodStreamParser.parse(body, accountId, generation) { chunk ->
+            parse(body, generation) { size ->
                 // Cancellation has to be honoured between chunks, or a cancelled sync
                 // keeps writing rows for a screen nobody is looking at.
                 currentCoroutineContext().ensureActive()
-                db.vodDao().insertAll(chunk)
-                written += chunk.size
-                setState(STATE_INDEXING, done = written, total = 0)
+                written += size
+                setState(STATE_INDEXING, done = written, total = 0, contentType = contentType)
             }
 
             if (written == 0) {
@@ -84,85 +137,24 @@ class CatalogSyncer(
                 // has: a panel that rejects the call answers with an object, which the
                 // parser reports as zero rows, and that is indistinguishable here from a
                 // genuinely empty catalog. Flipping generations on it would wipe every
-                // per-category row.
-                setState(STATE_PARTIAL, done = 0, total = 0)
-                Log.i(TAG, "vod catalog sync: no rows returned, keeping existing generation")
+                // per-category row. Browsing keeps working category by category; only
+                // ALL, RECENTLY ADDED and search need completeness, and they are the ones
+                // that must know they do not have it.
+                setState(STATE_PARTIAL, done = 0, total = 0, contentType = contentType)
+                Log.i(TAG, "$contentType catalog sync: no rows returned, keeping existing generation")
                 return@withContext Result.success(0)
             }
 
             // One small transaction: everything older than this run goes, atomically.
-            db.vodDao().deleteGenerationsUpTo(accountId, generation - 1)
-
-            setState(STATE_COMPLETE, done = written, total = written)
-            Log.i(TAG, "vod catalog sync complete: $written rows")
+            flip(generation)
+            setState(STATE_COMPLETE, done = written, total = written, contentType = contentType)
+            Log.i(TAG, "$contentType catalog sync complete: $written rows")
             Result.success(written)
         } catch (t: Throwable) {
             // A failed sync leaves the previous generation intact and browsable rather
             // than half-deleting it.
-            setState(STATE_FAILED, done = 0, total = 0)
-            Log.w(TAG, "vod catalog sync failed: ${t.message}")
-            Result.failure(t)
-        }
-    }
-
-    /**
-     * The same tier for live, with one difference that is a fact about the panel rather
-     * than a design choice: `get_vod_streams` with no `category_id` is **verified** to
-     * return the whole catalog, `get_live_streams` is not (`docs/xtream-api-reference.md`).
-     *
-     * A panel that rejects the call answers with an object rather than an array, which
-     * the parser reports as zero rows — indistinguishable from an empty catalog, and in
-     * both cases the right move is the same: leave the per-category rows alone, record
-     * [STATE_PARTIAL], and let browsing keep working category by category. Only `ALL`,
-     * `RECENTLY ADDED` and content-type search need completeness, and they are the ones
-     * that must know they don't have it.
-     */
-    suspend fun syncLive(): Result<Int> = withContext(Dispatchers.IO) {
-        val generation = System.currentTimeMillis()
-        setState(STATE_INDEXING, done = 0, total = 0, contentType = TYPE_LIVE)
-
-        try {
-            val response = api.getLiveStreams(
-                credentials.username,
-                credentials.password,
-                categoryId = null
-            )
-            if (!response.isSuccessful) {
-                setState(STATE_FAILED, done = 0, total = 0, contentType = TYPE_LIVE)
-                return@withContext Result.failure(
-                    IllegalStateException("HTTP ${response.code()}")
-                )
-            }
-
-            val body = response.body()
-                ?: run {
-                    setState(STATE_FAILED, done = 0, total = 0, contentType = TYPE_LIVE)
-                    return@withContext Result.failure(IllegalStateException("empty body"))
-                }
-
-            var written = 0
-            LiveStreamParser.parse(body, accountId, generation) { chunk ->
-                currentCoroutineContext().ensureActive()
-                db.liveDao().insertAll(chunk)
-                written += chunk.size
-                setState(STATE_INDEXING, done = written, total = 0, contentType = TYPE_LIVE)
-            }
-
-            if (written == 0) {
-                // Nothing was written, so there is no new generation to flip to and the
-                // existing per-category rows must survive untouched.
-                setState(STATE_PARTIAL, done = 0, total = 0, contentType = TYPE_LIVE)
-                Log.i(TAG, "live catalog sync: panel did not answer without category_id")
-                return@withContext Result.success(0)
-            }
-
-            db.liveDao().deleteGenerationsUpTo(accountId, generation - 1)
-            setState(STATE_COMPLETE, done = written, total = written, contentType = TYPE_LIVE)
-            Log.i(TAG, "live catalog sync complete: $written rows")
-            Result.success(written)
-        } catch (t: Throwable) {
-            setState(STATE_FAILED, done = 0, total = 0, contentType = TYPE_LIVE)
-            Log.w(TAG, "live catalog sync failed: ${t.message}")
+            setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
+            Log.w(TAG, "$contentType catalog sync failed: ${t.message}")
             Result.failure(t)
         }
     }

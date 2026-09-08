@@ -280,6 +280,42 @@ Rows are 44 dp, not the ~31 dp that "maximum density" first suggested: denser
 than that leaves no room for a legible focus state and stops being readable at
 3 m, which would make the dense mode the mode nobody can read.
 
+### Series detail
+
+The one extra layer. Built as the browse screen's own layout rather than a new
+one: a **season rail** on the left (280 dp, narrower than browse's 360 dp — season
+labels are short), an **episode list** on the right, the same `tvFocusFrame`, and
+the same LEFT/RIGHT contract. A viewer arriving from the Movies grid should not
+have to learn a second set of navigation rules for the same D-pad.
+
+```
+┌──────────────┬──────────────────────────────────────────────┐
+│ Season 1  60 │  <show name>                        Refresh  │
+│ Season 2  30 │ ┌──────────────────────────────────────────┐ │
+│ Specials   4 │ │ 01   Episode title              41 min   │ │
+│              │ ├──────────────────────────────────────────┤ │
+│              │ │ 02   Episode title              40 min   │ │
+└──────────────┴──────────────────────────────────────────────┘
+```
+
+Rules that are not styling:
+
+- **Focus lands on the episode list, not the rail.** Playing an episode is why
+  the user opened the show; the rail is one LEFT away. Without an explicit
+  request the screen opens with focus on nothing and the first D-pad press is
+  spent finding it — the same defect class as the login focus trap, and just as
+  invisible in code review.
+- **RIGHT from a season row targets the episode list explicitly.** Left to the
+  2D focus search it picks the header's `Refresh`, exactly as it does in browse.
+- **Episodes sort by season then episode number**, never alphabetically. This is
+  the one list in the app where the panel's own numbering is meaningful.
+- **Cached episodes always render, error or not.** A failed refresh must not take
+  away a show the user could otherwise still play; the error goes beside the
+  list, never instead of it.
+- Season `0` is labelled **Specials**, not "Season 0", which reads as a bug.
+- A show with no episodes says so ("No episodes listed for this show") and is
+  kept distinct from an error state.
+
 ## Search — scoped by content type
 
 Search is entered from inside a content type and covers **only** that type.
@@ -440,7 +476,10 @@ From real panel responses, not assumptions:
   48,751, and the end of the list is unreachable in practice.
 - **Category grids sort alphabetically on `name_normalized`**, plain code-unit
   order (no ICU collator). Latin-named titles group before Arabic-named ones
-  rather than interleaving. See `decisions.md`.
+  rather than interleaving. See `decisions.md`. The **episode list is the one
+  exception** — season then `episode_num`.
+- **A show is not playable.** Activating one opens the season/episode picker;
+  only movies, channels and episodes reach the player. See Series detail.
 
 ## Continue watching
 

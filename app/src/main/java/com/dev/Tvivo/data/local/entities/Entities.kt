@@ -141,3 +141,65 @@ data class LiveStreamEntity(
     val num: Int?,
     val generation: Long
 )
+
+/**
+ * A series *show* — the middle layer that live and movies do not have. It is not
+ * playable: `series_id` addresses nothing on the stream endpoints, only
+ * `get_series_info`, and only episodes carry a playable id.
+ *
+ * Its own table for the same reason live has one: `series_id` collides with the
+ * `stream_id` space of both other content types.
+ *
+ * The panel names two fields differently here — `cover` for the poster and
+ * `last_modified` for the timestamp — and both are normalised at the parser boundary
+ * onto [streamIcon] / [added] so the browse grid stays type-agnostic.
+ */
+@Entity(
+    tableName = "series",
+    primaryKeys = ["accountId", "seriesId"],
+    indices = [
+        Index(value = ["accountId", "categoryId", "nameNormalized"]),
+        Index(value = ["accountId", "nameNormalized"]),
+        Index(value = ["accountId", "added"])
+    ]
+)
+data class SeriesEntity(
+    val accountId: String,
+    val seriesId: Int,
+    val categoryId: String?,
+    val name: String,
+    val nameDisplay: String,
+    val nameNormalized: String,
+    val streamIcon: String?,
+    val plot: String?,
+    val added: Long?,
+    val num: Int?,
+    val generation: Long
+)
+
+/**
+ * One episode of one show, cached from `get_series_info`.
+ *
+ * [episodeId] is a **string**: the panel returns it quoted, it is the id that goes in
+ * the playback URL, and nothing is gained by round-tripping it through Int.
+ *
+ * [seasonNumber] comes from the key of the `episodes` object, which is the season number
+ * as a string. The episode body repeats it in `season`, but the key is authoritative —
+ * a handful of shows disagree between the two.
+ */
+@Entity(
+    tableName = "series_episodes",
+    primaryKeys = ["accountId", "seriesId", "episodeId"],
+    indices = [Index(value = ["accountId", "seriesId", "seasonNumber", "episodeNum"])]
+)
+data class EpisodeEntity(
+    val accountId: String,
+    val seriesId: Int,
+    val episodeId: String,
+    val seasonNumber: Int,
+    val episodeNum: Int,
+    val title: String,
+    val containerExtension: String?,
+    val durationSecs: Int?,
+    val added: Long?
+)

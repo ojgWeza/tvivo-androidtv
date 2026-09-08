@@ -149,9 +149,10 @@ from the OkHttp `BufferedSource` with a `JsonReader` and inserted in chunks.
 Materialising it into a `List<T>` is 30–50 MB of heap on a box whose per-app
 limit may be 96 MB.
 
-**Verified 2026-09-08 for `get_live_streams` as well:** omitting `category_id`
-returns the whole live catalog (6,425 channels in one call on this panel), same
-shape, same streaming requirement. Still **not** verified for `get_series`.
+**Verified 2026-09-08 for all three content types.** Omitting `category_id`
+returns the whole catalog: 48,761 VOD items, 6,425 live channels, and 13,264
+series shows, each in one call on this panel, same shape, same streaming
+requirement. `get_series` was the last unverified endpoint; it answers.
 
 A panel that rejects the no-`category_id` form answers with a JSON *object*
 rather than an array. The parser reports that as zero rows, so callers must
@@ -187,7 +188,14 @@ GET .../player_api.php?username={u}&password={p}&action=get_series_categories
 GET .../player_api.php?username={u}&password={p}&action=get_series&category_id={id}
 ```
 Note: action is `get_series`, **not** `get_series_streams`. Returns show
-metadata only — no episodes, no playable stream yet:
+metadata only — no episodes, no playable stream yet.
+
+Three field names break the pattern the other two content types share, and each
+one silently drops data if missed: the id is `series_id` (not `stream_id`), the
+poster is `cover` (not `stream_icon`), and the timestamp is `last_modified` (not
+`added`). `category_id` is an **int** here where VOD and live send a string —
+normalise it to a string on insert or the grouped category counts miss every
+series row.
 ```json
 {
   "backdrop_path": [],
@@ -242,6 +250,20 @@ The nested `info` block inside each episode (codec, bitrate, resolution,
 audio language, etc.) is transcoding metadata — safe to ignore except
 `duration` / `duration_secs` if displaying runtime.
 
+**`duration_secs` is not trustworthy on this panel.** Verified 2026-09-08: on a
+60-episode drama every episode reported 9–190 "seconds". Read `duration`
+(`HH:MM:SS`) and treat `duration_secs` as the fallback.
+
+Episode `title` repeats the show's leading quality token (`"HD  <show> - S01E01"`),
+so it needs the same `NameNormalizer` display pass the catalog names get — both
+for consistency with the grid and because the leading LTR run breaks truncation
+on Arabic titles.
+
+`id` (the episode id) is a **quoted string** and it is what goes in the playback
+URL. Season keys are not contiguous, `"0"` is a real season (specials), and a
+handful of shows carry a `season` field that disagrees with the key they are
+filed under — the key is what groups the picker, so it wins.
+
 ### Playback URL
 ```
 http://{server}:{port}/series/{user}/{pass}/{episode_id}.{container_extension}
@@ -262,6 +284,8 @@ is large, per the sample above).
 
 ## Open items / not yet verified
 
+- Live `.ts` playback and the series `/series/` path have never been executed —
+  `max_connections` is 1, so no automated test may open a stream.
 - HTTPS port behavior — cert validity, whether it works at all.
 - Timeshift/catch-up API for channels with `tv_archive: 1` (none observed
   yet in this panel's sample data).

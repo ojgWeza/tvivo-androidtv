@@ -17,9 +17,11 @@ import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.dao.CategoryCount
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
+import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
+import com.dev.Tvivo.data.repository.SeriesRepository
 import com.dev.Tvivo.data.repository.VodRepository
 import com.dev.Tvivo.sync.CatalogSyncer
 import com.dev.Tvivo.ui.home.ContentType
@@ -62,9 +64,11 @@ class BrowseViewModel(
     private val db = AppDatabase.get(application)
     private val store = CredentialsStore(application)
 
-    /** The Room `contentType` key: `vod` / `live`, shared with resume and favourites. */
+    /** The Room `contentType` key: `vod` / `live` / `series`, shared with resume and
+     *  favourites. */
     private val typeKey = when (contentType) {
         ContentType.LIVE -> TYPE_LIVE
+        ContentType.SERIES -> TYPE_SERIES
         else -> TYPE_VOD
     }
 
@@ -73,8 +77,12 @@ class BrowseViewModel(
         else -> CardShape.POSTER
     }
 
-    /** Live has no meaningful resume point, so it never asks for one. */
-    private val tracksResume = contentType != ContentType.LIVE
+    /**
+     * Live has no meaningful resume point, and a *show* is not a playable thing — resume
+     * belongs to its episodes, which the detail screen owns. Both skip the lookup, so
+     * neither ever raises a resume prompt over an item that cannot honour it.
+     */
+    private val tracksResume = contentType == ContentType.MOVIES
 
     private val _state = MutableStateFlow(BrowseUiState())
     val state: StateFlow<BrowseUiState> = _state.asStateFlow()
@@ -108,6 +116,7 @@ class BrowseViewModel(
             accountId = id
             val catalog = when (contentType) {
                 ContentType.LIVE -> CatalogSource.live(LiveRepository(db, credentials, id))
+                ContentType.SERIES -> CatalogSource.series(SeriesRepository(db, credentials, id))
                 else -> CatalogSource.vod(VodRepository(db, credentials, id))
             }
             source = catalog
@@ -158,6 +167,7 @@ class BrowseViewModel(
             viewModelScope.launch {
                 when (contentType) {
                     ContentType.LIVE -> syncer.syncLive()
+                    ContentType.SERIES -> syncer.syncSeries()
                     else -> syncer.syncVod()
                 }
             }
@@ -251,6 +261,17 @@ private class CatalogSource(
         )
 
         fun vod(repo: VodRepository) = CatalogSource(
+            observeCategories = repo::observeCategories,
+            countsByCategory = repo::countsByCategory,
+            refreshCategories = { force -> repo.refreshCategories(force) },
+            refreshCategory = { id, force -> repo.refreshCategory(id, force) },
+            pagingInCategory = { id ->
+                Pager(config) { repo.pagingInCategory(id) }.flow
+                    .map { data -> data.map { it.toBrowseItem() } }
+            }
+        )
+
+        fun series(repo: SeriesRepository) = CatalogSource(
             observeCategories = repo::observeCategories,
             countsByCategory = repo::countsByCategory,
             refreshCategories = { force -> repo.refreshCategories(force) },
