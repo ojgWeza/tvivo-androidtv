@@ -1,7 +1,6 @@
 package com.dev.Tvivo.ui.common
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -81,7 +80,7 @@ private fun DialogAction(
         modifier = modifier
             .fillMaxWidth()
             .tvFocusFrame()
-            .clickable { onClick() }
+            .tvClickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 14.dp)
     )
 }

@@ -1,7 +1,6 @@
 package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -30,7 +31,16 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import com.dev.Tvivo.ui.common.IconPill
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import com.dev.Tvivo.ui.common.dpadFieldNavigation
+import com.dev.Tvivo.ui.common.tvClickable
+import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
@@ -84,9 +94,13 @@ fun BrowseScreen(
 
     Row(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         CategoryRail(
-            categories = state.categories,
+            // The *filtered* list. Counts stay keyed by id, so they follow whichever
+            // categories survive the filter without any extra bookkeeping.
+            categories = state.visibleCategories,
             counts = state.counts,
             selectedCategoryId = state.selectedCategoryId,
+            filter = state.categoryFilter,
+            onFilterChanged = viewModel::onCategoryFilterChanged,
             onSelect = { viewModel.selectCategory(it.categoryId) },
             gridFocusRequester = gridFocusRequester
         )
@@ -101,13 +115,36 @@ fun BrowseScreen(
                 confirmation = state.refreshConfirmation,
                 syncState = state.catalogSyncState,
                 syncDone = state.catalogSyncDone,
-                onRefresh = viewModel::refreshSelected
+                onRefresh = viewModel::refreshSelected,
+                itemFilter = state.itemFilter,
+                isItemFilterOpen = state.isItemFilterOpen,
+                filteredCount = state.filteredCount,
+                totalCount = state.counts[state.selectedCategoryId],
+                onItemFilterChanged = viewModel::onItemFilterChanged,
+                onItemFilterOpenChanged = viewModel::setItemFilterOpen
             )
 
             when {
                 // Offline is fully browsable: a dead network must fail at play time, not
                 // throw a full-screen error over data the app already has.
                 state.error != null && items.itemCount == 0 -> ErrorState(state.error!!)
+
+                // Phase 5 — the first load of a cold category. Without this the screen
+                // is blank while the query runs, which reads as an empty category that
+                // then suddenly fills.
+                items.itemCount == 0 &&
+                    items.loadState.refresh is androidx.paging.LoadState.Loading ->
+                    LoadingState()
+
+                // A filter that matches nothing is not an empty category, and
+                // offering `Refresh` for it would be answering a question nobody asked.
+                items.itemCount == 0 &&
+                    state.itemFilter.isNotBlank() &&
+                    items.loadState.refresh !is androidx.paging.LoadState.Loading ->
+                    NoFilterMatchState(
+                        query = state.itemFilter,
+                        onClear = { viewModel.setItemFilterOpen(false) }
+                    )
 
                 items.itemCount == 0 &&
                     items.loadState.refresh !is androidx.paging.LoadState.Loading ->
@@ -178,7 +215,13 @@ private fun Header(
     confirmation: String?,
     syncState: String?,
     syncDone: Int,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    itemFilter: String,
+    isItemFilterOpen: Boolean,
+    filteredCount: Int?,
+    totalCount: Int?,
+    onItemFilterChanged: (String) -> Unit,
+    onItemFilterOpenChanged: (Boolean) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -186,8 +229,22 @@ private fun Header(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // The header shows the category name immediately, before any row arrives.
-            Text(text = title, color = Palette.Ink, style = TvType.headline)
+            Column {
+                // The header shows the category name immediately, before any row arrives.
+                Text(text = title, color = Palette.Ink, style = TvType.headline)
+
+                // D-14 — `N of M`, and only while filtering. Unfiltered, `M` on its own
+                // is the honest number and `48,751 of 48,751` is noise.
+                val countLine = when {
+                    filteredCount != null && totalCount != null ->
+                        "$filteredCount of $totalCount"
+                    totalCount != null -> "$totalCount"
+                    else -> null
+                }
+                countLine?.let {
+                    Text(text = it, color = Palette.Dim, style = TvType.label)
+                }
+            }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Visible progress that dismisses at 100%. The rail counts filling in
@@ -211,8 +268,26 @@ private fun Header(
                 //
                 // Note the scope difference the label has to carry: this refreshes the
                 // *current category*, Home's pill refreshes everything.
+                // D-14. Collapsed it is a search pill like any other; opened it
+                // expands in place into a field with its own clear action, so the
+                // control the user pressed is the control they end up typing into.
+                if (isItemFilterOpen) {
+                    ItemFilterField(
+                        value = itemFilter,
+                        onValueChange = onItemFilterChanged,
+                        onClose = { onItemFilterOpenChanged(false) }
+                    )
+                } else {
+                    IconPill(
+                        icon = Icons.Default.Search,
+                        label = "Filter this category",
+                        onClick = { onItemFilterOpenChanged(true) },
+                        modifier = Modifier.padding(end = 12.dp)
+                    )
+                }
+
                 IconPill(
-                    glyph = "↻",
+                    icon = Icons.Default.Refresh,
                     label = "Refresh this category",
                     enabled = !isRefreshing,
                     onClick = onRefresh
@@ -252,6 +327,97 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
     }
 }
 
+/**
+ * D-14. The field the search pill turns into. Focus lands in it on open, so the pill and
+ * the field are one gesture rather than two.
+ *
+ * **Back closes it and clears the filter** (see `setItemFilterOpen`). A filter that is
+ * hidden but still applied is a grid quietly missing rows with nothing on screen to say
+ * so.
+ */
+@Composable
+private fun ItemFilterField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val focus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("Filter", color = Palette.Dim, style = TvType.caption) },
+            singleLine = true,
+            textStyle = TvType.body,
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Palette.Ink,
+                unfocusedTextColor = Palette.Ink,
+                focusedContainerColor = Palette.Elevated,
+                unfocusedContainerColor = Palette.Elevated,
+                cursorColor = Palette.Accent,
+                focusedBorderColor = Palette.Accent,
+                unfocusedBorderColor = Palette.Line
+            ),
+            // Without this the field traps focus and the filtered grid is
+            // unreachable — see `dpadFieldNavigation`.
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                autoCorrect = false,
+                imeAction = androidx.compose.ui.text.input.ImeAction.Next
+            ),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Down) }
+            ),
+            modifier = Modifier
+                .width(FILTER_FIELD_WIDTH)
+                .focusRequester(focus)
+                .dpadFieldNavigation(focusManager)
+        )
+        IconPill(
+            icon = Icons.Default.Close,
+            label = "Clear filter",
+            onClick = onClose,
+            modifier = Modifier.padding(start = 8.dp, end = 12.dp)
+        )
+    }
+}
+
+private val FILTER_FIELD_WIDTH = 320.dp
+
+@Composable
+private fun LoadingState() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Text, not a spinner: there is no progress to report for a single Room query, and
+        // a spinner over a 200 ms wait is more distracting than a word.
+        Text(text = "Loading…", color = Palette.Dim, style = TvType.title)
+    }
+}
+
+/** Distinct from [EmptyState]: the category has rows, this filter just does not match any. */
+@Composable
+private fun NoFilterMatchState(query: String, onClear: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Nothing here matches \"$query\"",
+                color = Palette.Ink,
+                style = TvType.title
+            )
+            Text(
+                text = "Clear filter",
+                color = Palette.AccentText,
+                style = TvType.body,
+                modifier = Modifier
+                    .tvFocusFrame()
+                    .tvClickable { onClear() }
+                    .padding(top = 16.dp)
+            )
+        }
+    }
+}
+
 @Composable
 private fun EmptyState(onRefresh: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -261,7 +427,7 @@ private fun EmptyState(onRefresh: () -> Unit) {
                 text = "Refresh",
                 color = Palette.AccentText,
                 style = TvType.body,
-                modifier = Modifier.clickable { onRefresh() }.padding(top = 16.dp)
+                modifier = Modifier.tvClickable { onRefresh() }.padding(top = 16.dp)
             )
         }
     }

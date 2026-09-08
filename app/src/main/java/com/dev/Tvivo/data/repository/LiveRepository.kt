@@ -4,6 +4,7 @@ import androidx.paging.PagingSource
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
@@ -37,10 +38,25 @@ class LiveRepository(
     fun pagingInCategory(categoryId: String): PagingSource<Int, LiveStreamEntity> =
         db.liveDao().pagingInCategory(accountId, categoryId)
 
+    /**
+     * D-14. The query goes through `NameNormalizer.normalizeQuery` here, in one place.
+     * `nameNormalized` is lowercased, diacritic-stripped and whitespace-collapsed, so raw
+     * user input compared against it silently matches nothing as soon as anyone types a
+     * capital or an accent.
+     */
+    fun pagingInCategoryFiltered(
+        categoryId: String,
+        query: String
+    ): PagingSource<Int, LiveStreamEntity> =
+        db.liveDao().pagingInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
+    fun countInCategoryFiltered(categoryId: String, query: String): Flow<Int> =
+        db.liveDao().countInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
     fun pagingAll(): PagingSource<Int, LiveStreamEntity> = db.liveDao().pagingAll(accountId)
 
     fun pagingSearch(query: String): PagingSource<Int, LiveStreamEntity> =
-        db.liveDao().pagingSearch(accountId, query.lowercase().trim())
+        db.liveDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
     suspend fun byId(streamId: Int): LiveStreamEntity? = db.liveDao().byId(accountId, streamId)
 

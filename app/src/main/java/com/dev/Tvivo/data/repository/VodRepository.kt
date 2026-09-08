@@ -3,6 +3,7 @@ package com.dev.Tvivo.data.repository
 import androidx.paging.PagingSource
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
@@ -35,10 +36,25 @@ class VodRepository(
     fun pagingInCategory(categoryId: String): PagingSource<Int, VodStreamEntity> =
         db.vodDao().pagingInCategory(accountId, categoryId)
 
+    /**
+     * D-14. The query goes through `NameNormalizer.normalizeQuery` here, in one place.
+     * `nameNormalized` is lowercased, diacritic-stripped and whitespace-collapsed, so raw
+     * user input compared against it silently matches nothing as soon as anyone types a
+     * capital or an accent.
+     */
+    fun pagingInCategoryFiltered(
+        categoryId: String,
+        query: String
+    ): PagingSource<Int, VodStreamEntity> =
+        db.vodDao().pagingInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
+    fun countInCategoryFiltered(categoryId: String, query: String): Flow<Int> =
+        db.vodDao().countInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
     fun pagingAll(): PagingSource<Int, VodStreamEntity> = db.vodDao().pagingAll(accountId)
 
     fun pagingSearch(query: String): PagingSource<Int, VodStreamEntity> =
-        db.vodDao().pagingSearch(accountId, query.lowercase().trim())
+        db.vodDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
     suspend fun byId(streamId: Int): VodStreamEntity? = db.vodDao().byId(accountId, streamId)
 

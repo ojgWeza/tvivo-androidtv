@@ -211,18 +211,26 @@ private fun StreamCard(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        // The scrim is taller than the text and fades rather than
-                        // butting: a hard edge over artwork reads as a bug, and two
-                        // lines of title need the gradient to have finished by the top
-                        // of the first line.
+                        // **Q-18 — the scrim owns its own height.** The first cut sized
+                        // the box to the text plus 6 dp and started the gradient at 45%
+                        // of that, which left almost no distance to fade over: titles
+                        // over bright posters ended up competing with the artwork rather
+                        // than sitting on it. The scrim is now a fixed band, taller than
+                        // two lines of `label`, so the gradient has room to be fully
+                        // opaque behind the text and fully clear well above it.
+                        .height(SCRIM_HEIGHT)
                         .background(
                             Brush.verticalGradient(
                                 0f to Color.Transparent,
-                                0.45f to Palette.Bg.copy(alpha = 0.72f),
-                                1f to Palette.Bg.copy(alpha = 0.94f)
+                                0.30f to Palette.Bg.copy(alpha = 0.55f),
+                                0.55f to Palette.Bg.copy(alpha = 0.88f),
+                                1f to Palette.Bg.copy(alpha = 0.98f)
                             )
                         )
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    // Text pinned to the bottom of the band, so a one-line title sits in
+                    // the opaque part rather than floating in the middle of the fade.
+                    contentAlignment = Alignment.BottomStart
                 ) {
                     Text(
                         text = item?.title ?: "",
@@ -262,6 +270,13 @@ private fun StreamCard(
 
 /** Two lines of `label` (20 sp line height) plus its 8 dp offset from the card. */
 private val TITLE_BLOCK_HEIGHT = 48.dp
+
+/**
+ * The poster title band. Two lines of `label` need 40 dp; the rest is fade distance, and
+ * it is the fade distance that Q-18 was short of. At 68 dp on a 165 dp poster this is
+ * ~41% of the card, but only the bottom ~25% is meaningfully darkened.
+ */
+private val SCRIM_HEIGHT = 68.dp
 
 /** Card sizes are specified in pixels because they are image-pipeline inputs. */
 private val CardShape.widthPx: Int

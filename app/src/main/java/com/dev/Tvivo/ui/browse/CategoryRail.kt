@@ -1,10 +1,10 @@
 package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -27,6 +27,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import com.dev.Tvivo.ui.common.dpadFieldNavigation
+import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
 
@@ -49,6 +53,8 @@ fun CategoryRail(
     categories: List<CategoryEntity>,
     counts: Map<String?, Int>,
     selectedCategoryId: String?,
+    filter: String,
+    onFilterChanged: (String) -> Unit,
     onSelect: (CategoryEntity) -> Unit,
     /** Where RIGHT goes. Without this, Compose's 2D focus search picks the header's
      *  Refresh — it is also to the right, and further from the rail than the first card
@@ -56,24 +62,85 @@ fun CategoryRail(
     gridFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
-    LazyColumn(
+    Column(
         modifier = modifier
             .width(RAIL_WIDTH)
             .fillMaxHeight()
             .background(Palette.Surface)
-            .focusGroup(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 24.dp)
     ) {
-        items(categories, key = { it.categoryId }) { category ->
-            RailRow(
-                name = category.name,
-                count = counts[category.categoryId],
-                selected = category.categoryId == selectedCategoryId,
-                onSelect = { onSelect(category) },
-                gridFocusRequester = gridFocusRequester
-            )
+        // D-13. Pinned above the list rather than scrolling with it: a filter that
+        // scrolls out of view while you are looking at its results is a filter you
+        // forget is applied.
+        CategoryFilterField(value = filter, onValueChange = onFilterChanged)
+
+        LazyColumn(
+            modifier = Modifier.fillMaxHeight().focusGroup(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
+        ) {
+            items(categories, key = { it.categoryId }) { category ->
+                RailRow(
+                    name = category.name,
+                    count = counts[category.categoryId],
+                    selected = category.categoryId == selectedCategoryId,
+                    onSelect = { onSelect(category) },
+                    gridFocusRequester = gridFocusRequester
+                )
+            }
+
+            // Says why the rail is empty. Without this, filtering to nothing looks
+            // identical to a category list that failed to load.
+            if (categories.isEmpty() && filter.isNotBlank()) {
+                item {
+                    Text(
+                        text = "No category matches \"$filter\"",
+                        color = Palette.Dim,
+                        style = TvType.label,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                    )
+                }
+            }
         }
     }
+}
+
+/**
+ * **Q-19 — this field trapped focus.** Without [dpadFieldNavigation] the text field eats
+ * D-pad up/down for its own caret, so once focus lands here the only way out is Back:
+ * the filtered categories the user just produced are unreachable, which makes the whole
+ * feature unusable. Identical in shape to the original login focus trap.
+ */
+@Composable
+private fun CategoryFilterField(value: String, onValueChange: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
+    androidx.compose.material3.OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text("Filter categories", color = Palette.Dim, style = TvType.caption) },
+        singleLine = true,
+        textStyle = TvType.body,
+        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Palette.Ink,
+            unfocusedTextColor = Palette.Ink,
+            focusedContainerColor = Palette.Elevated,
+            unfocusedContainerColor = Palette.Elevated,
+            cursorColor = Palette.Accent,
+            focusedBorderColor = Palette.Accent,
+            unfocusedBorderColor = Palette.Line
+        ),
+        // `Next` rather than `Done`: the natural next move after typing a filter is
+        // into the list it just produced.
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            autoCorrect = false,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Next
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+            onNext = { focusManager.moveFocus(FocusDirection.Down) }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .dpadFieldNavigation(focusManager)
+    )
 }
 
 @Composable
@@ -105,7 +172,7 @@ private fun RailRow(
             .focusProperties { right = gridFocusRequester }
             .background(background)
             .onFocusChanged { focused = it.isFocused }
-            .clickable { onSelect() }
+            .tvClickable { onSelect() }
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

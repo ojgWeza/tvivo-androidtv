@@ -1,6 +1,9 @@
 package com.dev.Tvivo.ui.home
 
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,14 +19,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Text
+import com.dev.Tvivo.R
 import com.dev.Tvivo.ui.common.ConfirmDialog
 import com.dev.Tvivo.ui.common.IconPill
 import com.dev.Tvivo.ui.common.tvFocusFrame
@@ -33,7 +48,25 @@ import com.dev.Tvivo.ui.theme.TvType
 enum class ContentType(val label: String) {
     LIVE("Live TV"),
     MOVIES("Movies"),
-    SERIES("Series")
+    SERIES("Series");
+
+    /**
+     * D-9. Stored at `drawable-nodpi` and downloaded at exactly 520x300 — the tile size —
+     * so nothing is rescaled at runtime. `nodpi` is the point: any density bucket would
+     * have Android scale the bitmap for the device's density and undo that.
+     *
+     * The three read as different *ideas* rather than three pictures of screens:
+     * broadcast, the big screen, episodes in sequence. All three were screened for
+     * third-party brand marks — see `docs/design/img/CREDITS.md`, where two otherwise
+     * good candidates were rejected for a visible Netflix logo.
+     */
+    @get:DrawableRes
+    val art: Int
+        get() = when (this) {
+            LIVE -> R.drawable.tile_live
+            MOVIES -> R.drawable.tile_movies
+            SERIES -> R.drawable.tile_series
+        }
 }
 
 /**
@@ -69,6 +102,20 @@ fun HomeScreen(
 
     var confirmingExit by remember { mutableStateOf(false) }
 
+    // **Q-17 — the pill row's traversal is declared, not inferred.**
+    //
+    // Compose's 2D focus search picks by geometry, and once was observed sending RIGHT
+    // from `Refresh` *down* to the Series tile rather than across to `Account`, leaving
+    // Account and Exit reachable only by accident. `animateContentSize` is the likely
+    // reason it is intermittent: a pill's bounds change while it expands, so a press
+    // landing mid-animation is scored against bounds that no longer hold.
+    //
+    // The rail needed exactly this treatment for exactly this reason. On this project the
+    // 2D search is overridden, not trusted.
+    val refreshPill = remember { FocusRequester() }
+    val accountPill = remember { FocusRequester() }
+    val exitPill = remember { FocusRequester() }
+
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 96.dp, vertical = 64.dp),
         verticalArrangement = Arrangement.Center
@@ -82,7 +129,8 @@ fun HomeScreen(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.focusGroup()
             ) {
                 accountSummary?.let {
                     Text(
@@ -96,25 +144,37 @@ fun HomeScreen(
                 }
 
                 IconPill(
-                    glyph = "↻",
+                    icon = Icons.Default.Refresh,
                     label = if (isRefreshing) "Refreshing…" else "Refresh everything",
                     // Guarded in the ViewModel too, but a disabled pill says why nothing
                     // happens on a second press instead of silently swallowing it.
                     enabled = !isRefreshing,
-                    onClick = onRefreshEverything
+                    onClick = onRefreshEverything,
+                    modifier = Modifier
+                        .focusRequester(refreshPill)
+                        .focusProperties { right = accountPill }
                 )
                 IconPill(
-                    glyph = "◔",
+                    icon = Icons.Default.AccountCircle,
                     label = "Account",
-                    onClick = onOpenSettings
+                    onClick = onOpenSettings,
+                    modifier = Modifier
+                        .focusRequester(accountPill)
+                        .focusProperties {
+                            left = refreshPill
+                            right = exitPill
+                        }
                 )
                 // Last in the row and behind a confirm: on a household remote this is one
                 // press from the first screen, and quitting is not something to do by
                 // accident. See `TODOS.md` Part 2b — decided 2026-09-08.
                 IconPill(
-                    glyph = "⏻",
+                    icon = Icons.Default.ExitToApp,
                     label = "Exit",
-                    onClick = { confirmingExit = true }
+                    onClick = { confirmingExit = true },
+                    modifier = Modifier
+                        .focusRequester(exitPill)
+                        .focusProperties { left = accountPill }
                 )
             }
         }
@@ -135,6 +195,7 @@ fun HomeScreen(
             ContentType.entries.forEach { type ->
                 HomeTile(
                     label = type.label,
+                    art = type.art,
                     modifier = Modifier
                         .weight(1f)
                         .then(if (type == focusTarget) Modifier.focusRequester(restore) else Modifier),
@@ -161,7 +222,12 @@ fun HomeScreen(
 }
 
 @Composable
-private fun HomeTile(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun HomeTile(
+    label: String,
+    @DrawableRes art: Int,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     Card(
         onClick = onClick,
         colors = CardDefaults.colors(containerColor = Palette.Elevated),
@@ -170,11 +236,35 @@ private fun HomeTile(label: String, modifier: Modifier = Modifier, onClick: () -
         border = CardDefaults.border(focusedBorder = Border.None),
         modifier = modifier.height(180.dp).tvFocusFrame()
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.Bottom
-        ) {
-            Text(text = label, color = Palette.Ink, style = TvType.headline)
+        Box(modifier = Modifier.fillMaxSize()) {
+            Image(
+                painter = painterResource(art),
+                // The label below says what this is; announcing the photograph as well
+                // would have a screen reader read the tile twice.
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Bottom-up scrim. The label has to stay legible over three photographs that
+            // were not chosen for their bottom-edge luminance, so the scrim does the work
+            // rather than the crop.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.45f to Palette.Bg.copy(alpha = 0.35f),
+                            1f to Palette.Bg.copy(alpha = 0.92f)
+                        )
+                    )
+            )
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Text(text = label, color = Palette.Ink, style = TvType.headline)
+            }
         }
     }
 }

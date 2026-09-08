@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,25 +12,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
-import androidx.tv.material3.Text
 import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.auth.LoginScreen
 import com.dev.Tvivo.diagnostics.CodecProbe
+import com.dev.Tvivo.sync.RefreshWorker
+import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.ui.browse.BrowseScreen
+import com.dev.Tvivo.ui.common.SplashScreen
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
 import com.dev.Tvivo.ui.settings.AccountViewModel
 import com.dev.Tvivo.ui.series.SeriesDetailScreen
 import com.dev.Tvivo.ui.settings.SettingsScreen
+import com.dev.Tvivo.ui.settings.DiagnosticsScreen
 import com.dev.Tvivo.ui.settings.SubscriptionScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
@@ -53,6 +54,9 @@ class MainActivity : ComponentActivity() {
         // panel, and only appearing once focus reached the row and dismissed the IME.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (BuildConfig.DEBUG) CodecProbe.log()
+        // Phase 5. Idempotent and cheap; scheduling here rather than in an Application
+        // subclass keeps it in the one place that already owns start-up ordering.
+        RefreshWorker.schedule(applicationContext)
         setContent {
             TvivoTheme {
                 Surface(
@@ -67,7 +71,9 @@ class MainActivity : ComponentActivity() {
 }
 
 private sealed interface Route {
-    data object Loading : Route
+    /** D-10. Carries its own progress so the splash can report real steps rather than
+     *  animate a bar on a timer. */
+    data class Loading(val progress: Float, val caption: String) : Route
     data object Login : Route
     data class Home(val credentials: Credentials) : Route
     data class Browse(val credentials: Credentials, val type: ContentType) : Route
@@ -80,18 +86,31 @@ private sealed interface Route {
     /** D-15. Read-only, and its own screen: Account keeps the actions, this keeps the
      *  facts. Back returns to Account, not to Home. */
     data class Subscription(val credentials: Credentials) : Route
+
+    /** Phase 5. Read-only, and reached from Account. */
+    data class Diagnostics(val credentials: Credentials) : Route
 }
 
 @Composable
 private fun TvivoApp() {
     val context = LocalContext.current
     val store = remember { CredentialsStore(context.applicationContext) }
-    var route by remember { mutableStateOf<Route>(Route.Loading) }
+    var route by remember {
+        mutableStateOf<Route>(Route.Loading(0.15f, "Starting…"))
+    }
 
     // Credentials are entered once; every later launch resolves them off the main
     // thread and lands straight on Home.
+    //
+    // The splash reports the two steps that actually take the time — the Tink decrypt,
+    // then opening a Room database holding ~68k cached rows. Reporting them honestly is
+    // the point of D-10: a determinate bar that lies is worse than a spinner.
     LaunchedEffect(Unit) {
-        route = store.load()?.let { Route.Home(it) } ?: Route.Login
+        route = Route.Loading(0.35f, "Unlocking your account")
+        val credentials = store.load()
+        route = Route.Loading(0.8f, "Opening your library")
+        AppDatabase.get(context.applicationContext)
+        route = credentials?.let { Route.Home(it) } ?: Route.Login
     }
 
     // The tile Home returns focus to. Kept out of Route.Home so Back restores it
@@ -112,6 +131,7 @@ private fun TvivoApp() {
             route is Route.SeriesDetail ||
             route is Route.Settings ||
             route is Route.Subscription ||
+            route is Route.Diagnostics ||
             (route is Route.Login && switchingAccount != null)
     ) {
         when (val current = route) {
@@ -124,6 +144,7 @@ private fun TvivoApp() {
             // Back out of Subscription returns to Account, which is where it was opened
             // from — skipping to Home would lose the user's place in the action list.
             is Route.Subscription -> route = Route.Settings(current.credentials)
+            is Route.Diagnostics -> route = Route.Settings(current.credentials)
             is Route.Login -> switchingAccount?.let {
                 switchingAccount = null
                 route = Route.Home(it)
@@ -133,12 +154,10 @@ private fun TvivoApp() {
     }
 
     when (val current = route) {
-        Route.Loading -> Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(text = "Tvivo", color = Palette.Ink)
-        }
+        is Route.Loading -> SplashScreen(
+            progress = current.progress,
+            caption = current.caption
+        )
 
         Route.Login -> LoginScreen(
             onAuthenticated = { authenticated ->
@@ -175,10 +194,13 @@ private fun TvivoApp() {
                 switchingAccount = current.credentials
                 route = Route.Login
             },
-            onShowSubscription = { route = Route.Subscription(current.credentials) }
+            onShowSubscription = { route = Route.Subscription(current.credentials) },
+            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) }
         )
 
         is Route.Subscription -> SubscriptionScreen(viewModel = account)
+
+        is Route.Diagnostics -> DiagnosticsScreen()
 
         is Route.Browse -> {
             val isLive = current.type == ContentType.LIVE

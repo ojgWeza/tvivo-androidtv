@@ -30,6 +30,49 @@ interface SeriesDao {
     )
     fun pagingInCategory(accountId: String, categoryId: String): PagingSource<Int, SeriesEntity>
 
+    /**
+     * D-14 — the item filter, scoped to **one category**.
+     *
+     * Matching is on `nameNormalized`, the same column the sort uses, so filter and order
+     * agree, and the caller must put the query through `NameNormalizer.normalizeQuery`
+     * first or nothing will match. Note `nameNormalized` derives from `nameDisplay`,
+     * which has the quality token stripped — so typing `HD` does **not** filter by
+     * quality, even though the badge on the card says `HD`. That badge is a separate
+     * field (`qualityOf`).
+     *
+     * `LIKE '%' || :query || '%'` cannot use an index and is a scan of the category.
+     * That is acceptable because the scope is one category, not the 48k-row catalog, and
+     * the caller debounces; a global filter would need FTS.
+     */
+    @Query(
+        """
+        SELECT * FROM series
+        WHERE accountId = :accountId AND categoryId = :categoryId
+          AND nameNormalized LIKE '%' || :query || '%'
+        ORDER BY nameNormalized ASC
+        """
+    )
+    fun pagingInCategoryFiltered(
+        accountId: String,
+        categoryId: String,
+        query: String
+    ): PagingSource<Int, SeriesEntity>
+
+    /** The `N` of the header's `N of M`. Counted, not taken from the paging list, whose
+     *  size is unknown until it has all been loaded. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM series
+        WHERE accountId = :accountId AND categoryId = :categoryId
+          AND nameNormalized LIKE '%' || :query || '%'
+        """
+    )
+    fun countInCategoryFiltered(
+        accountId: String,
+        categoryId: String,
+        query: String
+    ): Flow<Int>
+
     @Query("SELECT * FROM series WHERE accountId = :accountId ORDER BY nameNormalized ASC")
     fun pagingAll(accountId: String): PagingSource<Int, SeriesEntity>
 

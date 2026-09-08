@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app mark. Traced from docs/design/img/icon.svg.
+
+  Tvivo is TV + *vivo* (*vivre*: alive, quick, vivid), so the mark is a live signal inside
+  a screen, not a monogram — an earlier `T` letterform encoded the spelling instead of the
+  meaning and was discarded. One stroke, so it survives being shrunk to launcher size
+  where lettering would not.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="320"
+    android:viewportHeight="320">
+
+    <path android:pathData="M0,0h320v320h-320z">
+        <aapt:attr xmlns:aapt="http://schemas.android.com/aapt" name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="320" android:endY="320"
+                android:startColor="#163036"
+                android:endColor="#0A1619" />
+        </aapt:attr>
+    </path>
+
+    <path
+        android:pathData="M46,78 m0,18 a18,18 0 0 1 18,-18 h192 a18,18 0 0 1 18,18 v114 a18,18 0 0 1 -18,18 h-192 a18,18 0 0 1 -18,-18 z"
+        android:fillColor="#00000000"
+        android:strokeColor="#1E4149"
+        android:strokeWidth="11" />
+
+    <path
+        android:pathData="M74,153 H112 L136,104 L160,208 L186,128 L204,153 H246"
+        android:fillColor="#00000000"
+        android:strokeColor="#D97757"
+        android:strokeWidth="17"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Stand and base: what makes the rounded rectangle read as a screen rather than a
+         card, at the size where the pulse alone would be ambiguous. -->
+    <path android:pathData="M140,242 m0,5.5 a5.5,5.5 0 0 1 5.5,-5.5 h29 a5.5,5.5 0 0 1 5.5,5.5 a5.5,5.5 0 0 1 -5.5,5.5 h-29 a5.5,5.5 0 0 1 -5.5,-5.5 z"
+        android:fillColor="#1E4149" />
+    <path android:pathData="M108,259 m0,5.5 a5.5,5.5 0 0 1 5.5,-5.5 h93 a5.5,5.5 0 0 1 5.5,5.5 a5.5,5.5 0 0 1 -5.5,5.5 h-93 a5.5,5.5 0 0 1 -5.5,-5.5 z"
+        android:fillColor="#1E4149" />
+</vector>

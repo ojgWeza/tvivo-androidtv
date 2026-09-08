@@ -37,6 +37,23 @@ object NameNormalizer {
     private fun toDisplay(raw: String): String = strip(raw).display
 
     /**
+     * D-14. Puts a user's filter text through the **same** transform as the stored
+     * `normalized` column, so a `LIKE` against it can actually match.
+     *
+     * This is not a nicety. `normalized` is lowercased, NFD-decomposed, stripped of
+     * combining marks and re-composed; comparing raw keystrokes against it fails the
+     * moment anyone types a capital, an accented Latin letter, or Arabic with diacritics
+     * — all three of which occur in this catalog. Filtering is only as good as the
+     * agreement between the two sides of the comparison, so there is exactly one
+     * implementation and both sides call it.
+     *
+     * Note this searches the **quality-stripped** name, because `normalized` is derived
+     * from `display`. Typing `HD` therefore does not filter by quality even though the
+     * badge on the card says `HD` — the badge comes from [qualityOf], a separate field.
+     */
+    fun normalizeQuery(input: String): String = toNormalized(input)
+
+    /**
      * The quality tokens [toDisplay] removed, normalised for display — `"HD"`, `"4K"`,
      * `null` when the title carried none.
      *

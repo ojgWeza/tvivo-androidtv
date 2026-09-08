@@ -29,7 +29,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -48,13 +51,41 @@ data class BrowseUiState(
     val refreshConfirmation: String? = null,
     /** Full-catalog progress. Dismisses at 100%; gates ALL, RECENTLY ADDED and search. */
     val catalogSyncState: String? = null,
-    val catalogSyncDone: Int = 0
-)
+    val catalogSyncDone: Int = 0,
+
+    /** D-13. Filters the **rail**, in memory — the category list is ~120 rows. */
+    val categoryFilter: String = "",
+
+    /** D-14. Filters the **grid**, in SQL, scoped to the selected category. */
+    val itemFilter: String = "",
+    val isItemFilterOpen: Boolean = false,
+    /** The `N` of `N of M`; null while unfiltered, when `M` alone is the honest number. */
+    val filteredCount: Int? = null
+) {
+    /**
+     * D-13. Rail filtering is a plain substring match over what is already in memory, so
+     * it needs no query, no debounce and no DAO — the panel publishes ~120 categories and
+     * they are all resident.
+     *
+     * Matching is on the **raw** name the rail draws, not on a normalized column, because
+     * this list is what the user is looking at while they type. `RAMADAN EGYPT 2026 SD`
+     * and `... HD` must both survive a search for `ramadan`, which is precisely why the
+     * rail never truncates them (Q-12).
+     */
+    val visibleCategories: List<CategoryEntity>
+        get() = if (categoryFilter.isBlank()) {
+            categories
+        } else {
+            val needle = categoryFilter.trim().lowercase()
+            categories.filter { it.name.lowercase().contains(needle) }
+        }
+}
 
 /**
  * One browse ViewModel for every content type. [contentType] picks the repository and
  * the card shape; nothing else in the screen knows which type it is showing.
  */
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class BrowseViewModel(
     application: Application,
     private val savedState: SavedStateHandle,
@@ -88,6 +119,17 @@ class BrowseViewModel(
     val state: StateFlow<BrowseUiState> = _state.asStateFlow()
 
     private val selectedCategory = MutableStateFlow<String?>(null)
+
+    /**
+     * D-14. Debounced before it reaches Room: the filter is a `LIKE '%x%'` scan of the
+     * category, so every keystroke would otherwise be a fresh scan plus a fresh
+     * `PagingSource`. 300 ms is long enough to swallow a burst of D-pad keystrokes and
+     * short enough not to feel laggy.
+     *
+     * The *typed* value lives in `BrowseUiState` so the field stays responsive; this is
+     * only what the query is allowed to see.
+     */
+    private val debouncedItemFilter = MutableStateFlow("")
 
     /**
      * Focus restoration is by stable item ID, held in `SavedStateHandle` rather than a
@@ -151,6 +193,20 @@ class BrowseViewModel(
                 }
             }
 
+            // D-14 — the `N` of `N of M`. Counted in SQL rather than taken from the
+            // paging list, whose size is not known until every page has been loaded.
+            viewModelScope.launch {
+                combine(
+                    selectedCategory,
+                    debouncedItemFilter.debounce(FILTER_DEBOUNCE_MS)
+                ) { id, q -> id to q }
+                    .flatMapLatest { (categoryId, query) ->
+                        if (categoryId == null || query.isBlank()) flowOf(null)
+                        else catalog.countFiltered(categoryId, query)
+                    }
+                    .collect { count -> _state.update { it.copy(filteredCount = count) } }
+            }
+
             viewModelScope.launch {
                 catalog.countsByCategory().collect { counts ->
                     _state.update { s ->
@@ -174,20 +230,50 @@ class BrowseViewModel(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val items: Flow<PagingData<BrowseItem>> = selectedCategory
-        .flatMapLatest { categoryId ->
-            val catalog = source
-            if (catalog == null || categoryId == null) {
-                flowOf(PagingData.empty())
-            } else {
-                catalog.pagingInCategory(categoryId)
-            }
+    val items: Flow<PagingData<BrowseItem>> =
+        combine(selectedCategory, debouncedItemFilter.debounce(FILTER_DEBOUNCE_MS)) { id, q ->
+            id to q
         }
-        .cachedIn(viewModelScope)
+            .flatMapLatest { (categoryId, query) ->
+                val catalog = source
+                when {
+                    catalog == null || categoryId == null -> flowOf(PagingData.empty())
+                    query.isBlank() -> catalog.pagingInCategory(categoryId)
+                    else -> catalog.pagingFiltered(categoryId, query)
+                }
+            }
+            .cachedIn(viewModelScope)
+
+    /** D-13. In-memory only: no query, no refresh, nothing hits the panel. */
+    fun onCategoryFilterChanged(text: String) {
+        _state.update { it.copy(categoryFilter = text) }
+    }
+
+    /**
+     * D-14. Opening reveals the field; closing **clears the filter as well as hiding it**.
+     * A hidden filter that is still applied is a grid silently missing rows, with no
+     * control on screen to explain why.
+     */
+    fun setItemFilterOpen(open: Boolean) {
+        if (open) {
+            _state.update { it.copy(isItemFilterOpen = true) }
+        } else {
+            debouncedItemFilter.value = ""
+            _state.update { it.copy(isItemFilterOpen = false, itemFilter = "", filteredCount = null) }
+        }
+    }
+
+    fun onItemFilterChanged(text: String) {
+        _state.update { it.copy(itemFilter = text) }
+        debouncedItemFilter.value = text
+    }
 
     fun selectCategory(categoryId: String) {
         selectedCategory.value = categoryId
+        // Carrying a filter across categories would open the new one already filtered, by
+        // text the user typed for a different list.
+        debouncedItemFilter.value = ""
+        _state.update { it.copy(itemFilter = "", filteredCount = null) }
         _state.update { it.copy(selectedCategoryId = categoryId, error = null) }
         viewModelScope.launch {
             source?.refreshCategory(categoryId, false)
@@ -234,6 +320,11 @@ class BrowseViewModel(
 
     private fun Throwable.toAppError(): AppError =
         (this as? AppErrorException)?.error ?: AppError.Unreachable
+
+    private companion object {
+        /** Long enough to swallow a D-pad keystroke burst, short enough not to feel laggy. */
+        const val FILTER_DEBOUNCE_MS = 300L
+    }
 }
 
 /**
@@ -246,7 +337,9 @@ private class CatalogSource(
     val countsByCategory: () -> Flow<List<CategoryCount>>,
     val refreshCategories: suspend (Boolean) -> Result<Boolean>,
     val refreshCategory: suspend (String, Boolean) -> Result<Boolean>,
-    val pagingInCategory: (String) -> Flow<PagingData<BrowseItem>>
+    val pagingInCategory: (String) -> Flow<PagingData<BrowseItem>>,
+    val pagingFiltered: (String, String) -> Flow<PagingData<BrowseItem>>,
+    val countFiltered: (String, String) -> Flow<Int>
 ) {
     companion object {
         /**
@@ -268,7 +361,12 @@ private class CatalogSource(
             pagingInCategory = { id ->
                 Pager(config) { repo.pagingInCategory(id) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
-            }
+            },
+            pagingFiltered = { id, query ->
+                Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
+                    .map { data -> data.map { it.toBrowseItem() } }
+            },
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
         )
 
         fun series(repo: SeriesRepository) = CatalogSource(
@@ -279,7 +377,12 @@ private class CatalogSource(
             pagingInCategory = { id ->
                 Pager(config) { repo.pagingInCategory(id) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
-            }
+            },
+            pagingFiltered = { id, query ->
+                Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
+                    .map { data -> data.map { it.toBrowseItem() } }
+            },
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
         )
 
         fun live(repo: LiveRepository) = CatalogSource(
@@ -290,7 +393,12 @@ private class CatalogSource(
             pagingInCategory = { id ->
                 Pager(config) { repo.pagingInCategory(id) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
-            }
+            },
+            pagingFiltered = { id, query ->
+                Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
+                    .map { data -> data.map { it.toBrowseItem() } }
+            },
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
         )
     }
 }

@@ -9,6 +9,7 @@ import com.dev.Tvivo.auth.AuthRepository
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.VodRepository
 import com.dev.Tvivo.sync.CatalogSyncer
@@ -150,6 +151,14 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
             val seriesRows = syncer.syncSeries(force = true).getOrDefault(0)
 
             val failed = categories.any { it.isFailure }
+            if (failed) {
+                DiagnosticLog.warn("refresh", "Manual refresh: categories failed")
+            } else {
+                DiagnosticLog.info(
+                    "refresh",
+                    "Manual refresh: $vodRows movies, $liveRows channels, $seriesRows shows"
+                )
+            }
             _state.update {
                 it.copy(
                     isRefreshing = false,
@@ -171,6 +180,7 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
      */
     fun signOut() {
         viewModelScope.launch {
+            DiagnosticLog.warn("account", "Signed out; stored credentials erased")
             store.wipe()
             _state.update { AccountUiState(isLoading = false, signedOut = true) }
         }

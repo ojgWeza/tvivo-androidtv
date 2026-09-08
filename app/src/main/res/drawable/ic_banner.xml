@@ -1,16 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android TV launcher banner, 320x180. Horizontal lockup: the pulse mark plus the
+  wordmark. Traced from docs/design/img/banner.svg.
+
+  The wordmark is drawn as paths rather than set as text: a launcher banner is rendered
+  by the system launcher, not by this app, so it cannot rely on a font this app bundles
+  or on the device having any particular one.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="320dp"
     android:height="180dp"
     android:viewportWidth="320"
     android:viewportHeight="180">
+
     <path
         android:pathData="M0,0h320v180h-320z"
-        android:fillColor="#0F2126" />
+        android:fillColor="#0A1619" />
+
+    <!-- The screen the pulse lives inside. -->
     <path
-        android:pathData="M40,90 L140,90 L140,100 L100,100 L100,150 L80,150 L80,100 L40,100 Z"
-        android:fillColor="#D97757" />
+        android:pathData="M35,52 m0,9 a9,9 0 0 1 9,-9 h86 a9,9 0 0 1 9,9 v50 a9,9 0 0 1 -9,9 h-86 a9,9 0 0 1 -9,-9 z"
+        android:fillColor="#00000000"
+        android:strokeColor="#1E4149"
+        android:strokeWidth="6" />
+
+    <!-- One stroke. The beat spikes and cuts a sharp V trough, so the V of *vivo* falls
+         out of the signal rather than being spelled. -->
     <path
-        android:pathData="M160,60 L180,60 L220,130 L220,60 L240,60 L240,150 L220,150 L180,80 L180,150 L160,150 Z"
-        android:fillColor="#E8F1F2" />
+        android:pathData="M48,86 H65 L76,64 L87,110 L99,74 L107,86 H126"
+        android:fillColor="#00000000"
+        android:strokeColor="#D97757"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Wordmark: T v i v o -->
+    <path android:fillColor="#E8F1F2"
+        android:pathData="M152,72 h44 v9 h-17 v34 h-10 v-34 h-17 z" />
+    <path android:fillColor="#E8F1F2"
+        android:pathData="M198,83 h10 l8,22 l8,-22 h10 l-13,32 h-10 z" />
+    <path android:fillColor="#E8F1F2"
+        android:pathData="M238,83 h9 v32 h-9 z M238,71 h9 v9 h-9 z" />
+    <path android:fillColor="#E8F1F2"
+        android:pathData="M252,83 h10 l8,22 l8,-22 h10 l-13,32 h-10 z" />
+    <path android:fillColor="#E8F1F2"
+        android:pathData="M303,82 m-14,17 a14,17 0 1 1 28,0 a14,17 0 1 1 -28,0 z M303,90 m-6,9 a6,9 0 1 0 12,0 a6,9 0 1 0 -12,0 z" />
 </vector>

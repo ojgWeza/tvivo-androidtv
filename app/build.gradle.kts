@@ -87,6 +87,10 @@ dependencies {
     implementation("androidx.paging:paging-compose:3.3.2")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Phase 5 `RefreshWorker`. The catalog TTL is 24 h, so without a background refresh
+    // the first launch of the day always pays for a full re-sync in the foreground.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.google.crypto.tink:tink-android:1.14.1")
 
     implementation("com.squareup.retrofit2:retrofit:2.11.0")

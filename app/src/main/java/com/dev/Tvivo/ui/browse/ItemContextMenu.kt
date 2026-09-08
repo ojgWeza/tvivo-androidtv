@@ -1,7 +1,6 @@
 package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
+import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
 
@@ -70,7 +70,7 @@ private fun MenuAction(label: String, onClick: () -> Unit) {
         style = TvType.title,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .tvClickable { onClick() }
             .padding(vertical = 14.dp)
     )
 }

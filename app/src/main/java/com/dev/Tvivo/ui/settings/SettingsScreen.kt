@@ -1,7 +1,6 @@
 package com.dev.Tvivo.ui.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ConfirmDialog
+import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
@@ -44,6 +44,7 @@ fun SettingsScreen(
     onSignedOut: () -> Unit,
     onSwitchAccount: () -> Unit,
     onShowSubscription: () -> Unit,
+    onShowDiagnostics: () -> Unit,
     viewModel: AccountViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -76,6 +77,11 @@ fun SettingsScreen(
             label = "Sign in to a different account",
             hint = "Keeps this account signed in until the new one is accepted",
             onClick = onSwitchAccount
+        )
+        ActionRow(
+            label = "Diagnostics",
+            hint = "What the app has done since it started, for when something looks wrong",
+            onClick = onShowDiagnostics
         )
 
         // **D-12 — everything reversible is above this line.**
@@ -134,7 +140,7 @@ private fun ActionRow(
         modifier = modifier
             .fillMaxWidth()
             .tvFocusFrame()
-            .clickable { onClick() }
+            .tvClickable { onClick() }
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Text(

@@ -104,10 +104,14 @@ the grid rhythm around.
 ---
 
 ## Q-14 — Sideloaded APK crashes on launch on a phone
-**Severity: Unknown until triaged. Reported 2026-09-08, not yet investigated.**
+**Severity: Unknown until triaged. Reported 2026-09-08. Reproducible — the user has
+tried this several times and it crashes on every launch. Still not investigated, because
+no logcat has been captured from the phone.**
 
 The debug APK installs on an Android **phone**, and crashes immediately on
-"Open". No logcat captured yet, so there is no root cause here — only the report.
+"Open" — every attempt, not intermittently. No logcat captured yet, so there is no root
+cause here, only the report. **Getting the trace is the blocker; nothing else about this
+is worth guessing at until it exists.**
 
 **First step is a stack trace, not a fix:** `adb logcat -c` before launching,
 then `adb logcat -d AndroidRuntime:E *:S` right after the crash. Everything below
@@ -197,6 +201,81 @@ box are too small.
 
 **Fix:** start the gradient higher and give the scrim its own height independent
 of the text.
+
+---
+
+## Q-19 — The category and item filter fields trap focus — **FIXED, verified**
+**Severity: High. Found 2026-09-08 on-emulator, in the QA pass for D-13/D-14.**
+`ui/browse/CategoryRail.kt`, `ui/browse/BrowseScreen.kt`
+
+Once focus entered the rail's `Filter categories` field, **no D-pad press could leave
+it.** Verified on-emulator: with the IME dismissed, two DOWN presses and a RIGHT and an
+UP all left focus in the field, moving only the caret. The filtered categories the user
+had just produced were unreachable, and Back was the only way out — which also discards
+the filter. D-13 was therefore unusable as shipped, and D-14 could not even be reached to
+test.
+
+**Cause: the fix for this already existed and was in the wrong place.** `LoginScreen` has
+carried a private `dpadFieldNavigation` since the very first defect on this project — a
+login screen that could be typed into but never left. Being private to one screen, it was
+a detail of that screen rather than a rule, so two new fields reproduced the identical
+trap.
+
+**Fix:** lifted to `ui/common/DpadField.kt` with the reasoning attached, and applied to
+both filter fields plus an `ImeAction.Next` that moves focus into the list. **Any
+focusable text field on a TV must carry it.** Left/right are deliberately still not
+intercepted — inside a field they move the caret, which is wanted when fixing a typo.
+
+**Verified on-emulator 2026-09-08:** with `horror` typed and the IME dismissed, DOWN moves focus out of the field and onto the first filtered category. D-14 became reachable and was then verified for the first time.
+
+## Q-20 — The splash mark shows its launcher background as a box — **FIXED, verified**
+**Severity: Low. Found 2026-09-08 on-emulator.** `ui/common/SplashScreen.kt`
+
+`ic_launcher_mark` carries a gradient background rect, because a launcher icon has to
+supply its own surface. Drawn on the splash, which already has one, that rect reads as a
+lighter square floating behind the mark.
+
+**Fix:** `ic_mark.xml`, same geometry without the background, for in-app use. The launcher
+icon keeps its tile. **Verified on-emulator 2026-09-08.**
+
+---
+
+## Q-21 — The expanded item filter overlaps the category title
+**Severity: Low. Found 2026-09-08 on-emulator, verifying D-14.**
+`ui/browse/BrowseScreen.kt`
+
+Opening the grid filter expands a 320 dp field in place, and it is drawn over the category
+name: with `ARABIC MOVIES 2026` in the header, the field covers everything from `2026`
+rightwards.
+
+**Cause:** the header is a `SpaceBetween` row of `title` and `actions`. Collapsed, the two
+pills leave room; expanded, the field takes 320 dp more than the row has to give, and the
+title does not shrink because nothing tells it to.
+
+**Fix:** give the title `Modifier.weight(1f)` with an ellipsis so it yields to the field,
+or collapse the title to the count line while the filter is open. The second reads better:
+the user filtering a category knows which one they are in.
+
+**Not a functional defect** — the filter and the `N of M` count both work, and the title
+returns when the filter closes.
+
+## Q-22 — The diagnostic log has almost no call sites
+**Severity: Medium. Found 2026-09-08 on-emulator.** `diagnostics/DiagnosticLog.kt`
+
+The Diagnostics screen renders correctly and, after a full session of cold start, catalog
+browsing, category filtering and item filtering, reported **"Nothing recorded yet."** That
+is honest — but it means the screen would be empty at exactly the moment someone opened it
+to find out why something broke.
+
+**Cause:** the log was wired only into `RefreshWorker` and `AccountViewModel` (manual
+refresh, sign-out). None of those ran. The events that actually matter — app start, catalog
+sync start/finish/zero-row guard, category refresh failure, auth failure, playback error —
+are not instrumented.
+
+**Fix:** hook `CatalogSyncer` (including the `partial`/zero-row guard, which is the
+condition most worth seeing after the fact), `BrowseViewModel`'s error path,
+`AuthRepository` failures, and `PlayerActivity`'s error listener. **Never log a URL** — a
+stream URL carries the username and password as query parameters.
 
 ---
 
@@ -351,11 +430,14 @@ is settled** — rationale in `docs/decisions.md`, specification in
 `docs/ui-scope.md`, visual reference in **`docs/design/comps.html`** (open it in
 a browser before touching UI). Nothing here is built yet.
 
-**Status 2026-09-08: D-1 through D-8, D-12 and D-15..D-17 are written and
-uncommitted, compiled only as far as D-5.** Nothing below has been run on the
-emulator yet — every build is gated on the owner's approval. What is left is
-D-9 (tile photographs), D-10 (splash), D-11 (app mark + banner), D-13 (category
-filter) and D-14 (item filter).
+**Status 2026-09-08: the whole design pass D-1..D-17 is built, deployed and
+verified on-emulator.** Phase 5 has also landed its `RefreshWorker` (WorkManager
+job confirmed scheduled), an on-device Diagnostics screen, `supportsRtl`, and a
+grid loading state. 149 unit tests pass.
+
+The QA pass that verified it found six defects, Q-15..Q-20; all six are fixed,
+and Q-15..Q-20 are verified except where noted. Q-21 and Q-22 are open and were
+found by the same pass.
 
 Sequencing: **D-4 and D-5 touch nearly every screen.** Land them first so
 everything else is built against the real scale and roles rather than twice.

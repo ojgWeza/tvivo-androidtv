@@ -1,7 +1,6 @@
 package com.dev.Tvivo.ui.series
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +39,7 @@ import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.ui.browse.ResumePrompt
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
@@ -189,7 +189,7 @@ private fun SeasonRail(
                     .focusProperties { right = episodeListFocus }
                     .background(background)
                     .onFocusChanged { focused = it.isFocused }
-                    .clickable { onSelect(season) }
+                    .tvClickable { onSelect(season) }
                     .padding(horizontal = 24.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -246,7 +246,7 @@ private fun Header(
                 style = TvType.body,
                 modifier = Modifier
                     .tvFocusFrame()
-                    .clickable { onRefresh() }
+                    .tvClickable { onRefresh() }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
@@ -325,7 +325,7 @@ private fun EpisodeRow(
             .fillMaxWidth()
             .tvFocusFrame()
             .onFocusChanged { if (it.isFocused) onFocused() }
-            .clickable { onPlay() }
+            .tvClickable { onPlay() }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

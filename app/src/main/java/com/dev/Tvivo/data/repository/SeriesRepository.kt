@@ -4,6 +4,7 @@ import androidx.paging.PagingSource
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
@@ -47,10 +48,25 @@ class SeriesRepository(
     fun pagingInCategory(categoryId: String): PagingSource<Int, SeriesEntity> =
         db.seriesDao().pagingInCategory(accountId, categoryId)
 
+    /**
+     * D-14. The query goes through `NameNormalizer.normalizeQuery` here, in one place.
+     * `nameNormalized` is lowercased, diacritic-stripped and whitespace-collapsed, so raw
+     * user input compared against it silently matches nothing as soon as anyone types a
+     * capital or an accent.
+     */
+    fun pagingInCategoryFiltered(
+        categoryId: String,
+        query: String
+    ): PagingSource<Int, SeriesEntity> =
+        db.seriesDao().pagingInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
+    fun countInCategoryFiltered(categoryId: String, query: String): Flow<Int> =
+        db.seriesDao().countInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
+
     fun pagingAll(): PagingSource<Int, SeriesEntity> = db.seriesDao().pagingAll(accountId)
 
     fun pagingSearch(query: String): PagingSource<Int, SeriesEntity> =
-        db.seriesDao().pagingSearch(accountId, query.lowercase().trim())
+        db.seriesDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
     suspend fun byId(seriesId: Int): SeriesEntity? = db.seriesDao().byId(accountId, seriesId)
 

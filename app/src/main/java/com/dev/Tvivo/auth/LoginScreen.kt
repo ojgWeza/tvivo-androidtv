@@ -21,15 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
@@ -45,6 +39,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
@@ -282,29 +277,6 @@ private val FORM_WIDTH = 410.dp
 
 /** One line of `body`, reserved whether or not there is an error to put in it. */
 private val ERROR_LINE_HEIGHT = 22.dp
-
-/**
- * Without this the Sign in button is unreachable and the app is unusable on a remote.
- *
- * A Compose text field swallows D-pad up/down to move its own cursor, which on a phone is
- * right and on a TV is fatal — it is the only way out of the field. Intercepting in the
- * *preview* pass moves focus before the field ever sees the event.
- */
-private fun Modifier.dpadFieldNavigation(focusManager: FocusManager): Modifier =
-    onPreviewKeyEvent { event ->
-        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-        when (event.key) {
-            Key.DirectionDown -> {
-                focusManager.moveFocus(FocusDirection.Down)
-                true
-            }
-            Key.DirectionUp -> {
-                focusManager.moveFocus(FocusDirection.Up)
-                true
-            }
-            else -> false
-        }
-    }
 
 @Composable
 private fun fieldColors() = OutlinedTextFieldDefaults.colors(
