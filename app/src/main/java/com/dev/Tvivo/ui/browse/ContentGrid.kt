@@ -61,7 +61,9 @@ fun ContentGrid(
     cardShape: CardShape,
     /** The rail's RIGHT target; a focus group forwards it to its first focusable card. */
     gridFocusRequester: FocusRequester,
-    onPlay: (BrowseItem) -> Unit,
+    /** OK on a card. Opens the pre-run page — it has not started a stream since the
+     *  detail screen landed, and the old name said otherwise. */
+    onActivate: (BrowseItem) -> Unit,
     onContextMenu: (BrowseItem) -> Unit,
     onFocused: (BrowseItem) -> Unit,
     modifier: Modifier = Modifier
@@ -106,7 +108,7 @@ fun ContentGrid(
                 } else {
                     Modifier
                 },
-                onPlay = { item?.let(onPlay) },
+                onActivate = { item?.let(onActivate) },
                 onLongPress = { item?.let(onContextMenu) },
                 onFocused = { item?.let(onFocused) }
             )
@@ -135,7 +137,7 @@ private fun StreamCard(
     item: BrowseItem?,
     cardShape: CardShape,
     modifier: Modifier = Modifier,
-    onPlay: () -> Unit,
+    onActivate: () -> Unit,
     onLongPress: () -> Unit,
     onFocused: () -> Unit
 ) {
@@ -160,7 +162,7 @@ private fun StreamCard(
                 // Placeholders stay focusable but inert — non-focusable placeholders make
                 // D-pad traversal skip a hole and jump unpredictably.
                 .combinedClickable(
-                    onClick = { if (item != null) onPlay() },
+                    onClick = { if (item != null) onActivate() },
                     onLongClick = { if (item != null) onLongPress() }
                 )
         ) {

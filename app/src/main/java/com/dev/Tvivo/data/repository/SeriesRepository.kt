@@ -68,6 +68,14 @@ class SeriesRepository(
     fun pagingSearch(query: String): PagingSource<Int, SeriesEntity> =
         db.seriesDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
+    /** `Recently added`, newest first, capped by the caller. */
+    fun recentlyAdded(limit: Int): Flow<List<SeriesEntity>> =
+        db.seriesDao().recentlyAdded(accountId, limit)
+
+    /** Resolves the ids held by Continue watching and Favourites into rows. */
+    suspend fun byIds(ids: List<Int>): List<SeriesEntity> =
+        if (ids.isEmpty()) emptyList() else db.seriesDao().byIds(accountId, ids)
+
     suspend fun byId(seriesId: Int): SeriesEntity? = db.seriesDao().byId(accountId, seriesId)
 
     fun observeEpisodes(seriesId: Int): Flow<List<EpisodeEntity>> =

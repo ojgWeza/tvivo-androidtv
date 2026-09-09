@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -60,8 +61,12 @@ fun CategoryRail(
      *  Refresh — it is also to the right, and further from the rail than the first card
      *  only in a way the search does not weigh. The rail must reach the grid. */
     gridFocusRequester: FocusRequester,
+    /** The screen's resting focus. Requested once categories arrive, so the first D-pad
+     *  press has somewhere to move *from* — see [BrowseScreen]. */
+    railFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
+    val filterFocusRequester = remember { FocusRequester() }
     Column(
         modifier = modifier
             .width(RAIL_WIDTH)
@@ -71,19 +76,34 @@ fun CategoryRail(
         // D-13. Pinned above the list rather than scrolling with it: a filter that
         // scrolls out of view while you are looking at its results is a filter you
         // forget is applied.
-        CategoryFilterField(value = filter, onValueChange = onFilterChanged)
+        CategoryFilterField(
+            value = filter,
+            onValueChange = onFilterChanged,
+            gridFocusRequester = gridFocusRequester,
+            focusRequester = filterFocusRequester
+        )
 
         LazyColumn(
-            modifier = Modifier.fillMaxHeight().focusGroup(),
+            // Requesting focus on a focus *group* delegates to its first focusable
+            // child, which is what makes this safe against a LazyColumn whose rows are
+            // not composed yet. The same pattern the grid already uses.
+            modifier = Modifier
+                .fillMaxHeight()
+                .focusRequester(railFocusRequester)
+                .focusGroup(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
         ) {
-            items(categories, key = { it.categoryId }) { category ->
+            itemsIndexed(categories, key = { _, it -> it.categoryId }) { index, category ->
                 RailRow(
                     name = category.name,
                     count = counts[category.categoryId],
                     selected = category.categoryId == selectedCategoryId,
                     onSelect = { onSelect(category) },
-                    gridFocusRequester = gridFocusRequester
+                    gridFocusRequester = gridFocusRequester,
+                    // Only the first row sends UP to the filter. Declared per-row rather
+                    // than on the group, or UP from row 40 would jump to the filter
+                    // instead of row 39.
+                    filterFocusRequester = filterFocusRequester.takeIf { index == 0 }
                 )
             }
 
@@ -108,13 +128,28 @@ fun CategoryRail(
  * D-pad up/down for its own caret, so once focus lands here the only way out is Back:
  * the filtered categories the user just produced are unreachable, which makes the whole
  * feature unusable. Identical in shape to the original login focus trap.
+ *
+ * **Q-24 — and RIGHT has to reach the grid, exactly as it does from a category row.**
+ * The rail is one pane; which row of it focus happens to be on must not change what
+ * crossing to the content means. [RailRow] already carries this override and the field
+ * did not, so RIGHT worked from every row of the rail except the one at the top of it.
+ * The override is required rather than optional for the same reason it is on [RailRow]:
+ * the 2D search scores the header's Refresh as a perfectly good candidate to the right.
  */
 @Composable
-private fun CategoryFilterField(value: String, onValueChange: (String) -> Unit) {
+private fun CategoryFilterField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    gridFocusRequester: FocusRequester,
+    focusRequester: FocusRequester
+) {
     val focusManager = LocalFocusManager.current
     androidx.compose.material3.OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
+        // `Filter`, not `Search`: it narrows a list that is already on screen. Search
+        // is the thing that goes and finds rows you are not looking at, and this is not
+        // that — promising it here would be promising the wrong feature.
         label = { Text("Filter categories", color = Palette.Dim, style = TvType.caption) },
         singleLine = true,
         textStyle = TvType.body,
@@ -139,6 +174,8 @@ private fun CategoryFilterField(value: String, onValueChange: (String) -> Unit) 
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 16.dp)
+            .focusRequester(focusRequester)
+            .focusProperties { right = gridFocusRequester }
             .dpadFieldNavigation(focusManager)
     )
 }
@@ -149,7 +186,9 @@ private fun RailRow(
     count: Int?,
     selected: Boolean,
     onSelect: () -> Unit,
-    gridFocusRequester: FocusRequester
+    gridFocusRequester: FocusRequester,
+    /** Non-null on the first row only: UP from the top of the list opens the filter. */
+    filterFocusRequester: FocusRequester? = null
 ) {
     var focused by remember { mutableStateOf(false) }
     var overflowed by remember { mutableStateOf(false) }
@@ -169,7 +208,14 @@ private fun RailRow(
             // The override belongs on the focused node itself: declared on the parent
             // focus group it is not consulted, and the 2D search picks the header's
             // Refresh instead — also to the right, and nothing weighs it as further.
-            .focusProperties { right = gridFocusRequester }
+            .focusProperties {
+                right = gridFocusRequester
+                // **Q-25 — UP from the top of the list is how the filter is reached.**
+                // The field is pinned above the list and is not part of it, so without
+                // this the 2D search is free to leave the rail entirely and hand UP to
+                // the grid, which is what it did.
+                filterFocusRequester?.let { up = it }
+            }
             .background(background)
             .onFocusChanged { focused = it.isFocused }
             .tvClickable { onSelect() }

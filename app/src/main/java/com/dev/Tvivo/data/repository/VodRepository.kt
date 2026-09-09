@@ -10,6 +10,7 @@ import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.data.remote.CategoryListParser
 import com.dev.Tvivo.data.remote.ErrorMapper
+import com.dev.Tvivo.data.remote.VodInfoParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
 import kotlinx.coroutines.Dispatchers
@@ -56,12 +57,38 @@ class VodRepository(
     fun pagingSearch(query: String): PagingSource<Int, VodStreamEntity> =
         db.vodDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
+    /** `Recently added`, newest first, capped by the caller. */
+    fun recentlyAdded(limit: Int): Flow<List<VodStreamEntity>> =
+        db.vodDao().recentlyAdded(accountId, limit)
+
+    /** Resolves the ids held by Continue watching and Favourites into rows. */
+    suspend fun byIds(ids: List<Int>): List<VodStreamEntity> =
+        if (ids.isEmpty()) emptyList() else db.vodDao().byIds(accountId, ids)
+
     suspend fun byId(streamId: Int): VodStreamEntity? = db.vodDao().byId(accountId, streamId)
 
     /**
      * Categories are one fast call, which is what makes a content type browsable in about
      * a second while the full catalog syncs behind it.
      */
+    /**
+     * The film's description, fetched once and cached on the row.
+     *
+     * Returns null rather than failing loudly: a missing description must never be an
+     * error state on the pre-run page, which has a poster, a title and a Play button
+     * that all work perfectly well without one.
+     */
+    suspend fun fetchPlot(streamId: Int): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = api.getVodInfo(credentials.username, credentials.password, streamId)
+            if (!response.isSuccessful) return@runCatching null
+            val body = response.body() ?: return@runCatching null
+            VodInfoParser.parsePlot(body)?.also { plot ->
+                db.vodDao().updatePlot(accountId, streamId, plot)
+            }
+        }.getOrNull()
+    }
+
     suspend fun refreshCategories(force: Boolean = false): Result<Boolean> =
         withContext(Dispatchers.IO) {
             cache.ensureFresh(

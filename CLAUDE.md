@@ -13,10 +13,28 @@ Insights / Medica Cloud Care work.
 plus an Account screen (`ui/settings/`) carrying sign out, switch account,
 refresh everything, exit, and the subscription expiry. The app authenticates,
 browses movies, live channels and series by category, plays movies, and shows a
-season/episode picker per show. 48,761 VOD rows, 6,425 live channels and 13,264
-series shows are synced and cached; 132 unit tests pass. Live and episode
+season/episode picker per show. 48,780 VOD rows, 6,424 live channels and 13,279
+series shows are synced and cached; **149 unit tests pass**. Live and episode
 playback are the paths never exercised — `max_connections` is 1, so no automated
 test may open a stream.
+
+**As of 2026-09-10, two things changed that everything else now assumes.**
+
+*Activating a card does not play anything.* Every content type opens a pre-run
+page (`ui/detail/`) carrying poster, title, description, Play (focused on
+arrival) and a favourite heart. `ContentGrid`'s callback is `onActivate`, not
+`onPlay`. The long-press menu keeps a direct Play as the shortcut. A movie's
+description comes from `get_vod_info`, fetched lazily and cached — this panel
+sends no `plot` on `get_vod_streams`, verified over a forced re-sync of all
+48,780 rows.
+
+*The rail leads with three folders the panel does not publish* — `RECENTLY
+ADDED` (100), `CONTINUE WATCHING` (50) and `FAVOURITES`, in that order, above
+the panel's categories. They are `CategoryEntity` rows with `__`-prefixed ids;
+see `docs/architecture.md`. The Room DB is now on a **real migration** — never
+restore `fallbackToDestructiveMigration`, it drops `favourites` and
+`resume_positions`, which are the only user data the app holds and the two
+tables those folders are built from.
 
 **To test the login screen, use Account → "Sign in to a different account" and
 enter a deliberately wrong account.** That path does **not** wipe anything: it

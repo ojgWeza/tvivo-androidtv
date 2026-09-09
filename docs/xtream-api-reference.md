@@ -133,6 +133,24 @@ Example item:
 }
 ```
 
+### Get one film's metadata (the only source of a movie description)
+```
+GET .../player_api.php?username={u}&password={p}&action=get_vod_info&vod_id={id}
+```
+**Verified 2026-09-10.** `get_vod_streams` carries **no `plot`** on this panel: a forced
+re-sync of all three catalogs produced 0 plots across 48,780 VOD rows while `get_series`
+returned 7,604 through the identical parser. A movie description is therefore only
+available per film, from this endpoint.
+
+Fetched lazily when the pre-run page opens and cached onto `vod_streams.plot`, so a film
+opened once describes itself thereafter with the panel unreachable. The response is one
+small object and is safe to materialise, unlike every list endpoint here.
+
+Forks disagree on where the description lives, so `VodInfoParser` checks `info.plot`,
+then `plot`, then `description`/`overview`/`storyline`, at the top level too, and yields
+null on anything unrecognised. Note `optString` turns a JSON null into the literal string
+`"null"` — that is filtered, or it renders as the synopsis.
+
 ### List the entire VOD catalog in one call
 
 ```

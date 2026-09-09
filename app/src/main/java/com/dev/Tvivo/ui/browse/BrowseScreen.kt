@@ -52,6 +52,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun BrowseScreen(
     contentType: ContentType,
+    /** Activating a card. Opens the pre-run page; it never starts a stream. */
+    onOpenDetail: (BrowseItem) -> Unit,
+    /** The long-press shortcut only. Straight to the player, resume prompt included. */
     onPlay: (BrowseItem, Long) -> Unit
 ) {
     val application = LocalContext.current.applicationContext as android.app.Application
@@ -71,9 +74,30 @@ fun BrowseScreen(
     var resumePromptItem by remember { mutableStateOf<Pair<BrowseItem, Long>?>(null) }
     val scope = rememberCoroutineScope()
     val gridFocusRequester = remember { FocusRequester() }
+    val railFocusRequester = remember { FocusRequester() }
 
-    // OK plays. If a resume point exists the prompt comes first, so neither resuming nor
-    // starting over happens silently.
+    // **Q-25 — the screen must open with something focused.** It did not, and an
+    // Android TV screen with no focus owner has no D-pad behaviour at all: the first
+    // press runs a 2D search with no origin to measure from, so it lands on whichever
+    // node the heuristic likes — which is how RIGHT out of the rail opened the search
+    // field instead of crossing to the grid. The rail is the resting place because it
+    // is where a user decides what to look at.
+    //
+    // Keyed on the first categories arriving: requesting focus on an empty LazyColumn
+    // has nothing to delegate to. `runCatching` because a FocusRequester whose node has
+    // left composition throws rather than returning false.
+    var focusPlaced by remember { mutableStateOf(false) }
+    LaunchedEffect(state.visibleCategories.isNotEmpty()) {
+        if (!focusPlaced && state.visibleCategories.isNotEmpty()) {
+            runCatching { railFocusRequester.requestFocus() }.onSuccess { focusPlaced = true }
+        }
+    }
+
+    // The long-press menu's Play. If a resume point exists the prompt comes first, so
+    // neither resuming nor starting over happens silently.
+    //
+    // OK on a card does **not** come through here any more — it opens the pre-run page,
+    // which owns the same prompt. This is the shortcut, not the main path.
     fun launch(item: BrowseItem) {
         scope.launch {
             val resumeMs = viewModel.resumePositionMs(item.id)
@@ -103,7 +127,8 @@ fun BrowseScreen(
             filter = state.categoryFilter,
             onFilterChanged = viewModel::onCategoryFilterChanged,
             onSelect = { viewModel.selectCategory(it.categoryId) },
-            gridFocusRequester = gridFocusRequester
+            gridFocusRequester = gridFocusRequester,
+            railFocusRequester = railFocusRequester
         )
 
         Column(modifier = Modifier.fillMaxSize()) {
@@ -156,7 +181,10 @@ fun BrowseScreen(
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
-                    onPlay = { item -> launch(item) },
+                    onActivate = { item ->
+                        viewModel.pendingFocusItemId = item.id
+                        onOpenDetail(item)
+                    },
                     onContextMenu = { contextMenuItem = it },
                     onFocused = { viewModel.pendingFocusItemId = it.id }
                 )

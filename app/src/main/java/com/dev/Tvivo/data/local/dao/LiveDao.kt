@@ -95,6 +95,28 @@ interface LiveDao {
     @Query("SELECT * FROM live_streams WHERE accountId = :accountId AND streamId = :streamId")
     suspend fun byId(accountId: String, streamId: Int): LiveStreamEntity?
 
+    /** `Recently added`, newest first. See [VodDao.recentlyAdded]. */
+    @Query(
+        """
+        SELECT * FROM live_streams
+        WHERE accountId = :accountId AND added IS NOT NULL
+        ORDER BY added DESC LIMIT :limit
+        """
+    )
+    fun recentlyAdded(accountId: String, limit: Int): Flow<List<LiveStreamEntity>>
+
+    /**
+     * Continue watching and Favourites hold ids, not rows — the row they point at can be
+     * re-synced, renamed or removed underneath them. Resolving them here means a folder
+     * whose item has left the catalog simply shows one fewer card rather than a blank.
+     *
+     * Unordered on purpose: SQL cannot express "in the order these ids were given", and
+     * both callers have an order that matters (last-watched, and when it was favourited).
+     * The caller re-orders.
+     */
+    @Query("SELECT * FROM live_streams WHERE accountId = :accountId AND streamId IN (:ids)")
+    suspend fun byIds(accountId: String, ids: List<Int>): List<LiveStreamEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<LiveStreamEntity>)
 

@@ -69,6 +69,22 @@ interface XtreamApiService {
         @Query("action") action: String = "get_series"
     ): Response<okhttp3.ResponseBody>
 
+    /**
+     * A single film's metadata. **This is the only way to get a movie's description on
+     * this panel** — verified 2026-09-10: a forced full re-sync produced 0 plots across
+     * 48,780 `get_vod_streams` rows, while `get_series` returned 7,604 through the same
+     * parser. The list call simply does not carry one for VOD.
+     *
+     * One small object, so unlike the list endpoints it is safe to materialise.
+     */
+    @GET("player_api.php")
+    suspend fun getVodInfo(
+        @Query("username") username: String,
+        @Query("password") password: String,
+        @Query("vod_id") vodId: Int,
+        @Query("action") action: String = "get_vod_info"
+    ): Response<okhttp3.ResponseBody>
+
     @GET("player_api.php")
     suspend fun getSeriesInfo(
         @Query("username") username: String,

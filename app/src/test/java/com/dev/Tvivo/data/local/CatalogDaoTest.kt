@@ -63,6 +63,7 @@ class CatalogDaoTest {
         nameNormalized = name.lowercase(),
         streamIcon = null,
         containerExtension = "mp4",
+        plot = null,
         added = null,
         num = null,
         generation = generation

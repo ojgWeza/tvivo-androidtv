@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dev.Tvivo.data.local.dao.CatalogSyncDao
 import com.dev.Tvivo.data.local.dao.CategoryDao
 import com.dev.Tvivo.data.local.dao.FavouriteDao
@@ -34,7 +36,7 @@ import com.dev.Tvivo.data.local.entities.VodStreamEntity
         ResumePositionEntity::class,
         FavouriteEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,6 +54,15 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var instance: AppDatabase? = null
 
+        /** v4 adds `vod_streams.plot`. The catalog re-syncs anyway, so back-filling is
+         *  unnecessary — but the two user-data tables must survive, which is the whole
+         *  point of doing this as a migration rather than a drop. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vod_streams ADD COLUMN plot TEXT")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -59,9 +70,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "tvivo.db"
                 )
-                    // No schema history to preserve yet, and the whole DB is a cache that
-                    // re-syncs from the panel. Revisit once resume positions matter.
-                    .fallbackToDestructiveMigration()
+                    // **Resume positions and favourites are now the reason this cannot
+                    // be destructive.** The catalog tables are a cache and would happily
+                    // re-sync, but `resume_positions` and `favourites` are the only user
+                    // data the app holds and the panel cannot give them back — they are
+                    // what Continue watching and Favourites are built from. A dropped
+                    // table here is a silently emptied folder the user curated.
+                    .addMigrations(MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

@@ -55,6 +55,13 @@ data class VodStreamEntity(
     val nameNormalized: String,
     val streamIcon: String?,
     val containerExtension: String?,
+    /**
+     * The panel sends `plot` on VOD rows just as it does on series rows, and
+     * [StreamListParser] has always read it — the VOD mapping simply dropped it, and
+     * this column did not exist to put it in. The detail screen is the first thing that
+     * needed it. Nullable because a panel is free not to send it.
+     */
+    val plot: String?,
     val added: Long?,
     val num: Int?,
     val generation: Long

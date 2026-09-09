@@ -58,6 +58,14 @@ class LiveRepository(
     fun pagingSearch(query: String): PagingSource<Int, LiveStreamEntity> =
         db.liveDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
+    /** `Recently added`, newest first, capped by the caller. */
+    fun recentlyAdded(limit: Int): Flow<List<LiveStreamEntity>> =
+        db.liveDao().recentlyAdded(accountId, limit)
+
+    /** Resolves the ids held by Continue watching and Favourites into rows. */
+    suspend fun byIds(ids: List<Int>): List<LiveStreamEntity> =
+        if (ids.isEmpty()) emptyList() else db.liveDao().byIds(accountId, ids)
+
     suspend fun byId(streamId: Int): LiveStreamEntity? = db.liveDao().byId(accountId, streamId)
 
     suspend fun refreshCategories(force: Boolean = false): Result<Boolean> =

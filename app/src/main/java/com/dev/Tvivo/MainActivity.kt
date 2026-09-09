@@ -42,6 +42,7 @@ import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import android.content.Intent
 import android.os.Build
 import com.dev.Tvivo.diagnostics.DiagnosticLog
+import com.dev.Tvivo.ui.detail.ItemDetailScreen
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvivoTheme
 
@@ -79,6 +80,39 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The one place a movie or channel URL is built and handed to the player.
+ *
+ * There are two ways in — the pre-run page's Play, and the grid's long-press shortcut —
+ * and they must not drift: live and movies differ only in the URL path segment and the
+ * default extension (`ts` against `mp4`), which is exactly the kind of difference that
+ * gets fixed in one copy and not the other.
+ */
+private fun playItem(
+    context: android.content.Context,
+    credentials: Credentials,
+    accountId: String,
+    isLive: Boolean,
+    itemId: Int,
+    extension: String?,
+    resumeFromMs: Long
+) {
+    val url = if (isLive) {
+        StreamUrlBuilder.live(credentials, itemId, extension ?: "ts")
+    } else {
+        StreamUrlBuilder.movie(credentials, itemId, extension ?: "mp4")
+    }
+    context.startActivity(
+        Intent(context, PlayerActivity::class.java)
+            .putExtra(PlayerActivity.EXTRA_URL, url)
+            .putExtra(PlayerActivity.EXTRA_IS_LIVE, isLive)
+            .putExtra(PlayerActivity.EXTRA_ITEM_ID, itemId.toString())
+            .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, if (isLive) TYPE_LIVE else TYPE_VOD)
+            .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
+            .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+    )
+}
+
 private sealed interface Route {
     /** D-10. Carries its own progress so the splash can report real steps rather than
      *  animate a bar on a timer. */
@@ -86,6 +120,17 @@ private sealed interface Route {
     data object Login : Route
     data class Home(val credentials: Credentials) : Route
     data class Browse(val credentials: Credentials, val type: ContentType) : Route
+
+    /**
+     * The pre-run page. Activating any card lands here rather than in the player — see
+     * [ItemDetailScreen] for why. Carries the type as well as the id because
+     * `stream_id` is only unique *within* a content type on this panel.
+     */
+    data class ItemDetail(
+        val credentials: Credentials,
+        val type: ContentType,
+        val itemId: Int
+    ) : Route
 
     /** Series has a layer the other two do not: a show is not playable, so activating
      *  one opens its season/episode picker rather than the player. */
@@ -137,6 +182,7 @@ private fun TvivoApp() {
     // and fall through to the default (exit-to-launcher) behaviour.
     BackHandler(
         enabled = route is Route.Browse ||
+            route is Route.ItemDetail ||
             route is Route.SeriesDetail ||
             route is Route.Settings ||
             route is Route.Subscription ||
@@ -145,10 +191,19 @@ private fun TvivoApp() {
     ) {
         when (val current = route) {
             is Route.Browse -> route = Route.Home(current.credentials)
-            // Back out of a show returns to the shows grid, not to Home: the grid is
-            // where the user was, and it restores its own focus by item id.
+            // Back out of the pre-run page returns to the grid it was opened from, which
+            // restores focus to the card by item id.
+            is Route.ItemDetail -> route = Route.Browse(current.credentials, current.type)
+            // Back out of the episode picker returns to the show's pre-run page, which
+            // is the screen it was opened from. Going straight to the grid would skip a
+            // step the user walked through and lose the heart they may have come back
+            // for.
             is Route.SeriesDetail ->
-                route = Route.Browse(current.credentials, ContentType.SERIES)
+                route = Route.ItemDetail(
+                    current.credentials,
+                    ContentType.SERIES,
+                    current.seriesId
+                )
             is Route.Settings -> route = Route.Home(current.credentials)
             // Back out of Subscription returns to Account, which is where it was opened
             // from — skipping to Home would lose the user's place in the action list.
@@ -219,32 +274,55 @@ private fun TvivoApp() {
             }
             BrowseScreen(
                 contentType = current.type,
-                // For movies and live this plays; for series the item is a *show*, which
-                // addresses no stream endpoint, so it opens the episode picker instead.
+                // Activating a card no longer plays anything: every type opens the
+                // pre-run page, which owns Play, the description and the heart.
+                onOpenDetail = { item ->
+                    route = Route.ItemDetail(current.credentials, current.type, item.id)
+                },
+                // The long-press menu keeps its direct Play. It is the deliberate
+                // shortcut for someone who already knows what the item is, and taking it
+                // away would make the new page a tax rather than a step.
                 onPlay = { item, resumeFromMs ->
                     if (isSeries) {
                         route = Route.SeriesDetail(current.credentials, item.id)
                         return@BrowseScreen
                     }
-                    // Live and movies differ in the URL path segment and in the default
-                    // extension — `ts` for live, `mp4` for a film — and in nothing else.
-                    val url = if (isLive) {
-                        StreamUrlBuilder.live(current.credentials, item.id, item.extension ?: "ts")
-                    } else {
-                        StreamUrlBuilder.movie(current.credentials, item.id, item.extension ?: "mp4")
-                    }
-                    context.startActivity(
-                        Intent(context, PlayerActivity::class.java)
-                            .putExtra(PlayerActivity.EXTRA_URL, url)
-                            .putExtra(PlayerActivity.EXTRA_IS_LIVE, isLive)
-                            .putExtra(PlayerActivity.EXTRA_ITEM_ID, item.id.toString())
-                            .putExtra(
-                                PlayerActivity.EXTRA_CONTENT_TYPE,
-                                if (isLive) TYPE_LIVE else TYPE_VOD
-                            )
-                            .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
-                            .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+                    playItem(
+                        context = context,
+                        credentials = current.credentials,
+                        accountId = accountId,
+                        isLive = isLive,
+                        itemId = item.id,
+                        extension = item.extension,
+                        resumeFromMs = resumeFromMs
                     )
+                }
+            )
+        }
+
+        is Route.ItemDetail -> {
+            val accountId = remember(current.credentials) {
+                AccountIdentity.of(current.credentials)
+            }
+            val detailIsLive = current.type == ContentType.LIVE
+            ItemDetailScreen(
+                contentType = current.type,
+                itemId = current.itemId,
+                onPlay = { resumeFromMs, extension ->
+                    playItem(
+                        context = context,
+                        credentials = current.credentials,
+                        accountId = accountId,
+                        isLive = detailIsLive,
+                        itemId = current.itemId,
+                        extension = extension,
+                        resumeFromMs = resumeFromMs
+                    )
+                },
+                // A show's Play is "show me the episodes" — `series_id` addresses no
+                // stream endpoint, so the picker is the only thing it can mean.
+                onOpenEpisodes = {
+                    route = Route.SeriesDetail(current.credentials, current.itemId)
                 }
             )
         }

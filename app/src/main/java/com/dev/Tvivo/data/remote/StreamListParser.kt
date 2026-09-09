@@ -40,7 +40,7 @@ object StreamListParser {
         val extension: String?,
         val added: Long?,
         val num: Int?,
-        /** Series only; absent on VOD and live items. */
+        /** Sent on VOD and series rows; absent on live, which has nothing to describe. */
         val plot: String? = null
     )
 

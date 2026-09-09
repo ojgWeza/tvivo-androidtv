@@ -13,14 +13,20 @@ the original plan. **145 unit tests pass.** VOD (48,761 rows), live (6,425
 channels) and series (13,264 shows) all sync in full; movie playback works end to
 end and the season/episode picker was driven on-emulator.
 
-**Updated 2026-09-10.** Q-15..Q-18 and Q-20 were fixed and verified on-emulator
-in the design-pass commit; Q-21 and Q-22 are now fixed in code but **have not been
-driven on the emulator**, which on this project is the only evidence that counts.
-Still genuinely open: **Q-4 and Q-5** (both need an open stream, and
-`max_connections` is 1 — they land with the physical-TV session), **Q-8** (movie
-title block eats vertical space) and **Q-14** (sideloaded APK crashes on launch on a
-phone, still no logcat). Q-11's inset bug is fixed and verified. Phase 5 (hardening)
-is in progress.
+**Updated 2026-09-10, end of session.** Q-15..Q-27 are all fixed; everything except
+Q-24 and Q-27 was driven on the API 34 emulator across Movies, Live and Series.
+**149 unit tests pass.**
+
+Landed this session beyond the defects: the three virtual rail folders
+(`RECENTLY ADDED` 100, `CONTINUE WATCHING` 50, `FAVOURITES`), the pre-run detail page
+that replaced activate-to-play, `get_vod_info` for movie descriptions, and a real
+Room migration in place of `fallbackToDestructiveMigration` — which would have dropped
+the two tables the new folders are built from.
+
+Still genuinely open: **Q-4 and Q-5** (both need an open stream, and `max_connections`
+is 1 — they land with the physical-TV session), **Q-8** (movie title block eats
+vertical space) and **Q-14** (sideloaded APK crashes on launch on a phone, still no
+logcat). Q-11's inset bug is fixed and verified. Phase 5 (hardening) is in progress.
 
 **Credentials were re-entered by hand on 2026-09-08** after the Phase 4 session
 cleared app data and destroyed the previous set. Do not clear app data.
@@ -316,6 +322,89 @@ after a real session, which only a real session proves.
 # Part 1b — Platform constraints, not defects
 
 Recorded so they are not re-investigated as bugs.
+
+## Q-26 — Virtual folders rendered as "Loading…" forever — **FIXED, verified**
+**Severity: High. Found 2026-09-10 on-emulator, building the virtual folders.**
+`ui/browse/BrowseViewModel.kt`
+
+`RECENTLY ADDED` showed `100` in the rail and `Loading…` in the grid, indefinitely. The
+list was in hand the whole time.
+
+**Cause:** `PagingData.from(list)` — the overload without `sourceLoadStates` — leaves
+`refresh` as `LoadState.Loading` forever. The grid's loading branch therefore always won,
+and `itemCount` read 0 over a list it was already holding.
+
+**Fix:** pass explicit `LoadStates`, all `NotLoading(endOfPaginationReached = true)`,
+because a virtual folder *is* the whole list — there is no next page. **Verified on
+emulator:** 100 cards render.
+
+## Q-27 — Back from the episode picker skipped the pre-run page — **FIXED**
+**Severity: Low. Found 2026-09-10 during the full sweep.**
+`MainActivity.kt`
+
+With the pre-run page inserted before the picker, `Route.SeriesDetail`'s Back still went
+straight to the shows grid — skipping a screen the user had walked through, and losing the
+heart they may have gone back for. Now returns to `Route.ItemDetail`.
+
+## Q-25 — The browse screen opens with nothing focused — **FIXED, unverified on-emulator**
+**Severity: High. Root cause behind the Q-24 report. Found 2026-09-10.**
+`ui/browse/BrowseScreen.kt`, `ui/browse/CategoryRail.kt`
+
+Opening Movies leaves **no node focused at all** — confirmed by `uiautomator dump`, which
+reports zero `focused="true"` nodes on the browse screen. An Android TV screen with no
+focus owner has no D-pad behaviour: the first press runs a 2D search with no origin to
+measure from, so it lands wherever the heuristic likes. That is why RIGHT out of the rail
+opened the search field instead of crossing to the grid — the press was never *leaving*
+the rail, because focus had never been in it.
+
+**Every screen that had this bug had it invisibly.** Nothing looks wrong in a screenshot;
+the defect is that the screenshot has no focus frame in it, which reads as "before the
+user pressed anything".
+
+**Fix, three parts:**
+1. The rail is the resting focus, requested once the first categories arrive — it is
+   where a user decides what to look at. Requesting on the LazyColumn's `focusGroup`
+   delegates to its first focusable child, which is safe against rows not yet composed.
+2. **UP from the top of the list opens the filter** (the decided idiom). Declared on the
+   first row only, or UP from row 40 would jump to the filter instead of row 39. The
+   field is pinned above the list and is not part of it, so without the override the 2D
+   search is free to leave the rail entirely and hand UP to the grid — which it did.
+3. The field reads **`Search`** at rest rather than `Filter categories`: the user is
+   looking for the verb, and the rail is the only thing on that side of the screen, so
+   what it searches is not in question.
+
+**Worth a test, not just a fix.** "Does this screen have a focus owner when it opens" is
+one assertion per screen and would have caught this — T-T2.
+
+## Q-24 — Every text field is a horizontal dead end — **FIXED, unverified on-emulator**
+**Severity: High. Reported by the user 2026-09-10.**
+`ui/common/DpadField.kt`, `ui/browse/CategoryRail.kt`
+
+From Movies, RIGHT out of the rail lands in the `Filter categories` field, and a second
+RIGHT does nothing at all. There is no D-pad answer to "how do I get to the grid from
+here" other than knowing to press DOWN first, which nothing on screen says.
+
+**Cause: [dpadFieldNavigation] only ever opened a *vertical* escape.** It intercepts
+up/down and deliberately leaves left/right to the caret. `RailRow` carries
+`focusProperties { right = gridFocusRequester }` and the field above it does not — so
+RIGHT crossed to the grid from every row of the rail except the one at the top. The same
+gap left the header's `Clear filter` pill unreachable: it sits to the right of the item
+filter and nothing could move onto it.
+
+**The caret argument does not survive contact with the device.** The TV IME ships its own
+◀ ▶ keys, so caret movement is already served; and while the IME is up it owns every
+arrow press and the modifier is never called at all (Q-10). The only time these events
+reach the app is once the keyboard is closed — which is exactly when the user has
+finished typing and wants to leave.
+
+**Fix:** left/right escape too, consumed **only on a successful move**, so where focus has
+nowhere to go (LEFT out of the leftmost pane) the event still falls through to the caret
+and nothing is taken away. Plus the explicit `right = gridFocusRequester` on the rail's
+field, because the 2D search scores the header's Refresh as a fine candidate to the right
+— the same override `RailRow` already needed, and the same lesson as Q-17.
+
+**The rule this settles:** the rail is one pane, and which row of it focus happens to be
+on must never change what crossing to the content means.
 
 ## Q-23 — Sign out renders as an empty focus frame — **FIXED, verified**
 **Severity: High. Found 2026-09-10 on-emulator, while verifying Q-21/Q-22.**

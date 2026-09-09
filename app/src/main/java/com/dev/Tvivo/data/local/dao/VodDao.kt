@@ -82,8 +82,22 @@ interface VodDao {
     )
     fun pagingSearch(accountId: String, query: String): PagingSource<Int, VodStreamEntity>
 
-    @Query("SELECT * FROM vod_streams WHERE accountId = :accountId ORDER BY added DESC LIMIT :limit")
-    fun recentlyAdded(accountId: String, limit: Int = 30): Flow<List<VodStreamEntity>>
+    /**
+     * `Recently added`. `added` is a unix timestamp the panel sets, so this is the
+     * catalog's own idea of new rather than ours. Rows with a null `added` sort last
+     * under `DESC`, which is right: an item that will not say when it arrived has no
+     * claim on a folder about arrival order.
+     *
+     * The limit is the caller's — it is a product decision (100), not a query detail.
+     */
+    @Query(
+        """
+        SELECT * FROM vod_streams
+        WHERE accountId = :accountId AND added IS NOT NULL
+        ORDER BY added DESC LIMIT :limit
+        """
+    )
+    fun recentlyAdded(accountId: String, limit: Int): Flow<List<VodStreamEntity>>
 
     /**
      * Rail counts, one grouped query exposed as a Flow so they fill in live as the
@@ -102,6 +116,29 @@ interface VodDao {
 
     @Query("SELECT * FROM vod_streams WHERE accountId = :accountId AND streamId = :streamId")
     suspend fun byId(accountId: String, streamId: Int): VodStreamEntity?
+
+    /**
+     * Continue watching and Favourites hold ids, not rows — the row they point at can be
+     * re-synced, renamed or removed underneath them. Resolving them here means a folder
+     * whose item has left the catalog simply shows one fewer card rather than a blank.
+     *
+     * Unordered on purpose: SQL cannot express "in the order these ids were given", and
+     * both callers have an order that matters (last-watched, and when it was favourited).
+     * The caller re-orders.
+     */
+    @Query("SELECT * FROM vod_streams WHERE accountId = :accountId AND streamId IN (:ids)")
+    suspend fun byIds(accountId: String, ids: List<Int>): List<VodStreamEntity>
+
+    /**
+     * Caches a plot fetched from `get_vod_info`. Written straight onto the catalog row so
+     * that re-opening a film costs nothing, and so a film the user has looked at once
+     * still describes itself with the panel unreachable.
+     *
+     * It is lost on the next full sync, which rewrites every row — acceptable, because
+     * the fetch is one small call and only happens for films actually opened.
+     */
+    @Query("UPDATE vod_streams SET plot = :plot WHERE accountId = :accountId AND streamId = :streamId")
+    suspend fun updatePlot(accountId: String, streamId: Int, plot: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<VodStreamEntity>)

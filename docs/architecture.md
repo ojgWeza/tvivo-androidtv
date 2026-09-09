@@ -137,13 +137,51 @@ All three columns are written in the same transaction as the row.
 
 ### Virtual rail entries own no sync state
 
-`ALL`, `FAVOURITES`, `CONTINUE WATCHING` and `RECENTLY ADDED` are **views over
-existing rows**. They must never get a `sync_meta` row, not even a sentinel
-`category_id`. Giving `ALL` a sentinel reintroduces exactly the data-loss bug
+**Built 2026-09-10** — `RECENTLY ADDED`, `CONTINUE WATCHING` and `FAVOURITES`,
+in that order, above the panel's own categories. `ALL` is specified here but
+not built; see the note at the end of this section.
+
+They are modelled as `CategoryEntity` with a `__`-prefixed id (`__recent`,
+`__continue`, `__favourites`). Panel ids are numeric strings, so the prefix
+cannot collide, and `VirtualFolder.isVirtual` is a prefix test rather than set
+membership so a fourth folder needs no list updated elsewhere. Modelling them
+as categories is what keeps the rail, the header, the counts and the focus
+contract from each growing a second case — the only real difference is where
+their rows come from, which is one `when` in `BrowseViewModel`.
+
+They are **bounded** (100, 50, and however many the user favourited), so they
+are delivered as a single `PagingData.from` page rather than paged. That call
+**must** be given explicit `sourceLoadStates`; without them `refresh` stays
+`Loading` for ever and the grid renders a spinner over a list it is already
+holding (Q-26).
+
+Two guards matter: a virtual id must never reach `refreshCategory` — the panel
+does not know `__continue` — and never reach `countFiltered`, since there is no
+table to count.
+
+`RECENTLY_ADDED_LIMIT` is 100, agreed with the user, and lives with the enum
+rather than in the DAO because it is a product decision.
+
+These are **views over existing rows**. They must never get a `sync_meta` row,
+not even a sentinel `category_id`. Giving `ALL` a sentinel reintroduces exactly the data-loss bug
 the per-category key was introduced to fix: refreshing `ALL` stamps everything
 fresh, and per-category refreshes then stop happening for 24 h. `ALL`'s
 displayed freshness is the *oldest* category stamp, and manual refresh inside
 `ALL` re-fetches only the categories that are actually stale.
+
+**Activating a card opens a pre-run page, not the player** (`ui/detail/`).
+`ContentGrid`'s callback is `onActivate`, not `onPlay` — it has not started a
+stream since that page landed. The page carries poster, title, description,
+Play (focused on arrival) and the favourite heart, all as `IconPill`s. For a
+series the primary action opens the season/episode picker instead, because
+`series_id` addresses no stream endpoint. The long-press context menu keeps a
+direct Play as the deliberate shortcut, and both routes build their URL through
+one `playItem` helper so live/movie path differences cannot drift apart.
+
+Everything on the page is a Room read **except** a movie's description: this
+panel sends no `plot` on `get_vod_streams` (verified over a forced re-sync of
+48,780 rows), so `get_vod_info` is fetched lazily after the page is on screen
+and cached onto `vod_streams.plot`. Nothing the user can see waits on it.
 
 Rail counts come from one grouped
 `SELECT category_id, COUNT(*) … GROUP BY category_id` exposed as a `Flow`, so

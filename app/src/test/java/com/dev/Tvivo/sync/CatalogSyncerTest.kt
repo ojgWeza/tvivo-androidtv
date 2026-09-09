@@ -76,6 +76,7 @@ class CatalogSyncerTest {
         nameNormalized = "cached film",
         streamIcon = null,
         containerExtension = "mp4",
+        plot = null,
         added = null,
         num = null,
         // Written by the per-category path, which always uses generation 0.

@@ -6,6 +6,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
@@ -61,7 +63,10 @@ data class BrowseUiState(
     val itemFilter: String = "",
     val isItemFilterOpen: Boolean = false,
     /** The `N` of `N of M`; null while unfiltered, when `M` alone is the honest number. */
-    val filteredCount: Int? = null
+    val filteredCount: Int? = null,
+
+    /** The three folders the panel does not publish, already ordered. */
+    val virtualCategories: List<CategoryEntity> = emptyList()
 ) {
     /**
      * D-13. Rail filtering is a plain substring match over what is already in memory, so
@@ -74,11 +79,16 @@ data class BrowseUiState(
      * rail never truncates them (Q-12).
      */
     val visibleCategories: List<CategoryEntity>
-        get() = if (categoryFilter.isBlank()) {
-            categories
-        } else {
+        get() {
+            // Virtual folders lead. They are the three shortest routes to something the
+            // user already cares about, and a rail that opens on `ARABIC MOVIES 2026`
+            // buries them under ~120 rows of panel naming.
+            val all = virtualCategories + categories
+            if (categoryFilter.isBlank()) return all
             val needle = categoryFilter.trim().lowercase()
-            categories.filter { it.name.lowercase().contains(needle) }
+            // Filtered like any other row: `fav` should find FAVOURITES. Exempting them
+            // would make the filter lie about what the rail contains.
+            return all.filter { it.name.lowercase().contains(needle) }
         }
 }
 
@@ -164,7 +174,8 @@ class BrowseViewModel(
                 else -> CatalogSource.vod(VodRepository(db, credentials, id))
             }
             source = catalog
-            playbackState = PlaybackStateRepository(db, id)
+            val playback = PlaybackStateRepository(db, id)
+            playbackState = playback
             val syncer = CatalogSyncer(db, credentials, id)
             catalogSyncer = syncer
 
@@ -179,6 +190,10 @@ class BrowseViewModel(
                 }
             }
 
+            val virtuals = VirtualFolder.forContentType(contentType == ContentType.LIVE)
+                .mapIndexed { index, folder -> folder.toCategory(id, typeKey, -100 + index) }
+            _state.update { it.copy(virtualCategories = virtuals) }
+
             viewModelScope.launch {
                 catalog.observeCategories().collect { categories ->
                     _state.update {
@@ -186,11 +201,17 @@ class BrowseViewModel(
                             categories = categories,
                             isLoadingCategories = false,
                             selectedCategoryId = it.selectedCategoryId
+                                ?: virtuals.firstOrNull()?.categoryId
                                 ?: categories.firstOrNull()?.categoryId
                         )
                     }
+                    // The rail opens on the first row, and the first row is now a
+                    // virtual folder — so that is what the grid must be showing, or the
+                    // highlight and the content disagree on entry.
                     if (selectedCategory.value == null) {
-                        categories.firstOrNull()?.let { first -> selectCategory(first.categoryId) }
+                        val first = virtuals.firstOrNull()?.categoryId
+                            ?: categories.firstOrNull()?.categoryId
+                        first?.let { selectCategory(it) }
                     }
                 }
             }
@@ -203,8 +224,13 @@ class BrowseViewModel(
                     debouncedItemFilter.debounce(FILTER_DEBOUNCE_MS)
                 ) { id, q -> id to q }
                     .flatMapLatest { (categoryId, query) ->
-                        if (categoryId == null || query.isBlank()) flowOf(null)
-                        else catalog.countFiltered(categoryId, query)
+                        when {
+                            categoryId == null || query.isBlank() -> flowOf(null)
+                            // Counted off the in-memory list in `virtualItems`, not in
+                            // SQL: there is no table to count.
+                            VirtualFolder.isVirtual(categoryId) -> flowOf(null)
+                            else -> catalog.countFiltered(categoryId, query)
+                        }
                     }
                     .collect { count -> _state.update { it.copy(filteredCount = count) } }
             }
@@ -212,8 +238,31 @@ class BrowseViewModel(
             viewModelScope.launch {
                 catalog.countsByCategory().collect { counts ->
                     _state.update { s ->
-                        s.copy(counts = counts.associate { it.categoryId to it.count })
+                        s.copy(counts = s.counts + counts.associate { it.categoryId to it.count })
                     }
+                }
+            }
+
+            // The virtual folders' own counts. Live-updating for the same reason the
+            // panel categories' are: a folder that says nothing until you open it is a
+            // folder you have to open to find out it is empty.
+            playback?.let { pb ->
+                if (contentType != ContentType.LIVE) {
+                    viewModelScope.launch {
+                        pb.continueWatching(typeKey).collect { rows ->
+                            putCount(VirtualFolder.CONTINUE_WATCHING.id, rows.size)
+                        }
+                    }
+                }
+                viewModelScope.launch {
+                    pb.favourites(typeKey).collect { rows ->
+                        putCount(VirtualFolder.FAVOURITES.id, rows.size)
+                    }
+                }
+            }
+            viewModelScope.launch {
+                catalog.recentlyAdded(VirtualFolder.RECENTLY_ADDED_LIMIT).collect { rows ->
+                    putCount(VirtualFolder.RECENTLY_ADDED.id, rows.size)
                 }
             }
 
@@ -240,11 +289,68 @@ class BrowseViewModel(
                 val catalog = source
                 when {
                     catalog == null || categoryId == null -> flowOf(PagingData.empty())
+                    // Virtual folders are bounded — 50, 100, and however many the user
+                    // has favourited — so they are built as one list rather than paged.
+                    // Paging exists for the 48,761-row case and buys nothing here.
+                    VirtualFolder.isVirtual(categoryId) -> virtualItems(catalog, categoryId, query)
                     query.isBlank() -> catalog.pagingInCategory(categoryId)
                     else -> catalog.pagingFiltered(categoryId, query)
                 }
             }
             .cachedIn(viewModelScope)
+
+    private fun putCount(categoryId: String, count: Int) =
+        _state.update { it.copy(counts = it.counts + (categoryId to count)) }
+
+    /**
+     * A virtual folder's rows, as a single page.
+     *
+     * The item filter still applies — a folder is a list like any other, and 100 rows is
+     * exactly the size where wanting to narrow it is reasonable. Matched against the
+     * title the grid actually draws, because that is what the user is reading.
+     */
+    private fun virtualItems(
+        catalog: CatalogSource,
+        categoryId: String,
+        query: String
+    ): Flow<PagingData<BrowseItem>> {
+        val playback = playbackState
+        val rows: Flow<List<BrowseItem>> = when (VirtualFolder.of(categoryId)) {
+            VirtualFolder.RECENTLY_ADDED ->
+                catalog.recentlyAdded(VirtualFolder.RECENTLY_ADDED_LIMIT)
+
+            VirtualFolder.CONTINUE_WATCHING ->
+                playback?.continueWatching(typeKey)
+                    ?.map { rows -> catalog.byIds(rows.mapNotNull { it.itemId.toIntOrNull() }) }
+                    ?: flowOf(emptyList())
+
+            VirtualFolder.FAVOURITES ->
+                playback?.favourites(typeKey)
+                    ?.map { rows -> catalog.byIds(rows.mapNotNull { it.itemId.toIntOrNull() }) }
+                    ?: flowOf(emptyList())
+
+            null -> flowOf(emptyList())
+        }
+        return rows.map { list ->
+            val needle = query.trim().lowercase()
+            val filtered =
+                if (needle.isBlank()) list
+                else list.filter { it.title.lowercase().contains(needle) }
+            // **The load states are not optional here.** `PagingData.from(list)` without
+            // them leaves `refresh` as `Loading` forever, so the grid sits on its
+            // spinner and reports `itemCount == 0` over a list it is already holding —
+            // a folder with 100 rows in it rendering as "Loading…". `endOfPagination`
+            // is true because this *is* the whole list; there is no next page.
+            PagingData.from(
+                filtered,
+                sourceLoadStates = LoadStates(
+                    refresh = LoadState.NotLoading(endOfPaginationReached = true),
+                    prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                    append = LoadState.NotLoading(endOfPaginationReached = true)
+                )
+            )
+        }
+    }
 
     /** D-13. In-memory only: no query, no refresh, nothing hits the panel. */
     fun onCategoryFilterChanged(text: String) {
@@ -277,6 +383,10 @@ class BrowseViewModel(
         debouncedItemFilter.value = ""
         _state.update { it.copy(itemFilter = "", filteredCount = null) }
         _state.update { it.copy(selectedCategoryId = categoryId, error = null) }
+        // A virtual folder has no panel category behind it: `__continue` is not an id
+        // the panel would recognise, and asking it to refresh one is a guaranteed error
+        // toast over a folder that is already showing the right rows.
+        if (VirtualFolder.isVirtual(categoryId)) return
         viewModelScope.launch {
             source?.refreshCategory(categoryId, false)
                 ?.onFailure { t -> _state.update { it.copy(error = t.toAppError()) } }
@@ -286,6 +396,12 @@ class BrowseViewModel(
     /** Manual refresh ignores the TTL, always fetches, same transaction. */
     fun refreshSelected() {
         val categoryId = selectedCategory.value ?: return
+        // Same reason as `selectCategory`. The folders are views over local data and are
+        // already live — there is nothing to go and fetch.
+        if (VirtualFolder.isVirtual(categoryId)) {
+            _state.update { it.copy(refreshConfirmation = "Up to date") }
+            return
+        }
         _state.update { it.copy(isRefreshing = true, error = null, refreshConfirmation = null) }
         viewModelScope.launch {
             source?.refreshCategory(categoryId, true)
@@ -349,7 +465,11 @@ private class CatalogSource(
     val refreshCategory: suspend (String, Boolean) -> Result<Boolean>,
     val pagingInCategory: (String) -> Flow<PagingData<BrowseItem>>,
     val pagingFiltered: (String, String) -> Flow<PagingData<BrowseItem>>,
-    val countFiltered: (String, String) -> Flow<Int>
+    val countFiltered: (String, String) -> Flow<Int>,
+    /** `RECENTLY ADDED`, newest first, catalog-wide. */
+    val recentlyAdded: (Int) -> Flow<List<BrowseItem>>,
+    /** Resolves Continue watching / Favourites ids into rows, in the ids' own order. */
+    val byIds: suspend (List<Int>) -> List<BrowseItem>
 ) {
     companion object {
         /**
@@ -376,7 +496,17 @@ private class CatalogSource(
                 Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
             },
-            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) },
+            recentlyAdded = { limit ->
+                repo.recentlyAdded(limit).map { rows -> rows.map { it.toBrowseItem() } }
+            },
+            byIds = { ids ->
+                // Re-ordered to the ids' own order, which is the order carrying the
+                // meaning — last watched first, most recently favourited first. SQL
+                // `IN` returns rows in whatever order suits it.
+                val rows = repo.byIds(ids).map { it.toBrowseItem() }.associateBy { it.id }
+                ids.mapNotNull { rows[it] }
+            }
         )
 
         fun series(repo: SeriesRepository) = CatalogSource(
@@ -392,7 +522,17 @@ private class CatalogSource(
                 Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
             },
-            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) },
+            recentlyAdded = { limit ->
+                repo.recentlyAdded(limit).map { rows -> rows.map { it.toBrowseItem() } }
+            },
+            byIds = { ids ->
+                // Re-ordered to the ids' own order, which is the order carrying the
+                // meaning — last watched first, most recently favourited first. SQL
+                // `IN` returns rows in whatever order suits it.
+                val rows = repo.byIds(ids).map { it.toBrowseItem() }.associateBy { it.id }
+                ids.mapNotNull { rows[it] }
+            }
         )
 
         fun live(repo: LiveRepository) = CatalogSource(
@@ -408,7 +548,17 @@ private class CatalogSource(
                 Pager(config) { repo.pagingInCategoryFiltered(id, query) }.flow
                     .map { data -> data.map { it.toBrowseItem() } }
             },
-            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) }
+            countFiltered = { id, query -> repo.countInCategoryFiltered(id, query) },
+            recentlyAdded = { limit ->
+                repo.recentlyAdded(limit).map { rows -> rows.map { it.toBrowseItem() } }
+            },
+            byIds = { ids ->
+                // Re-ordered to the ids' own order, which is the order carrying the
+                // meaning — last watched first, most recently favourited first. SQL
+                // `IN` returns rows in whatever order suits it.
+                val rows = repo.byIds(ids).map { it.toBrowseItem() }.associateBy { it.id }
+                ids.mapNotNull { rows[it] }
+            }
         )
     }
 }
