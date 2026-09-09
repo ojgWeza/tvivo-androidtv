@@ -13,10 +13,14 @@ the original plan. **145 unit tests pass.** VOD (48,761 rows), live (6,425
 channels) and series (13,264 shows) all sync in full; movie playback works end to
 end and the season/episode picker was driven on-emulator.
 
-Every defect except Q-4, Q-5, Q-8 and Q-11 is fixed and verified on-emulator.
-Q-4 and Q-5 both need an open stream, and `max_connections` is 1. Q-11's inset
-bug is fixed and verified, but the buttons still fall below the fold — what is
-left there is a layout decision. Phase 5 (hardening) is next.
+**Updated 2026-09-10.** Q-15..Q-18 and Q-20 were fixed and verified on-emulator
+in the design-pass commit; Q-21 and Q-22 are now fixed in code but **have not been
+driven on the emulator**, which on this project is the only evidence that counts.
+Still genuinely open: **Q-4 and Q-5** (both need an open stream, and
+`max_connections` is 1 — they land with the physical-TV session), **Q-8** (movie
+title block eats vertical space) and **Q-14** (sideloaded APK crashes on launch on a
+phone, still no logcat). Q-11's inset bug is fixed and verified. Phase 5 (hardening)
+is in progress.
 
 **Credentials were re-entered by hand on 2026-09-08** after the Phase 4 session
 cleared app data and destroyed the previous set. Do not clear app data.
@@ -134,8 +138,9 @@ reading the trace, not instead of reading it.
 
 ---
 
-## Q-15 — The icon pill draws a second, rectangular focus indicator
+## Q-15 — The icon pill draws a second, rectangular focus indicator — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**
+**Fixed and verified on-emulator 2026-09-08.** Lifted to `tvClickable` in `ui/common/TvFocusFrame.kt` and applied to every `clickable` call site, since all of them were latent instances of the same thing.
 `ui/common/IconPill.kt`
 
 The focused pill shows the accent stadium fill *and* a black rectangle behind it,
@@ -154,8 +159,9 @@ edges.
 sites at the same time — they are all latent instances of this, and any of them
 gaining a rounded shape reintroduces it.
 
-## Q-16 — The Exit pill's glyph renders as tofu
+## Q-16 — The Exit pill's glyph renders as tofu — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator.**
+**Fixed and verified on-emulator 2026-09-08.** `IconPill` takes an `ImageVector` from `material-icons-core` rather than a character, so font coverage stops being a variable. Still placeholders pending T-D1.
 `ui/common/IconPill.kt`
 
 `⏻` (U+23FB POWER SYMBOL) has no glyph in the emulator's font stack and draws as
@@ -169,8 +175,9 @@ picture — the pill's whole premise is that a glyph is legible at rest.
 **Interim fix:** restrict placeholders to glyphs that actually exist in Roboto /
 Noto on Android TV, and verify each one on-device rather than assuming.
 
-## Q-17 — RIGHT from a pill sometimes lands on a tile instead of the next pill
+## Q-17 — RIGHT from a pill sometimes lands on a tile instead of the next pill — **FIXED**
 **Severity: Medium. Intermittent — reproduced once, not on cold start.**
+**Fixed and verified on-emulator 2026-09-08.** The pill row's traversal is declared — `focusGroup()` plus explicit `focusProperties` — rather than left to the 2D focus search.
 `ui/home/HomeScreen.kt`
 
 With focus on `Refresh everything`, RIGHT moved focus **down to the Series tile**
@@ -188,8 +195,9 @@ than the neighbouring pill. This is the same failure the rail already needed
 **Fix:** explicit `focusProperties` wiring across the row, and re-test with a
 press sent during the animation window rather than after it.
 
-## Q-18 — Overlaid card titles are hard to read over bright artwork
+## Q-18 — Overlaid card titles are hard to read over bright artwork — **FIXED**
 **Severity: Low. Found 2026-09-08 on-emulator.** `ui/browse/ContentGrid.kt`
+**Fixed and verified on-emulator 2026-09-08.** The scrim owns its own height (68 dp on a 165 dp poster) instead of being sized to the text.
 
 D-6 works structurally — titles are on the poster, two lines, and the grid gained
 back its row — but the scrim is too weak. Over bright posters the title competes
@@ -240,7 +248,7 @@ icon keeps its tile. **Verified on-emulator 2026-09-08.**
 
 ---
 
-## Q-21 — The expanded item filter overlaps the category title
+## Q-21 — The expanded item filter overlaps the category title — **FIXED, unverified on-emulator**
 **Severity: Low. Found 2026-09-08 on-emulator, verifying D-14.**
 `ui/browse/BrowseScreen.kt`
 
@@ -252,14 +260,20 @@ rightwards.
 pills leave room; expanded, the field takes 320 dp more than the row has to give, and the
 title does not shrink because nothing tells it to.
 
-**Fix:** give the title `Modifier.weight(1f)` with an ellipsis so it yields to the field,
-or collapse the title to the count line while the filter is open. The second reads better:
-the user filtering a category knows which one they are in.
+**Fixed 2026-09-10, both halves.** The title `Column` takes `Modifier.weight(1f)`, so
+the actions measure first and the title can never be drawn over; and the title itself is
+hidden while the filter is open, leaving the count line, which is the part actually
+changing under the user. It wraps to two lines rather than truncating — `RAMADAN EGYPT
+2026 SD` and `... HD` truncate to the same string.
+
+**Not yet driven on the emulator.** The layout is the kind that has passed a green build
+and still been wrong here; it needs a screenshot with a long category name and the filter
+open before it is called done.
 
 **Not a functional defect** — the filter and the `N of M` count both work, and the title
 returns when the filter closes.
 
-## Q-22 — The diagnostic log has almost no call sites
+## Q-22 — The diagnostic log has almost no call sites — **FIXED, unverified on-emulator**
 **Severity: Medium. Found 2026-09-08 on-emulator.** `diagnostics/DiagnosticLog.kt`
 
 The Diagnostics screen renders correctly and, after a full session of cold start, catalog
@@ -272,16 +286,64 @@ refresh, sign-out). None of those ran. The events that actually matter — app s
 sync start/finish/zero-row guard, category refresh failure, auth failure, playback error —
 are not instrumented.
 
-**Fix:** hook `CatalogSyncer` (including the `partial`/zero-row guard, which is the
-condition most worth seeing after the fact), `BrowseViewModel`'s error path,
-`AuthRepository` failures, and `PlayerActivity`'s error listener. **Never log a URL** — a
-stream URL carries the username and password as query parameters.
+**Fixed 2026-09-10.** Call sites added at every point named above plus app start:
+
+- `MainActivity` — start marker with version and API level. Without it an empty log is
+  ambiguous between "nothing went wrong" and "the process restarted under the problem".
+- `CatalogSyncer` — start, TTL skip, complete-with-row-count, HTTP failure, empty body,
+  and the `partial`/zero-row guard as a **warning**. That last one is the most valuable
+  line on the screen: it is the exact state where `ALL`, `RECENTLY ADDED` and search are
+  incomplete while every per-category listing looks perfectly healthy. Its own `Log.i`
+  calls were replaced rather than duplicated. Cancellation is logged as `info`, not as a
+  failure — leaving a browse screen cancels its sync, and an error per screen exit would
+  bury the real ones.
+- `BrowseViewModel` — the single `toAppError()` funnel every browse failure passes
+  through, plus the missing-credentials path.
+- `AuthRepository` — HTTP rejection, panel refusal (`auth: 0`, expired), and transport
+  failure.
+- `PlayerActivity.fail()` — the one exit both the error listener and the connection-limit
+  path already go through.
+
+**Nothing logged carries a URL, a credential or a title.** Exceptions are recorded by
+type (`t.javaClass.simpleName`), never by message: a network exception's message echoes
+the request URL, and that URL is the whole account.
+
+**Not yet driven on the emulator** — the point of this fix is that the screen has content
+after a real session, which only a real session proves.
 
 ---
 
 # Part 1b — Platform constraints, not defects
 
 Recorded so they are not re-investigated as bugs.
+
+## Q-23 — Sign out renders as an empty focus frame — **FIXED, verified**
+**Severity: High. Found 2026-09-10 on-emulator, while verifying Q-21/Q-22.**
+`ui/settings/SettingsScreen.kt`
+
+Below the D-12 divider the Account screen draws a focusable row with **no text in it at
+all** — a focus frame around nothing. It is `Sign out`: the only irreversible action in
+the app, reachable on a remote with no indication of what it does. The accessibility dump
+is unambiguous — the label node is 10 px tall and the hint node is absent entirely.
+
+**Cause: an unscrollable `Column` does not overflow, it squeezes its last child.** The
+screen is 540 dp less 128 dp of vertical padding, so 412 dp are usable, and the content
+measures 451 dp (display 40 + username 26 + spacer 32 + three 76 dp action rows + 49 dp of
+divider and spacers + a fourth 76 dp row). The 39 dp shortfall comes out of whichever
+child is measured last, and D-12 deliberately put `Sign out` there.
+
+**This is the same class as Q-11** — content below the fold on a fixed-height screen — and
+it went unnoticed for the same reason every focus defect on this project has: it builds,
+it launches, and the row is only wrong once you look at it.
+
+**Fix:** `verticalScroll(rememberScrollState())` on the root `Column`, so every row gets
+the height it asked for and TV focus traversal scrolls the row into view. Not a smaller
+type scale or tighter spacers — those would fix this instance and leave the next one, and
+the screen gains a row whenever an account gains a capability.
+
+**Verified on-emulator 2026-09-10:** `Sign out` renders its label and its
+"cannot be recovered" hint, and the `ConfirmDialog` was not reached — no credentials were
+touched at any point.
 
 ## Q-10 — The TV IME owns the D-pad, so in-form navigation is keyboard-only
 **Severity: Low. Not a defect — a platform constraint, recorded so it is not

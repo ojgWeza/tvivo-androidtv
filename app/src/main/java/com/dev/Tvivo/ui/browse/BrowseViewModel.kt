@@ -13,6 +13,7 @@ import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.data.AppError
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.dao.CategoryCount
 import com.dev.Tvivo.data.local.entities.CategoryEntity
@@ -151,6 +152,7 @@ class BrowseViewModel(
         viewModelScope.launch {
             val credentials = store.load()
             if (credentials == null) {
+                DiagnosticLog.error("browse", "No stored credentials; cannot load $contentType")
                 _state.update { it.copy(isLoadingCategories = false, error = AppError.AuthFailed) }
                 return@launch
             }
@@ -318,8 +320,16 @@ class BrowseViewModel(
         viewModelScope.launch { playbackState?.clearResume(typeKey, itemId.toString()) }
     }
 
-    private fun Throwable.toAppError(): AppError =
-        (this as? AppErrorException)?.error ?: AppError.Unreachable
+    /**
+     * Q-22 — every browse failure lands here, so this is the one place that has to
+     * record it. The content type and the mapped [AppError], never the category name or
+     * the item: the log is operational, not a record of what was watched.
+     */
+    private fun Throwable.toAppError(): AppError {
+        val mapped = (this as? AppErrorException)?.error ?: AppError.Unreachable
+        DiagnosticLog.error("browse", "$contentType: $mapped")
+        return mapped
+    }
 
     private companion object {
         /** Long enough to swallow a D-pad keystroke burst, short enough not to feel laggy. */

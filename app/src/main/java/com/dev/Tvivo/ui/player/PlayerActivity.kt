@@ -16,6 +16,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.dev.Tvivo.data.AppError
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
@@ -209,6 +210,10 @@ class PlayerActivity : ComponentActivity() {
     private fun fail(error: AppError, cause: PlaybackException?) {
         // ExoPlayer error messages echo the full URI, which carries the account password
         // in the path. Everything logged goes through redact().
+        DiagnosticLog.error(
+            "playback",
+            "$error${cause?.errorCodeName?.let { " ($it)" } ?: ""}"
+        )
         Log.w(TAG, "playback failed: $error ${cause?.message?.let(StreamUrlBuilder::redact) ?: ""}")
         setResult(RESULT_CANCELED)
         finish()

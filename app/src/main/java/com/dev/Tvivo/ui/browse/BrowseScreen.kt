@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
@@ -229,9 +230,28 @@ private fun Header(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            // **Q-21 — the title yields to the filter.** Opened, the field asks for
+            // 320 dp that a `SpaceBetween` row has no spare, and nothing told the title
+            // to shrink, so the field drew over it. `weight(1f)` measures the actions
+            // first and hands the title whatever is left; the title itself steps aside
+            // entirely while the filter is open, because someone filtering a category
+            // already knows which category they are in, and the count line below is the
+            // part that is actually changing under them.
+            Column(modifier = Modifier.weight(1f)) {
                 // The header shows the category name immediately, before any row arrives.
-                Text(text = title, color = Palette.Ink, style = TvType.headline)
+                if (!isItemFilterOpen) {
+                    Text(
+                        text = title,
+                        color = Palette.Ink,
+                        style = TvType.headline,
+                        // Two lines, never one: this panel ships `RAMADAN EGYPT 2026 SD`
+                        // and `... HD`, which truncate to the same string and recreate
+                        // the false-duplicate defect. Wrapping is the rule everywhere a
+                        // category label is drawn.
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 // D-14 — `N of M`, and only while filtering. Unfiltered, `M` on its own
                 // is the honest number and `48,751 of 48,751` is noise.

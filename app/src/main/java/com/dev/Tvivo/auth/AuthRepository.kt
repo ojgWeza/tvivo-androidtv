@@ -1,6 +1,7 @@
 package com.dev.Tvivo.auth
 
 import com.dev.Tvivo.data.AppError
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.data.model.UserInfo
 import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.data.remote.XtreamApiClient
@@ -30,6 +31,7 @@ class AuthRepository {
                     .authenticate(input.username, input.password)
 
                 if (!response.isSuccessful) {
+                    DiagnosticLog.error(AREA, "Sign-in rejected, HTTP ${response.code()}")
                     return@withContext Result.failure(
                         AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     )
@@ -38,6 +40,8 @@ class AuthRepository {
                 val body = response.body()
                 val info = body?.userInfo
                 ErrorMapper.fromUserInfo(info)?.let {
+                    // The mapped AppError, never the credentials that produced it.
+                    DiagnosticLog.error(AREA, "Sign-in refused by panel: $it")
                     return@withContext Result.failure(AppErrorException(it))
                 }
                 requireNotNull(info)
@@ -54,10 +58,15 @@ class AuthRepository {
                     )
                 )
             } catch (t: Throwable) {
+                // The exception type only: a network exception's message can echo the
+                // request URL, which carries the username and password.
+                DiagnosticLog.error(AREA, "Sign-in failed, ${t.javaClass.simpleName}")
                 Result.failure(AppErrorException(ErrorMapper.fromThrowable(t)))
             }
         }
 }
+
+private const val AREA = "auth"
 
 /** Carries an [AppError] through `Result` without leaking a raw exception to the UI. */
 class AppErrorException(val error: AppError) : Exception(error.toString())

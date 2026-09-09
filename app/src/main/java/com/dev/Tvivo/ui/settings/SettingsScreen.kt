@@ -1,6 +1,8 @@
 package com.dev.Tvivo.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,10 +56,18 @@ fun SettingsScreen(
     LaunchedEffect(Unit) { firstAction.requestFocus() }
     LaunchedEffect(state.signedOut) { if (state.signedOut) onSignedOut() }
 
+    // **Q-23 — this Column must scroll.** Its content is 451 dp against 412 dp of
+    // usable height (540 dp screen less 128 dp of vertical padding), and an unscrollable
+    // Column does not overflow: it squeezes the *last* child. The last child here is
+    // Sign out, so the one irreversible action on the screen was measured down to 48 dp
+    // and rendered as an empty focus frame — focusable, reachable, and completely
+    // unlabelled. Scrolling gives every row the height it asked for, and TV focus
+    // traversal brings the row into view on its own.
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Palette.Bg)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 96.dp, vertical = 64.dp)
     ) {
         Text(text = "Account", color = Palette.Ink, style = TvType.display)

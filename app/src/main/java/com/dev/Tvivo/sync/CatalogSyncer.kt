@@ -1,6 +1,5 @@
 package com.dev.Tvivo.sync
 
-import android.util.Log
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
@@ -11,6 +10,8 @@ import com.dev.Tvivo.data.remote.LiveStreamParser
 import com.dev.Tvivo.data.remote.SeriesListParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
+import com.dev.Tvivo.diagnostics.DiagnosticLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -118,10 +119,11 @@ class CatalogSyncer(
         // "Indexing" over data that was already complete. The per-category tier has had
         // this since it was written (`CachedFetch.ensureFresh`); this tier never did.
         if (!force && isFresh(contentType)) {
-            Log.i(TAG, "$contentType catalog sync: within TTL, keeping cached generation")
+            DiagnosticLog.info(AREA, "$contentType: within TTL, keeping cached generation")
             return@withContext Result.success(0)
         }
 
+        DiagnosticLog.info(AREA, "$contentType: sync started" + if (force) " (forced)" else "")
         val generation = System.currentTimeMillis()
         setState(STATE_INDEXING, done = 0, total = 0, contentType = contentType)
 
@@ -129,11 +131,13 @@ class CatalogSyncer(
             val response = request()
             if (!response.isSuccessful) {
                 setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
+                DiagnosticLog.error(AREA, "$contentType: sync failed, HTTP ${response.code()}")
                 return@withContext Result.failure(IllegalStateException("HTTP ${response.code()}"))
             }
 
             val body = response.body() ?: run {
                 setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
+                DiagnosticLog.error(AREA, "$contentType: sync failed, empty body")
                 return@withContext Result.failure(IllegalStateException("empty body"))
             }
 
@@ -155,20 +159,34 @@ class CatalogSyncer(
                 // ALL, RECENTLY ADDED and search need completeness, and they are the ones
                 // that must know they do not have it.
                 setState(STATE_PARTIAL, done = 0, total = 0, contentType = contentType)
-                Log.i(TAG, "$contentType catalog sync: no rows returned, keeping existing generation")
+                // The single most useful line on the Diagnostics screen: it is the exact
+                // state in which ALL, RECENTLY ADDED and search are incomplete while
+                // every per-category listing looks perfectly healthy.
+                DiagnosticLog.warn(
+                    AREA,
+                    "$contentType: no rows returned, keeping existing generation (partial)"
+                )
                 return@withContext Result.success(0)
             }
 
             // One small transaction: everything older than this run goes, atomically.
             flip(generation)
             setState(STATE_COMPLETE, done = written, total = written, contentType = contentType)
-            Log.i(TAG, "$contentType catalog sync complete: $written rows")
+            DiagnosticLog.info(AREA, "$contentType: sync complete, $written rows")
             Result.success(written)
         } catch (t: Throwable) {
             // A failed sync leaves the previous generation intact and browsable rather
             // than half-deleting it.
             setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
-            Log.w(TAG, "$contentType catalog sync failed: ${t.message}")
+            // Leaving a browse screen cancels its sync. That is routine, not a fault,
+            // and logging it as one would fill the screen someone opened to find a real
+            // failure. The exception type, never its message: a network exception's
+            // message can carry the URL, and the URL carries the password.
+            if (t is CancellationException) {
+                DiagnosticLog.info(AREA, "$contentType: sync cancelled")
+            } else {
+                DiagnosticLog.error(AREA, "$contentType: sync failed, ${t.javaClass.simpleName}")
+            }
             Result.failure(t)
         }
     }
@@ -205,7 +223,7 @@ class CatalogSyncer(
     }
 
     companion object {
-        private const val TAG = "TvivoCatalogSync"
+        private const val AREA = "sync"
 
         /** Same 24 h window the per-category tier uses, for one answer to "is it stale". */
         const val TTL_MILLIS: Long = 24L * 60 * 60 * 1000

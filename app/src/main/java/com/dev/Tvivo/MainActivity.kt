@@ -40,6 +40,8 @@ import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import android.content.Intent
+import android.os.Build
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvivoTheme
 
@@ -53,6 +55,13 @@ class MainActivity : ComponentActivity() {
         // sitting under the TV keyboard, which covers roughly the lower half of a 1080p
         // panel, and only appearing once focus reached the row and dismissed the IME.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // Q-22 — the first line on the Diagnostics screen. Without a start marker there
+        // is no way to tell, after the fact, whether an empty log means nothing went
+        // wrong or that the process was restarted underneath the problem.
+        DiagnosticLog.info(
+            "app",
+            "Started, version ${BuildConfig.VERSION_NAME} on API ${Build.VERSION.SDK_INT}"
+        )
         if (BuildConfig.DEBUG) CodecProbe.log()
         // Phase 5. Idempotent and cheap; scheduling here rather than in an Application
         // subclass keeps it in the one place that already owns start-up ordering.
