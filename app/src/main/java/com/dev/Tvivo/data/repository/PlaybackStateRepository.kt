@@ -22,8 +22,17 @@ class PlaybackStateRepository(
 
     /**
      * Live is excluded by the caller: a live stream has no meaningful resume point.
-     * Crossing 92% removes the row rather than storing a position nobody wants to
-     * resume from — otherwise "continue watching" fills with finished films.
+     *
+     * **The two "don't store this" cases are not the same case**, and collapsing them
+     * into one `remove` was a data-loss bug. Crossing [COMPLETE_FRACTION] means the user
+     * finished the film, so the row *should* go — otherwise Continue watching fills with
+     * things nobody wants to resume. But a position below [MIN_TRACKED_MS] only means
+     * *this* visit was too short to be worth recording; it says nothing about the forty
+     * minutes the user may already have watched. Removing there threw away a real resume
+     * point whenever someone opened a film and backed out again within a minute, which
+     * is the single most common way to touch a title you are part-way through.
+     *
+     * So: too-short declines to *write*, finished *removes*.
      */
     suspend fun savePosition(
         contentType: String,
@@ -32,10 +41,12 @@ class PlaybackStateRepository(
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
         val finished = durationMs > 0 && positionMs >= durationMs * COMPLETE_FRACTION
-        if (positionMs < MIN_TRACKED_MS || finished) {
+        if (finished) {
             db.resumeDao().remove(accountId, contentType, itemId)
             return@withContext
         }
+        // Leaves any existing row exactly as it was.
+        if (positionMs < MIN_TRACKED_MS) return@withContext
         db.resumeDao().upsert(
             ResumePositionEntity(
                 accountId = accountId,
