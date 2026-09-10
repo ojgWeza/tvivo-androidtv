@@ -26,6 +26,25 @@ export GRADLE_USER_HOME="${GRADLE_USER_HOME:-D:\dev\gradle_home}"
 echo "==> stopping Gradle daemons to free memory"
 (cd "$(dirname "$0")/.." && ./gradlew --stop >/dev/null 2>&1) || true
 
+# Force "Send keyboard shortcuts to = Emulator controls" before every boot.
+#
+# Without this the host keyboard stops driving the emulator: Esc arrives as
+# KEYCODE_ESCAPE (111) instead of KEYCODE_BACK (4) and the arrow keys stop acting as the
+# D-pad, which makes a D-pad-only app untestable from the host. Typing into text fields
+# keeps working either way, so there is no trade here.
+#
+# It is set here rather than once by hand because the emulator persists its UI settings
+# on *clean exit* only — and on this machine the emulator is routinely OOM-killed or hard
+# killed (see -memory below), which loses the value and silently reverts the setting.
+# Writing it every launch is idempotent and immune to that.
+# MSYS_NO_PATHCONV=1 is required: without it Git Bash rewrites the `HKCU\...` key into a
+# Windows path and reg.exe fails with "Invalid syntax".
+if command -v reg.exe >/dev/null 2>&1; then
+  MSYS_NO_PATHCONV=1 reg.exe add 'HKCU\Software\Android Open Source Project\Emulator\set' \
+    /v forwardShortcutsToDevice /t REG_SZ /d false /f >/dev/null 2>&1 || true
+  echo "==> keyboard shortcuts routed to emulator controls"
+fi
+
 echo "==> booting $AVD"
 "$SDK_UNIX/emulator/emulator.exe" \
   -avd "$AVD" \
