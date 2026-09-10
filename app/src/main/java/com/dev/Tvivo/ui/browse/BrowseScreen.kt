@@ -86,9 +86,23 @@ fun BrowseScreen(
     // Keyed on the first categories arriving: requesting focus on an empty LazyColumn
     // has nothing to delegate to. `runCatching` because a FocusRequester whose node has
     // left composition throws rather than returning false.
+    //
+    // **Returning from the pre-run page is not a fresh entry.** This screen recomposes
+    // from scratch on the way back, so `focusPlaced` starts false again and the rail took
+    // focus every time — which is why activating a card at grid position 800 and pressing
+    // Back left the user on `RECENTLY ADDED` with the grid still showing the category they
+    // came from. The rail and the header disagreed, and the grid position was unreachable
+    // without scrolling to it again.
+    //
+    // `pendingFocusItemId` is the signal for which of the two entries this is: it is set
+    // by `onActivate` on the way out and survives in `SavedStateHandle`. When it is
+    // present the grid owns the restore ([ContentGrid] scrolls to the item and requests
+    // focus onto it), so the rail must not compete for focus at all.
     var focusPlaced by remember { mutableStateOf(false) }
-    LaunchedEffect(state.visibleCategories.isNotEmpty()) {
-        if (!focusPlaced && state.visibleCategories.isNotEmpty()) {
+    val returningToItem = viewModel.pendingFocusItemId != null
+    LaunchedEffect(state.visibleCategories.isNotEmpty(), returningToItem) {
+        if (focusPlaced || returningToItem) return@LaunchedEffect
+        if (state.visibleCategories.isNotEmpty()) {
             runCatching { railFocusRequester.requestFocus() }.onSuccess { focusPlaced = true }
         }
     }
@@ -133,7 +147,19 @@ fun BrowseScreen(
 
         Column(modifier = Modifier.fillMaxSize()) {
             Header(
-                title = state.categories
+                // **Both lists, not just the panel's.** The three virtual folders are
+                // `CategoryEntity` rows like any other, but they live in
+                // `virtualCategories`, and this lookup searched `categories` alone — so
+                // selecting RECENTLY ADDED, CONTINUE WATCHING or FAVOURITES matched
+                // nothing and the header drew an empty title. Every content type opens on
+                // a virtual folder, so that was the *first* thing the user saw on every
+                // entry to every browse screen.
+                //
+                // The union rather than `visibleCategories`, which is filtered: the
+                // selected category stays selected while the rail filter hides it, and a
+                // title that disappeared as you typed would be a second version of the
+                // same bug.
+                title = (state.virtualCategories + state.categories)
                     .firstOrNull { it.categoryId == state.selectedCategoryId }
                     ?.name
                     .orEmpty(),
@@ -281,13 +307,17 @@ private fun Header(
                     )
                 }
 
-                // D-14 — `N of M`, and only while filtering. Unfiltered, `M` on its own
-                // is the honest number and `48,751 of 48,751` is noise.
-                val countLine = when {
-                    filteredCount != null && totalCount != null ->
-                        "$filteredCount of $totalCount"
-                    totalCount != null -> "$totalCount"
-                    else -> null
+                // **`N of M`, and *only* while filtering.** The unfiltered `M` used to
+                // render too, which put a bare `100` under the title saying exactly what
+                // the rail row two inches to the left already said — and on the virtual
+                // folders, where the header draws no title, that bare number was the
+                // whole header. A count is worth a line only when it is telling the user
+                // something the rail cannot: how much of the category a filter just cut
+                // away.
+                val countLine = if (filteredCount != null && totalCount != null) {
+                    "$filteredCount of $totalCount"
+                } else {
+                    null
                 }
                 countLine?.let {
                     Text(text = it, color = Palette.Dim, style = TvType.label)
@@ -327,8 +357,12 @@ private fun Header(
                     )
                 } else {
                     IconPill(
+                        // "this category" was doing no work: the control sits inside the
+                        // category, under its title, so the scope is already said by
+                        // where the pill is. Spelling it out only made the expanded pill
+                        // wide enough to shove the rest of the header sideways.
                         icon = Icons.Default.Search,
-                        label = "Filter this category",
+                        label = "Filter",
                         onClick = { onItemFilterOpenChanged(true) },
                         modifier = Modifier.padding(end = 12.dp)
                     )
@@ -336,7 +370,7 @@ private fun Header(
 
                 IconPill(
                     icon = Icons.Default.Refresh,
-                    label = "Refresh this category",
+                    label = "Refresh",
                     enabled = !isRefreshing,
                     onClick = onRefresh
                 )
@@ -423,16 +457,29 @@ private fun ItemFilterField(
                 .focusRequester(focus)
                 .dpadFieldNavigation(focusManager)
         )
-        IconPill(
-            icon = Icons.Default.Close,
-            label = "Clear filter",
-            onClick = onClose,
-            modifier = Modifier.padding(start = 8.dp, end = 12.dp)
-        )
+        // **Only once there is something to clear, and flush against the field.**
+        // It used to render unconditionally with an 8 dp gap, so opening the filter put
+        // a detached `✕ Clear filter` next to an empty box — a control offering to undo
+        // something the user had not done yet, presented as though it belonged to the
+        // header rather than to the field. Back already closes an empty filter, which is
+        // the only thing Clear could have meant at that point.
+        if (value.isNotBlank()) {
+            IconPill(
+                icon = Icons.Default.Close,
+                label = "Clear",
+                onClick = onClose,
+                modifier = Modifier.padding(end = 12.dp)
+            )
+        }
     }
 }
 
-private val FILTER_FIELD_WIDTH = 320.dp
+/**
+ * 260 dp, down from 320. The field only ever holds a few characters of a title — nobody
+ * types a full name to filter a category — and at 320 dp it was wide enough to push the
+ * refresh pill and the category title around it every time it opened.
+ */
+private val FILTER_FIELD_WIDTH = 260.dp
 
 @Composable
 private fun LoadingState() {

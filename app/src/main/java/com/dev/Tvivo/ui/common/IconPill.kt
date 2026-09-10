@@ -70,7 +70,9 @@ fun IconPill(
             // Not `clickable`: its default indication paints a rectangle that ignores
             // the stadium shape, which is Q-15.
             .tvClickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 20.dp),
+            // 12 dp, down from 20: at 56 dp the padding is what centres the glyph, and
+            // 20 dp a side left the collapsed pill wider than it was tall.
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val ink = when {
@@ -99,10 +101,19 @@ fun IconPill(
     }
 }
 
-/** 88 dp square at rest, so the pills read as one row of uniform controls. */
-private val PILL_HEIGHT = 88.dp
+/**
+ * 56 dp square at rest, so the pills read as one row of uniform controls.
+ *
+ * **Was 88 dp, which was a touch target scaled up rather than a TV control.** An 88 dp
+ * circle around a 32 dp glyph is a 2.75:1 ratio — ~87% of the pill is empty — and three
+ * of them side by side dominated the Home header and pushed the account line sideways
+ * whenever one took focus. 56 dp keeps the glyph comfortably legible at ten feet (the
+ * constraint is the *icon* size, not the circle around it) while giving the header back
+ * roughly a third of its width.
+ */
+private val PILL_HEIGHT = 56.dp
 
-/** Large enough to read at ten feet inside an 88 dp pill without filling it. */
+/** Unchanged: this is the number that has to survive the ten-foot test, not the pill. */
 private val ICON_SIZE = 32.dp
 
 private val PILL_SHAPE = RoundedCornerShape(percent = 50)

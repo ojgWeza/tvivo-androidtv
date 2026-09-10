@@ -36,7 +36,7 @@ import com.dev.Tvivo.data.local.entities.VodStreamEntity
         ResumePositionEntity::class,
         FavouriteEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -63,6 +63,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 adds `rating` to `vod_streams` and `series`.
+         *
+         * `REAL` and nullable, because the normalised value is a 0–10 Double and *unrated*
+         * has to be distinguishable from *rated zero* — a `NOT NULL DEFAULT 0` would make
+         * every existing row look like a film rated 0.0.
+         *
+         * **Existing rows stay null until the next catalog sync.** Nothing back-fills them:
+         * the rating only arrives with the list response, so it lands when the catalog is
+         * next fetched. Ratings therefore appear after a `Refresh all`, not on upgrade —
+         * which is the same bargain v4 made for `plot`, and is why the badge is written to
+         * render nothing at all rather than a placeholder when the value is null.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vod_streams ADD COLUMN rating REAL")
+                db.execSQL("ALTER TABLE series ADD COLUMN rating REAL")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -76,7 +96,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // data the app holds and the panel cannot give them back — they are
                     // what Continue watching and Favourites are built from. A dropped
                     // table here is a silently emptied folder the user curated.
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

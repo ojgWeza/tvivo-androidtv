@@ -183,6 +183,35 @@ panel sends no `plot` on `get_vod_streams` (verified over a forced re-sync of
 48,780 rows), so `get_vod_info` is fetched lazily after the page is on screen
 and cached onto `vod_streams.plot`. Nothing the user can see waits on it.
 
+The description is rendered through `ui/common/ScrollableText`, **not** a plain
+`Text` in a `verticalScroll`. The two are not interchangeable on this device: a
+scroll container that nothing can focus has no way to receive a scroll gesture
+when there is no pointer and no wheel, so the earlier version clipped the
+synopsis at the bottom of its column with no ellipsis and no way to reach the
+rest. `ScrollableText` takes focus **only while it overflows**, and consumes
+UP/DOWN only while there is somewhere left to scroll, so it never becomes a
+D-pad stop on content that fits or a trap on content that does not.
+
+### Ratings
+
+`rating` is read from the *list* responses (`get_vod_streams`, `get_series`) and
+stored on `vod_streams` and `series`. That matters: it is the reason a badge on
+every card costs no extra request. A per-item `get_vod_info` would not scale to
+48,780 rows.
+
+Normalised in `StreamListParser` to a single **0–10 Double, or null**. The panel
+sends `rating` (0–10) and `rating_5based` (0–5), either as numbers or as quoted
+strings, and sends `0` for *unrated* far more often than for a genuine zero — so
+`0` maps to null and the UI's only test is a null check. Values outside range are
+discarded rather than rendered, which also catches the panels that put a 5-based
+value in the `rating` field.
+
+**Added in DB v5, and nothing back-fills it.** The value only arrives with a list
+fetch, so existing rows stay null until their category is next synced. Ratings
+therefore appear progressively, not on upgrade — the same bargain v4 made for
+`plot`, and why the badge draws nothing at all rather than a placeholder when the
+value is null.
+
 Rail counts come from one grouped
 `SELECT category_id, COUNT(*) … GROUP BY category_id` exposed as a `Flow`, so
 they fill in live as the background sync lands. Note `category_id` is a
@@ -335,8 +364,41 @@ These are not optional:
   unpredictably.
 - **`prefetchDistance` ≥ 2 rows**, which is 10 items in poster mode and 4 in
   names-only. It differs per view mode.
-- `Modifier.focusGroup()` on the grid plus `focusRestorer()`, so
-  LEFT-to-rail-and-back returns to the same card.
+- `Modifier.focusGroup()` on the grid plus **`focusProperties { enter = … }`**, so
+  LEFT-to-rail-and-back returns to the same card rather than to item 0.
+
+  **Not `focusRestorer()`, which is what this said and what was tried first.** On
+  Compose 1.6.8, chained alongside an explicit `focusGroup()` on the same grid it
+  did not restore the remembered child *and* left nothing focused at all — which
+  on a D-pad device means the remote stops working until the user backs out of
+  the screen. Strictly worse than the bug it was meant to fix. `enter` names the
+  target explicitly and degrades to `FocusRequester.Default` (first child, the
+  old behaviour) when there isn't one.
+
+  **The `enter` target must be derived from `gridState.layoutInfo.visibleItemsInfo`,
+  not tracked in a flag.** `FocusRequester.requestFocus()` throws when nothing is
+  attached, and the focus system calls it *inside* the `enter` lambda where
+  nothing can catch it — so `enter` must not hand over a requester whose card is
+  not composed. The obvious way to know that is a boolean set by a
+  `DisposableEffect` on the target card, and it does not work: moving focus
+  between two cards runs the new effect and the old `onDispose` in an order
+  Compose does not guarantee, and the dispose regularly lands last and leaves the
+  flag false. `visibleItemsInfo` is the laid-out truth, read at the moment it is
+  needed, with no ordering to get wrong.
+
+**Restoration on *return* is a separate path from re-entry, and both are needed.**
+Re-entry from the rail is `enter`, above. Returning from the pre-run page is
+`pendingFocusItemId` in `SavedStateHandle`, and it must **request focus, not just
+scroll** — an earlier version stopped at `scrollToItem`, which put the card on
+screen and left focus on the rail, so the user could see where they had been and
+had to walk back into it. The `requestFocus` cannot run in the same frame as the
+scroll (the card is not composed until the scroll has been laid out), hence a
+bounded frame-by-frame retry rather than a single call.
+
+Note also that `pendingFocusItemId` is deliberately **not** observable: it is a
+plain `SavedStateHandle` value, so writing it on every card focus does not
+recompose the grid. Making it Compose state would re-trigger the restore effect
+on every D-pad press and fight the user's own scrolling.
 
 ## Search
 

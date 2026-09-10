@@ -41,7 +41,16 @@ object StreamListParser {
         val added: Long?,
         val num: Int?,
         /** Sent on VOD and series rows; absent on live, which has nothing to describe. */
-        val plot: String? = null
+        val plot: String? = null,
+        /**
+         * Normalised to a **0–10** scale, or null when the panel did not rate the item.
+         *
+         * The panel sends both `rating` (0–10) and `rating_5based` (0–5), either as a
+         * number or as a quoted string, and the reference notes both are "frequently 0".
+         * A `0` here means *unrated*, not "rated zero" — so it is mapped to null rather
+         * than rendered, because a wall of `0.0` badges is worse than no badge.
+         */
+        val rating: Double? = null
     )
 
     suspend fun <T> parse(
@@ -93,6 +102,8 @@ object StreamListParser {
         var added: Long? = null
         var num: Int? = null
         var plot: String? = null
+        var rating: Double? = null
+        var rating5: Double? = null
 
         reader.beginObject()
         while (reader.hasNext()) {
@@ -107,6 +118,8 @@ object StreamListParser {
                 "added", "last_modified" -> added = reader.nextStringOrNull()?.toLongOrNull()
                 "num" -> num = reader.nextIntOrNull()
                 "plot" -> plot = reader.nextStringOrNull()
+                "rating" -> rating = reader.nextDoubleOrNull()
+                "rating_5based" -> rating5 = reader.nextDoubleOrNull()
                 else -> reader.skipValue()
             }
         }
@@ -122,8 +135,23 @@ object StreamListParser {
             extension = extension,
             added = added,
             num = num,
-            plot = plot
+            plot = plot,
+            rating = normaliseRating(rating, rating5)
         )
+    }
+
+    /**
+     * `rating` wins when it is populated; `rating_5based` is doubled onto the same 0–10
+     * scale as the fallback. Anything at or below zero, or out of range, is treated as
+     * *unrated* — panels send `0` for "no rating" far more often than they send a real
+     * zero, and a few send a 5-based value in the `rating` field, which the upper bound
+     * catches rather than rendering as `4.5/10` for a 4.5-star film.
+     */
+    private fun normaliseRating(rating: Double?, rating5: Double?): Double? {
+        val fromTen = rating?.takeIf { it > 0.0 && it <= 10.0 }
+        if (fromTen != null) return fromTen
+        val fromFive = rating5?.takeIf { it > 0.0 && it <= 5.0 }
+        return fromFive?.let { it * 2.0 }
     }
 
     private fun JsonReader.nextStringOrNull(): String? = when (peek()) {
@@ -137,6 +165,14 @@ object StreamListParser {
         JsonToken.NULL -> { nextNull(); null }
         JsonToken.NUMBER -> nextInt()
         JsonToken.STRING -> nextString().toIntOrNull()
+        else -> { skipValue(); null }
+    }
+
+    /** `rating` arrives as a bare number on some rows and a quoted string on others. */
+    private fun JsonReader.nextDoubleOrNull(): Double? = when (peek()) {
+        JsonToken.NULL -> { nextNull(); null }
+        JsonToken.NUMBER -> nextDouble()
+        JsonToken.STRING -> nextString().toDoubleOrNull()
         else -> { skipValue(); null }
     }
 }

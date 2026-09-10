@@ -23,10 +23,22 @@ that replaced activate-to-play, `get_vod_info` for movie descriptions, and a rea
 Room migration in place of `fallbackToDestructiveMigration` — which would have dropped
 the two tables the new folders are built from.
 
+**Updated 2026-09-10, second session (QA sweep + fixes).** A full report-only sweep
+found 14 defects; those plus a 14-item list from the user were fixed in one pass and
+re-driven on the emulator. **149 unit tests still pass** and the DB moved to **v5**
+(`rating` on `vod_streams` and `series`) over a real migration that preserved the
+three resume rows and one favourite on the device.
+
+Closed and verified on-emulator this session: **Q-22** (see its entry — the earlier
+"not fixed" call was wrong), **U-1..U-13** below, and **QA-1** (live pre-run page used
+the 2:3 poster frame) and **QA-2** (episode-picker `Refresh` was orange text).
+
 Still genuinely open: **Q-4 and Q-5** (both need an open stream, and `max_connections`
 is 1 — they land with the physical-TV session), **Q-8** (movie title block eats
-vertical space) and **Q-14** (sideloaded APK crashes on launch on a phone, still no
-logcat). Q-11's inset bug is fixed and verified. Phase 5 (hardening) is in progress.
+vertical space), **Q-14** (sideloaded APK crashes on launch on a phone, still no
+logcat), **U-14** (player seek — written but unverifiable without a stream) and
+**QA-3..QA-7** (the visual findings below). Q-11's inset bug is fixed and verified.
+Phase 5 (hardening) is in progress.
 
 **Credentials were re-entered by hand on 2026-09-08** after the Phase 4 session
 cleared app data and destroyed the previous set. Do not clear app data.
@@ -279,7 +291,7 @@ open before it is called done.
 **Not a functional defect** — the filter and the `N of M` count both work, and the title
 returns when the filter closes.
 
-## Q-22 — The diagnostic log has almost no call sites — **FIXED, unverified on-emulator**
+## Q-22 — The diagnostic log has almost no call sites — **FIXED, verified 2026-09-10**
 **Severity: Medium. Found 2026-09-08 on-emulator.** `diagnostics/DiagnosticLog.kt`
 
 The Diagnostics screen renders correctly and, after a full session of cold start, catalog
@@ -314,8 +326,121 @@ are not instrumented.
 type (`t.javaClass.simpleName`), never by message: a network exception's message echoes
 the request URL, and that URL is the whole account.
 
-**Not yet driven on the emulator** — the point of this fix is that the screen has content
-after a real session, which only a real session proves.
+**Verified on the emulator 2026-09-10**, and the verification is worth recording because it
+was first read as a *failure*.
+
+After a ~45 minute session across Movies, Live and Series the screen showed **four lines**:
+app start, and `within TTL, keeping cached generation` for vod, live and series. That was
+briefly written up as "Q-22 is not fixed". It is not — it is the correct and complete output.
+Every one of the 20 call sites is app start, a sync lifecycle event, or a **failure**, and in
+that session no sync ran (all three content types were inside their TTL) and nothing failed.
+There was nothing else to record.
+
+**The trap to avoid next time: a healthy session produces a nearly empty Diagnostics screen,
+and an empty screen is not evidence of missing instrumentation.** Read the call-site list
+before concluding otherwise. Whether routine non-failure events should also be recorded is a
+separate design question — **T-D4**.
+
+---
+
+# Part 1c — 2026-09-10 QA sweep: fixed and verified
+
+Fourteen items raised by the user plus two from the report-only sweep, all landed in one
+pass and re-driven on the API 34 emulator. Kept as one block because they were one change
+set; the reasoning for each lives in the code comment at the site.
+
+| ID | Item | Fix | Verified |
+|---|---|---|---|
+| U-1 | Entering Series focused the header search and opened the IME | **Not reproduced** — see QA-8 | — |
+| U-2 | Player has no fast-forward; the time-bar knob is not focusable | `SEEK_INCREMENT_MS` + `onKeyDown` LEFT/RIGHT in `PlayerActivity` | **No** — see U-14 |
+| U-3 | No rating anywhere | `rating` parsed → DB v5 → grid badge + detail line | Yes, real values |
+| U-4 | Series plot truncated with no way to read the rest | `ui/common/ScrollableText.kt` | Yes |
+| U-5 | Rail → grid → rail → grid landed on the first visible item | `focusProperties { enter }` in `ContentGrid` | Yes |
+| U-6 | `Refresh this category` — "this" is inferred; pill too big | Label → `Refresh`; `IconPill` 88 → 56 dp | Yes |
+| U-7 | Search pill exaggerated; Clear shown with an empty box | Clear only when non-blank, flush; field 320 → 260 dp | Yes |
+| U-8 | Count on the right panel duplicates the rail | `N of M` only while filtering | Yes |
+| U-9 | Home icon circles far too big for their glyphs | Same `IconPill` change as U-6 | Yes |
+| U-10 | Movies → Home → Movies showed a stale list | Same root as U-12 | Yes |
+| U-11 | `Refresh everything` → `Refresh all` | Label | Yes |
+| U-12 | Back from a channel/movie/show lost the left-panel focus | Rail no longer competes when `pendingFocusItemId` is set; restore now *requests focus*, not just scrolls | Yes |
+| U-13 | Continue watching dropped a film played for 1 s | See below — this was **data loss** | Partly |
+| QA-1 | Live pre-run page used the 2:3 poster frame for a 16:9 logo | `CHANNEL_WIDTH/HEIGHT` in `ItemDetailScreen` | Yes |
+| QA-2 | Episode-picker `Refresh` was orange text (= the focus colour) | `IconPill` | Yes |
+
+## U-13 — the Continue watching condition was hiding a data-loss bug
+
+`PlaybackStateRepository.savePosition` collapsed two unrelated cases into one `remove`:
+
+```kotlin
+if (positionMs < MIN_TRACKED_MS || finished) { remove(...) }
+```
+
+The 60 s floor is right — it stops accidental opens filling the folder. But crossing it
+downward says only that *this visit* was short; it says nothing about the forty minutes
+already watched. So opening a part-watched film and backing out within a minute **deleted
+the resume point**, which is the most common way to touch something you are part-way
+through. Too-short now declines to *write*; only `finished` removes.
+
+**Not fully verified**: proving it needs an open stream. The three resume rows on the device
+(3–6 % watched) are exactly the rows the old code would have destroyed on the next short
+visit, and they survived the v5 migration intact.
+
+## U-14 — player seek is written but unverified
+
+`max_connections` is 1, so no automated test may open a stream and the QA pass could not
+either. The change is in (`SEEK_INCREMENT_MS` = 10 s, symmetric, intercepted in
+`onKeyDown` so seeking does not depend on `DefaultTimeBar` taking focus) but **someone has
+to play a film and press LEFT/RIGHT**. Lands with Q-4/Q-5 and the physical-TV session.
+
+---
+
+# Part 1d — 2026-09-10 QA sweep: found and still open
+
+Visual/content findings from the report-only pass, none of which were in the fix batch.
+Full report with screenshots: `.gstack/qa-reports/` (gitignored — it contains account
+details visible in the UI).
+
+## QA-3 — Arabic description paragraphs resolve LTR, so the last line hangs on the wrong edge
+**Severity: Medium.** Glyph order and bidi-isolation of embedded Latin runs are both correct;
+the *paragraph direction* is not, so a short final line aligns left instead of flush right.
+Reproduces on the movie pre-run page and the episode-picker header. Same class as
+`rtl-title-truncation-needs-display-column`, but in the body text rather than the title.
+
+## QA-4 — The focused grid card scrolls flush against the bottom edge and is clipped
+**Severity: Medium.** Scrolling down keeps the focused card as the last visible row with its
+lower portion cut off, and the row above the viewport renders as a bare strip of titles with
+no poster. Worse on an overscanning TV.
+
+## QA-5 — Live channel cards with no logo render as bare empty rectangles
+**Severity: Low.** 13 of 15 cards on the Live TV landing had no artwork and no fallback — no
+channel initial, no generic glyph. May be upstream absence; the empty state is unhandled
+either way. The same gap shows on the live pre-run page, now that its frame is the right shape.
+
+## QA-6 — Card titles: contrast over bright artwork, and mid-word breaks
+**Severity: Low.** Two-line titles grow upward into the poster while one-line titles sit below
+it, so the overlay is inconsistent card to card, and the scrim is not strong enough over
+saturated art. Titles also break mid-word (`BTS.The.Retur` / `n.2026`).
+
+## QA-7 — The rail's "last-active" tint is very close to invisible
+**Severity: Low.** The two-state contract (focus frame + last-active) is implemented, but the
+tint is only a few percent lighter than the rail background, so when focus is elsewhere it is
+hard to tell which category the grid belongs to. Same on the episode picker's season list.
+
+## QA-8 — Entering Series focused the header search and opened the IME — **not reproduced**
+**Severity: unknown. Reported by the user, not seen in QA.** Entering Series and Live both
+focused the rail cleanly with no IME across repeated attempts. `BrowseScreen` already carries
+a comment about "RIGHT out of the rail opened the search field instead of crossing to the
+grid", so the *class* of bug is known. Best hypothesis: a race where the rail has no
+categories yet, so the first D-pad press runs an origin-less 2D focus search and the header
+field wins. **If it recurs, note whether the catalog was mid-sync.**
+
+## T-D4 — Decide whether Diagnostics should record routine events
+**Not a defect.** Every `DiagnosticLog` call site is app start, a sync lifecycle event, or a
+failure, so a *healthy* session leaves the screen nearly empty (see Q-22). That is defensible
+— it is a diagnostics screen, not an activity log — but it means the screen cannot answer
+"what did the app just do?", only "what went wrong?". Adding category selection and the
+`get_vod_info` / `get_series_info` fetches would answer both. Costs noise; decide before
+Phase 5 closes.
 
 ---
 

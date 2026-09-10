@@ -145,7 +145,7 @@ fun HomeScreen(
 
                 IconPill(
                     icon = Icons.Default.Refresh,
-                    label = if (isRefreshing) "Refreshing…" else "Refresh everything",
+                    label = if (isRefreshing) "Refreshing…" else "Refresh all",
                     // Guarded in the ViewModel too, but a disabled pill says why nothing
                     // happens on a second press instead of silently swallowing it.
                     enabled = !isRefreshing,

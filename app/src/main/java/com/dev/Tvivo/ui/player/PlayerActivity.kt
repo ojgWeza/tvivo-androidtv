@@ -41,11 +41,16 @@ class PlayerActivity : ComponentActivity() {
     private var itemId: String? = null
     private var contentType: String? = null
 
+    /** Both are read by [onKeyDown], which runs outside `onCreate`'s scope. */
+    private var playerView: PlayerView? = null
+    private var isLive: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val url = intent.getStringExtra(EXTRA_URL)
         val isLive = intent.getBooleanExtra(EXTRA_IS_LIVE, false)
+        this.isLive = isLive
         val accountId = intent.getStringExtra(EXTRA_ACCOUNT_ID)
         val resumeFromMs = intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L)
         itemId = intent.getStringExtra(EXTRA_ITEM_ID)
@@ -72,6 +77,7 @@ class PlayerActivity : ComponentActivity() {
             setShowPreviousButton(false)
             useController = !isLive
         }
+        this.playerView = playerView
 
         // Back *works* here — the defect was discoverability, not the mechanism (Q-4).
         // A plain corner label, tied to the same visibility as the controller so it
@@ -128,6 +134,12 @@ class PlayerActivity : ComponentActivity() {
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             )
             .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractors))
+            // Explicit rather than relying on the Media3 defaults (5 s back / 15 s
+            // forward), because these are the increments the D-pad handler below applies
+            // and a remote holding LEFT expects to cover ground. Symmetric, because
+            // asymmetric skip is disorienting when the only feedback is a moving bar.
+            .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
+            .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
             .build()
 
         player = exo
@@ -190,6 +202,48 @@ class PlayerActivity : ComponentActivity() {
         repo.savePosition(type, id, position, duration)
     }
 
+    /**
+     * **LEFT/RIGHT seek, handled here rather than left to the time bar.**
+     *
+     * Media3's `DefaultTimeBar` is scrubbable in principle, but only once it holds focus,
+     * and on this build it never does: the controller's focus order puts the transport
+     * buttons first and a progressive `.mkv`/`.mp4`/`.ts` has no seek index for the bar
+     * to render against until the extractor has one, so the knob shows a position and
+     * takes no input. The user's report was exactly that — a bar with a position marker
+     * that cannot be reached with the D-pad.
+     *
+     * Intercepting at the Activity means seek works whatever the controller decides to do
+     * with focus, which is the behaviour a remote implies: LEFT and RIGHT move you through
+     * the film, always. The controller is shown on each press so the bar reflects the new
+     * position — seeking against an invisible bar feels like nothing happened.
+     *
+     * Live is excluded: [isLive] streams are progressive with no seekable window, and
+     * `useController` is already false for them.
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        val exo = player
+        if (exo != null && !isLive && exo.isCurrentMediaItemSeekable) {
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                    // `duration` is C.TIME_UNSET (a large negative) until the extractor
+                    // has one, so the clamp is only applied once it is real.
+                    val end = exo.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                    exo.seekTo((exo.currentPosition + SEEK_INCREMENT_MS).coerceAtMost(end))
+                    playerView?.showController()
+                    return true
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                    exo.seekTo((exo.currentPosition - SEEK_INCREMENT_MS).coerceAtLeast(0L))
+                    playerView?.showController()
+                    return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     private fun startFirstFrameWatchdog() {
         firstFrameWatchdog?.cancel()
         firstFrameWatchdog = lifecycleScope.launch {
@@ -245,6 +299,10 @@ class PlayerActivity : ComponentActivity() {
         positionTicker?.cancel()
         player?.release()
         player = null
+        // Dropped with the player: it holds a reference back to it, and `onStop` can run
+        // more than once before the Activity is finished.
+        playerView?.player = null
+        playerView = null
     }
 
     companion object {
@@ -255,6 +313,13 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_ITEM_ID = "item_id"
         const val EXTRA_CONTENT_TYPE = "content_type"
         const val EXTRA_RESUME_FROM_MS = "resume_from_ms"
+
+        /**
+         * 10 s a press. Long enough to cross an ad break in a few presses, short enough
+         * that a single press is a correction rather than a jump — and the key repeat on
+         * a held D-pad turns it into a fast scan without needing a separate gesture.
+         */
+        private const val SEEK_INCREMENT_MS = 10_000L
 
         private const val POSITION_SAVE_INTERVAL_MS = 10_000L
 

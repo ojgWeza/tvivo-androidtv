@@ -188,7 +188,13 @@ Notes:
 - `direct_source` is typically empty — always construct the URL yourself.
 - Titles are frequently Arabic (RTL) or mixed Arabic/English — verify text
   rendering handles this (Android handles Unicode RTL by default, but test).
-- `rating` / `rating_5based` are frequently `0` — don't assume populated.
+- `rating` / `rating_5based` are present on the **list** responses, not just
+  `get_vod_info` — which is what makes a rating badge on every card affordable.
+  Both are `0` on a meaningful minority of rows, so treat `0` as *unrated* rather
+  than as a score; do not assume populated. **Coverage is better than that note
+  originally implied**: spot-checked on-device 2026-09-10 over `BOX OFFICE MOVIES`,
+  where most rows carried real values (5.0/6.0/8.0) and the unrated ones sent `0`.
+  Either field may arrive as a bare number or as a quoted string.
 
 ## Content type 3 — Series
 

@@ -10,9 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -39,8 +37,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.dev.Tvivo.ui.browse.asRatingLabel
 import com.dev.Tvivo.ui.browse.ResumePrompt
 import com.dev.Tvivo.ui.common.IconPill
+import com.dev.Tvivo.ui.common.ScrollableText
 import com.dev.Tvivo.ui.common.TvivoImageLoader
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.theme.Palette
@@ -114,10 +114,19 @@ fun ItemDetailScreen(
     ) {
         // The poster at its true 2:3, large: this is the one screen with room for the
         // art the grid can only show at 220x330.
+        //
+        // **Live gets a 16:9 frame, not a 2:3 one.** Channel art is a logo, and the grid
+        // has always known that — `CardShape.CHANNEL` exists precisely because cropping
+        // or letterboxing a wide mark into poster shape destroys it. This screen reused
+        // the movie frame for every content type, so a channel drew as a 300x450 portrait
+        // slab with a small logo adrift in the middle of it, and for the many channels
+        // the panel ships no art for, as an empty portrait rectangle taking a third of
+        // the screen.
+        val isLive = contentType == ContentType.LIVE
         Box(
             modifier = Modifier
-                .width(POSTER_WIDTH)
-                .height(POSTER_HEIGHT)
+                .width(if (isLive) CHANNEL_WIDTH else POSTER_WIDTH)
+                .height(if (isLive) CHANNEL_HEIGHT else POSTER_HEIGHT)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Palette.Elevated)
         ) {
@@ -150,6 +159,19 @@ fun ItemDetailScreen(
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
+
+            // Directly under the title and above the actions, because it is something the
+            // user weighs *before* deciding to play, not a detail to hunt for afterwards.
+            // Spelled out here, unlike the grid badge: the page has the room, and `7.4`
+            // alone beside a synopsis is ambiguous in a way it is not in a card corner.
+            state.rating?.let { rating ->
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "${rating.asRatingLabel()} / 10",
+                    color = Palette.AccentText,
+                    style = TvType.label
+                )
+            }
 
             Spacer(Modifier.height(20.dp))
 
@@ -198,17 +220,12 @@ fun ItemDetailScreen(
             Spacer(Modifier.height(28.dp))
 
             state.plot?.let { plot ->
-                Text(
-                    text = plot,
-                    color = Palette.Dim,
-                    style = TvType.body,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // Scrolls rather than truncates: a synopsis clipped mid-sentence
-                        // is worse than one the user can reach the end of. Not focusable,
-                        // so it never becomes a D-pad stop between Play and the rail.
-                        .verticalScroll(rememberScrollState())
-                )
+                // Scrolls rather than truncates — but *reachably*. This was a bare
+                // `verticalScroll` on a non-focusable Text, which on a D-pad device
+                // cannot be scrolled at all: the synopsis clipped at the bottom of the
+                // column with no ellipsis and no way to read the rest. [ScrollableText]
+                // keeps the same intent and adds the one thing that made it work.
+                ScrollableText(text = plot)
             }
         }
     }
@@ -235,3 +252,10 @@ fun ItemDetailScreen(
 /** 2:3 at roughly twice the card, which is the point of the screen. */
 private val POSTER_WIDTH = 300.dp
 private val POSTER_HEIGHT = 450.dp
+
+/**
+ * 16:9, the same ratio as `CardShape.CHANNEL`, at the same width as the poster so the two
+ * layouts share a column and the text block does not shift between content types.
+ */
+private val CHANNEL_WIDTH = 300.dp
+private val CHANNEL_HEIGHT = 169.dp

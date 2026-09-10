@@ -38,7 +38,11 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.ui.browse.ResumePrompt
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.ui.common.IconPill
+import com.dev.Tvivo.ui.common.ScrollableText
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.Palette
@@ -229,25 +233,32 @@ private fun Header(
             Column(modifier = Modifier.weight(1f).padding(end = 24.dp)) {
                 Text(text = title, color = Palette.Ink, style = TvType.headline, maxLines = 2,
                     overflow = TextOverflow.Ellipsis)
+                // Was `maxLines = 2` with a hard ellipsis and nothing to press: the
+                // synopsis announced that it continued and then offered no way to read
+                // the rest. Capped short here because the episode list is what this
+                // screen is for — the plot is context, not the content — but scrollable
+                // once it overflows, so "there is more" and "you can reach it" are the
+                // same affordance.
                 plot?.let {
-                    Text(
+                    ScrollableText(
                         text = it,
-                        color = Palette.Dim,
                         style = TvType.label,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        maxHeight = PLOT_MAX_HEIGHT,
                         modifier = Modifier.padding(top = 6.dp)
                     )
                 }
             }
-            Text(
-                text = "Refresh",
-                color = Palette.AccentText,
-                style = TvType.body,
-                modifier = Modifier
-                    .tvFocusFrame()
-                    .tvClickable { onRefresh() }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            // The same component every other screen uses for this action. It was a bare
+            // orange text link, which broke the app's one colour rule twice over: orange
+            // means *focused* everywhere else, so an unfocused control painted in it
+            // reads as focused, and Refresh looked like a different action here than it
+            // does in the browse header or on Home. D-8 made that argument for the
+            // browse header and this screen was simply missed.
+            IconPill(
+                icon = Icons.Default.Refresh,
+                label = "Refresh",
+                enabled = !isRefreshing,
+                onClick = onRefresh
             )
         }
 
@@ -360,3 +371,10 @@ private fun Message(text: String) {
         Text(text = text, color = Palette.Ink, style = TvType.title)
     }
 }
+
+/**
+ * Roughly three lines of `label`. The header is a strip above the episode list, not a
+ * synopsis pane — anything taller starts pushing episodes off the first screen, which is
+ * the one thing this screen must not do.
+ */
+private val PLOT_MAX_HEIGHT = 64.dp

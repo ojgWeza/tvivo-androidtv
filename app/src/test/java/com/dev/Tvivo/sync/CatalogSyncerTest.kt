@@ -77,6 +77,7 @@ class CatalogSyncerTest {
         streamIcon = null,
         containerExtension = "mp4",
         plot = null,
+        rating = null,
         added = null,
         num = null,
         // Written by the per-category path, which always uses generation 0.
@@ -106,6 +107,7 @@ class CatalogSyncerTest {
         nameNormalized = "cached show",
         streamIcon = null,
         plot = null,
+        rating = null,
         added = null,
         num = null,
         generation = 0
@@ -278,7 +280,7 @@ class CatalogSyncerTest {
         syncer.syncVod().getOrThrow()
         assertEquals(1, server.requestCount)
 
-        // `Refresh everything` on the Account screen is the caller that must still fetch.
+        // `Refresh all` on Home is the caller that must still fetch.
         server.enqueue(MockResponse().setBody(vodJson(9)))
         assertEquals(1, syncer.syncVod(force = true).getOrThrow())
         assertEquals(2, server.requestCount)

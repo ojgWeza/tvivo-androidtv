@@ -62,6 +62,13 @@ data class VodStreamEntity(
      * needed it. Nullable because a panel is free not to send it.
      */
     val plot: String?,
+    /**
+     * Panel rating normalised to 0–10, or null when unrated. See
+     * [com.dev.Tvivo.data.remote.StreamListParser.RawStream.rating] — `0` from the panel
+     * means *unrated* and is stored as null, so a null check is the only rendering test
+     * a caller needs.
+     */
+    val rating: Double?,
     val added: Long?,
     val num: Int?,
     val generation: Long
@@ -179,6 +186,8 @@ data class SeriesEntity(
     val nameNormalized: String,
     val streamIcon: String?,
     val plot: String?,
+    /** Normalised to 0–10, null when unrated. Same contract as `vod_streams.rating`. */
+    val rating: Double?,
     val added: Long?,
     val num: Int?,
     val generation: Long

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -18,12 +19,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -54,6 +57,7 @@ import com.dev.Tvivo.ui.theme.TvType
  * poster. It is a pixel size fed to the image pipeline, not styling; see
  * [TvivoImageLoader].
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ContentGrid(
     items: LazyPagingItems<BrowseItem>,
@@ -72,23 +76,98 @@ fun ContentGrid(
     val restoreRequester = remember { FocusRequester() }
     var restored by remember(pendingFocusItemId) { mutableStateOf(pendingFocusItemId == null) }
 
+    /**
+     * The card focus should come back to when focus **re-enters** the grid from outside
+     * — the rail, or the header.
+     *
+     * Unlike `pendingFocusItemId` (a `SavedStateHandle` value, deliberately not
+     * observable, read once per fresh composition) this is Compose state, because
+     * `restoreRequester` has to *move* to whichever card the user last stood on while
+     * the screen stays composed. Seeded from the pending id so a return from the pre-run
+     * page and a return from the rail converge on the same card.
+     */
+    var lastFocusedId by remember { mutableStateOf(pendingFocusItemId) }
+
+    /**
+     * Whether [restoreRequester] currently has a node, answered from the grid's own
+     * layout rather than tracked in a flag.
+     *
+     * `FocusRequester.requestFocus()` throws when nothing is attached and the focus system
+     * calls it *inside* the `enter` lambda, where nothing can catch it — so `enter` must
+     * not hand it over unless the target card is really composed.
+     *
+     * The first attempt tracked this with a boolean set by a `DisposableEffect` on the
+     * target card, and it did not work: moving focus from one card to the next runs the
+     * new card's effect and the old card's `onDispose` in an order Compose does not
+     * guarantee, so the dispose regularly landed last and left the flag false. Focus then
+     * fell through to the first child on every re-entry — the exact bug this is here to
+     * fix. `visibleItemsInfo` is the laid-out truth, read at the moment it is needed, with
+     * no ordering to get wrong.
+     */
+    fun restoreTargetIsLaidOut(): Boolean {
+        val id = lastFocusedId ?: return false
+        return gridState.layoutInfo.visibleItemsInfo.any { info ->
+            info.index < items.itemCount && items.peek(info.index)?.id == id
+        }
+    }
+
     // Restoration is by stable item ID with a nearest-index fallback, never by raw index:
     // the list can have shifted under us while a stream was playing.
+    //
+    // **Scrolling to the item was never enough.** This used to stop at `scrollToItem`,
+    // which put the card on screen but left focus wherever the screen had placed it — on
+    // the rail — so coming back from the pre-run page showed the right grid position and
+    // then made the user walk back into it. The scroll and the focus have to happen
+    // together or the restore is only half done.
+    //
+    // The `requestFocus` cannot run in the same frame as the scroll: `restoreRequester` is
+    // attached to a card that is not composed until the scroll has been laid out, and a
+    // FocusRequester with no node throws. Hence the bounded frame-by-frame retry rather
+    // than a single call — bounded because a pending id can legitimately no longer be in
+    // the list at all (the catalog re-synced under us), and an unbounded wait for a card
+    // that will never arrive would spin for the life of the screen.
     LaunchedEffect(pendingFocusItemId, items.itemCount) {
         if (restored || pendingFocusItemId == null || items.itemCount == 0) return@LaunchedEffect
         val index = (0 until items.itemCount).firstOrNull { i ->
             items.peek(i)?.id == pendingFocusItemId
+        } ?: return@LaunchedEffect
+        gridState.scrollToItem(index)
+        repeat(FOCUS_RESTORE_FRAMES) {
+            withFrameNanos {}
+            if (runCatching { restoreRequester.requestFocus() }.isSuccess) {
+                restored = true
+                return@LaunchedEffect
+            }
         }
-        if (index != null) {
-            gridState.scrollToItem(index)
-            restored = true
-        }
+        // Give up on the focus, keep the scroll: a wrong-but-visible position beats
+        // fighting for focus forever.
+        restored = true
     }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(5),
         state = gridState,
-        modifier = modifier.fillMaxSize().focusRequester(gridFocusRequester).focusGroup(),
+        // **This is what makes leaving to the rail and coming back land where the user
+        // left.** A focus group entered from outside delegates to its *first* focusable
+        // child, so LEFT to the rail then RIGHT back jumped from wherever the user was to
+        // item 0.
+        //
+        // `focusProperties { enter = … }` rather than `focusRestorer()`: the latter reads
+        // like the purpose-built answer, but combined with an explicit `focusGroup()` on
+        // the same chain it dropped focus off the screen entirely — the grid was entered,
+        // the remembered child was not restored, and nothing ended up focused, which on a
+        // D-pad device means the remote stops working until the user backs out. `enter` is
+        // explicit about where focus goes and degrades to `Default` (first child, the old
+        // behaviour) whenever the target is not attached.
+        modifier = modifier
+            .fillMaxSize()
+            .focusRequester(gridFocusRequester)
+            .focusProperties {
+                enter = {
+                    if (restoreTargetIsLaidOut()) restoreRequester else FocusRequester.Default
+                }
+            }
+            .focusGroup(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -100,17 +179,24 @@ fun ContentGrid(
             key = items.itemKey { it.id }
         ) { index ->
             val item = items[index]
+            val isRestoreTarget = item != null && item.id == lastFocusedId
+
             StreamCard(
                 item = item,
                 cardShape = cardShape,
-                modifier = if (item?.id == pendingFocusItemId) {
+                modifier = if (isRestoreTarget) {
                     Modifier.focusRequester(restoreRequester)
                 } else {
                     Modifier
                 },
                 onActivate = { item?.let(onActivate) },
                 onLongPress = { item?.let(onContextMenu) },
-                onFocused = { item?.let(onFocused) }
+                onFocused = {
+                    item?.let {
+                        lastFocusedId = it.id
+                        onFocused(it)
+                    }
+                }
             )
         }
 
@@ -185,22 +271,49 @@ private fun StreamCard(
                 )
             }
 
-            // The panel lists the same title once per quality, and `nameDisplay` has the
-            // quality token stripped out of it (that strip is what makes mixed-direction
-            // titles truncate correctly). Without this badge the two rows render as the
-            // same string and read as duplicates that the user cannot tell apart.
-            // Top-start because the provider watermark on this panel's art sits top-end.
-            item?.quality?.let { quality ->
-                Text(
-                    text = quality,
-                    color = Palette.Ink,
-                    style = TvType.caption,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(Palette.Bg.copy(alpha = 0.78f))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
+            // **Both corner badges share one row, top-start.** The provider watermark on
+            // this panel's art sits top-end, so that corner is unusable, and two
+            // independently-aligned badges in the same corner would overlap on any card
+            // carrying both. A single row lays them out side by side instead.
+            //
+            // Rating first: it is the one the eye is looking for, and quality is the
+            // disambiguator that only matters once two rows read alike.
+            if (item?.rating != null || item?.quality != null) {
+                Row(
+                    modifier = Modifier.align(Alignment.TopStart),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Accent-tinted so it reads as a value rather than a label, and so it
+                    // is distinguishable from the quality token at a glance across a grid.
+                    item.rating?.let { rating ->
+                        Text(
+                            text = rating.asRatingLabel(),
+                            color = Palette.Accent,
+                            style = TvType.caption,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .background(Palette.Bg.copy(alpha = 0.78f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+
+                    // The panel lists the same title once per quality, and `nameDisplay`
+                    // has the quality token stripped out of it (that strip is what makes
+                    // mixed-direction titles truncate correctly). Without this badge the
+                    // two rows render as the same string and read as duplicates that the
+                    // user cannot tell apart.
+                    item.quality?.let { quality ->
+                        Text(
+                            text = quality,
+                            color = Palette.Ink,
+                            style = TvType.caption,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .background(Palette.Bg.copy(alpha = 0.78f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
             }
 
             // **D-6 — poster titles are overlaid, not placed underneath.** Underneath
@@ -279,6 +392,15 @@ private val TITLE_BLOCK_HEIGHT = 48.dp
  * ~41% of the card, but only the bottom ~25% is meaningfully darkened.
  */
 private val SCRIM_HEIGHT = 68.dp
+
+/**
+ * How many frames the focus restore waits for its card to compose before giving up.
+ *
+ * Eight is a tenth of a second at 60 Hz — long enough for a `scrollToItem` plus layout on
+ * the slowest box this targets, short enough that a pending id which no longer exists
+ * costs nothing anyone can perceive.
+ */
+private const val FOCUS_RESTORE_FRAMES = 8
 
 /** Card sizes are specified in pixels because they are image-pipeline inputs. */
 private val CardShape.widthPx: Int

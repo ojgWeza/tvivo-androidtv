@@ -25,6 +25,12 @@ data class ItemDetailUiState(
     val plot: String? = null,
     val imageUrl: String? = null,
     val extension: String? = null,
+    /**
+     * Panel rating on a 0–10 scale, null when unrated. Live never carries one — a channel
+     * is not a title — and existing cached rows stay null until the catalog next syncs
+     * (see `AppDatabase.MIGRATION_4_5`).
+     */
+    val rating: Double? = null,
     val quality: String? = null,
     val isFavourite: Boolean = false,
     /** Non-null once we know there is somewhere to resume from. */
@@ -95,6 +101,7 @@ class ItemDetailViewModel(
                                 title = row.nameDisplay,
                                 plot = row.plot?.takeIf { p -> p.isNotBlank() },
                                 imageUrl = row.streamIcon,
+                                rating = row.rating,
                                 isLoading = false
                             )
                         }
@@ -113,6 +120,7 @@ class ItemDetailViewModel(
                                 plot = cached,
                                 imageUrl = row.streamIcon,
                                 extension = row.containerExtension,
+                                rating = row.rating,
                                 isLoading = false
                             )
                         }

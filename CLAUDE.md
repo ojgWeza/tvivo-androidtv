@@ -31,10 +31,19 @@ sends no `plot` on `get_vod_streams`, verified over a forced re-sync of all
 *The rail leads with three folders the panel does not publish* — `RECENTLY
 ADDED` (100), `CONTINUE WATCHING` (50) and `FAVOURITES`, in that order, above
 the panel's categories. They are `CategoryEntity` rows with `__`-prefixed ids;
-see `docs/architecture.md`. The Room DB is now on a **real migration** — never
+see `docs/architecture.md`. The Room DB is **v5, on real migrations** — never
 restore `fallbackToDestructiveMigration`, it drops `favourites` and
 `resume_positions`, which are the only user data the app holds and the two
-tables those folders are built from.
+tables those folders are built from. v5 adds `rating` to `vod_streams` and
+`series`; nothing back-fills it, so ratings appear per category as each one
+re-syncs.
+
+**Every focusable surface has two distinct restore paths and both are required.**
+Re-entering the grid from the rail is `focusProperties { enter }`; returning from
+the pre-run page is `pendingFocusItemId` and must *request focus*, not merely
+scroll. `focusRestorer()` is **not** a substitute — on Compose 1.6.8 alongside an
+explicit `focusGroup()` it leaves nothing focused, which on a remote means the
+app stops responding. The reasoning is in `docs/architecture.md` under paging.
 
 **To test the login screen, use Account → "Sign in to a different account" and
 enter a deliberately wrong account.** That path does **not** wipe anything: it

@@ -26,7 +26,15 @@ data class BrowseItem(
      * The panel publishes the same show at several qualities as separate rows. Without
      * this the grid renders both as the same string and they read as duplicates.
      */
-    val quality: String? = null
+    val quality: String? = null,
+    /**
+     * Panel rating on a 0–10 scale, or null when the panel did not rate it.
+     *
+     * Null is the common case on this panel and the badge simply does not draw — an
+     * "unrated" placeholder on most of a 48,780-row catalog would be noise, not
+     * information. Live carries none: a channel is not a title.
+     */
+    val rating: Double? = null
 )
 
 /**
@@ -35,12 +43,26 @@ data class BrowseItem(
  */
 enum class CardShape { POSTER, CHANNEL }
 
+/**
+ * `7.4` — one decimal, no `/10` suffix and no star glyph.
+ *
+ * The scale is not written out because the badge has to survive at card size, and a
+ * single number in a fixed corner reads as a rating without being told. A glyph was the
+ * other option and was dropped for the reason Q-16 records: the TV font stack cannot be
+ * relied on for symbols, and a missing star draws as tofu.
+ *
+ * Locale-independent on purpose (`Locale.ROOT`): this is a number, and an Arabic locale
+ * rendering it in Eastern Arabic numerals beside Latin catalog titles reads as a glitch.
+ */
+fun Double.asRatingLabel(): String = String.format(java.util.Locale.ROOT, "%.1f", this)
+
 fun VodStreamEntity.toBrowseItem() = BrowseItem(
     id = streamId,
     title = nameDisplay,
     imageUrl = streamIcon,
     extension = containerExtension,
-    quality = NameNormalizer.qualityOf(name)
+    quality = NameNormalizer.qualityOf(name),
+    rating = rating
 )
 
 fun LiveStreamEntity.toBrowseItem() = BrowseItem(
@@ -61,5 +83,6 @@ fun SeriesEntity.toBrowseItem() = BrowseItem(
     title = nameDisplay,
     imageUrl = streamIcon,
     extension = null,
-    quality = NameNormalizer.qualityOf(name)
+    quality = NameNormalizer.qualityOf(name),
+    rating = rating
 )

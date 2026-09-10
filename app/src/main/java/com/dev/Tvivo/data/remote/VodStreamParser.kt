@@ -34,6 +34,7 @@ object VodStreamParser {
                 streamIcon = raw.streamIcon,
                 containerExtension = raw.extension,
                 plot = raw.plot,
+                rating = raw.rating,
                 added = raw.added,
                 num = raw.num,
                 generation = generation

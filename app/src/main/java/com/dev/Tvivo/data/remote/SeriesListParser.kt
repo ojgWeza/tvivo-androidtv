@@ -33,6 +33,7 @@ object SeriesListParser {
                 nameNormalized = names.normalized,
                 streamIcon = raw.streamIcon,
                 plot = raw.plot?.takeIf { it.isNotBlank() },
+                rating = raw.rating,
                 added = raw.added,
                 num = raw.num,
                 generation = generation
