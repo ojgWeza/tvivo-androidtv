@@ -814,7 +814,7 @@ Implemented as `TvivoApplication` + `CrashDiagnostics`: the handler records only
 exception types and bounded stack frames (never messages), syncs the file before
 delegating to Android's prior handler, then consumes and deletes it on next launch.
 
-## N-2 — Define what the user sees when `max_connections` is exhausted
+## N-2 — Define what the user sees when max_connections is exhausted — **IMPLEMENTED, physical-TV verification pending**
 **Cost: small. Gates the physical-TV session.**
 
 `max_connections` is `1` on this account, so a second concurrent stream — another

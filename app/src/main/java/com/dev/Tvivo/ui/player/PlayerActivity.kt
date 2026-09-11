@@ -1,5 +1,6 @@
 package com.dev.Tvivo.ui.player
 
+import android.app.AlertDialog
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -17,6 +18,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.diagnostics.DiagnosticLog
+import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
@@ -44,6 +46,7 @@ class PlayerActivity : ComponentActivity() {
     /** Both are read by [onKeyDown], which runs outside `onCreate`'s scope. */
     private var playerView: PlayerView? = null
     private var isLive: Boolean = false
+    private var failureShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -269,8 +272,17 @@ class PlayerActivity : ComponentActivity() {
             "$error${cause?.errorCodeName?.let { " ($it)" } ?: ""}"
         )
         Log.w(TAG, "playback failed: $error ${cause?.message?.let(StreamUrlBuilder::redact) ?: ""}")
+        if (failureShown || isFinishing) return
+        failureShown = true
+        firstFrameWatchdog?.cancel()
+        bufferingWatchdog?.cancel()
+        player?.stop()
         setResult(RESULT_CANCELED)
-        finish()
+        AlertDialog.Builder(this)
+            .setMessage(ErrorCopy.of(error).message)
+            .setPositiveButton("Back to list") { _, _ -> finish() }
+            .setOnCancelListener { finish() }
+            .show()
     }
 
     override fun onStop() {
