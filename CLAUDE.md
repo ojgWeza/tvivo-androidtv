@@ -14,7 +14,7 @@ plus an Account screen (`ui/settings/`) carrying sign out, switch account,
 refresh everything, exit, and the subscription expiry. The app authenticates,
 browses movies, live channels and series by category, plays movies, and shows a
 season/episode picker per show. 48,780 VOD rows, 6,424 live channels and 13,279
-series shows are synced and cached; **151 unit tests pass**. Live and episode
+series shows are synced and cached; **155 unit tests pass**. Live and episode
 playback are the paths never exercised — `max_connections` is 1, so no automated
 test may open a stream.
 

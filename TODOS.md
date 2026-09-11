@@ -832,7 +832,7 @@ screen tempted to say "you can only watch one thing at a time".
 Best specified now and verified in the physical-TV session, where it can actually
 be provoked.
 
-## N-3 — A defined cached-catalog-but-no-network path
+## N-3 — A defined cached-catalog-but-no-network path — **IMPLEMENTED, emulator verification pending**
 **Cost: small-to-medium. Blocks Phase 5's error-state work from being complete.**
 
 The app assumes the panel is reachable. A household router being down, or the TV
@@ -845,7 +845,7 @@ the panel, and whether a Play attempt says something better than a generic error
 contract over "stale and cannot refresh". Fold into Phase 5's empty/loading/error
 state table rather than building it separately.
 
-## N-4 — "This category did not sync" is indistinguishable from "empty"
+## N-4 — "This category did not sync" is indistinguishable from "empty" — **IMPLEMENTED, emulator verification pending**
 **Cost: small. The data it needs already exists.**
 
 The zero-row guard records `partial` instead of flipping the generation — that

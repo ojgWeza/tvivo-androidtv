@@ -33,6 +33,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
+import com.dev.Tvivo.data.AppError
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -44,6 +45,7 @@ import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.home.ContentType
+import com.dev.Tvivo.sync.CatalogSyncer
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
@@ -173,6 +175,8 @@ fun BrowseScreen(
                 confirmation = state.refreshConfirmation,
                 syncState = state.catalogSyncState,
                 syncDone = state.catalogSyncDone,
+                error = state.error,
+                hasCachedItems = items.itemCount > 0,
                 onRefresh = viewModel::refreshSelected,
                 itemFilter = state.itemFilter,
                 isItemFilterOpen = state.isItemFilterOpen,
@@ -278,6 +282,8 @@ private fun Header(
     confirmation: String?,
     syncState: String?,
     syncDone: Int,
+    error: AppError?,
+    hasCachedItems: Boolean,
     onRefresh: () -> Unit,
     itemFilter: String,
     isItemFilterOpen: Boolean,
@@ -289,6 +295,7 @@ private fun Header(
     railFocusRequester: FocusRequester
 ) {
     val refreshFocusRequester = remember { FocusRequester() }
+    val statusMessage = browseStatusMessage(error, syncState, hasCachedItems)
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
@@ -347,6 +354,10 @@ private fun Header(
                     )
                 }
                 confirmation?.let {
+                    Text(text = it, color = Palette.Dim, style = TvType.label,
+                        modifier = Modifier.padding(end = 16.dp))
+                }
+                statusMessage?.let {
                     Text(text = it, color = Palette.Dim, style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp))
                 }
@@ -422,6 +433,13 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
             }
         }
     }
+}
+
+internal fun browseStatusMessage(error: AppError?, catalogSyncState: String?, hasCachedItems: Boolean): String? = when {
+    error != null && hasCachedItems -> "Offline — showing cached data"
+    catalogSyncState == CatalogSyncer.STATE_PARTIAL -> "Catalog incomplete — showing available categories"
+    catalogSyncState == CatalogSyncer.STATE_FAILED && hasCachedItems -> "Catalog update unavailable — showing cached data"
+    else -> null
 }
 
 /**
