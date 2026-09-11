@@ -716,8 +716,8 @@ the generation flip, account scoping, the per-content-type table separation, and
 the zero-row guard for VOD, live and series. `SeriesRepositoryTest` adds the
 per-show `get_series_info` TTL and its own empty-result guard.
 
-## T-T2 — Instrumented D-pad focus traversal tests
-Compose focus tests on the emulator, per `CLAUDE.md`. Q-1, Q-2, Q-3 and Q-9 are
+## T-T2 — Instrumented D-pad focus traversal tests — **HARNESS IMPLEMENTED, device run pending**
+Compose focus tests on the emulator, per CLAUDE.md. The Android-test harness now compiles with isolated RIGHT and DOWN escape tests for the shared D-pad field contract; execution remains pending fresh emulator approval. `CLAUDE.md`. Q-1, Q-2, Q-3 and Q-9 are
 all focus/layout defects that shipped despite a green build — this is the class
 of test that would catch them. Q-9 raises the value further: it was invisible in
 code review twice over, since the first fix compiled, read correctly, and did
