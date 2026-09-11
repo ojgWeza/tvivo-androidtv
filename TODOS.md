@@ -856,7 +856,7 @@ affordance the empty state does not need.
 
 Depends on N-3's state table; do them together.
 
-## N-5 — Verify a resume position survives process death
+## N-5 — Verify a resume position survives process death — **LOCAL COVERAGE IMPLEMENTED, hardware verification pending**
 **Cost: verification first, possibly zero code.**
 
 `resume_positions` and `favourites` are the only user data the app holds, and
