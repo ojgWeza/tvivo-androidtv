@@ -9,14 +9,54 @@ do not, plus what you are and are not expected to do here.
 **Your shell is blocked here.** Every `pwsh -Command` / `cmd /c` spawn is
 rejected at CreateProcess by policy on this box. You cannot run Gradle, the unit
 suite, `adb`, or the emulator, and working around it through another tool is
-extremely expensive — one `git log` cost ~32k tokens that way. **Do not try.**
+extremely expensive — one `git log` cost ~32k tokens that way, so don't.
 
-So: **read, reason, and write code. Do not attempt to build or verify it.**
-A human, or Claude Code, runs `./gradlew test` and drives the emulator. When you
-finish, say plainly what you could not check — that is useful, not a failure.
+**But this is a default-flags limitation, not a prohibition.** If you are invoked
+with a sandbox or approval mode that gives you a working shell — notably the
+interactive `codex` TUI rather than `codex exec` — then build, test, and commit
+freely. The owner needs you able to finish work unaided.
+
+Default mode: **read, reason, write.** With a working shell, build and run local
+unit tests as needed, but follow the deployment and emulator approval rules
+below. A human, or Claude Code, may run `./gradlew test` and drive the emulator.
+When you finish, say plainly what you could not check — that is useful, not a
+failure.
 
 State assumptions instead of proving them. If a task genuinely cannot be done
 without executing something, say so and stop rather than guessing.
+
+## Deployment, emulator, and memory rules
+
+- **Never deploy/install the APK or launch an emulator test without asking the
+  owner first and receiving explicit approval for that deployment and test.** A
+  request to develop or fix code is not approval to deploy it.
+- After development is finished and deployment/testing is approved, use the
+  repository's emulator setup on the D: drive (`tools/emulator.sh`). Never launch
+  bare `emulator.exe`.
+- This machine is memory-constrained. Development/build processes and the
+  emulator must not compete for memory:
+  - Before development or builds, stop the emulator if it is running.
+  - Before launching the emulator, stop Gradle/Kotlin build daemons and other
+    development processes used for the build. `tools/emulator.sh` is expected to
+    perform the daemon shutdown; verify that it has done so.
+- Prefer dense, coherent implementation batches grouped by dependency and test
+  surface. Do not stop to request deployment/emulator testing after each small
+  change or single TODO item. Finish the whole batch, perform all safe local
+  checks available without deployment, then request approval once for the
+  combined deploy-and-emulator validation.
+- Approval to deploy and test applies to that test run only. Ask again before a
+  later deployment or emulator session unless the owner explicitly grants a
+  broader scope.
+
+## Workflow skills
+
+- Use the installed gstack skills when they match the work: planning/reprioritizing
+  before a dense batch, engineering review after implementation, and QA only
+  after explicit deployment/emulator approval. Repository-specific constraints
+  in this file and `CLAUDE.md` always override a generic skill workflow.
+- Do not let `ship`, `land-and-deploy`, `qa`, or similar skills bypass the
+  explicit approval requirement for installation, deployment, streams, or the
+  emulator.
 
 ## Non-negotiables — each of these has already cost real time
 

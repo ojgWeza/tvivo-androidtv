@@ -4,6 +4,14 @@
 **Evidence reviewed:** `PRODUCT.md`, `CLAUDE.md`, `TODOS.md`, `docs/architecture.md`, `docs/ui-scope.md`, and `docs/decisions.md`.  
 **Confidence boundary:** This is a document review, not a new emulator or physical-TV QA pass. “Built” and “verified” below mean the project tracker records them that way; they are not claims from a fresh build run.
 
+## Current-state snapshot
+
+- Phases 0–4 are built; Phase 5 hardening is in progress.
+- The tracker records 149 passing unit tests. No build or test was rerun for this review.
+- Movie playback has been exercised. Live and episode playback remain shipped-but-never-executed paths because automated tests must not consume the development account's single connection.
+- Q-4, Q-5, Q-14, U-14, QA-3 through QA-7, N-1 through N-7, and T-T2 remain materially open. Q-21 is fixed in code but still needs emulator verification; QA-8 is reported but not reproduced.
+- The Room database is version 5 on real migrations. Favourites and resume positions are user data and must never be exposed to destructive migration fallback.
+
 ## Executive assessment
 
 Tvivo has crossed the difficult boundary between a demo and a credible Android TV product foundation. The core loop is unusually well thought through for a POC: authenticate safely, browse a large and imperfect catalog from the couch, open a content page before committing a scarce stream, and retain the user’s personal state locally. The data architecture is particularly strong. Per-account Room data, per-category freshness, generation-safe full sync, and a real non-destructive database migration are the kinds of decisions that prevent a TV app from becoming unreliable after the first week of real use.
@@ -49,7 +57,7 @@ The move from immediate activation-to-play to a pre-run page was also correct. I
 
 ### 4. The product has already improved beyond bare functionality
 
-The design pass is materially more than polish. The theme roles, ten-foot type scale, rail label wrapping, Home action row, protected sign-out, subscriptions screen, and card treatments directly improve usability. The recent tracker indicates the design work D-1 through D-17 is built, alongside `RefreshWorker`, Diagnostics, RTL support, and grid loading states.
+The design pass is materially more than polish. The theme roles, ten-foot type scale, rail label wrapping, Home action row, protected sign-out, subscriptions screen, and card treatments directly improve usability. The tracker records the design work D-1 through D-17 as built and emulator-verified, alongside `RefreshWorker`, Diagnostics, RTL support, and grid loading states. Q-21 is the explicit exception around later follow-up work: its fix exists in code but still needs an emulator screenshot with a long category title and the item filter open.
 
 ### 5. Testing discipline is pointed at the real risks
 
@@ -228,6 +236,7 @@ The documentation is thoughtful but has a few status conflicts that should be re
 - `TODOS.md`’s top summary says Q-8 remains open, while the design table says D-6 is built and closes Q-8.
 - Some sections retain historical wording that the design pass is “decided and unbuilt,” followed immediately by a newer status stating D-1 through D-17 are built and verified.
 - The architecture/product text contains both earlier and later interaction decisions around activation/play; the newer pre-run-page decision should be treated as authoritative everywhere.
+- The design-pass status says all work is verified, while Q-21 explicitly remains unverified and the later QA sweep leaves QA-3 through QA-7 open. The summary should distinguish the completed design scope from unresolved follow-up defects.
 
 This is not a product defect, but an out-of-date status document causes expensive rework. Update historical headings or label them explicitly as superseded, retain the useful rationale, and maintain one short “current verified state” section at the top of `TODOS.md`.
 

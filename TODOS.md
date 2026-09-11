@@ -156,6 +156,17 @@ is a candidate list to check the trace against, not a diagnosis.
 - Layouts are built to a fixed 1920x1080 10-foot geometry (`docs/ui-scope.md`),
   so a phone is outside every measurement in the design.
 
+**Cross-project lesson (PrayerQiblaApp, confirmed on a Xiaomi Mi 10):** its
+apparently similar post-install crash was `Failed to create an instance of
+androidx.work.impl.WorkDatabase` inside
+`androidx.startup.InitializationProvider`; release R8 shrinking had broken a
+reflection-dependent WorkManager/Room path before Flutter started. Tvivo already
+sets `isMinifyEnabled = false`, so this is evidence for what to inspect in the
+trace, not evidence that Q-14 has the same cause. Tvivo now also sets
+`isShrinkResources = false` explicitly and initializes WorkManager only after
+the sanitized crash handler is installed, so a comparable initialization
+failure can survive into on-device Diagnostics on the next launch.
+
 **Phone is not a target.** `PRODUCT.md` scopes this to Android TV, so the
 outcome may legitimately be "the phone is unsupported, and the failure should be
 a clear message rather than a crash" — but that is a decision to make *after*
@@ -770,15 +781,15 @@ everything else is built against the real scale and roles rather than twice.
 
 # Part 2c — Filed 2026-09-10: new items, not yet scheduled
 
-Seven gaps that were never work items. Ordered by **cost against what they
+Nine gaps that were never work items. Ordered by **cost against what they
 unblock**: N-1..N-3 are cheap and something else is waiting on each of them,
-N-4..N-5 are cheap and self-contained, N-6..N-7 are real features.
+N-4..N-5 are cheap and self-contained, N-6..N-9 are real features.
 
 Nothing here is built. None of it is in `docs/ui-scope.md` or `decisions.md`
 yet — file the decision there if one of these is taken.
 
 ## N-1 — An unhandled-exception hook that writes to `DiagnosticLog`
-**Cost: small. Unblocks Q-14.**
+**Cost: small. Unblocks Q-14. Implemented 2026-09-11; 151 unit tests pass; device verification pending.**
 
 Q-14 (the phone crash) has been open with no root cause for two days for exactly
 one reason: no logcat has ever been captured from that device, and the crash
@@ -790,6 +801,10 @@ read it" — on any device, with no adb, including the physical TV later.
 Must write **synchronously** on the crashing thread and survive the process
 dying; a coroutine launch will not finish. Ties into T-D4 — this is the strongest
 argument that Diagnostics needs to record more than failures it happens to catch.
+
+Implemented as `TvivoApplication` + `CrashDiagnostics`: the handler records only
+exception types and bounded stack frames (never messages), syncs the file before
+delegating to Android's prior handler, then consumes and deletes it on next launch.
 
 ## N-2 — Define what the user sees when `max_connections` is exhausted
 **Cost: small. Gates the physical-TV session.**
@@ -876,6 +891,66 @@ does, and that decides the layout before anything else.
 
 **Declines to reopen voice search** — that is in "Considered and not taken" and
 this is the typed path that made it unnecessary.
+
+## N-8 — One-click diagnostic reporting from the TV
+**Cost: medium. Depends on N-1 and the existing `DiagnosticLog`.**
+
+A file export is not useful on a TV: the user is unlikely to have a file manager,
+email client or practical way to move the artifact elsewhere. Replace it with a
+remote-first **Report a problem** action in Diagnostics:
+
+1. Show a short consent screen stating exactly what will be sent, with default
+   focus on **Cancel**.
+2. On confirmation, send a strictly allowlisted report over HTTPS.
+3. Show a short reference such as `TV-4K7M2` when accepted; require no keyboard,
+   copying or second device.
+4. If offline, retain the pending report and retry through WorkManager, while
+   making the queued state visible to the user.
+
+The app should send to a small app-owned reporting endpoint. That service may
+email the developer initially and may later create a sanitized GitHub issue.
+**Never create issues directly from the APK:** a GitHub token or mail-provider
+credential embedded in a public Android package can be extracted. The repository
+is public, so detailed diagnostics must never be posted to an issue; at most the
+service posts a coarse summary plus the private report reference.
+
+Build the payload from an explicit allowlist rather than collecting broadly and
+redacting afterward. Useful fields: app/build version, Android API and TV model,
+timestamp, current screen, normalized failure category, recent redacted
+diagnostic events, and coarse cached/partial/sync/playback outcomes. Never send
+credentials, panel hostname or port, request/playback URLs, account or content
+ids, titles, category names, search text, exact resume positions, or raw
+exception messages. Use normal certificate validation, payload and retention
+limits, server-side rate limiting, and a visible **Delete local diagnostics**
+action. Document the data sent before enabling the feature.
+
+## N-9 — Profile and optimize Room retrieval for instant-feeling browse
+**Cost: medium. Performance milestone, not speculative index work.**
+
+The local catalog is large enough that database latency is product behavior:
+opening a category, moving between virtual folders, filtering, returning from a
+detail page, and restoring a far-away card should feel immediate even while a
+full-catalog sync is writing in the background. Define budgets before changing
+the schema: cached category/header data visible within 100 ms, first grid page
+within 200 ms, filter results within 300 ms after the existing debounce, and no
+main-thread disk I/O or focus loss while paging invalidates.
+
+Measure representative worst cases on the real database (large category,
+48k-row VOD catalog, Recently Added, Continue Watching, Favourites, filtered
+query, and BACK at a deep grid position). Capture Room query plans with
+`EXPLAIN QUERY PLAN`, query timings, PagingSource invalidations, allocation/GC
+pressure, and sync/read contention. Add benchmark fixtures that preserve the
+catalog's real order of magnitude without using provider data.
+
+Optimize only from observed plans. Check composite covering indexes against the
+actual WHERE/ORDER BY clauses; normalized-name filtering; joins/lookups used by
+virtual folders; bounded projections instead of full entities where possible;
+transaction size and WAL behavior during generation flips; and whether count
+queries duplicate expensive scans. Every added index must justify its sync and
+storage cost. Do not disable placeholders or stable keys: deep focus restoration
+depends on them. Treat the latency budgets as regression gates, with
+Macrobenchmark or instrumented measurements on the emulator and final
+confirmation on the physical TV after explicit deployment approval.
 
 ---
 

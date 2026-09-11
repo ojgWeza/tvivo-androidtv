@@ -17,10 +17,10 @@ import java.util.Locale
  * that lapsed — are all invisible from the outside. `Log.i` alone is only useful to
  * whoever is holding the cable.
  *
- * **In memory only, and deliberately so.** Entries are the app's own operational events;
- * writing them to disk would create a file that outlives the process and accumulates a
- * record of what the user watched, for no diagnostic gain that a live screen does not
- * already give. It is cleared when the process dies, which is the correct lifetime.
+ * Routine entries stay in memory and are cleared when the process dies. The one exception
+ * is a sanitized uncaught crash written synchronously by [CrashDiagnostics], consumed on
+ * the next start, and immediately deleted. That file contains exception types and stack
+ * frames only — never exception messages or operational/viewing history.
  *
  * **Never log a credential, a URL, or a title.** A stream URL carries the username and
  * password as query parameters, so a single logged URL is the whole account. Call sites
