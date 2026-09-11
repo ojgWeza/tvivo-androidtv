@@ -2,7 +2,8 @@
 
 Open work, with enough context to pick up cold. Items here were considered and
 consciously deferred, or found by testing and not yet fixed — not a backlog of
-ideas.
+ideas. The one exception is **Part 2c**, filed 2026-09-10: gaps that were never
+work items, ordered by cost against what they unblock.
 
 Everything that was *not* deferred is folded into `docs/ui-scope.md`,
 `docs/architecture.md` and `docs/decisions.md`.
@@ -61,7 +62,13 @@ Only the separate `Sign out` button calls `store.wipe()`.
    playback are shipped-but-never-executed code. This retires more risk than
    further emulator work.
 3. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
-   `RefreshWorker`, on-device diagnostic log.
+   `RefreshWorker`, on-device diagnostic log. **Take N-3 and N-4 inside this**,
+   not after it — they are error states, and building the state table twice is
+   the same mistake D-4/D-5 avoided.
+4. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
+   move at all until a stack trace exists on a device with no adb attached.
+   **N-2 before the physical-TV session**, since that session is the only place
+   an exhausted `max_connections` can be provoked on purpose.
 
 **T-T1 is done.** `CatalogDaoTest` (16 tests) covers `replaceCategory`, the
 generation flip, account scoping and the per-type table separation;
@@ -758,6 +765,117 @@ everything else is built against the real scale and roles rather than twice.
 - **Title overlay coverage.** Overlaying costs the bottom ~15% of the artwork,
   more on two-line titles. Capped at 2 lines + ellipsis, safe here only because
   the quality badge is a separate element.
+
+---
+
+# Part 2c — Filed 2026-09-10: new items, not yet scheduled
+
+Seven gaps that were never work items. Ordered by **cost against what they
+unblock**: N-1..N-3 are cheap and something else is waiting on each of them,
+N-4..N-5 are cheap and self-contained, N-6..N-7 are real features.
+
+Nothing here is built. None of it is in `docs/ui-scope.md` or `decisions.md`
+yet — file the decision there if one of these is taken.
+
+## N-1 — An unhandled-exception hook that writes to `DiagnosticLog`
+**Cost: small. Unblocks Q-14.**
+
+Q-14 (the phone crash) has been open with no root cause for two days for exactly
+one reason: no logcat has ever been captured from that device, and the crash
+happens before anything can be attached. An `UncaughtExceptionHandler` installed
+in `Application.onCreate` that appends the stack trace to the existing on-device
+`DiagnosticLog` turns "reproducible but untraceable" into "open Diagnostics and
+read it" — on any device, with no adb, including the physical TV later.
+
+Must write **synchronously** on the crashing thread and survive the process
+dying; a coroutine launch will not finish. Ties into T-D4 — this is the strongest
+argument that Diagnostics needs to record more than failures it happens to catch.
+
+## N-2 — Define what the user sees when `max_connections` is exhausted
+**Cost: small. Gates the physical-TV session.**
+
+`max_connections` is `1` on this account, so a second concurrent stream — another
+device in the house, or the app's own previous player not yet torn down — is not
+an edge case, it is the **first playback failure a real user will hit**. Nothing
+decides what appears today; the panel's refusal surfaces as whatever opaque
+Media3 error the `.ts`/`.mkv` open produces.
+
+Needs: the error copy (per the `ErrorCopy` pattern, one line), and a decision on
+whether the app *reads* `active_connections` from `server_info` before opening a
+stream to pre-empt it. **The copy must report, never assert a limit** — the
+constraint in `CLAUDE.md` applies here more than anywhere, since this is the one
+screen tempted to say "you can only watch one thing at a time".
+
+Best specified now and verified in the physical-TV session, where it can actually
+be provoked.
+
+## N-3 — A defined cached-catalog-but-no-network path
+**Cost: small-to-medium. Blocks Phase 5's error-state work from being complete.**
+
+The app assumes the panel is reachable. A household router being down, or the TV
+waking before the network, is an ordinary state, not a failure — and the catalog
+is fully cached locally, so browsing *should* work. Undefined today: whether the
+grid renders from cache, what the per-category refresh does when it cannot reach
+the panel, and whether a Play attempt says something better than a generic error.
+
+`CachedFetch` already distinguishes fresh from stale; what is missing is a UI
+contract over "stale and cannot refresh". Fold into Phase 5's empty/loading/error
+state table rather than building it separately.
+
+## N-4 — "This category did not sync" is indistinguishable from "empty"
+**Cost: small. The data it needs already exists.**
+
+The zero-row guard records `partial` instead of flipping the generation — that
+flag is written and never read by the UI. So a category that failed to sync and a
+category the panel genuinely ships empty render identically, and a refresh looks
+like it did nothing. Surface `partial` as a distinct state with the retry
+affordance the empty state does not need.
+
+Depends on N-3's state table; do them together.
+
+## N-5 — Verify a resume position survives process death
+**Cost: verification first, possibly zero code.**
+
+`resume_positions` and `favourites` are the only user data the app holds, and
+`CONTINUE WATCHING` is built directly on the former. Backing out of the player is
+tested; **the player being killed is not** — a TV box reclaiming memory, or the
+user pressing Home mid-film. If the write only happens on a clean teardown, the
+row is lost silently.
+
+Check the write path first (`onPause` vs `onStop` vs teardown); it may already be
+correct. Related: U-13 was a data-loss bug in this same table, which is reason
+enough not to assume.
+
+## N-6 — Episode-level continue watching, and *next* episode
+**Cost: medium. Depends on N-5.**
+
+`CONTINUE WATCHING` reads `resume_positions`, but whether a part-watched *episode*
+lands there is undefined, and if it does, the useful behaviour is not obvious:
+resuming the same episode is right mid-episode, and offering the **next** one is
+right after a finished episode. A series row also wants to show the show, not the
+episode, as its title.
+
+Do not start before N-5 — if the resume write itself is lossy, this builds on
+sand. Sub-60s replay handling already has a precedent in `5148343`.
+
+## N-7 — Global search across all three content types
+**Cost: largest here. Fully unblocked, no network work.**
+
+D-14 filters **within the current category only**, so finding a film today
+requires already knowing its category — across 48,780 VOD rows, 6,424 channels
+and 13,279 shows, that is the difference between a catalog and a haystack. The
+full-catalog tables are already synced and local, so this is a DAO query per
+content type plus a screen; **no panel call at all**.
+
+Reuses D-14's shape: debounced 300 ms on `Dispatchers.IO`, results as
+`BrowseItem` so the existing grid and pre-run page take them unchanged. Open
+questions: where it is reached from (Home icon row is the obvious slot, and D-7
+already established the component), whether results group by type or interleave,
+and whether the TV IME ceiling rule forces the field into the upper half — it
+does, and that decides the layout before anything else.
+
+**Declines to reopen voice search** — that is in "Considered and not taken" and
+this is the typed path that made it unnecessary.
 
 ---
 
