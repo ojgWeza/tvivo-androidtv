@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +49,7 @@ import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import androidx.activity.compose.BackHandler
 
 @Composable
 fun BrowseScreen(
@@ -75,6 +77,10 @@ fun BrowseScreen(
     val scope = rememberCoroutineScope()
     val gridFocusRequester = remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
+
+    BackHandler(enabled = state.isItemFilterOpen) {
+        viewModel.setItemFilterOpen(false)
+    }
 
     // **Q-25 — the screen must open with something focused.** It did not, and an
     // Android TV screen with no focus owner has no D-pad behaviour at all: the first
@@ -173,7 +179,9 @@ fun BrowseScreen(
                 filteredCount = state.filteredCount,
                 totalCount = state.counts[state.selectedCategoryId],
                 onItemFilterChanged = viewModel::onItemFilterChanged,
-                onItemFilterOpenChanged = viewModel::setItemFilterOpen
+                onItemFilterOpenChanged = viewModel::setItemFilterOpen,
+                gridFocusRequester = gridFocusRequester,
+                railFocusRequester = railFocusRequester
             )
 
             when {
@@ -276,8 +284,11 @@ private fun Header(
     filteredCount: Int?,
     totalCount: Int?,
     onItemFilterChanged: (String) -> Unit,
-    onItemFilterOpenChanged: (Boolean) -> Unit
+    onItemFilterOpenChanged: (Boolean) -> Unit,
+    gridFocusRequester: FocusRequester,
+    railFocusRequester: FocusRequester
 ) {
+    val refreshFocusRequester = remember { FocusRequester() }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
@@ -353,7 +364,10 @@ private fun Header(
                     ItemFilterField(
                         value = itemFilter,
                         onValueChange = onItemFilterChanged,
-                        onClose = { onItemFilterOpenChanged(false) }
+                        onClose = { onItemFilterOpenChanged(false) },
+                        gridFocusRequester = gridFocusRequester,
+                        railFocusRequester = railFocusRequester,
+                        refreshFocusRequester = refreshFocusRequester
                     )
                 } else {
                     IconPill(
@@ -372,7 +386,8 @@ private fun Header(
                     icon = Icons.Default.Refresh,
                     label = "Refresh",
                     enabled = !isRefreshing,
-                    onClick = onRefresh
+                    onClick = onRefresh,
+                    modifier = Modifier.focusRequester(refreshFocusRequester)
                 )
             }
         }
@@ -421,7 +436,10 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
 private fun ItemFilterField(
     value: String,
     onValueChange: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    gridFocusRequester: FocusRequester,
+    railFocusRequester: FocusRequester,
+    refreshFocusRequester: FocusRequester
 ) {
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -455,6 +473,11 @@ private fun ItemFilterField(
             modifier = Modifier
                 .width(FILTER_FIELD_WIDTH)
                 .focusRequester(focus)
+                .focusProperties {
+                    left = railFocusRequester
+                    right = refreshFocusRequester
+                    down = gridFocusRequester
+                }
                 .dpadFieldNavigation(focusManager)
         )
         // **Only once there is something to clear, and flush against the field.**

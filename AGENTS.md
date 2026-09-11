@@ -50,6 +50,11 @@ without executing something, say so and stop rather than guessing.
 
 ## Workflow skills
 
+- Before committing, use a focused, meaningful branch name that describes the
+  batch (for example, `feat/crash-diagnostics-and-qa`). Follow normal GitHub
+  hygiene: keep commits coherent and descriptively named, never commit directly
+  to a broad or unrelated branch, and do not push or open a PR unless the owner
+  explicitly asks.
 - Use the installed gstack skills when they match the work: planning/reprioritizing
   before a dense batch, engineering review after implementation, and QA only
   after explicit deployment/emulator approval. Repository-specific constraints

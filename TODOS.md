@@ -519,7 +519,7 @@ user pressed anything".
 **Worth a test, not just a fix.** "Does this screen have a focus owner when it opens" is
 one assertion per screen and would have caught this — T-T2.
 
-## Q-24 — Every text field is a horizontal dead end — **FIXED, unverified on-emulator**
+## Q-24 — Every text field is a horizontal dead end — **FIXED IN CODE, RECHECK PENDING**
 **Severity: High. Reported by the user 2026-09-10.**
 `ui/common/DpadField.kt`, `ui/browse/CategoryRail.kt`
 
@@ -548,6 +548,14 @@ field, because the 2D search scores the header's Refresh as a fine candidate to 
 
 **The rule this settles:** the rail is one pane, and which row of it focus happens to be
 on must never change what crossing to the content means.
+
+**QA regression found 2026-09-11:** the expanded item-filter field still trapped
+Up, Down, Left, Right, and Back on the field. The generic modifier had no valid
+2D destination in that header geometry, and the documented Back-to-close behavior was
+not wired. The code fix gives the field explicit Left → rail, Right → Refresh, and
+Down → grid requesters, and installs an enabled Back handler that closes and clears the
+filter. Debug and release unit suites pass (151 tests); emulator recheck is pending fresh
+deployment approval.
 
 ## Q-23 — Sign out renders as an empty focus frame — **FIXED, verified**
 **Severity: High. Found 2026-09-10 on-emulator, while verifying Q-21/Q-22.**
