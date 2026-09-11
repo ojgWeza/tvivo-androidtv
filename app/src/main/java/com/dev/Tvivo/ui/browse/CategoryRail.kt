@@ -197,7 +197,7 @@ private fun RailRow(
         focused -> Palette.Accent
         // Last-active state: when focus leaves the rail for the grid, the row the user
         // came from stays marked, or they lose their place entirely.
-        selected -> Palette.Elevated
+        selected -> Palette.Accent.copy(alpha = 0.40f)
         else -> Palette.Surface
     }
     val textColor = if (focused) Palette.OnAccent else Palette.Ink

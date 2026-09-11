@@ -168,7 +168,7 @@ fun ContentGrid(
                 }
             }
             .focusGroup(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
@@ -269,8 +269,18 @@ private fun StreamCard(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
-            }
+            } else if (item != null && cardShape == CardShape.CHANNEL) {
+                // A missing logo is panel data, not an empty card. Preserve the artwork
+                // bounds and give the channel a legible, stable fallback at ten feet.
+                Text(
+                    text = item.title.firstOrNull()?.uppercase() ?: "•",
+                    color = Palette.Ink,
+                    style = TvType.headline,
+                    maxLines = 1,
+                    modifier = Modifier.align(Alignment.Center)
+                )
 
+            }
             // **Both corner badges share one row, top-start.** The provider watermark on
             // this panel's art sits top-end, so that corner is unusable, and two
             // independently-aligned badges in the same corner would overlap on any card
@@ -355,6 +365,7 @@ private fun StreamCard(
                         color = Palette.Ink,
                         style = TvType.label,
                         maxLines = 2,
+                        minLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }

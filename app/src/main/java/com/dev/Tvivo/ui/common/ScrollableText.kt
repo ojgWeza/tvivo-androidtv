@@ -84,6 +84,7 @@ fun ScrollableText(
     // before) and only the *focusability* is conditional, which is the part that has a
     // cost in traversal.
     val overflows = scroll.maxValue > 0 && scroll.maxValue != Int.MAX_VALUE
+    val direction = paragraphDirection(text)
 
     // A block that stops overflowing (shorter plot loaded into the same slot) must not
     // keep focus it can no longer justify.
@@ -95,7 +96,10 @@ fun ScrollableText(
         Text(
             text = text,
             color = color,
-            style = style,
+            style = style.copy(
+                textDirection = direction,
+                textAlign = paragraphAlignment(text)
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = maxHeight)

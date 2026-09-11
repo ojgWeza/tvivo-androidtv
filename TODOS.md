@@ -418,18 +418,18 @@ Visual/content findings from the report-only pass, none of which were in the fix
 Full report with screenshots: `.gstack/qa-reports/` (gitignored — it contains account
 details visible in the UI).
 
-## QA-3 — Arabic description paragraphs resolve LTR, so the last line hangs on the wrong edge
+## QA-3 — Arabic description paragraphs resolve LTR, so the last line hangs on the wrong edge — **IMPLEMENTED, emulator verification pending**
 **Severity: Medium.** Glyph order and bidi-isolation of embedded Latin runs are both correct;
 the *paragraph direction* is not, so a short final line aligns left instead of flush right.
 Reproduces on the movie pre-run page and the episode-picker header. Same class as
 `rtl-title-truncation-needs-display-column`, but in the body text rather than the title.
 
-## QA-4 — The focused grid card scrolls flush against the bottom edge and is clipped
+## QA-4 — The focused grid card scrolls flush against the bottom edge and is clipped — **IMPLEMENTED, emulator verification pending**
 **Severity: Medium.** Scrolling down keeps the focused card as the last visible row with its
 lower portion cut off, and the row above the viewport renders as a bare strip of titles with
 no poster. Worse on an overscanning TV.
 
-## QA-5 — Live channel cards with no logo render as bare empty rectangles
+## QA-5 — Live channel cards with no logo render as bare empty rectangles — **IMPLEMENTED, emulator verification pending**
 **Severity: Low.** 13 of 15 cards on the Live TV landing had no artwork and no fallback — no
 channel initial, no generic glyph. May be upstream absence; the empty state is unhandled
 either way. The same gap shows on the live pre-run page, now that its frame is the right shape.
@@ -439,7 +439,7 @@ either way. The same gap shows on the live pre-run page, now that its frame is t
 it, so the overlay is inconsistent card to card, and the scrim is not strong enough over
 saturated art. Titles also break mid-word (`BTS.The.Retur` / `n.2026`).
 
-## QA-7 — The rail's "last-active" tint is very close to invisible
+## QA-7 — The rail's "last-active" tint is very close to invisible — **IMPLEMENTED, emulator verification pending**
 **Severity: Low.** The two-state contract (focus frame + last-active) is implemented, but the
 tint is only a few percent lighter than the rail background, so when focus is elsewhere it is
 hard to tell which category the grid belongs to. Same on the episode picker's season list.
