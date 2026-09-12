@@ -65,6 +65,7 @@ fun ContentGrid(
     cardShape: CardShape,
     /** The rail's RIGHT target; a focus group forwards it to its first focusable card. */
     gridFocusRequester: FocusRequester,
+    itemFilterFocusRequester: FocusRequester? = null,
     /** OK on a card. Opens the pre-run page — it has not started a stream since the
      *  detail screen landed, and the old name said otherwise. */
     onActivate: (BrowseItem) -> Unit,
@@ -187,8 +188,9 @@ fun ContentGrid(
                 modifier = if (isRestoreTarget) {
                     Modifier.focusRequester(restoreRequester)
                 } else {
-                    Modifier
-                },
+                Modifier
+            },
+                itemFilterFocusRequester = itemFilterFocusRequester.takeIf { index < 5 },
                 onActivate = { item?.let(onActivate) },
                 onLongPress = { item?.let(onContextMenu) },
                 onFocused = {
@@ -223,6 +225,7 @@ private fun StreamCard(
     item: BrowseItem?,
     cardShape: CardShape,
     modifier: Modifier = Modifier,
+    itemFilterFocusRequester: FocusRequester? = null,
     onActivate: () -> Unit,
     onLongPress: () -> Unit,
     onFocused: () -> Unit
@@ -245,6 +248,9 @@ private fun StreamCard(
                     focused = st.isFocused
                     if (st.isFocused) onFocused()
                 }
+                .focusProperties {
+                    itemFilterFocusRequester?.let { up = it }
+                }
                 // Placeholders stay focusable but inert — non-focusable placeholders make
                 // D-pad traversal skip a hole and jump unpredictably.
                 .combinedClickable(
@@ -252,7 +258,7 @@ private fun StreamCard(
                     onLongClick = { if (item != null) onLongPress() }
                 )
         ) {
-            if (item?.imageUrl != null) {
+            if (!item?.imageUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(item.imageUrl)
@@ -366,6 +372,7 @@ private fun StreamCard(
                         style = TvType.label,
                         maxLines = 2,
                         minLines = 2,
+                        softWrap = true,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -381,6 +388,7 @@ private fun StreamCard(
                 color = if (focused) Palette.Ink else Palette.Dim,
                 style = TvType.label,
                 maxLines = 2,
+                softWrap = true,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()

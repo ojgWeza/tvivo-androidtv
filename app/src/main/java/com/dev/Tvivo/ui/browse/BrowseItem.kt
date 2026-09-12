@@ -54,7 +54,11 @@ enum class CardShape { POSTER, CHANNEL }
  * Locale-independent on purpose (`Locale.ROOT`): this is a number, and an Arabic locale
  * rendering it in Eastern Arabic numerals beside Latin catalog titles reads as a glitch.
  */
-fun Double.asRatingLabel(): String = String.format(java.util.Locale.ROOT, "%.1f", this)
+fun Double.asRatingLabel(): String = if (this % 1.0 == 0.0) {
+    String.format(java.util.Locale.ROOT, "%.0f", this)
+} else {
+    String.format(java.util.Locale.ROOT, "%.1f", this)
+}
 
 fun VodStreamEntity.toBrowseItem() = BrowseItem(
     id = streamId,

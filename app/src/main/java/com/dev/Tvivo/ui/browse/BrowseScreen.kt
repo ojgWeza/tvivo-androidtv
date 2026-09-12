@@ -79,6 +79,7 @@ fun BrowseScreen(
     val scope = rememberCoroutineScope()
     val gridFocusRequester = remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
+    val itemFilterFocusRequester = remember { FocusRequester() }
 
     BackHandler(enabled = state.isItemFilterOpen) {
         viewModel.setItemFilterOpen(false)
@@ -188,6 +189,7 @@ fun BrowseScreen(
                 onItemFilterChanged = viewModel::onItemFilterChanged,
                 onItemFilterOpenChanged = viewModel::setItemFilterOpen,
                 gridFocusRequester = gridFocusRequester,
+                itemFilterFocusRequester = itemFilterFocusRequester,
                 railFocusRequester = railFocusRequester
             )
 
@@ -222,6 +224,7 @@ fun BrowseScreen(
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
+                    itemFilterFocusRequester = itemFilterFocusRequester,
                     onActivate = { item ->
                         viewModel.pendingFocusItemId = item.id
                         onOpenDetail(item)
@@ -295,6 +298,7 @@ private fun Header(
     onItemFilterChanged: (String) -> Unit,
     onItemFilterOpenChanged: (Boolean) -> Unit,
     gridFocusRequester: FocusRequester,
+    itemFilterFocusRequester: FocusRequester,
     railFocusRequester: FocusRequester
 ) {
     val refreshFocusRequester = remember { FocusRequester() }
@@ -380,6 +384,7 @@ private fun Header(
                         onValueChange = onItemFilterChanged,
                         onClose = { onItemFilterOpenChanged(false) },
                         gridFocusRequester = gridFocusRequester,
+                        itemFilterFocusRequester = itemFilterFocusRequester,
                         railFocusRequester = railFocusRequester,
                         refreshFocusRequester = refreshFocusRequester
                     )
@@ -459,10 +464,11 @@ private fun ItemFilterField(
     onValueChange: (String) -> Unit,
     onClose: () -> Unit,
     gridFocusRequester: FocusRequester,
+    itemFilterFocusRequester: FocusRequester,
     railFocusRequester: FocusRequester,
     refreshFocusRequester: FocusRequester
 ) {
-    val focus = remember { FocusRequester() }
+    val focus = itemFilterFocusRequester
     val focusManager = LocalFocusManager.current
     LaunchedEffect(Unit) { focus.requestFocus() }
 
