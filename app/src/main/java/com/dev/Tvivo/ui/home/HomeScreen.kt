@@ -20,12 +20,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +43,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Text
 import com.dev.Tvivo.R
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.common.ConfirmDialog
 import com.dev.Tvivo.ui.common.IconPill
 import com.dev.Tvivo.ui.common.tvFocusFrame
@@ -229,12 +234,29 @@ private fun HomeTile(
     onClick: () -> Unit
 ) {
     Card(
-        onClick = onClick,
+        onClick = {
+            // This is deliberately before [onClick]: when a handset tap appears inert,
+            // Diagnostics distinguishes a Card callback that never ran from a route that
+            // failed to change after it did.
+            DiagnosticLog.info("navigation", "Home tile click: $label")
+            onClick()
+        },
         colors = CardDefaults.colors(containerColor = Palette.Elevated),
         // tv-material3 draws its own grey focus outline. Left on, the tile shows two
         // competing rings; the app has exactly one focus indicator (Q-3).
         border = CardDefaults.border(focusedBorder = Border.None),
-        modifier = modifier.height(180.dp).tvFocusFrame()
+        modifier = modifier
+            .height(180.dp)
+            .onFocusChanged {
+                if (it.isFocused) DiagnosticLog.info("focus", "Home tile focused: $label")
+            }
+            .pointerInput(label) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    DiagnosticLog.info("touch", "Pointer press on Home tile: $label")
+                }
+            }
+            .tvFocusFrame()
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Image(

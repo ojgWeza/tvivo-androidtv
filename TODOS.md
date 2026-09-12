@@ -146,11 +146,10 @@ is worth guessing at until it exists.**
 then `adb logcat -d AndroidRuntime:E *:S` right after the crash. Everything below
 is a candidate list to check the trace against, not a diagnosis.
 
-- **Verified in `AndroidManifest.xml`:** `MainActivity`'s only intent filter is
-  `LEANBACK_LAUNCHER` — there is no `android.intent.category.LAUNCHER` — and
-  `android.software.leanback` is declared `required="true"`. So the app has no
-  home-screen icon on a phone at all, and the installer's `Open` is reaching the
-  activity by a different route than a normal launch would.
+- **Updated 2026-09-12:** `MainActivity` now has both `LEANBACK_LAUNCHER` and
+  `LAUNCHER` intent filters, and `android.software.leanback` is optional. A
+  sideloaded build therefore has a normal phone-launcher entry; this removes one
+  unsupported-entry-path variable but does not explain a crash without its trace.
 - `androidx.tv.material3` is a TV surface library; nothing guarantees it behaves
   on a handset form factor.
 - Layouts are built to a fixed 1920x1080 10-foot geometry (`docs/ui-scope.md`),
@@ -192,13 +191,72 @@ Implement an adaptive login presentation:
 - Preserve ordinary touch interaction for handset users.
 - Clear or redirect text-field focus when the keyboard is dismissed; do not rely
   on `focusRestorer()`.
+- Add a standard `android.intent.category.LAUNCHER` activity entry and make the
+  Android TV feature declaration optional, so the installed app appears in a
+  phone launcher/application list as well as on Android TV.
+- Keep the full "Tvivo" label in handset launcher/application lists. The resource
+  label is already `Tvivo`; `tvivo-name-truncation.png` instead exposed the login
+  wordmark being drawn beneath the status bar. Handset login now applies safe-drawing
+  padding before its own content padding.
+- Capture from 2026-09-12 (`tvivo-login-current.png`) shows the handset in
+  portrait, but the rendered Tvivo content still uses the wide TV rail/card
+  presentation. Ensure the mobile login route is explicitly vertical and
+  handset-sized rather than inheriting TV geometry.
+- After successful login on a handset, restore landscape orientation for the
+  browse/home experience so rail icons and wide cards render correctly; return
+  to portrait for the login route.
+- Mi 10 touch QA (2026-09-12): Live TV, Series, and Movies nodes report
+  `clickable=true`/`enabled=true`, but taps did not visibly navigate. The
+  activity still requests `SCREEN_ORIENTATION_LANDSCAPE` while the handset UI
+  reports a portrait 1080x2120 surface, so coordinate/orientation mapping or
+  the touch targets must be fixed and verified on-device.
+- Follow-up QA: do not treat orientation as the root-cause explanation without
+  proving it. In the landscape UI dump, each tile has a concrete clickable bounds
+  (`Live TV` [354,462]-[870,904], `Movies` [958,462]-[1473,904], `Series`
+  [1561,462]-[2076,904]); an injected tap at the apparent Live TV centre did
+  not change route. Instrument the tile callbacks/route state and reproduce
+  with Compose UI touch tests plus on-device input to determine whether the
+  failure is coordinate translation, `androidx.tv.material3.Card` touch handling
+  on phones, or a callback/state bug.
+- Add an in-app diagnostic log facility that records navigation/touch events,
+  focus transitions, orientation and window metrics, route changes, and caught
+  exceptions. Persist a bounded, user-viewable/exportable log so handset issues
+  can be inspected after they occur without an attached ADB session.
+- Extend click diagnostics through the complete post-click path: log touch
+  receipt and tile name, `onSelect` invocation, requested content type/route,
+  `MainActivity` route-state mutation, destination composition/loading or error,
+  and any rejected transition or exception.
+- Complete the diagnostic implementation and validation: define a stable
+  `Tvivo` log schema (timestamp, screen, event, payload, severity), add a
+  bounded persistent logger and a user-visible/exportable diagnostics view,
+  include app/build/device/orientation/window metadata, and capture uncaught
+  exceptions with stack traces. Instrument every interactive surface and
+  navigation boundary (login fields/actions, home tiles, rail/category items,
+  detail/play actions, back/account/refresh/exit), plus ViewModel/API/Room and
+  image-loading failures. Log event ordering and elapsed time, redact
+  credentials/tokens/provider secrets, verify logs survive process restart, and
+  add unit/instrumented tests proving events are emitted and routes complete.
+  Rebuild and exercise each control on both Android TV and the Mi 10, export the
+  log after a failed interaction, and document the exact reproduction steps.
 
 **Implemented:** compact non-TV devices use an available-width vertical form with
 IME-aware scrolling; credentials stack, action labels compact, and closing the
 handset keyboard clears field focus. Android TV retains its fixed, D-pad-first
-layout and focus behaviour. `MainActivity` no longer forces landscape so a phone
-can use its normal orientation. Needs real-handset validation for touch, IME and
-rotation; no emulator/deployment was run.
+layout and focus behaviour. On handsets `Login` is portrait and authenticated
+catalog routes are landscape; `MainActivity` handles the configuration change so
+the in-progress login/account-switch state is retained. The manifest exposes a
+standard phone launcher entry and makes Leanback optional. Needs real-handset
+validation for launch, touch, IME, and rotation; no emulator/deployment was run.
+
+**Follow-up implementation, 2026-09-12:** `DiagnosticLog` now persists its
+bounded 200-entry, credential-safe log across restarts and exposes `Export log`
+and `Clear log` from Diagnostics. It records route changes, requested orientation,
+configuration/window metrics, Home-tile pointer presses, Card click callbacks,
+and Home focus transitions. This creates the evidence chain needed to distinguish
+a handset coordinate/input problem from a Card callback or route-state failure.
+`HomeScreenTouchTest` now exercises a real Compose touch click through the Live
+tile callback; it and the real-handset reproduction remain unrun/unverified until
+an approved device/emulator session.
 
 ## Q-15 — The icon pill draws a second, rectangular focus indicator — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**

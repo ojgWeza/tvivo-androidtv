@@ -1,5 +1,9 @@
 package com.dev.Tvivo
 
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -13,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -39,8 +44,6 @@ import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
-import android.content.Intent
-import android.os.Build
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.detail.ItemDetailScreen
 import com.dev.Tvivo.ui.theme.Palette
@@ -63,6 +66,7 @@ class MainActivity : ComponentActivity() {
             "app",
             "Started, version ${BuildConfig.VERSION_NAME} on API ${Build.VERSION.SDK_INT}"
         )
+        logWindowMetrics("Started")
         if (BuildConfig.DEBUG) CodecProbe.log()
         // Phase 5. Idempotent and cheap; scheduling here rather than in an Application
         // subclass keeps it in the one place that already owns start-up ordering.
@@ -77,6 +81,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        logWindowMetrics("Configuration changed")
+    }
+
+    private fun logWindowMetrics(event: String) {
+        val metrics = resources.displayMetrics
+        val orientation = when (resources.configuration.orientation) {
+            Configuration.ORIENTATION_LANDSCAPE -> "landscape"
+            Configuration.ORIENTATION_PORTRAIT -> "portrait"
+            else -> "undefined"
+        }
+        DiagnosticLog.info(
+            "window",
+            "$event: $orientation, ${metrics.widthPixels}x${metrics.heightPixels}px"
+        )
     }
 }
 
@@ -145,12 +167,56 @@ private sealed interface Route {
     data class Diagnostics(val credentials: Credentials) : Route
 }
 
+private fun Route.diagnosticName(): String = when (this) {
+    is Route.Loading -> "Loading"
+    Route.Login -> "Login"
+    is Route.Home -> "Home"
+    is Route.Browse -> "Browse ${type.name}"
+    is Route.ItemDetail -> "Detail ${type.name}"
+    is Route.SeriesDetail -> "Series detail"
+    is Route.Settings -> "Settings"
+    is Route.Subscription -> "Subscription"
+    is Route.Diagnostics -> "Diagnostics"
+}
+
 @Composable
 private fun TvivoApp() {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isTelevision = configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
     val store = remember { CredentialsStore(context.applicationContext) }
     var route by remember {
         mutableStateOf<Route>(Route.Loading(0.15f, "Starting…"))
+    }
+
+    LaunchedEffect(route) {
+        DiagnosticLog.info("navigation", "Route: ${route.diagnosticName()}")
+    }
+
+    // Handset login is a touch-first portrait form; the catalog is designed around wide
+    // cards and rail navigation, so it returns to landscape once an account is active.
+    // MainActivity handles these configuration changes itself so changing orientation does
+    // not recreate the activity and discard an in-progress sign-in or account switch.
+    LaunchedEffect(isTelevision, route) {
+        val activity = context as? android.app.Activity ?: return@LaunchedEffect
+        val requestedOrientation = when {
+            isTelevision -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            route is Route.Login || route is Route.Loading ->
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        if (activity.requestedOrientation != requestedOrientation) {
+            activity.requestedOrientation = requestedOrientation
+            val orientation = if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) {
+                "portrait"
+            } else if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
+                "landscape"
+            } else {
+                "system default"
+            }
+            DiagnosticLog.info("window", "Requested $orientation for ${route.diagnosticName()}")
+        }
     }
 
     // Credentials are entered once; every later launch resolves them off the main

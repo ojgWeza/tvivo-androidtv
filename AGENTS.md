@@ -37,6 +37,13 @@ without executing something, say so and stop rather than guessing.
 - Stop processes started for a failed attempt before handing off, and state
   plainly whether the requested artifact was produced.
 
+## Storage and search policy
+
+- **Treat C: as space-constrained.** Put new tools, SDKs, build caches, Android
+  user state, temporary artifacts, and other setup on D: by default. Search D:
+  first; inspect C: only when the item cannot reasonably be there or the user
+  explicitly asks for it. Do not create new caches or install tooling on C:.
+
 ## Deployment, emulator, and memory rules
 
 - **Never deploy/install the APK or launch an emulator test without asking the

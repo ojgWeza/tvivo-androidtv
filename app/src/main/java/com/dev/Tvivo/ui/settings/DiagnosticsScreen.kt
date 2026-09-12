@@ -14,8 +14,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.theme.Palette
@@ -31,6 +33,7 @@ import com.dev.Tvivo.ui.theme.TvType
 @Composable
 fun DiagnosticsScreen() {
     val entries by DiagnosticLog.entries.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -41,12 +44,23 @@ fun DiagnosticsScreen() {
         Text(text = "Diagnostics", color = Palette.Ink, style = TvType.display)
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "What this app has done since it started. Newest first. " +
-                "Cleared when the app closes.",
+            text = "Sanitized activity record. Newest first; retained across restarts. " +
+                "Export never includes credentials, URLs, or titles.",
             color = Palette.Dim,
             style = TvType.body
         )
         Spacer(Modifier.height(24.dp))
+
+        Row {
+            Button(onClick = { DiagnosticLog.export(context) }) {
+                Text("Export log")
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = DiagnosticLog::clear) {
+                Text("Clear log")
+            }
+        }
+        Spacer(Modifier.height(20.dp))
 
         if (entries.isEmpty()) {
             // Not an error state: an empty log on a healthy app is the normal case.

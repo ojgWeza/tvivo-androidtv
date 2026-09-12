@@ -52,7 +52,7 @@ app/
 │   └── player/
 │       └── PlayerActivity.kt         // Media3 PlayerView via AndroidView
 ├── diagnostics/
-│   ├── DiagnosticLog.kt              // on-device redacted ring buffer
+│   ├── DiagnosticLog.kt              // persisted, exportable on-device redacted ring buffer
 │   └── CrashDiagnostics.kt            // one sanitized crash across process death
 ├── sync/
 │   ├── CatalogSyncer.kt              // full-catalog tier: streamed parse + generations
@@ -78,11 +78,15 @@ Requirements:
 
 ## Diagnostics and crash recovery
 
-`DiagnosticLog` keeps routine operational events in a bounded in-memory ring
-buffer. `CrashDiagnostics`, installed from `TvivoApplication` before any
-Activity starts, is the sole persistence exception: an uncaught exception is
-serialized synchronously to one private file, the prior Android handler is then
-invoked, and the file is consumed and deleted on the next process start.
+`DiagnosticLog` keeps the newest 200 sanitized operational events in a bounded
+app-private ring buffer that is persisted across process restarts. Diagnostics
+can export a plain-text snapshot through the Android share sheet; credentials,
+URLs, and catalogue titles are never logged or exported. It records navigation,
+focus, touch/click dispatch, and window/orientation evidence alongside routine
+operational events. `CrashDiagnostics`, installed from `TvivoApplication` before
+any Activity starts, additionally serializes an uncaught exception synchronously
+to one private file; the prior Android handler is then invoked, and that crash
+report is consumed and deleted on the next process start.
 
 The persisted form is deliberately not `stackTraceToString()`: exception
 messages may contain request URLs and therefore credentials. It allowlists only

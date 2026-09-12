@@ -1,6 +1,8 @@
 package com.dev.Tvivo.auth
 
 import android.content.res.Configuration
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,8 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.rememberScrollState
-import androidx.compose.foundation.layout.verticalScroll
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,6 +50,7 @@ import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvFocusFrame
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
 
@@ -121,6 +123,7 @@ fun LoginScreen(
         // The IME covers the button row and the error line. Leaving it open means the
         // user submits and then watches nothing happen.
         keyboard?.hide()
+        DiagnosticLog.info("navigation", "Login sign-in requested")
         viewModel.submit()
     }
 
@@ -144,6 +147,9 @@ fun LoginScreen(
             .then(
                 if (isHandset) {
                     Modifier
+                        // Edge-to-edge is required for Compose to observe IME insets, but
+                        // a handset status bar must not overlay the wordmark or first field.
+                        .safeDrawingPadding()
                         .imePadding()
                         .verticalScroll(rememberScrollState())
                 } else {
@@ -205,6 +211,9 @@ fun LoginScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(serverFocus)
+                    .onFocusChanged {
+                        if (it.isFocused) DiagnosticLog.info("focus", "Login server field focused")
+                    }
                     .dpadFieldNavigation(focusManager)
             )
 
@@ -235,6 +244,9 @@ fun LoginScreen(
                     colors = fieldColors(),
                     modifier = credentialsModifier
                         .focusRequester(usernameFocus)
+                        .onFocusChanged {
+                            if (it.isFocused) DiagnosticLog.info("focus", "Login username field focused")
+                        }
                         .dpadFieldNavigation(focusManager)
                 )
 
@@ -263,6 +275,9 @@ fun LoginScreen(
                     colors = fieldColors(),
                     modifier = credentialsModifier
                         .focusRequester(passwordFocus)
+                        .onFocusChanged {
+                            if (it.isFocused) DiagnosticLog.info("focus", "Login password field focused")
+                        }
                         .dpadFieldNavigation(focusManager)
                 )
             }
@@ -309,7 +324,10 @@ fun LoginScreen(
                     Text(if (state.isSubmitting) "Signing in…" else "Sign in")
                 }
                 Button(
-                    onClick = viewModel::onTogglePasswordVisibility,
+                    onClick = {
+                        DiagnosticLog.info("interaction", "Login password visibility toggled")
+                        viewModel.onTogglePasswordVisibility()
+                    },
                     modifier = Modifier.tvFocusFrame()
                 ) {
                     Text(
@@ -321,7 +339,10 @@ fun LoginScreen(
                     )
                 }
                 Button(
-                    onClick = viewModel::onClear,
+                    onClick = {
+                        DiagnosticLog.info("interaction", "Login credentials cleared")
+                        viewModel.onClear()
+                    },
                     modifier = Modifier.tvFocusFrame()
                 ) {
                     Text("Clear")
