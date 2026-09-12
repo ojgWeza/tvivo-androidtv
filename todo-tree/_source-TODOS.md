@@ -234,6 +234,24 @@ Implement an adaptive login presentation:
   category and right/content-panel item to the default safe selection, rather
   than retaining stale focus/selection against replaced data. Verify for Live,
   Movies, and Series, including an in-progress refresh.
+- Mi 10 browse layout: the rightmost content column is clipped. Measure the
+  usable window excluding system bars, apply insets, and reclaim the gap between
+  rail and grid before reducing card sizes; keep horizontal scrolling as fallback.
+- Mi 10 player layout: playback is not full-screen within the usable window.
+  Detect window bounds minus system bars, support deliberate immersive fullscreen,
+  and verify portrait/landscape handset layouts separately from Android TV.
+- Series detail UX: replace the ambiguous episode-list play affordance with a
+  clearly labelled `Episodes`/`View episodes` action and obvious focus state.
+- Player controls: replace "Back to exit" text with a compact upper-left Back
+  button; place Next/Previous episode controls in the upper-right. Keep
+  play/pause, seek, progress, audio, and subtitles discoverable with touch/D-pad.
+- Player resilience: after device sleep/wake, recreate the player surface without
+  crashing, preserve position, and pause playback rather than forcing an exit;
+  log lifecycle/decoder failures with redacted stack traces.
+- In-player navigation: add an Episodes button that opens a dismissible overlay
+  episode list, allowing episode selection without leaving the player.
+- Consider a Home Settings button for configurable layout/orientation, card
+  density, visible rails, and playback preferences, with safe defaults.
 
 **Implemented 2026-09-12; device verification pending:** Browse now measures its
 content column from the width remaining after the fixed rail, rather than taking
@@ -1106,6 +1124,90 @@ storage cost. Do not disable placeholders or stable keys: deep focus restoration
 depends on them. Treat the latency budgets as regression gates, with
 Macrobenchmark or instrumented measurements on the emulator and final
 confirmation on the physical TV after explicit deployment approval.
+
+## N-10 — Handset touch activation path needs form-factor flexibility
+**Cost: small. Deferred until other handset form factors are supported.**
+
+The 2026-09-12 handset Home tile fix extracts `detectTapGestures` specifically
+for non-TV devices and wires it through `onSelect` alongside the Android TV `Card`
+click path. This works for phones but assumes all non-TV devices behave the same
+way. If tablet support is added later, the touch/D-pad/focus contract may differ
+again, and a blanket "if not TV, use touch workaround" will need revisiting.
+
+**Rule for future form factors:** do not generalize a handset touch workaround to
+other non-TV devices without device evidence. Verify touch input paths, focus
+traversal, and card activation on each new form factor independently before
+merging the code.
+
+**Current scope:** phone-only right now; defer tablet/other form factors until
+they are actively supported.
+
+## N-11 — Diagnostic log verbosity on production
+**Cost: small. Production-facing decision, not code.**
+
+2026-09-12 refactored `DiagnosticLog` with a structured schema and added call
+sites at every navigation/sync/failure point. The log is now queryable and safe
+to export (redaction is enforced in the logger, not at call sites). On the
+emulator, a healthy 45-minute session produces only four lines (app start + three
+TTL skips). That is correct and expected.
+
+On a real TV, the log is persistent and bounded (200 entries); a longer session
+or one with background sync + user navigation may fill it faster. Measure actual
+verbosity on the physical TV during Phase 5 validation. If routine events (e.g.,
+category selection, image loading, non-error sync progress) are worth recording,
+decide that explicitly as part of T-D4 (Decide whether Diagnostics should record
+routine events) rather than retroactively adding call sites.
+
+**Current state:** bounded, structured, and safe; validate density on hardware.
+
+## N-12 — Database size profiling and optimization
+**Cost: medium. Measurement first, optimization only from observed data.**
+
+The local catalog holds 48,780 VOD rows, 6,425 live channels, and 13,279 series
+shows, plus per-show episode lists (some shows have 100+ episodes). Room caches
+poster images downsampled to card size (220×330 and 220×124 px). The app does
+not yet have a manifest size constraint or a user-visible storage footprint
+warning.
+
+Before Phase 5 closes, measure the actual database footprint on the real panel:
+total `.db` file size, per-table sizes, image cache size, and whether the TTL
++generation logic produces dead rows or orphaned image blobs. Add a
+`diagnostics/DbMetrics` query that reports these to the Diagnostics screen so
+the user can see what is consuming space.
+
+Check for: rows retained past the TTL window (generation flips should clean them,
+but verify the migration is correct), orphaned image files if the image loader
+ever fails, and index bloat from the per-content-type and per-category structures.
+If the database exceeds a reasonable threshold on real hardware (e.g., >500 MB),
+decide whether to add explicit user-triggered cleanup, reduce the full-catalog
+sync window, or implement incremental/differential sync instead of replace-all.
+
+**Current state:** no profiling or optimization done; measurement is prerequisite.
+
+## N-13 — RAM usage profiling and heap pressure
+**Cost: medium. Empirical measurement on the physical TV is essential.**
+
+The app holds the full in-memory `PagingData` for each category's grid, plus the
+Compose UI tree for the rail, detail pages, and player. With 9,750-row categories
+and simultaneous image-loading on a TV with 1–2 GB heap, memory pressure during
+scroll/filter operations and background sync is unverified.
+
+Profile on the physical TV during Phase 5:
+- Measure heap size at launch, after catalog sync completes, and during active
+  browsing (rail changes, grid scroll, category filter, detail page open, player).
+- Capture GC frequency and pause times, especially during scroll and while a
+  background sync writes to the database.
+- Check whether placeholders or stable keys cause memory bloat (they should not,
+  but confirm on real hardware).
+- Profile image loader concurrency — how many images load simultaneously, and
+  whether the downsampling/caching pipeline is a bottleneck or a pressure point.
+
+If GC pauses or OOM behavior are observed, decide whether to: cap the in-memory
+PagingData window per category, implement LRU eviction for off-screen image
+caches, or reduce background sync concurrency when the heap is above a threshold.
+
+**Current state:** no profiling done; the app is "responsive on the emulator" but
+heap constraints are unknown on real hardware.
 
 ---
 

@@ -1,8 +1,10 @@
 # AGENTS.md — for Codex and any non-Claude agent
 
-`CLAUDE.md` in this directory is the full project brief. **Read it before
-proposing anything.** This file is the short version of what will break if you
-do not, plus what you are and are not expected to do here.
+`CLAUDE.md` in this directory is the compact project-bible index. **Read it before
+proposing anything**, then load only relevant `bible-detail\claude-*` sections.
+Read `todo-tree\00-overview.md` at session start and the relevant TODO section
+before changing tracked work. This file remains the short version of what will
+break if you do not, plus what you are and are not expected to do here.
 
 ## What you are being asked to do on this machine
 
