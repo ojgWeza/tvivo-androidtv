@@ -291,18 +291,23 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
         val exo = player
         val repo = playbackState
         val id = itemId
         val type = contentType
-        if (exo != null && repo != null && id != null && type != null) {
-            val position = exo.currentPosition
-            val duration = exo.duration.takeIf { it > 0 } ?: 0L
-            // The Activity is going away, so this cannot ride on lifecycleScope.
-            kotlinx.coroutines.runBlocking { repo.savePosition(type, id, position, duration) }
-        }
+        val position = exo?.currentPosition
+        val duration = exo?.duration?.takeIf { it > 0 } ?: 0L
+
+        // A direct Xtream stream occupies an account slot until Media3 tears its media
+        // source down. Do that before the synchronous Room write below: a viewer can
+        // leave this player and immediately start another stream on the same account.
         release()
+        super.onStop()
+
+        if (exo != null && repo != null && id != null && type != null) {
+            // The Activity is going away, so this cannot ride on lifecycleScope.
+            kotlinx.coroutines.runBlocking { repo.savePosition(type, id, position ?: 0L, duration) }
+        }
     }
 
     override fun onDestroy() {
@@ -314,12 +319,16 @@ class PlayerActivity : ComponentActivity() {
         firstFrameWatchdog?.cancel()
         bufferingWatchdog?.cancel()
         positionTicker?.cancel()
-        player?.release()
+        val exo = player
         player = null
         // Dropped with the player: it holds a reference back to it, and `onStop` can run
         // more than once before the Activity is finished.
         playerView?.player = null
         playerView = null
+        // stop() releases the loaded media and its network resources before release()
+        // disposes the player. The explicit boundary matters for one-slot accounts.
+        exo?.stop()
+        exo?.release()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 

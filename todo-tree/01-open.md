@@ -24,6 +24,29 @@ generation flip, account scoping and the per-type table separation;
 `CatalogSyncerTest` (11) drives the full-catalog tier over MockWebServer against
 in-memory Room, including the zero-row guard for all three content types.
 
+## Next approved emulator-validation run
+
+Run this as one batch after the pending patch is built and installed. It needs
+explicit deployment approval; no automated check may open a stream.
+
+1. **QA-11 — connection teardown.** Play a movie, leave it, then immediately
+   start Live. The second launch must not report that another device is using the
+   account.
+2. **T-T2 — instrumented D-pad focus harness.** Execute the existing RIGHT and
+   DOWN escape tests.
+3. **Visual/focus fixes.** Verify QA-3..QA-7, QA-9, QA-10, Q-24, Q-25 and Q-27:
+   RTL paragraphs, grid clipping, logo fallback, title layout, rail tint, header
+   focus targets, ratings, field escapes, initial browse focus and picker Back.
+4. **Phase-5 error states.** Verify N-3 and N-4: cached browsing during an
+   unavailable network, and a clear partial-sync state with retry.
+5. **N-5 — resume after process stop.** During the same permitted playback
+   session, stop the app after a movie has progressed, reopen it and confirm the
+   saved position remains available.
+
+**Physical TV only:** live `.ts`, episode `/series/` playback, remote key-repeat,
+and the final physical-device connection-limit checks remain outside this emulator
+batch.
+
 `DESIGN.md` (T-D1) can wait — the shared `tvFocusFrame` and `BrowseItem` /
 `CardShape` now enforce most of what it would have said. Multi-account (T-A1) is
 speculative until a second panel actually exists.
@@ -44,4 +67,3 @@ wrong, and episode titles carried the `HD` token the grid strips. What is left
 is below. The durable lessons
 from the fixed ones live in `docs/ui-scope.md` and `docs/decisions.md`, not
 here — this file is for what is still open.
-

@@ -75,6 +75,29 @@ generation flip, account scoping and the per-type table separation;
 `CatalogSyncerTest` (11) drives the full-catalog tier over MockWebServer against
 in-memory Room, including the zero-row guard for all three content types.
 
+## Next approved emulator-validation run
+
+Run this as one batch after the pending patch is built and installed. It needs
+explicit deployment approval; no automated check may open a stream.
+
+1. **QA-11 — connection teardown.** Play a movie, leave it, then immediately
+   start Live. The second launch must not report that another device is using the
+   account.
+2. **T-T2 — instrumented D-pad focus harness.** Execute the existing RIGHT and
+   DOWN escape tests.
+3. **Visual/focus fixes.** Verify QA-3..QA-7, QA-9, QA-10, Q-24, Q-25 and Q-27:
+   RTL paragraphs, grid clipping, logo fallback, title layout, rail tint, header
+   focus targets, ratings, field escapes, initial browse focus and picker Back.
+4. **Phase-5 error states.** Verify N-3 and N-4: cached browsing during an
+   unavailable network, and a clear partial-sync state with retry.
+5. **N-5 — resume after process stop.** During the same permitted playback
+   session, stop the app after a movie has progressed, reopen it and confirm the
+   saved position remains available.
+
+**Physical TV only:** live `.ts`, episode `/series/` playback, remote key-repeat,
+and the final physical-device connection-limit checks remain outside this emulator
+batch.
+
 `DESIGN.md` (T-D1) can wait — the shared `tvFocusFrame` and `BrowseItem` /
 `CardShape` now enforce most of what it would have said. Multi-account (T-A1) is
 speculative until a second panel actually exists.
@@ -614,8 +637,13 @@ field wins. **If it recurs, note whether the catalog was mid-sync.**
 ## QA-10 — Whole-number ratings render with a trailing `.0` — **IMPLEMENTED, emulator verification pending**
 **Severity: Low.** Card and detail ratings render values such as `7.0` and `5.0`; whole numbers should render as `7` and `5`, while fractional ratings retain their decimal part.
 
-## QA-11 — Playback connection is not released before the next stream — **CONFIRMED on emulator 2026-09-12**
-**Severity: High.** After leaving a movie stream and starting Live playback, the panel displayed `Another device may be using this account.` No other device was active. Force-stopping Tvivo released the stale session. This is a user-visible false account-conflict failure and needs an explicit player-teardown check.
+## QA-11 — Playback connection is not released before the next stream — **IMPLEMENTED, emulator verification pending**
+**Severity: High.** After leaving a movie stream and starting Live playback, the panel displayed `Another device may be using this account.` No other device was active. Force-stopping Tvivo released the stale session.
+
+`PlayerActivity` now snapshots the VOD resume position, then detaches, stops and releases
+Media3 before writing that snapshot to Room. This removes the suspected teardown gap: the
+prior order kept the player alive during a synchronous database write without an explicit stop.
+Verify by leaving a movie and immediately starting Live in one approved emulator session.
 
 ## T-D4 — Decide whether Diagnostics should record routine events
 **Not a defect.** Every `DiagnosticLog` call site is app start, a sync lifecycle event, or a
