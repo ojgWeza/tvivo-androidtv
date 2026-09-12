@@ -5,11 +5,15 @@
    (T-D2b) are all unverifiable on the emulator, and both live and episode
    playback are shipped-but-never-executed code. This retires more risk than
    further emulator work.
-2. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
+2. **P-1 — player baseline on the physical TV.** Validate the existing player
+   before adding controls: movie, live and episode playback; seek; back; audio
+   metadata; connection teardown; error mapping; and resume after process death.
+   This is the gate for the player-control work in `62-section.md`.
+3. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
    `RefreshWorker`, on-device diagnostic log. **Take N-3 and N-4 inside this**,
    not after it — they are error states, and building the state table twice is
    the same mistake D-4/D-5 avoided.
-3. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
+4. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
    move at all until a stack trace exists on a device with no adb attached.
    **N-2 before the physical-TV session**, since that session is the only place
    an exhausted `max_connections` can be provoked on purpose.
