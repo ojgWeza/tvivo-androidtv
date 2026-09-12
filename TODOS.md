@@ -429,7 +429,7 @@ Reproduces on the movie pre-run page and the episode-picker header. Same class a
 lower portion cut off, and the row above the viewport renders as a bare strip of titles with
 no poster. Worse on an overscanning TV.
 
-## QA-5 — Live channel cards with no logo render as bare empty rectangles — **IMPLEMENTED, emulator verification pending**
+## QA-5 — Live channel cards with no logo render as bare empty rectangles — **CONFIRMED on emulator 2026-09-12**
 **Severity: Low.** 13 of 15 cards on the Live TV landing had no artwork and no fallback — no
 channel initial, no generic glyph. May be upstream absence; the empty state is unhandled
 either way. The same gap shows on the live pre-run page, now that its frame is the right shape.
@@ -451,6 +451,15 @@ a comment about "RIGHT out of the rail opened the search field instead of crossi
 grid", so the *class* of bug is known. Best hypothesis: a race where the rail has no
 categories yet, so the first D-pad press runs an origin-less 2D focus search and the header
 field wins. **If it recurs, note whether the catalog was mid-sync.**
+
+## QA-9 — Up from the first content row targets the left category filter — **CONFIRMED on emulator 2026-09-12**
+**Severity: Medium.** From the first row of the Movies grid, pressing UP focuses the left `Filter categories` field and opens the TV IME. It should transfer focus to the right-pane item-search control.
+
+## QA-10 — Whole-number ratings render with a trailing `.0` — **CONFIRMED on emulator 2026-09-12**
+**Severity: Low.** Card and detail ratings render values such as `7.0` and `5.0`; whole numbers should render as `7` and `5`, while fractional ratings retain their decimal part.
+
+## QA-11 — Playback connection is not released before the next stream — **CONFIRMED on emulator 2026-09-12**
+**Severity: High.** After leaving a movie stream and starting Live playback, the panel displayed `Another device may be using this account.` No other device was active. Force-stopping Tvivo released the stale session. This is a user-visible false account-conflict failure and needs an explicit player-teardown check.
 
 ## T-D4 — Decide whether Diagnostics should record routine events
 **Not a defect.** Every `DiagnosticLog` call site is app start, a sync lifecycle event, or a
