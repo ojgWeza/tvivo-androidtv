@@ -1,4 +1,4 @@
-## Q-24 — Every text field is a horizontal dead end — **FIXED IN CODE, RECHECK PENDING**
+## Q-24 — Every text field is a horizontal dead end — **RAIL-FILTER PATH VERIFIED ON EMULATOR 2026-09-13**
 **Severity: High. Reported by the user 2026-09-10.**
 `ui/common/DpadField.kt`, `ui/browse/CategoryRail.kt`
 
@@ -36,3 +36,7 @@ Down → grid requesters, and installs an enabled Back handler that closes and c
 filter. Debug and release unit suites pass (151 tests); emulator recheck is pending fresh
 deployment approval.
 
+**Emulator recheck 2026-09-13:** with the rail filter focused, the TV IME dismissed,
+and RIGHT pressed, focus moved into the grid (`[608,240][828,364]`) while the IME
+remained hidden. The documented closed-keyboard rail-filter escape now works. The
+expanded item-filter scenario remains part of the broader pending Browse verification.

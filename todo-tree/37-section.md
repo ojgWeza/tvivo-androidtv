@@ -1,5 +1,5 @@
-## T-T2 — Instrumented D-pad focus traversal tests — **HARNESS IMPLEMENTED, device run pending**
-Compose focus tests on the emulator, per CLAUDE.md. The Android-test harness now compiles with isolated RIGHT and DOWN escape tests for the shared D-pad field contract; execution remains pending fresh emulator approval. Q-1, Q-2, Q-3 and Q-9 are
+## T-T2 — Instrumented D-pad focus traversal tests — **VERIFIED ON API 34 EMULATOR 2026-09-13**
+Compose focus tests on the emulator, per CLAUDE.md. The Android-test harness has isolated RIGHT and DOWN escape tests for the shared D-pad field contract. The initial device run failed because `defaultConfig` did not declare AndroidX's test runner, causing Android to select the legacy runner and discover no JUnit4 tests. Declaring `androidx.test.runner.AndroidJUnitRunner` fixed discovery; both tests passed on the API 34 emulator. Q-1, Q-2, Q-3 and Q-9 are
 all focus/layout defects that shipped despite a green build — this is the class
 of test that would catch them. Q-9 raises the value further: it was invisible in
 code review twice over, since the first fix compiled, read correctly, and did
@@ -25,4 +25,3 @@ found by the same pass.
 
 Sequencing: **D-4 and D-5 touch nearly every screen.** Land them first so
 everything else is built against the real scale and roles rather than twice.
-

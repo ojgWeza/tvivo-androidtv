@@ -1,20 +1,15 @@
 ## Suggested order for the next session
 
-1. **T-T2 (instrumented focus tests).** Now the highest-value gap. Five of the
-   defects found on this project were focus/layout, all behind green builds, and
-   Phase 4 added two more of the same class (initial focus on the detail screen,
-   and the season rail's RIGHT target) that only a screenshot caught. Q-9 is the
-   sharpest case: the first fix compiled, read correctly, and did nothing.
-2. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback, the
+1. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback, the
    `/series/` episode path, `max_connections` behaviour and remote key-repeat
    (T-D2b) are all unverifiable on the emulator, and both live and episode
    playback are shipped-but-never-executed code. This retires more risk than
    further emulator work.
-3. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
+2. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
    `RefreshWorker`, on-device diagnostic log. **Take N-3 and N-4 inside this**,
    not after it — they are error states, and building the state table twice is
    the same mistake D-4/D-5 avoided.
-4. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
+3. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
    move at all until a stack trace exists on a device with no adb attached.
    **N-2 before the physical-TV session**, since that session is the only place
    an exhausted `max_connections` can be provoked on purpose.
@@ -32,14 +27,13 @@ explicit deployment approval; no automated check may open a stream.
 1. **QA-11 — connection teardown.** Play a movie, leave it, then immediately
    start Live. The second launch must not report that another device is using the
    account.
-2. **T-T2 — instrumented D-pad focus harness.** Execute the existing RIGHT and
-   DOWN escape tests.
-3. **Visual/focus fixes.** Verify QA-3..QA-7, QA-9, QA-10, Q-24, Q-25 and Q-27:
-   RTL paragraphs, grid clipping, logo fallback, title layout, rail tint, header
-   focus targets, ratings, field escapes, initial browse focus and picker Back.
-4. **Phase-5 error states.** Verify N-3 and N-4: cached browsing during an
+2. **Visual/focus fixes.** Verify QA-3..QA-7, QA-9, QA-10, Q-25 and Q-27, plus
+   Q-24's expanded item-filter path: RTL paragraphs, grid clipping, logo fallback,
+   title layout, rail tint, header focus targets, ratings, field escapes, initial
+   browse focus and picker Back.
+3. **Phase-5 error states.** Verify N-3 and N-4: cached browsing during an
    unavailable network, and a clear partial-sync state with retry.
-5. **N-5 — resume after process stop.** During the same permitted playback
+4. **N-5 — resume after process stop.** During the same permitted playback
    session, stop the app after a movie has progressed, reopen it and confirm the
    saved position remains available.
 

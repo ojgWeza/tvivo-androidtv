@@ -41,6 +41,12 @@ logcat), **U-14** (player seek — written but unverifiable without a stream) an
 **QA-3..QA-7** (the visual findings below). Q-11's inset bug is fixed and verified.
 Phase 5 (hardening) is in progress.
 
+**Updated 2026-09-13.** The missing AndroidX instrumentation-runner declaration was
+fixed and the focused `DpadFieldNavigationTest` harness passed on the API 34 emulator:
+both explicit RIGHT and DOWN field escapes pass. Q-24's rail-filter RIGHT escape was
+also rechecked with the TV IME closed and moved focus into the grid. The remaining
+visual, offline-state, resume, and playback checks are still pending.
+
 **Credentials were re-entered by hand on 2026-09-08** after the Phase 4 session
 cleared app data and destroyed the previous set. Do not clear app data.
 
@@ -48,4 +54,3 @@ cleared app data and destroyed the previous set. Do not clear app data.
 enter a deliberately wrong account.** That path does not wipe anything: it routes
 to Login and keeps the current credentials until a new sign-in is *accepted*.
 Only the separate `Sign out` button calls `store.wipe()`.
-
