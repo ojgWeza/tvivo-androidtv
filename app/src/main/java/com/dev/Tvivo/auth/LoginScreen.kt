@@ -1,14 +1,20 @@
 package com.dev.Tvivo.auth
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.rememberScrollState
+import androidx.compose.foundation.layout.verticalScroll
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -25,6 +31,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -57,16 +65,34 @@ fun LoginScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    val configuration = LocalConfiguration.current
+    val isTelevision = configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
+    // The TV form is a deliberately fixed ten-foot layout. A compact non-TV device is
+    // different input hardware and a different viewport, not a smaller TV.
+    val isHandset = !isTelevision && configuration.smallestScreenWidthDp < HANDSET_BREAKPOINT_DP
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     val serverFocus = remember { FocusRequester() }
     val usernameFocus = remember { FocusRequester() }
     val passwordFocus = remember { FocusRequester() }
 
     var passwordField by remember { mutableStateOf(TextFieldValue("")) }
+    var hadVisibleIme by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         serverFocus.requestFocus()
-        keyboard?.show()
+        // A TV remote needs an explicit invitation to type. On a handset, opening the
+        // keyboard before the user taps a field obscures the form for no benefit.
+        if (isTelevision) keyboard?.show()
+    }
+
+    // On a handset, Back after typing must not leave an invisible text-field focus owner
+    // behind. Do not apply this to TV: after its IME closes the D-pad needs the focused
+    // field so `dpadFieldNavigation` can move out of it.
+    LaunchedEffect(imeVisible, isHandset) {
+        if (isHandset && hadVisibleIme && !imeVisible) focusManager.clearFocus(force = true)
+        hadVisibleIme = imeVisible
     }
 
     LaunchedEffect(state.authenticated) {
@@ -98,7 +124,7 @@ fun LoginScreen(
         viewModel.submit()
     }
 
-    // **D-1 — the layout is the fix, not the insets.**
+    // **D-1 — the TV layout is the fix, not the insets.**
     //
     // Everything focusable is positioned above the IME ceiling (y = 297 dp) by layout,
     // rather than scrolled into view after the fact. That distinction is the whole of
@@ -107,31 +133,52 @@ fun LoginScreen(
     // were. There is no scroll here and no `imePadding()` — the content is ~290 dp tall,
     // top-anchored, and simply never reaches the keyboard.
     //
+    // Q-28 adds a separate handset path below. Its smaller, stacked form is scrollable
+    // and uses IME insets because a phone keyboard is not the TV IME ceiling problem.
     // `WindowCompat.setDecorFitsSystemWindows(window, false)` stays in `MainActivity`:
     // it is a precondition for insets working anywhere in the app, and it is what made
     // `imePadding()` stop being a silent no-op. It is just not what saves this screen.
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 48.dp, vertical = 24.dp),
+            .then(
+                if (isHandset) {
+                    Modifier
+                        .imePadding()
+                        .verticalScroll(rememberScrollState())
+                } else {
+                    Modifier
+                }
+            )
+            .padding(
+                horizontal = if (isHandset) HANDSET_HORIZONTAL_PADDING else 48.dp,
+                vertical = if (isHandset) 16.dp else 24.dp
+            ),
         // Centred, not left-aligned against an empty right half.
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
-            modifier = Modifier.width(FORM_WIDTH),
+            modifier = if (isHandset) Modifier.fillMaxWidth() else Modifier.width(FORM_WIDTH),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Wordmark and subtitle share a baseline rather than stacking. Stacking costs
             // 26 dp, and the budget to the ceiling is only a few dp wide once the fields
             // and the action row have taken their share.
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
-                Text(
-                    text = "Sign in to your provider",
-                    color = Palette.Dim,
-                    style = TvType.body,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
-                )
+            if (isHandset) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
+                    Text(text = "Sign in to your provider", color = Palette.Dim, style = TvType.body)
+                }
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
+                    Text(
+                        text = "Sign in to your provider",
+                        color = Palette.Dim,
+                        style = TvType.body,
+                        modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                    )
+                }
             }
 
             // Full-width row of its own: one field accepting `host:port`,
@@ -161,12 +208,20 @@ fun LoginScreen(
                     .dpadFieldNavigation(focusManager)
             )
 
-            // Username and password share one row. They are the two halves of a single
-            // credential, and pairing them buys back a whole 56 dp row of ceiling budget.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            // The TV pairs credentials to stay above its IME ceiling. Handsets stack them
+            // so each field remains comfortably tappable at compact widths.
+            val credentialsModifier = if (isHandset) Modifier.fillMaxWidth() else Modifier.weight(1f)
+            val credentialsContainer: @Composable (@Composable () -> Unit) -> Unit = { content ->
+                if (isHandset) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) { content() }
+                }
+            }
+            credentialsContainer {
                 androidx.compose.material3.OutlinedTextField(
                     value = state.username,
                     onValueChange = viewModel::onUsernameChanged,
@@ -178,8 +233,7 @@ fun LoginScreen(
                     ),
                     keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
                     colors = fieldColors(),
-                    modifier = Modifier
-                        .weight(1f)
+                    modifier = credentialsModifier
                         .focusRequester(usernameFocus)
                         .dpadFieldNavigation(focusManager)
                 )
@@ -207,8 +261,7 @@ fun LoginScreen(
                     ),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                     colors = fieldColors(),
-                    modifier = Modifier
-                        .weight(1f)
+                    modifier = credentialsModifier
                         .focusRequester(passwordFocus)
                         .dpadFieldNavigation(focusManager)
                 )
@@ -259,7 +312,13 @@ fun LoginScreen(
                     onClick = viewModel::onTogglePasswordVisibility,
                     modifier = Modifier.tvFocusFrame()
                 ) {
-                    Text(if (state.showPassword) "Hide password" else "Show password")
+                    Text(
+                        if (state.showPassword) {
+                            if (isHandset) "Hide" else "Hide password"
+                        } else {
+                            if (isHandset) "Show" else "Show password"
+                        }
+                    )
                 }
                 Button(
                     onClick = viewModel::onClear,
@@ -274,6 +333,10 @@ fun LoginScreen(
 
 /** 820 px at 1 dp = 2 px. */
 private val FORM_WIDTH = 410.dp
+
+/** Handsets use their available width; tablets retain the established wide form. */
+private const val HANDSET_BREAKPOINT_DP = 600
+private val HANDSET_HORIZONTAL_PADDING = 24.dp
 
 /** One line of `body`, reserved whether or not there is an error to put in it. */
 private val ERROR_LINE_HEIGHT = 22.dp

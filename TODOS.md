@@ -174,6 +174,32 @@ reading the trace, not instead of reading it.
 
 ---
 
+## Q-28 — Login screen must support phone layout, touch, and keyboard insets
+**Severity: High for handset use. Implemented 2026-09-12; handset verification pending.**
+`auth/LoginScreen.kt`
+
+The login screen assumes the large TV/D-pad form factor. On a normal Android
+phone, the software keyboard covers the action controls, and dismissing it leaves
+focus stuck on the password field. Controls are enabled and clickable, but are
+not reachable by expected touch/D-pad navigation.
+
+Implement an adaptive login presentation:
+
+- Use available width rather than a fixed TV form width.
+- Use a compact, vertical, scrollable mobile layout while the IME is visible;
+  keep all fields and actions visible above the keyboard.
+- Keep TV layout and D-pad traversal working on Android TV.
+- Preserve ordinary touch interaction for handset users.
+- Clear or redirect text-field focus when the keyboard is dismissed; do not rely
+  on `focusRestorer()`.
+
+**Implemented:** compact non-TV devices use an available-width vertical form with
+IME-aware scrolling; credentials stack, action labels compact, and closing the
+handset keyboard clears field focus. Android TV retains its fixed, D-pad-first
+layout and focus behaviour. `MainActivity` no longer forces landscape so a phone
+can use its normal orientation. Needs real-handset validation for touch, IME and
+rotation; no emulator/deployment was run.
+
 ## Q-15 — The icon pill draws a second, rectangular focus indicator — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**
 **Fixed and verified on-emulator 2026-09-08.** Lifted to `tvClickable` in `ui/common/TvFocusFrame.kt` and applied to every `clickable` call site, since all of them were latent instances of the same thing.

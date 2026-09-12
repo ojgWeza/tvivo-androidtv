@@ -25,6 +25,18 @@ failure.
 State assumptions instead of proving them. If a task genuinely cannot be done
 without executing something, say so and stop rather than guessing.
 
+## Context discipline
+
+- Keep tool use proportional to the task. Read the named source and its direct
+  dependencies, not whole backlogs or unrelated logs.
+- For a build or test request, make one properly configured attempt. If it is
+  blocked by environment or missing tooling, report the exact blocker; do not
+  retry through alternate caches, modes, or long polling unless the owner asks.
+- Do not stream or paste large command output into the working context. Extract
+  only the error, status, or file path needed to make the next decision.
+- Stop processes started for a failed attempt before handing off, and state
+  plainly whether the requested artifact was produced.
+
 ## Deployment, emulator, and memory rules
 
 - **Never deploy/install the APK or launch an emulator test without asking the

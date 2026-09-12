@@ -549,6 +549,21 @@ The first impression, on the worst input device. A realistic credential set is
    pretending to be feedback. Subscription facts belong on their own screen,
    after authentication, where they are real.
 
+### Handset login exception (Q-28)
+
+The product is Android TV-first, but the login screen must be usable when a
+sideloaded build is opened on a compact handset. This is a separate presentation,
+not a scaled-down ten-foot screen: the form uses available width with 24 dp side
+padding; its wordmark/subtitle and username/password fields stack vertically; and
+the action labels compact to `Sign in`, `Show` / `Hide`, and `Clear`.
+
+On handsets only, the form scrolls and applies IME padding so every field and
+action remains reachable above a touch keyboard. When that keyboard is dismissed,
+text-field focus is cleared so it cannot trap subsequent touch or D-pad input.
+The television layout remains fixed above the 297 dp TV-IME ceiling; it neither
+scrolls nor clears the focused field when its IME closes, because the remote needs
+that focus owner for directional navigation.
+
 ### The IME ceiling — the rule Q-11 existed for
 
 The TV IME is a bottom-anchored panel covering roughly the lower half of a 1080p
