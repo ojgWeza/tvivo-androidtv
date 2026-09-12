@@ -117,6 +117,7 @@ private fun playItem(
     accountId: String,
     isLive: Boolean,
     itemId: Int,
+    title: String,
     extension: String?,
     resumeFromMs: Long
 ) {
@@ -130,6 +131,7 @@ private fun playItem(
             .putExtra(PlayerActivity.EXTRA_URL, url)
             .putExtra(PlayerActivity.EXTRA_IS_LIVE, isLive)
             .putExtra(PlayerActivity.EXTRA_ITEM_ID, itemId.toString())
+            .putExtra(PlayerActivity.EXTRA_TITLE, title)
             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, if (isLive) TYPE_LIVE else TYPE_VOD)
             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
@@ -379,6 +381,7 @@ private fun TvivoApp() {
                         accountId = accountId,
                         isLive = isLive,
                         itemId = item.id,
+                        title = item.title,
                         extension = item.extension,
                         resumeFromMs = resumeFromMs
                     )
@@ -394,13 +397,14 @@ private fun TvivoApp() {
             ItemDetailScreen(
                 contentType = current.type,
                 itemId = current.itemId,
-                onPlay = { resumeFromMs, extension ->
+                onPlay = { resumeFromMs, extension, title ->
                     playItem(
                         context = context,
                         credentials = current.credentials,
                         accountId = accountId,
                         isLive = detailIsLive,
                         itemId = current.itemId,
+                        title = title,
                         extension = extension,
                         resumeFromMs = resumeFromMs
                     )
@@ -432,6 +436,10 @@ private fun TvivoApp() {
                             .putExtra(PlayerActivity.EXTRA_URL, url)
                             .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
                             .putExtra(PlayerActivity.EXTRA_ITEM_ID, episode.episodeId)
+                            .putExtra(
+                                PlayerActivity.EXTRA_TITLE,
+                                "S${episode.seasonNumber} · E${episode.episodeNum}: ${episode.title}"
+                            )
                             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_SERIES)
                             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
                             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)

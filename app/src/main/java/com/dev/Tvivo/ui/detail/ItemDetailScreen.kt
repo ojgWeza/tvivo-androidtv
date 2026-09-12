@@ -66,7 +66,7 @@ import com.dev.Tvivo.ui.theme.TvType
 fun ItemDetailScreen(
     contentType: ContentType,
     itemId: Int,
-    onPlay: (resumeFromMs: Long, extension: String?) -> Unit,
+    onPlay: (resumeFromMs: Long, extension: String?, title: String) -> Unit,
     onOpenEpisodes: () -> Unit
 ) {
     val application = LocalContext.current.applicationContext as android.app.Application
@@ -195,7 +195,7 @@ fun ItemDetailScreen(
                         when {
                             isSeries -> onOpenEpisodes()
                             state.resumeFromMs != null -> resumePrompt = true
-                            else -> onPlay(0L, state.extension)
+                            else -> onPlay(0L, state.extension, state.title)
                         }
                     }
                 )
@@ -237,12 +237,12 @@ fun ItemDetailScreen(
             positionMs = ms,
             onResume = {
                 resumePrompt = false
-                onPlay(ms, state.extension)
+                onPlay(ms, state.extension, state.title)
             },
             onStartOver = {
                 resumePrompt = false
                 viewModel.clearResume()
-                onPlay(0L, state.extension)
+                onPlay(0L, state.extension, state.title)
             },
             onDismiss = { resumePrompt = false }
         )
