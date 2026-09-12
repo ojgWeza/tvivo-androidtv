@@ -34,6 +34,17 @@ without executing something, say so and stop rather than guessing.
   retry through alternate caches, modes, or long polling unless the owner asks.
 - Do not stream or paste large command output into the working context. Extract
   only the error, status, or file path needed to make the next decision.
+- Prefer `rg -n`, bounded `Get-Content -First/-Skip`, and focused diffs. Do not
+  dump whole source trees or repeat files already read; summarize only the
+  relevant symbols and line ranges.
+- Builds should write output to a temporary log and report only the final status,
+  first error, warnings, and artifact path. Poll long builds with a short tail,
+  never by replaying the complete build log.
+- After an edit, inspect `git diff --stat` and targeted hunks. Use `git diff`
+  without a path only when a complete review is needed before commit.
+- Treat generated APKs, Gradle caches, emulator state, and screenshots as
+  artifacts: inspect their metadata, not their binary contents, unless visual
+  inspection is the task.
 - Stop processes started for a failed attempt before handing off, and state
   plainly whether the requested artifact was produced.
 

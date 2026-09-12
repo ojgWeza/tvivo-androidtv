@@ -18,6 +18,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.regex.Pattern
 
 /**
  * Phase 5. A bounded, persisted record of what the app has been doing, readable and
@@ -56,13 +57,21 @@ object DiagnosticLog {
     enum class Level { INFO, WARN, ERROR }
 
     data class Entry(
-        val atEpochMs: Long,
-        val level: Level,
-        val area: String,
-        val message: String
+        /** Stable export schema: timestamp, screen, event, payload, severity. */
+        val timestamp: Long,
+        val screen: String,
+        val event: String,
+        val payload: String,
+        val severity: Level
     ) {
         val time: String
-            get() = TIME_FORMAT.format(Date(atEpochMs))
+            get() = TIME_FORMAT.format(Date(timestamp))
+
+        // Compatibility names keep older, deliberately non-sensitive call sites concise.
+        val atEpochMs get() = timestamp
+        val area get() = screen
+        val message get() = "$event: $payload"
+        val level get() = severity
     }
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
@@ -77,12 +86,21 @@ object DiagnosticLog {
         }
     }
 
-    fun info(area: String, message: String) = add(Level.INFO, area, message)
-    fun warn(area: String, message: String) = add(Level.WARN, area, message)
-    fun error(area: String, message: String) = add(Level.ERROR, area, message)
+    fun info(screen: String, event: String, payload: String = "") =
+        add(Level.INFO, screen, event, payload)
+    fun warn(screen: String, event: String, payload: String = "") =
+        add(Level.WARN, screen, event, payload)
+    fun error(screen: String, event: String, payload: String = "") =
+        add(Level.ERROR, screen, event, payload)
 
-    private fun add(level: Level, area: String, message: String) {
-        val entry = Entry(System.currentTimeMillis(), level, area, message)
+    private fun add(level: Level, screen: String, event: String, payload: String) {
+        val entry = Entry(
+            timestamp = System.currentTimeMillis(),
+            screen = redact(screen),
+            event = redact(event),
+            payload = redact(payload),
+            severity = level
+        )
         // Newest first: on a screen with no scrollbar and a D-pad, the thing that just
         // went wrong has to be the thing already on screen.
         val snapshot = synchronized(stateLock) {
@@ -91,9 +109,9 @@ object DiagnosticLog {
         persist(snapshot)
 
         when (level) {
-            Level.INFO -> Log.i(TAG, "[$area] $message")
-            Level.WARN -> Log.w(TAG, "[$area] $message")
-            Level.ERROR -> Log.e(TAG, "[$area] $message")
+            Level.INFO -> Log.i(TAG, "[${entry.screen}] ${entry.message}")
+            Level.WARN -> Log.w(TAG, "[${entry.screen}] ${entry.message}")
+            Level.ERROR -> Log.e(TAG, "[${entry.screen}] ${entry.message}")
         }
     }
 
@@ -139,30 +157,33 @@ object DiagnosticLog {
         }
     }
 
-    private fun read(file: File): List<Entry> = runCatching {
+    internal fun read(file: File): List<Entry> = runCatching {
         if (!file.isFile) return@runCatching emptyList()
         file.useLines { lines ->
             lines.mapNotNull { line ->
                 val values = line.split('\t', limit = 4)
                 if (values.size != 4) return@mapNotNull null
                 runCatching {
+                    val message = decode(values[3])
+                    val separator = message.indexOf('\u0000')
                     Entry(
-                        atEpochMs = values[0].toLong(),
-                        level = Level.valueOf(values[1]),
-                        area = decode(values[2]),
-                        message = decode(values[3])
+                        timestamp = values[0].toLong(),
+                        severity = Level.valueOf(values[1]),
+                        screen = decode(values[2]),
+                        event = if (separator >= 0) message.substring(0, separator) else "message",
+                        payload = if (separator >= 0) message.substring(separator + 1) else message
                     )
                 }.getOrNull()
             }.take(CAPACITY).toList()
         }
     }.getOrDefault(emptyList())
 
-    private fun encode(entries: List<Entry>): String = entries.joinToString("\n") { entry ->
+    internal fun encode(entries: List<Entry>): String = entries.joinToString("\n") { entry ->
         listOf(
-            entry.atEpochMs.toString(),
-            entry.level.name,
-            encode(entry.area),
-            encode(entry.message)
+            entry.timestamp.toString(),
+            entry.severity.name,
+            encode(entry.screen),
+            encode("${entry.event}\u0000${entry.payload}")
         ).joinToString("\t")
     }
 
@@ -170,7 +191,7 @@ object DiagnosticLog {
         appendLine("Tvivo diagnostics — newest first")
         appendLine("Credentials, URLs, and catalogue titles are never recorded.")
         entries.forEach { entry ->
-            appendLine("${entry.time} ${entry.level} [${entry.area}] ${entry.message}")
+            appendLine("${entry.time}\t${entry.severity}\t${entry.screen}\t${entry.event}\t${entry.payload}")
         }
     }
 
@@ -179,6 +200,21 @@ object DiagnosticLog {
 
     private fun decode(value: String): String =
         String(Base64.decode(value, Base64.NO_WRAP), Charsets.UTF_8)
+
+    /** Last line of defence: diagnostics must remain safe when a caller gets careless. */
+    internal fun redact(value: String): String {
+        var result = value
+        result = URL_CREDENTIALS.matcher(result).replaceAll("\$1<redacted>@")
+        result = URL_HOST.matcher(result).replaceAll("\$1<redacted-host>")
+        result = SECRET_FIELD.matcher(result).replaceAll("\$1=<redacted>")
+        result = AUTHORIZATION.matcher(result).replaceAll("\$1 <redacted>")
+        return result
+    }
+
+    private val URL_CREDENTIALS = Pattern.compile("(https?://)[^/@\\s:]+:[^/@\\s]+@", Pattern.CASE_INSENSITIVE)
+    private val URL_HOST = Pattern.compile("(https?://)(?:[^/@\\s]+@)?[^/\\s?#]+", Pattern.CASE_INSENSITIVE)
+    private val SECRET_FIELD = Pattern.compile("\\b(password|pass|token|authorization|username|user|host|server)\\s*[=:]\\s*[^\\s,;]+", Pattern.CASE_INSENSITIVE)
+    private val AUTHORIZATION = Pattern.compile("\\b(Bearer|Basic)\\s+[^\\s]+", Pattern.CASE_INSENSITIVE)
 
     private val TIME_FORMAT = SimpleDateFormat("HH:mm:ss", Locale.US)
 }

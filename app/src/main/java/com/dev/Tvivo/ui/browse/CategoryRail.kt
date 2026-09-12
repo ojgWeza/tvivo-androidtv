@@ -34,6 +34,7 @@ import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.theme.Palette
 import com.dev.Tvivo.ui.theme.TvType
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 
 /** D-3. Was 360 dp, which bought nothing: no panel name fits on one line at either
  *  width, so the extra 80 dp only narrowed the grid. */
@@ -98,7 +99,10 @@ fun CategoryRail(
                     name = category.name,
                     count = counts[category.categoryId],
                     selected = category.categoryId == selectedCategoryId,
-                    onSelect = { onSelect(category) },
+                    onSelect = {
+                        DiagnosticLog.info("Browse", "category selected", "categoryId=${category.categoryId}")
+                        onSelect(category)
+                    },
                     gridFocusRequester = gridFocusRequester,
                     // Only the first row sends UP to the filter. Declared per-row rather
                     // than on the group, or UP from row 40 would jump to the filter

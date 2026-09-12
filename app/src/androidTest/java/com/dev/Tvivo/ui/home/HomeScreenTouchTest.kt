@@ -20,6 +20,20 @@ class HomeScreenTouchTest {
 
     @Test
     fun touchOnLiveTileDispatchesItsSelection() {
+        assertTouchSelects("Live TV", ContentType.LIVE)
+    }
+
+    @Test
+    fun touchOnMoviesTileDispatchesItsSelection() {
+        assertTouchSelects("Movies", ContentType.MOVIES)
+    }
+
+    @Test
+    fun touchOnSeriesTileDispatchesItsSelection() {
+        assertTouchSelects("Series", ContentType.SERIES)
+    }
+
+    private fun assertTouchSelects(label: String, expected: ContentType) {
         var selected: ContentType? = null
 
         composeRule.setContent {
@@ -38,10 +52,10 @@ class HomeScreenTouchTest {
             }
         }
 
-        composeRule.onNodeWithText("Live TV").performTouchInput { click() }
+        composeRule.onNodeWithText(label).performTouchInput { click() }
 
         composeRule.runOnIdle {
-            assertEquals(ContentType.LIVE, selected)
+            assertEquals(expected, selected)
         }
     }
 }

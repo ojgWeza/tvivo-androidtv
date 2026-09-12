@@ -402,6 +402,11 @@ class BrowseViewModel(
             _state.update { it.copy(refreshConfirmation = "Up to date") }
             return
         }
+        // A refresh replaces the selected category's rows. Keeping its old card id or a
+        // filtered rail selection during that replacement leaves focus pointed at data
+        // which no longer exists. Move immediately to the same safe entry used on first
+        // load, while retaining categoryId locally for the in-flight request.
+        resetToDefaultSelection()
         _state.update { it.copy(isRefreshing = true, error = null, refreshConfirmation = null) }
         viewModelScope.launch {
             source?.refreshCategory(categoryId, true)
@@ -417,6 +422,25 @@ class BrowseViewModel(
     }
 
     fun dismissRefreshConfirmation() = _state.update { it.copy(refreshConfirmation = null) }
+
+    private fun resetToDefaultSelection() {
+        val defaultId = _state.value.virtualCategories.firstOrNull()?.categoryId
+            ?: _state.value.categories.firstOrNull()?.categoryId
+            ?: return
+        pendingFocusItemId = null
+        selectedCategory.value = defaultId
+        debouncedItemFilter.value = ""
+        _state.update {
+            it.copy(
+                selectedCategoryId = defaultId,
+                categoryFilter = "",
+                itemFilter = "",
+                isItemFilterOpen = false,
+                filteredCount = null
+            )
+        }
+        DiagnosticLog.info("Browse", "selection reset for refresh", "contentType=$contentType")
+    }
 
     /** Resume prompt data: null when there is nothing to resume from. */
     suspend fun resumePositionMs(itemId: Int): Long? =

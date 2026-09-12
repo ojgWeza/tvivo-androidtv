@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -63,6 +64,10 @@ class PlayerActivity : ComponentActivity() {
             finish()
             return
         }
+
+        // Playback is an active viewing surface, not a browsing screen. Keep the panel
+        // awake only while this Activity owns a player; release() clears the flag.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Live is excluded from resume tracking entirely — a live stream has no
         // meaningful resume point.
@@ -315,6 +320,7 @@ class PlayerActivity : ComponentActivity() {
         // more than once before the Activity is finished.
         playerView?.player = null
         playerView = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     companion object {

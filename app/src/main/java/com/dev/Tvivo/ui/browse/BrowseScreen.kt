@@ -153,7 +153,10 @@ fun BrowseScreen(
             railFocusRequester = railFocusRequester
         )
 
-        Column(modifier = Modifier.fillMaxSize()) {
+        // The rail has a fixed 280 dp width. `fillMaxSize()` here measured the content
+        // against the whole Row and let its final grid column extend behind the screen
+        // edge on a handset. Weight measures the remaining width after the rail instead.
+        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
             Header(
                 // **Both lists, not just the panel's.** The three virtual folders are
                 // `CategoryEntity` rows like any other, but they live in

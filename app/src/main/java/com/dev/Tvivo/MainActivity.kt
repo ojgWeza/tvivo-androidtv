@@ -63,8 +63,9 @@ class MainActivity : ComponentActivity() {
         // is no way to tell, after the fact, whether an empty log means nothing went
         // wrong or that the process was restarted underneath the problem.
         DiagnosticLog.info(
-            "app",
-            "Started, version ${BuildConfig.VERSION_NAME} on API ${Build.VERSION.SDK_INT}"
+            "App", "started",
+            "version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} api=${Build.VERSION.SDK_INT} " +
+                "device=${Build.MANUFACTURER} ${Build.MODEL}"
         )
         logWindowMetrics("Started")
         if (BuildConfig.DEBUG) CodecProbe.log()
@@ -96,8 +97,8 @@ class MainActivity : ComponentActivity() {
             else -> "undefined"
         }
         DiagnosticLog.info(
-            "window",
-            "$event: $orientation, ${metrics.widthPixels}x${metrics.heightPixels}px"
+            "Window", event,
+            "orientation=$orientation size=${metrics.widthPixels}x${metrics.heightPixels}px density=${metrics.densityDpi}"
         )
     }
 }
@@ -135,7 +136,7 @@ private fun playItem(
     )
 }
 
-private sealed interface Route {
+internal sealed interface Route {
     /** D-10. Carries its own progress so the splash can report real steps rather than
      *  animate a bar on a timer. */
     data class Loading(val progress: Float, val caption: String) : Route
@@ -167,6 +168,10 @@ private sealed interface Route {
     data class Diagnostics(val credentials: Credentials) : Route
 }
 
+/** Kept outside composition so all three Home transitions are unit-testable. */
+internal fun browseRoute(credentials: Credentials, type: ContentType): Route.Browse =
+    Route.Browse(credentials, type)
+
 private fun Route.diagnosticName(): String = when (this) {
     is Route.Loading -> "Loading"
     Route.Login -> "Login"
@@ -191,7 +196,7 @@ private fun TvivoApp() {
     }
 
     LaunchedEffect(route) {
-        DiagnosticLog.info("navigation", "Route: ${route.diagnosticName()}")
+        DiagnosticLog.info("Navigation", "destination composed", "route=${route.diagnosticName()}")
     }
 
     // Handset login is a touch-first portrait form; the catalog is designed around wide
@@ -215,7 +220,10 @@ private fun TvivoApp() {
             } else {
                 "system default"
             }
-            DiagnosticLog.info("window", "Requested $orientation for ${route.diagnosticName()}")
+            DiagnosticLog.info(
+                "Window", "orientation requested",
+                "orientation=$orientation route=${route.diagnosticName()} television=$isTelevision"
+            )
         }
     }
 
@@ -308,10 +316,20 @@ private fun TvivoApp() {
             refreshMessage = accountState.refreshMessage,
             onRefreshEverything = account::refreshEverything,
             onSelect = { type ->
-                DiagnosticLog.info("navigation", "Home requested Browse ${type.name}")
-                lastOpened = type
-                route = Route.Browse(current.credentials, type)
-                DiagnosticLog.info("navigation", "Route state set: Browse ${type.name}")
+                runCatching {
+                    DiagnosticLog.info("Home", "route requested", "contentType=${type.name} route=Browse")
+                    lastOpened = type
+                    route = browseRoute(current.credentials, type)
+                    DiagnosticLog.info(
+                        "Navigation", "route state mutated",
+                        "route=Browse contentType=${type.name}"
+                    )
+                }.onFailure { error ->
+                    DiagnosticLog.error(
+                        "Home", "route transition rejected",
+                        "contentType=${type.name} error=${error.javaClass.simpleName}"
+                    )
+                }
             },
             onOpenSettings = { route = Route.Settings(current.credentials) },
             onExit = { (context as? android.app.Activity)?.finish() }

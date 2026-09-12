@@ -3,6 +3,10 @@ package com.dev.Tvivo.ui.common
 import android.content.Context
 import android.graphics.Bitmap
 import coil.ImageLoader
+import coil.EventListener
+import coil.request.ErrorResult
+import coil.request.ImageRequest
+import com.dev.Tvivo.diagnostics.DiagnosticLog
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 
@@ -36,6 +40,12 @@ object TvivoImageLoader {
 
     private fun build(context: Context): ImageLoader =
         ImageLoader.Builder(context)
+            .eventListener(object : EventListener {
+                override fun onError(request: ImageRequest, result: ErrorResult) {
+                    // Request data is normally a provider URL, so log the failure class only.
+                    DiagnosticLog.warn("Image", "load failed", "error=${result.throwable.javaClass.simpleName}")
+                }
+            })
             .bitmapConfig(Bitmap.Config.RGB_565)
             // Animated fades during D-pad scroll read as flicker at 3 m.
             .crossfade(false)

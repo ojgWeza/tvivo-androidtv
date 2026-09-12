@@ -1,5 +1,7 @@
 package com.dev.Tvivo.ui.home
 
+import android.content.res.Configuration
+
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.FocusRequester
@@ -31,6 +34,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -209,7 +213,7 @@ fun HomeScreen(
                         // Keep this separate from Card's callback log. A successful Card
                         // click which does not invoke this callback is a different failure
                         // from a callback which invokes it but cannot change the route.
-                        DiagnosticLog.info("navigation", "Home tile onSelect invoked: ${type.label}")
+                        DiagnosticLog.info("Home", "onSelect invoked", "tile=${type.name}")
                         onSelect(type)
                     }
                 )
@@ -240,13 +244,19 @@ private fun HomeTile(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val configuration = LocalConfiguration.current
+    val isTelevision = configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
+    fun activate(source: String) {
+        DiagnosticLog.info("Home", "tile activated", "tile=$label source=$source")
+        onClick()
+    }
     Card(
         onClick = {
             // This is deliberately before [onClick]: when a handset tap appears inert,
             // Diagnostics distinguishes a Card callback that never ran from a route that
             // failed to change after it did.
-            DiagnosticLog.info("navigation", "Home tile click: $label")
-            onClick()
+            activate("tv-card")
         },
         colors = CardDefaults.colors(containerColor = Palette.Elevated),
         // tv-material3 draws its own grey focus outline. Left on, the tile shows two
@@ -255,19 +265,40 @@ private fun HomeTile(
         modifier = modifier
             .height(180.dp)
             .onFocusChanged {
-                if (it.isFocused) DiagnosticLog.info("focus", "Home tile focused: $label")
+                if (it.isFocused) DiagnosticLog.info("Home", "focus entered", "tile=$label")
             }
-            .pointerInput(label) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    DiagnosticLog.info("touch", "Pointer press on Home tile: $label")
-                    if (waitForUpOrCancellation() == null) {
-                        DiagnosticLog.warn("touch", "Pointer gesture cancelled on Home tile: $label")
-                    } else {
-                        DiagnosticLog.info("touch", "Pointer release on Home tile: $label")
+            .then(
+                if (!isTelevision) {
+                    // The Mi 10 proves TV Material Card does not complete its touch
+                    // activation callback. Consume handset taps here and route through
+                    // the identical callback; D-pad activation remains Card-owned.
+                    Modifier.pointerInput(label) {
+                        detectTapGestures(
+                            onPress = {
+                                DiagnosticLog.info("Home", "touch received", "tile=$label phase=press")
+                                if (tryAwaitRelease()) {
+                                    DiagnosticLog.info("Home", "touch received", "tile=$label phase=release")
+                                } else {
+                                    DiagnosticLog.warn("Home", "touch rejected", "tile=$label reason=cancelled")
+                                }
+                            },
+                            onTap = { activate("handset-touch") }
+                        )
+                    }
+                } else {
+                    Modifier.pointerInput(label) {
+                        awaitEachGesture {
+                            awaitFirstDown()
+                            DiagnosticLog.info("Home", "touch received", "tile=$label phase=press")
+                            if (waitForUpOrCancellation() == null) {
+                                DiagnosticLog.warn("Home", "touch rejected", "tile=$label reason=cancelled")
+                            } else {
+                                DiagnosticLog.info("Home", "touch received", "tile=$label phase=release")
+                            }
+                        }
                     }
                 }
-            }
+            )
             .tvFocusFrame()
     ) {
         Box(modifier = Modifier.fillMaxSize()) {

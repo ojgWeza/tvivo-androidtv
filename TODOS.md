@@ -222,6 +222,27 @@ Implement an adaptive login presentation:
   focus transitions, orientation and window metrics, route changes, and caught
   exceptions. Persist a bounded, user-viewable/exportable log so handset issues
   can be inspected after they occur without an attached ADB session.
+- Mi 10 screenshots (`tvivo-movies.png`, `tvivo-series.png`) confirm the
+  rightmost browse column is clipped at the screen edge: poster artwork and
+  titles are truncated. Make handset browse content width/insets responsive so
+  the final column remains fully visible (or horizontally scrollable).
+- Mi 10 playback QA: the phone can enter screen sleep while the player is
+  active. Keep the display awake for the lifetime of `PlayerActivity`/active
+  playback (with normal release on pause/stop/exit), and verify this on a
+  handset as well as Android TV.
+- Refresh behavior: after a catalog refresh, reset any selected left-rail
+  category and right/content-panel item to the default safe selection, rather
+  than retaining stale focus/selection against replaced data. Verify for Live,
+  Movies, and Series, including an in-progress refresh.
+
+**Implemented 2026-09-12; device verification pending:** Browse now measures its
+content column from the width remaining after the fixed rail, rather than taking
+the whole `Row` width and clipping the final handset column. `PlayerActivity`
+sets `FLAG_KEEP_SCREEN_ON` when playback is created and clears it in `release()`.
+Manual category refresh resets the rail/category, filter, pending grid focus, and
+content panel to the same safe default used on entry before the replacement data
+arrives. `./gradlew test assembleDebug` passed; validate the rightmost column,
+sleep prevention, and refresh behavior on Live, Movies, and Series before closing.
 - Extend click diagnostics through the complete post-click path: log touch
   receipt and tile name, `onSelect` invocation, requested content type/route,
   `MainActivity` route-state mutation, destination composition/loading or error,
@@ -266,6 +287,30 @@ stopped before pointer completion, Card activation, callback dispatch, state
 mutation, or Browse composition. This remains diagnostic instrumentation, not a
 claim that orientation or TV Material Card touch handling is the root cause;
 handset validation is still required.
+
+**Mi 10 validation, 2026-09-12:** The fresh debug APK was installed without
+clearing app data and the original Home-tile defect is fixed. Live TV and Movies
+were re-driven end to end; Series had already passed in the preceding run. Each
+records touch press → release → handset activation → `onSelect` → requested
+`Browse` route → route-state mutation → destination composition for its matching
+`ContentType`. The handset is a Xiaomi Mi 10 (`umi_eea`, 1080×2340 at 440 dpi).
+Diagnostics persisted and emitted the same chain to Logcat. Repeated image-load
+`IllegalStateException` warnings were observed without an app crash; investigate
+them separately if they affect visible artwork. Login/IME remains unverified on
+this device because the retained authenticated account must not be destroyed.
+
+**Durable validation rules:** pointer press/release proves only that input arrived;
+it does not prove a `Card` callback or navigation occurred. Diagnose and export the
+complete chain — touch press → release → activation → `onSelect` → requested route
+→ state mutation → destination composition — and identify the first missing event
+before blaming orientation or coordinates. `androidx.tv.material3.Card` remains
+the Android TV D-pad activation path, while the handset uses its explicit
+`detectTapGestures` path. Keep diagnostics bounded, persistent, exportable, and
+centrally redacted (credentials, tokens, URLs, server hosts, and provider data).
+Green unit/build checks are necessary but do not validate handset touch, IME,
+focus, rotation, or visible navigation; validate those on an approved device
+without opening a stream or clearing app data. Use Account → Sign in to a
+different account for the remaining Login/IME check.
 
 ## Q-15 — The icon pill draws a second, rectangular focus indicator — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**
