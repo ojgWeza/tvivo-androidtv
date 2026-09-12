@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -204,7 +205,13 @@ fun HomeScreen(
                     modifier = Modifier
                         .weight(1f)
                         .then(if (type == focusTarget) Modifier.focusRequester(restore) else Modifier),
-                    onClick = { onSelect(type) }
+                    onClick = {
+                        // Keep this separate from Card's callback log. A successful Card
+                        // click which does not invoke this callback is a different failure
+                        // from a callback which invokes it but cannot change the route.
+                        DiagnosticLog.info("navigation", "Home tile onSelect invoked: ${type.label}")
+                        onSelect(type)
+                    }
                 )
             }
         }
@@ -254,6 +261,11 @@ private fun HomeTile(
                 awaitEachGesture {
                     awaitFirstDown()
                     DiagnosticLog.info("touch", "Pointer press on Home tile: $label")
+                    if (waitForUpOrCancellation() == null) {
+                        DiagnosticLog.warn("touch", "Pointer gesture cancelled on Home tile: $label")
+                    } else {
+                        DiagnosticLog.info("touch", "Pointer release on Home tile: $label")
+                    }
                 }
             }
             .tvFocusFrame()

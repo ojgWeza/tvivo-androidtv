@@ -258,6 +258,15 @@ a handset coordinate/input problem from a Card callback or route-state failure.
 tile callback; it and the real-handset reproduction remain unrun/unverified until
 an approved device/emulator session.
 
+**Click-path follow-up, 2026-09-12:** Home diagnostics now also record pointer
+release versus gesture cancellation, `onSelect` invocation, the requested Browse
+content type, and the route-state assignment. Together with the existing route
+composition entry, one exported log establishes whether a no-navigation report
+stopped before pointer completion, Card activation, callback dispatch, state
+mutation, or Browse composition. This remains diagnostic instrumentation, not a
+claim that orientation or TV Material Card touch handling is the root cause;
+handset validation is still required.
+
 ## Q-15 — The icon pill draws a second, rectangular focus indicator — **FIXED**
 **Severity: Medium. Found 2026-09-08 on-emulator. Regression of Q-3.**
 **Fixed and verified on-emulator 2026-09-08.** Lifted to `tvClickable` in `ui/common/TvFocusFrame.kt` and applied to every `clickable` call site, since all of them were latent instances of the same thing.

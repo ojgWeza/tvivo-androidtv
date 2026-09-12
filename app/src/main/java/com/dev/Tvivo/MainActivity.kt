@@ -308,8 +308,10 @@ private fun TvivoApp() {
             refreshMessage = accountState.refreshMessage,
             onRefreshEverything = account::refreshEverything,
             onSelect = { type ->
+                DiagnosticLog.info("navigation", "Home requested Browse ${type.name}")
                 lastOpened = type
                 route = Route.Browse(current.credentials, type)
+                DiagnosticLog.info("navigation", "Route state set: Browse ${type.name}")
             },
             onOpenSettings = { route = Route.Settings(current.credentials) },
             onExit = { (context as? android.app.Activity)?.finish() }
