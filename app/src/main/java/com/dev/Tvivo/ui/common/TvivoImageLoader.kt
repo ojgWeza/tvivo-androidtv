@@ -21,6 +21,8 @@ import coil.memory.MemoryCache
  */
 object TvivoImageLoader {
 
+    const val DISK_CACHE_DIRECTORY = "poster_cache"
+
     /** Movies and series. Crop to fill — a poster is 2:3 and cropping is safe. */
     const val POSTER_WIDTH_PX = 220
     const val POSTER_HEIGHT_PX = 330
@@ -56,7 +58,7 @@ object TvivoImageLoader {
             }
             .diskCache {
                 DiskCache.Builder()
-                    .directory(context.cacheDir.resolve("poster_cache"))
+                    .directory(context.cacheDir.resolve(DISK_CACHE_DIRECTORY))
                     .maxSizeBytes(250L * 1024 * 1024)
                     .build()
             }

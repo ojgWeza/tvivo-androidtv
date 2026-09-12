@@ -1128,6 +1128,11 @@ action. Document the data sent before enabling the feature.
 ## N-9 — Profile and optimize Room retrieval for instant-feeling browse
 **Cost: medium. Performance milestone, not speculative index work.**
 
+**Implemented 2026-09-13:** Diagnostics has an explicit local-only catalog profiler.
+It times representative count, first-page, filtered-count, and rail-count reads for
+VOD, Live, and Series, and shows SQLite's query plan when available. Capture physical-TV
+baselines before considering schema changes.
+
 The local catalog is large enough that database latency is product behavior:
 opening a category, moving between virtual folders, filtering, returning from a
 detail page, and restoring a far-away card should feel immediate even while a
@@ -1191,6 +1196,11 @@ routine events) rather than retroactively adding call sites.
 ## N-12 — Database size profiling and optimization
 **Cost: medium. Measurement first, optimization only from observed data.**
 
+**Implemented 2026-09-13:** Diagnostics now reports the database, WAL, shared-memory,
+and poster-cache footprints, plus per-table page usage when the device SQLite build
+exposes the optional `dbstat` virtual table. The physical-TV baseline and any resulting
+optimization remain pending.
+
 The local catalog holds 48,780 VOD rows, 6,425 live channels, and 13,279 series
 shows, plus per-show episode lists (some shows have 100+ episodes). Room caches
 poster images downsampled to card size (220×330 and 220×124 px). The app does
@@ -1210,10 +1220,15 @@ If the database exceeds a reasonable threshold on real hardware (e.g., >500 MB),
 decide whether to add explicit user-triggered cleanup, reduce the full-catalog
 sync window, or implement incremental/differential sync instead of replace-all.
 
-**Current state:** no profiling or optimization done; measurement is prerequisite.
+**Current state:** on-device storage measurement is implemented; physical-TV profiling
+and any evidence-led optimization are pending.
 
 ## N-13 — RAM usage profiling and heap pressure
 **Cost: medium. Empirical measurement on the physical TV is essential.**
+
+**Implemented 2026-09-13:** Diagnostics reports Java/native heap, process PSS, private
+dirty memory, and ART GC count/time since process start. The physical-TV browsing and
+sync baseline remains required before changing paging or image-cache behaviour.
 
 The app holds the full in-memory `PagingData` for each category's grid, plus the
 Compose UI tree for the rail, detail pages, and player. With 9,750-row categories
@@ -1234,8 +1249,8 @@ If GC pauses or OOM behavior are observed, decide whether to: cap the in-memory
 PagingData window per category, implement LRU eviction for off-screen image
 caches, or reduce background sync concurrency when the heap is above a threshold.
 
-**Current state:** no profiling done; the app is "responsive on the emulator" but
-heap constraints are unknown on real hardware.
+**Current state:** an on-device process-health snapshot is implemented; heap constraints
+during sustained browse, sync, and playback on real hardware remain unknown.
 
 ---
 

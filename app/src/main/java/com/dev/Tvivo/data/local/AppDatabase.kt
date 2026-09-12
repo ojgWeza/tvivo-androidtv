@@ -51,6 +51,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun favouriteDao(): FavouriteDao
 
     companion object {
+        const val DATABASE_NAME = "tvivo.db"
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -88,7 +90,7 @@ abstract class AppDatabase : RoomDatabase() {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "tvivo.db"
+                    DATABASE_NAME
                 )
                     // **Resume positions and favourites are now the reason this cannot
                     // be destructive.** The catalog tables are a cache and would happily

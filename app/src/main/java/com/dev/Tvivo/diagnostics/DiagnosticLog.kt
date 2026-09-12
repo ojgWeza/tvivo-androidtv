@@ -121,10 +121,10 @@ object DiagnosticLog {
     }
 
     /** Shares a plain-text, sanitized snapshot through the system chooser. */
-    fun export(context: Context) {
+    fun export(context: Context, appendix: String = "") {
         val export = File(context.cacheDir, EXPORT_FILE_NAME)
         runCatching {
-            export.writeText(render(_entries.value), Charsets.UTF_8)
+            export.writeText(render(_entries.value, appendix), Charsets.UTF_8)
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.diagnostics",
@@ -187,9 +187,14 @@ object DiagnosticLog {
         ).joinToString("\t")
     }
 
-    private fun render(entries: List<Entry>): String = buildString {
+    private fun render(entries: List<Entry>, appendix: String = ""): String = buildString {
         appendLine("Tvivo diagnostics — newest first")
         appendLine("Credentials, URLs, and catalogue titles are never recorded.")
+        if (appendix.isNotBlank()) {
+            appendLine()
+            append(appendix.trimEnd())
+            appendLine()
+        }
         entries.forEach { entry ->
             appendLine("${entry.time}\t${entry.severity}\t${entry.screen}\t${entry.event}\t${entry.payload}")
         }
