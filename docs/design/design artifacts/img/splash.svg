@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <rect width="1920" height="1080" fill="#0A1619"/>
+  <g transform="translate(846,392)">
+    <rect x="0" y="0" width="228" height="150" rx="18" fill="none" stroke="#1E4149" stroke-width="11"/>
+    <path d="M28 75 H66 L90 26 L114 130 L140 50 L158 75 H200"
+          fill="none" stroke="#D97757" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="960" y="660" text-anchor="middle" font-family="Roboto,sans-serif" font-size="64" fill="#E8F1F2">Tvivo</text>
+  <rect x="860" y="726" width="200" height="6" rx="3" fill="#163036"/>
+  <rect x="860" y="726" width="78" height="6" rx="3" fill="#D97757"/>
+</svg>
