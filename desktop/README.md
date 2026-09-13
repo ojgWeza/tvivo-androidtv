@@ -3,6 +3,11 @@
 This Windows x64 technical spike plays local synthetic media only. It does not
 connect to a provider or ship LibVLC binaries.
 
+The proposed player viewport, controls, input, and heavyweight-surface rules
+are recorded in [`docs/design/desktop-player.md`](../docs/design/desktop-player.md).
+They are intentionally scoped to POC-D1 and do not approve desktop feature
+parity.
+
 Install a 64-bit LibVLC/VLC distribution locally, then point the run task at its
 directory (the directory containing `libvlc.dll` and the `plugins` folder):
 

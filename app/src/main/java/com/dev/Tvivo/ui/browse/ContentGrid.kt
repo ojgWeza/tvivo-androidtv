@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -145,9 +146,21 @@ fun ContentGrid(
         restored = true
     }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(5),
-        state = gridState,
+    // Card dimensions are fixed image-pipeline inputs. The column count is not: a
+    // constrained window or handset must show fewer whole cards rather than draw a
+    // tempting partial fifth card beyond the right edge. At the approved rail-open TV
+    // width (680 dp remaining), this still resolves to the specified five columns.
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val cardWidth = cardShape.widthDp()
+        val horizontalPadding = 24.dp
+        val gridGap = 20.dp
+        val columns = ((maxWidth - horizontalPadding * 2 + gridGap) / (cardWidth + gridGap))
+            .toInt()
+            .coerceIn(1, 5)
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = gridState,
         // **This is what makes leaving to the rail and coming back land where the user
         // left.** A focus group entered from outside delegates to its *first* focusable
         // child, so LEFT to the rail then RIGHT back jumped from wherever the user was to
@@ -160,7 +173,7 @@ fun ContentGrid(
         // D-pad device means the remote stops working until the user backs out. `enter` is
         // explicit about where focus goes and degrades to `Default` (first child, the old
         // behaviour) whenever the target is not attached.
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .focusRequester(gridFocusRequester)
             .focusProperties {
@@ -172,47 +185,48 @@ fun ContentGrid(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        items(
+        ) {
+            items(
             count = items.itemCount,
             // Without stable keys, recomposition after an append rebinds focus onto the
             // wrong item.
             key = items.itemKey { it.id }
-        ) { index ->
-            val item = items[index]
-            val isRestoreTarget = item != null && item.id == lastFocusedId
+            ) { index ->
+                val item = items[index]
+                val isRestoreTarget = item != null && item.id == lastFocusedId
 
-            StreamCard(
-                item = item,
-                cardShape = cardShape,
-                modifier = if (isRestoreTarget) {
-                    Modifier.focusRequester(restoreRequester)
-                } else {
-                Modifier
-            },
-                itemFilterFocusRequester = itemFilterFocusRequester.takeIf { index < 5 },
-                onActivate = { item?.let(onActivate) },
-                onLongPress = { item?.let(onContextMenu) },
-                onFocused = {
-                    item?.let {
-                        lastFocusedId = it.id
-                        onFocused(it)
+                StreamCard(
+                    item = item,
+                    cardShape = cardShape,
+                    modifier = if (isRestoreTarget) {
+                        Modifier.focusRequester(restoreRequester)
+                    } else {
+                    Modifier
+                },
+                    itemFilterFocusRequester = itemFilterFocusRequester.takeIf { index < columns },
+                    onActivate = { item?.let(onActivate) },
+                    onLongPress = { item?.let(onContextMenu) },
+                    onFocused = {
+                        item?.let {
+                            lastFocusedId = it.id
+                            onFocused(it)
+                        }
                     }
-                }
-            )
-        }
+                )
+            }
 
-        if (items.loadState.append is androidx.paging.LoadState.Loading) {
-            item {
-                // The loading footer must not be focusable, or the user D-pads onto a
-                // spinner and cannot get past it.
-                Box(
-                    modifier = Modifier
-                        .height(cardShape.heightDp())
-                        .focusProperties { canFocus = false },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("…", color = Palette.Dim)
+            if (items.loadState.append is androidx.paging.LoadState.Loading) {
+                item {
+                    // The loading footer must not be focusable, or the user D-pads onto a
+                    // spinner and cannot get past it.
+                    Box(
+                        modifier = Modifier
+                            .height(cardShape.heightDp())
+                            .focusProperties { canFocus = false },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("…", color = Palette.Dim)
+                    }
                 }
             }
         }

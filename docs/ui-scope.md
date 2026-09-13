@@ -90,6 +90,13 @@ the left or right edge — a partial card reads as a horizontal carousel in what
 is a vertical grid, and invites D-pad travel into clipped focus. A partial
 *bottom* row is different and is required: it is the only scroll affordance.
 
+**Whole-card invariant.** The grid spends the available width on complete fixed-size
+cards only. At the approved TV viewport it renders the specified 5 columns with the
+rail open (7 closed); if a narrower window or handset cannot fit that count after the
+rail, gutters, and safe-area padding, it reduces the column count. It never keeps the
+left gutter while sacrificing the rightmost card. Left and right grid padding are
+symmetric, and a focus frame is included in a card's own bounds.
+
 **Column count reflows** from 5 to 7 when the rail closes. The card size does
 not change, so the cached bitmap stays valid. This is only safe because focus
 is restored by stable item ID rather than by index (see Focus contract).
