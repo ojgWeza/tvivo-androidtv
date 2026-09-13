@@ -16,10 +16,9 @@
 
 # Part 2c — Filed 2026-09-10: new items, not yet scheduled
 
-Nine gaps that were never work items. Ordered by **cost against what they
+Twelve gaps that were never work items. Ordered by **cost against what they
 unblock**: N-1..N-3 are cheap and something else is waiting on each of them,
-N-4..N-5 are cheap and self-contained, N-6..N-9 are real features.
+N-4..N-5 are cheap and self-contained, N-6..N-16 are real features.
 
 Nothing here is built. None of it is in `docs/ui-scope.md` or `decisions.md`
 yet — file the decision there if one of these is taken.
-

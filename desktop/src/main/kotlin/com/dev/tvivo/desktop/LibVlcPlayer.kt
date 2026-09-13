@@ -3,6 +3,7 @@ package com.dev.tvivo.desktop
 import com.sun.jna.Callback
 import com.sun.jna.Library
 import com.sun.jna.Native
+import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import java.awt.Canvas
 import java.io.File
@@ -123,6 +124,7 @@ internal class LibVlcPlayer(
     private object NativeLibraryPath {
         fun configure(directory: File) {
             System.setProperty("jna.library.path", directory.absolutePath)
+            NativeLibrary.addSearchPath("libvlc", directory.absolutePath)
             System.setProperty("VLC_PLUGIN_PATH", File(directory, "plugins").absolutePath)
         }
     }

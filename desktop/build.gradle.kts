@@ -26,3 +26,10 @@ compose.desktop {
         mainClass = "com.dev.tvivo.desktop.MainKt"
     }
 }
+
+tasks.withType<org.gradle.api.tasks.JavaExec>().configureEach {
+    System.getProperty("tvivo.libvlc.dir")?.let { libVlcDirectory ->
+        systemProperty("tvivo.libvlc.dir", libVlcDirectory)
+        environment("VLC_PLUGIN_PATH", file("$libVlcDirectory/plugins").absolutePath)
+    }
+}

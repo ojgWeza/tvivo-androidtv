@@ -647,3 +647,24 @@ is, toward the keyboard — at exactly the moment the user needs to press it. A
 reserved line makes the ceiling arithmetic static instead of state-dependent, and
 the one-line budget means copy can never make it worse by wrapping. Copy that
 does not fit is rewritten, not wrapped.
+
+## Desktop playback starts with LibVLC, but only after the native surface is ready
+
+**Decision (2026-09-13):** the Windows desktop spike uses dynamically loaded
+LibVLC through a narrow JNA binding. The application receives the LibVLC
+directory explicitly; the Compose/Desktop Gradle run task forwards it into the
+application JVM and sets `VLC_PLUGIN_PATH`. The native video surface is embedded
+only after its AWT canvas is displayable, so JNA can safely obtain an HWND.
+
+**Evidence:** a local synthetic MP4 played in the Compose Desktop window on
+Windows x64 using a locally installed LibVLC 3.0.23 ZIP whose SHA-256 was
+verified against VideoLAN's published checksum. The POC is partial: MKV, TS,
+seek/duration, tracks, media-end/error callbacks, and close/reopen teardown are
+not yet verified. No provider endpoint, credential, real stream, or native VLC
+binary entered the repository.
+
+**UX consequence:** the test also showed that a naïve heavyweight native surface
+can leave a large black/matte frame and compete with Compose controls. This is
+not a desktop feature-parity green light. A design run must define the player
+viewport and control system before desktop feature work begins; Android TV gets
+the same viewport-quality review under N-16.
