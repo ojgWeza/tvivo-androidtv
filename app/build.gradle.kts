@@ -62,6 +62,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared-core"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.tv:tv-material:1.0.0")

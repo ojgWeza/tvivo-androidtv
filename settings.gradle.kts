@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 rootProject.name = "Tvivo"
 include(":app")
 include(":desktop")
+include(":shared-core")
