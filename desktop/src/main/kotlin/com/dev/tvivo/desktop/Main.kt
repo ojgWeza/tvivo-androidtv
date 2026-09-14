@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -78,7 +77,7 @@ private fun DesktopApp() {
             }
         }
     } else {
-        PlayerScreen(credentials!!, onSignOut = {
+        DesktopShell(credentials!!, onSignOut = {
             scope.launch {
                 withContext(Dispatchers.IO) { store.wipe() }
                 credentials = null

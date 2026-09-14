@@ -7,6 +7,11 @@ import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import java.awt.Canvas
 import java.io.File
+import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.util.zip.ZipInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class LibVlcPlayer(
@@ -17,6 +22,7 @@ internal class LibVlcPlayer(
     private var mediaPlayer: Pointer? = null
     private var eventManager: Pointer? = null
     private var eventCallback: LibVlcEventCallback? = null
+    @Volatile private var pendingResumeMs = 0L
     private val closed = AtomicBoolean(false)
 
     fun initialise(surface: Canvas): Result<Unit> = runCatching {
@@ -34,8 +40,14 @@ internal class LibVlcPlayer(
         loadedApi.libvlc_media_player_set_hwnd(createdPlayer, Native.getComponentPointer(surface))
         eventManager = loadedApi.libvlc_media_player_event_manager(createdPlayer)
         eventCallback = LibVlcEventCallback { event, _ ->
-            onState(eventName(event?.getInt(0) ?: -1))
+            val type = event?.getInt(0) ?: -1
+            if (type == MediaPlayerPlaying && pendingResumeMs > 0L) {
+                mediaPlayer?.let { loadedApi.libvlc_media_player_set_time(it, pendingResumeMs) }
+                pendingResumeMs = 0L
+            }
+            onState(eventName(type))
         }.also { callback ->
+            eventManager?.let { loadedApi.libvlc_event_attach(it, MediaPlayerPlaying, callback, null) }
             eventManager?.let { loadedApi.libvlc_event_attach(it, MediaEndReached, callback, null) }
             eventManager?.let { loadedApi.libvlc_event_attach(it, MediaEncounteredError, callback, null) }
         }
@@ -61,10 +73,32 @@ internal class LibVlcPlayer(
         }
     }
 
+    /** Plays a user-selected provider URL. Callers must never log this URL: it contains credentials. */
+    fun playUrl(url: String, resumeFromMs: Long = 0L): Result<Unit> = runCatching {
+        require(url.startsWith("http://") || url.startsWith("https://")) { "Unsupported playback URL." }
+        val loadedApi = requireApi()
+        val loadedInstance = checkNotNull(instance)
+        val loadedPlayer = checkNotNull(mediaPlayer)
+        loadedApi.libvlc_media_player_stop(loadedPlayer)
+        val media = checkNotNull(loadedApi.libvlc_media_new_location(loadedInstance, url)) {
+            "libvlc_media_new_location returned null."
+        }
+        try {
+            loadedApi.libvlc_media_player_set_media(loadedPlayer, media)
+            check(loadedApi.libvlc_media_player_play(loadedPlayer) == 0) { "LibVLC could not start playback." }
+            pendingResumeMs = resumeFromMs
+            onState(if (resumeFromMs > 0L) "Resuming" else "Opening stream…")
+        } finally {
+            loadedApi.libvlc_media_release(media)
+        }
+    }
+
     fun pause() = mediaPlayer?.let { requireApi().libvlc_media_player_set_pause(it, 1); onState("Paused") }
     fun resume() = mediaPlayer?.let { requireApi().libvlc_media_player_set_pause(it, 0); onState("Playing") }
     fun stop() = mediaPlayer?.let { requireApi().libvlc_media_player_stop(it); onState("Stopped") }
     fun seek(position: Float) = mediaPlayer?.let { requireApi().libvlc_media_player_set_position(it, position.coerceIn(0f, 1f)); onState("Seek ${(position * 100).toInt()}%") }
+    fun positionMs(): Long = mediaPlayer?.let { requireApi().libvlc_media_player_get_time(it) }?.coerceAtLeast(0L) ?: 0L
+    fun durationMs(): Long = mediaPlayer?.let { requireApi().libvlc_media_player_get_length(it) }?.coerceAtLeast(0L) ?: 0L
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -83,9 +117,12 @@ internal class LibVlcPlayer(
     private fun requireApi(): LibVlc = checkNotNull(api) { "LibVLC is not initialised." }
 
     private fun locateLibVlc(): File {
-        val configured = System.getProperty("tvivo.libvlc.dir")
-            ?: System.getenv("TVIVO_LIBVLC_DIR")
-            ?: error("Set -Dtvivo.libvlc.dir or TVIVO_LIBVLC_DIR to your LibVLC directory.")
+        val configured = sequenceOf(
+            System.getProperty("tvivo.libvlc.dir"),
+            System.getenv("TVIVO_LIBVLC_DIR"),
+            BundledLibVlc.install()?.absolutePath,
+        ).filterNotNull().firstOrNull { File(it, "libvlc.dll").isFile }
+            ?: error("The bundled LibVLC runtime could not be prepared. Reinstall Tvivo or set TVIVO_LIBVLC_DIR for development.")
         return File(configured).also {
             require(it.isDirectory && File(it, "libvlc.dll").isFile) {
                 "LibVLC directory must contain libvlc.dll: ${it.absolutePath}"
@@ -96,7 +133,8 @@ internal class LibVlcPlayer(
 
     private fun eventName(type: Int) = when (type) {
         MediaEndReached -> "Ended"
-        MediaEncounteredError -> "Playback error"
+        MediaEncounteredError -> "Playback error. Check the stream is reachable and try again."
+        MediaPlayerPlaying -> "Playing"
         else -> "LibVLC event $type"
     }
 
@@ -104,6 +142,7 @@ internal class LibVlcPlayer(
         fun libvlc_new(argc: Int, argv: Array<String>?): Pointer?
         fun libvlc_release(instance: Pointer)
         fun libvlc_media_new_path(instance: Pointer, path: String): Pointer?
+        fun libvlc_media_new_location(instance: Pointer, location: String): Pointer?
         fun libvlc_media_release(media: Pointer)
         fun libvlc_media_player_new(instance: Pointer): Pointer?
         fun libvlc_media_player_release(player: Pointer)
@@ -112,6 +151,9 @@ internal class LibVlcPlayer(
         fun libvlc_media_player_set_pause(player: Pointer, doPause: Int)
         fun libvlc_media_player_stop(player: Pointer)
         fun libvlc_media_player_set_position(player: Pointer, position: Float)
+        fun libvlc_media_player_set_time(player: Pointer, time: Long)
+        fun libvlc_media_player_get_time(player: Pointer): Long
+        fun libvlc_media_player_get_length(player: Pointer): Long
         fun libvlc_media_player_set_hwnd(player: Pointer, drawable: Pointer)
         fun libvlc_media_player_event_manager(player: Pointer): Pointer?
         fun libvlc_event_attach(manager: Pointer, eventType: Int, callback: LibVlcEventCallback, userData: Pointer?): Int
@@ -133,5 +175,43 @@ internal class LibVlcPlayer(
         val supportedExtensions = setOf("mp4", "mkv", "ts")
         const val MediaEndReached = 265
         const val MediaEncounteredError = 266
+        const val MediaPlayerPlaying = 260
+    }
+}
+
+/** Extracts the version-pinned runtime bundled in the distribution once per Windows user. */
+private object BundledLibVlc {
+    private const val archiveResource = "/libvlc/vlc-3.0.23-win64.zip"
+    private const val rootDirectory = "vlc-3.0.23/"
+
+    fun install(): File? = runCatching {
+        val base = Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("java.io.tmpdir"), "Tvivo", "libvlc", "3.0.23")
+        val runtime = base.resolve("libvlc.dll")
+        if (Files.isRegularFile(runtime)) return@runCatching base.toFile()
+        Files.createDirectories(base.parent)
+        val staging = Files.createTempDirectory(base.parent, "3.0.23-")
+        try {
+            resourceStream().use { input -> ZipInputStream(input).use { zip ->
+                generateSequence { zip.nextEntry }.forEach { entry ->
+                    if (!entry.name.startsWith(rootDirectory)) return@forEach
+                    val target = staging.resolve(entry.name.removePrefix(rootDirectory)).normalize()
+                    require(target.startsWith(staging)) { "Invalid bundled runtime entry." }
+                    if (entry.isDirectory) Files.createDirectories(target) else {
+                        Files.createDirectories(target.parent)
+                        Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING)
+                    }
+                }
+            } }
+            require(Files.isRegularFile(staging.resolve("libvlc.dll"))) { "Bundled LibVLC archive is incomplete." }
+            runCatching { Files.move(staging, base, StandardCopyOption.ATOMIC_MOVE) }
+                .recoverCatching { Files.move(staging, base) }
+            base.toFile()
+        } finally {
+            if (Files.exists(staging)) Files.walk(staging).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }.getOrNull()
+
+    private fun resourceStream(): InputStream = checkNotNull(BundledLibVlc::class.java.getResourceAsStream(archiveResource)) {
+        "Bundled LibVLC archive is missing."
     }
 }

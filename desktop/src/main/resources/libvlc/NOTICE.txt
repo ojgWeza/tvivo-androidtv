@@ -1,0 +1,5 @@
+Tvivo bundles the unmodified VideoLAN VLC 3.0.23 Windows x64 archive for its
+LibVLC runtime. The archive retains the upstream licence, authorship, and source
+materials. Upstream download, checksum, and source: https://get.videolan.org/vlc/3.0.23/win64/
+
+VideoLAN and VLC are trademarks of the VideoLAN non-profit organization.
