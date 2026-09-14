@@ -79,7 +79,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Canvas
 import java.awt.Color as AwtColor
-import java.awt.event.HierarchyEvent
 import javax.swing.SwingUtilities
 import java.net.URL
 import java.time.Instant
@@ -240,22 +239,57 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope(); var state by remember { mutableStateOf("Preparing player…") }; var playerReady by remember { mutableStateOf(false) }
+    // Once a terminal error/timeout is shown, ignore further onState updates (including the
+    // async native "Stopped"/"Ready" events our own stop()/close() calls trigger) so they can't
+    // race and overwrite the actionable message the user is looking at. Cleared when a fresh
+    // playback attempt starts.
+    var terminal by remember { mutableStateOf(false) }
+    // Sampled by the resume-position polling loop below; onDispose reads this instead of calling
+    // the native positionMs() synchronously on the disposal path.
+    var lastKnownPositionMs by remember { mutableStateOf(0L) }
     val surface = remember { Canvas().apply { background = AwtColor.BLACK } }
-    val player = remember { LibVlcPlayer { update -> SwingUtilities.invokeLater { state = update } } }
+    val player = remember { LibVlcPlayer { update -> SwingUtilities.invokeLater { if (!terminal) state = update } } }
     DisposableEffect(player) {
-        var attempted = false
-        fun initialise() { if (!attempted && surface.isDisplayable) { attempted = true; player.initialise(surface).onSuccess { playerReady = true }.onFailure { state = "LibVLC needs setup: ${it.message}" } } }
-        val listener = java.awt.event.HierarchyListener { event -> if (event.changeFlags and HierarchyEvent.DISPLAYABILITY_CHANGED.toLong() != 0L) initialise() }
-        surface.addHierarchyListener(listener); initialise()
+        player.initialise(surface).onSuccess { playerReady = true }.onFailure { terminal = true; state = "LibVLC needs setup: ${it.message}" }
         onDispose {
-            val position = player.positionMs()
-            if (position > 0L) repository.recordResume(item, episode, position)
-            surface.removeHierarchyListener(listener)
+            if (lastKnownPositionMs > 0L) repository.recordResume(item, episode, lastKnownPositionMs)
+            // close() is internally serialized and non-blocking (fire-and-forget onto its own
+            // background thread) -- safe to call from this synchronous disposal callback.
             player.close()
         }
     }
-    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { if (playerReady) scope.launch { state = "Preparing stream…"; runCatching { withContext(Dispatchers.IO) { repository.playbackUrl(item, episode) to repository.resumePosition(if (episode == null) item.type else CatalogType.SERIES, episode?.id ?: item.id) } }.onSuccess { (url, resumeMs) -> player.playUrl(url, resumeMs).onFailure { state = "Playback error: ${it.message}" } }.onFailure { state = it.message ?: "Unable to prepare playback." } } }
-    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); val position = player.positionMs(); if (position > 0L) withContext(Dispatchers.IO) { repository.recordResume(item, episode, position) } } }
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) {
+        if (!playerReady) return@LaunchedEffect
+        val debugFixture = System.getProperty("tvivo.debug.fixture")
+        terminal = false
+        state = "Preparing stream…"
+        scope.launch(Dispatchers.IO) {
+            if (debugFixture != null) {
+                player.play(java.io.File(debugFixture)).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
+                return@launch
+            }
+            runCatching { repository.playbackUrl(item, episode) to repository.resumePosition(if (episode == null) item.type else CatalogType.SERIES, episode?.id ?: item.id) }
+                .onSuccess { (url, resumeMs) -> player.playUrl(url, resumeMs).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } } }
+                .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = message ?: "Unable to prepare playback." } }
+        }
+    }
+    // Watchdog: if the stream never reaches Playing, stop it and surface an actionable error
+    // instead of leaving the user stuck on an indefinite "Buffering/Opening" state -- the native
+    // player can otherwise block on a dead/slow connection with no built-in timeout.
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) {
+        if (!playerReady) return@LaunchedEffect
+        val verbose = System.getProperty("tvivo.debug.verbose") != null
+        if (verbose) System.err.println("[watchdog] armed, playerReady=$playerReady")
+        delay(20_000)
+        if (verbose) System.err.println("[watchdog] checking, state=$state, terminal=$terminal")
+        if (!terminal && (state == "Buffering stream…" || state == "Opening stream…" || state == "Resuming stream…" || state == "Preparing stream…")) {
+            if (verbose) System.err.println("[watchdog] triggering stop+timeout")
+            terminal = true
+            state = "Playback timed out. The stream did not respond -- check the connection and try again."
+            player.stop() // fire-and-forget, serialized on LibVlcPlayer's own background thread
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); val position = withContext(Dispatchers.IO) { player.positionMs() }; if (position > 0L) { lastKnownPositionMs = position; withContext(Dispatchers.IO) { repository.recordResume(item, episode, position) } } } }
     var paused by remember { mutableStateOf(false) }
     var seek by remember { mutableStateOf(0f) }
     val title = episode?.let { "${item.title} · Season ${it.season} · ${it.displayLabel(item.title)}" } ?: item.title
@@ -277,8 +311,8 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         }
         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) { SwingPanel(factory = { surface }, modifier = Modifier.fillMaxSize()) }
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = playerReady, onClick = { if (paused) { player.resume(); paused = false } else { player.pause(); paused = true } }) { Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = if (paused) "Play" else "Pause"); Text(if (paused) "Play" else "Pause", modifier = Modifier.padding(start = 6.dp)) }
-            OutlinedButton(enabled = playerReady, onClick = { player.stop(); state = "Stopped" }) { Text("Stop") }
+            Button(enabled = playerReady && !terminal, onClick = { if (paused) { player.resume(); paused = false } else { player.pause(); paused = true } }) { Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = if (paused) "Play" else "Pause"); Text(if (paused) "Play" else "Pause", modifier = Modifier.padding(start = 6.dp)) }
+            OutlinedButton(enabled = playerReady, onClick = { terminal = true; state = "Stopped"; player.stop() }) { Text("Stop") }
             Slider(value = seek, onValueChange = { seek = it }, onValueChangeFinished = { if (playerReady) player.seek(seek) }, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = { onFullScreenChange(!fullScreen) }) { Text(if (fullScreen) "Exit full screen" else "Full screen") }
             OutlinedButton(onClick = onBack) { Text("Back") }

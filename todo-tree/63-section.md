@@ -106,3 +106,77 @@ play result, and native error events. Keep all credentials and full provider
 URLs out of logs and UI. First validate the LibVLC surface with a local
 synthetic fixture; a real provider stream may be opened only in an
 owner-approved manual validation session.
+
+**Status as of 2026-09-14, end of session -- uncommitted, not yet re-verified live:**
+Root cause of the original "no video" symptom was an HWND-timing race in the
+hand-rolled JNA `LibVlcPlayer`; fixed once, then during live-stream testing a
+second, more serious bug surfaced: `EmbeddedMediaPlayer`/native `stop()` calls
+could block indefinitely on a stalled provider socket, freezing the whole UI
+thread (not just the player) since they ran on the same dispatcher as
+everything else. Rather than patch the hand-rolled JNA bindings further, the
+player was migrated to `vlcj` (mature LibVLC binding) end to end, plus:
+- A 20s playback watchdog (`DesktopShell.kt`) that stops and shows an
+  actionable timeout message if a stream never reaches Playing.
+- All native control/lifecycle calls (`play`, `playUrl`, `pause`, `resume`,
+  `stop`, `close`, the resume-seek in the `playing` callback) serialized
+  through a single background executor in `LibVlcPlayer.kt`, so `close()`
+  (Back navigation) can never race a blocked `stop()` or an in-flight `play()`.
+- A `terminal` flag in `DesktopShell.kt` so a stale async "Stopped"/"Ready"
+  event can't overwrite the watchdog's timeout message on screen.
+
+Went through 4 rounds of Codex review (`bible-detail/claude-07-agent-division.md`
+loop) -- each round found a real race, now fixed; Codex's context ran out
+before it could run the actual test (fixture or live). **The fixture-playback
+fix from before the vlcj migration was visually confirmed working twice**
+(local `sintel-trailer.mp4`, moving video + working controls), but **the vlcj
+migration + all the serialization/watchdog fixes above have only been
+compile-checked, not run live yet.** Next session: build+run with
+`-Dtvivo.debug.fixture=desktop-fixtures\sintel-trailer.mp4` first to confirm
+the vlcj migration didn't regress the fixture path, then retest the same real
+provider stream that previously hung, and confirm the watchdog fires with the
+UI staying responsive (own screenshot evidence, not just "no exception").
+Do not close this item until that live pass is done.
+
+### D-Desktop-11 — Sign-in button re-enables mid-check
+
+**Severity: Medium. Reported 2026-09-14, manual desktop run.**
+
+**Observed:** After clicking Sign in, the UI shows an account-checking state,
+but the Sign in button becomes clickable again before that check finishes.
+This reads as ready-for-input while a request is still in flight and invites
+a duplicate submit or a confused re-click/re-entry.
+
+**Action:** Disable the Sign in button (and ideally show a spinner/label
+change) for the full duration of the account-check request; only re-enable
+it on failure, and route to Home directly on success without a re-enabled
+intermediate state.
+
+### D-Desktop-12 — Desktop UI needs a real design pass
+
+**Severity: Medium. Noted 2026-09-14, manual desktop run.**
+
+**Observed:** The desktop app (sign-in and beyond) is still functional-only
+layout with no visual design system applied yet -- default spacing/typography,
+no polish.
+
+**Action:** Run a design pass (`/design-consultation` or equivalent) against
+the desktop journey once functional regressions (D-Desktop-7..11) are closed;
+track as its own follow-up rather than folding into bug fixes.
+
+### D-Desktop-13 — Player transport controls are incomplete and the seek bar doesn't track playback
+
+**Severity: High. Reported 2026-09-14, manual desktop run (live D-Desktop-10 verification).**
+
+**Observed:** In `DesktopShell.kt`'s `DesktopPlayerScreen`, the seek `Slider`
+is only ever written by the user's own drag (`var seek by remember { ... }`)
+-- nothing reads `player.positionMs()`/`durationMs()` back into it, so it
+never reflects actual playback progress. The control row also only has
+Pause/Stop/seek/Full screen/Back; there's no native-style transport (skip
+back 10s, skip forward 10s) that users expect from a video player.
+
+**Action:** Poll `player.positionMs()`/`durationMs()` on a timer while
+`playerReady` and not user-dragging, and drive the slider from it (the
+existing 5s resume-save `LaunchedEffect` polling loop is a reasonable model
+to extend or pair with). Add explicit skip -10s/+10s buttons wired to
+`player.seek()`/`positionMs()`, alongside the existing Play/Pause/Stop/Full
+screen/Back.

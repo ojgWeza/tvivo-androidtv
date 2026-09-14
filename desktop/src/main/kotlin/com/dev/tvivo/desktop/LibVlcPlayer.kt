@@ -1,10 +1,6 @@
 package com.dev.tvivo.desktop
 
-import com.sun.jna.Callback
-import com.sun.jna.Library
-import com.sun.jna.Native
 import com.sun.jna.NativeLibrary
-import com.sun.jna.Pointer
 import java.awt.Canvas
 import java.io.File
 import java.io.InputStream
@@ -13,113 +9,135 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.zip.ZipInputStream
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import uk.co.caprica.vlcj.factory.MediaPlayerFactory
+import uk.co.caprica.vlcj.player.base.MediaPlayer
+import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
+import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
 
+/**
+ * Wraps vlcj's [EmbeddedMediaPlayer] instead of hand-rolled JNA bindings. vlcj owns HWND/video
+ * surface embedding internally (resolved lazily at play time), which removes the manual
+ * isDisplayable/isShowing race we used to handle ourselves in DesktopShell's DisposableEffect.
+ */
 internal class LibVlcPlayer(
     private val onState: (String) -> Unit,
 ) : AutoCloseable {
-    private var api: LibVlc? = null
-    private var instance: Pointer? = null
-    private var mediaPlayer: Pointer? = null
-    private var eventManager: Pointer? = null
-    private var eventCallback: LibVlcEventCallback? = null
+    private var factory: MediaPlayerFactory? = null
+    private var mediaPlayer: EmbeddedMediaPlayer? = null
     @Volatile private var pendingResumeMs = 0L
     private val closed = AtomicBoolean(false)
+    private val verboseLogging = System.getProperty("tvivo.debug.fixture") != null || System.getProperty("tvivo.debug.verbose") != null
+
+    // stop()/close() are blocking native calls that can themselves hang on a stalled network
+    // socket. Every control/lifecycle operation is serialized through this single background
+    // thread so (a) a blocked stop() never freezes the caller (Compose UI dispatcher), and
+    // (b) close() can never run concurrently with an in-flight stop() -- it queues behind it.
+    private val nativeExecutor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "LibVlcPlayer-native").apply { isDaemon = true } }
+
+    private fun submitNative(block: () -> Unit) {
+        if (nativeExecutor.isShutdown) return
+        runCatching { nativeExecutor.submit { runCatching(block).onFailure { debugLog("native op failed: $it") } } }
+    }
+
+    /** Like [submitNative] but waits for the result, so play/playUrl stay serialized with
+     * stop/close (never runs concurrently with a release) while still reporting success/failure
+     * to the caller. Callers must invoke this from a background thread (never the UI dispatcher). */
+    private fun <T> submitNativeBlocking(block: () -> T): T {
+        check(!nativeExecutor.isShutdown) { "Player has already been closed." }
+        return try {
+            nativeExecutor.submit(java.util.concurrent.Callable { block() }).get()
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
 
     fun initialise(surface: Canvas): Result<Unit> = runCatching {
         check(!closed.get()) { "Player has already been closed." }
         val libVlcDirectory = locateLibVlc()
         NativeLibraryPath.configure(libVlcDirectory)
-        api = Native.load("libvlc", LibVlc::class.java)
-        val loadedApi = checkNotNull(api)
-        val createdInstance = checkNotNull(loadedApi.libvlc_new(1, arrayOf("--plugin-path=${File(libVlcDirectory, "plugins").absolutePath}"))) { "libvlc_new returned null." }
-        instance = createdInstance
-        val createdPlayer = checkNotNull(loadedApi.libvlc_media_player_new(createdInstance)) {
-            "libvlc_media_player_new returned null."
-        }
-        mediaPlayer = createdPlayer
-        loadedApi.libvlc_media_player_set_hwnd(createdPlayer, Native.getComponentPointer(surface))
-        eventManager = loadedApi.libvlc_media_player_event_manager(createdPlayer)
-        eventCallback = LibVlcEventCallback { event, _ ->
-            val type = event?.getInt(0) ?: -1
-            if (type == MediaPlayerPlaying && pendingResumeMs > 0L) {
-                mediaPlayer?.let { loadedApi.libvlc_media_player_set_time(it, pendingResumeMs) }
-                pendingResumeMs = 0L
-            }
-            onState(eventName(type))
-        }.also { callback ->
-            eventManager?.let { manager ->
-                watchedEvents.forEach { eventType ->
-                    check(loadedApi.libvlc_event_attach(manager, eventType, callback, null) == 0) {
-                        "LibVLC could not observe playback state."
-                    }
+        val createdFactory = MediaPlayerFactory("--plugin-path=${File(libVlcDirectory, "plugins").absolutePath}")
+        factory = createdFactory
+        val player = createdFactory.mediaPlayers().newEmbeddedMediaPlayer()
+        mediaPlayer = player
+        player.videoSurface().set(createdFactory.videoSurfaces().newVideoSurface(surface))
+        player.events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
+            override fun opening(mediaPlayer: MediaPlayer) { debugLog("event opening"); onState("Opening stream…") }
+            override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) { debugLog("event buffering $newCache"); onState("Buffering stream…") }
+            override fun playing(mediaPlayer: MediaPlayer) {
+                debugLog("event playing")
+                if (pendingResumeMs > 0L) {
+                    // This callback runs on vlcj's own event thread, not nativeExecutor -- route
+                    // the seek through it so it can't race a Back-triggered close()/release.
+                    val resumeMs = pendingResumeMs
+                    pendingResumeMs = 0L
+                    submitNative { mediaPlayer.controls().setTime(resumeMs) }
                 }
+                onState("Playing")
             }
-        }
+            override fun paused(mediaPlayer: MediaPlayer) { debugLog("event paused"); onState("Paused") }
+            override fun stopped(mediaPlayer: MediaPlayer) { debugLog("event stopped"); onState("Stopped") }
+            override fun finished(mediaPlayer: MediaPlayer) { debugLog("event finished"); onState("Ended") }
+            override fun error(mediaPlayer: MediaPlayer) { debugLog("event error"); onState("Playback error. Check the stream is reachable and try again.") }
+        })
         onState("Ready")
     }
 
+    private fun debugLog(message: String) {
+        if (verboseLogging) System.err.println("[LibVlcPlayer] $message")
+    }
+
+    /** Serialized on [nativeExecutor] so play can never run concurrently with a Back-triggered
+     * close()/release. Call from a background thread only -- this blocks the caller. */
     fun play(file: File): Result<Unit> = runCatching {
         require(file.isFile) { "Choose an existing local media file." }
         require(file.extension.lowercase() in supportedExtensions) { "Only .mp4, .mkv, and .ts are supported by this POC." }
-        val loadedApi = requireApi()
-        val loadedInstance = checkNotNull(instance)
-        val loadedPlayer = checkNotNull(mediaPlayer)
-        loadedApi.libvlc_media_player_stop(loadedPlayer)
-        val media = checkNotNull(loadedApi.libvlc_media_new_path(loadedInstance, file.absolutePath)) {
-            "libvlc_media_new_path returned null."
-        }
-        try {
-            loadedApi.libvlc_media_player_set_media(loadedPlayer, media)
-            check(loadedApi.libvlc_media_player_play(loadedPlayer) == 0) { "LibVLC could not start playback." }
+        debugLog("play(fixture .${file.extension.lowercase()})")
+        submitNativeBlocking {
+            val player = requirePlayer()
+            check(player.media().play(file.absolutePath)) { "LibVLC could not start playback." }
             onState("Playing ${file.extension.lowercase()} fixture")
-        } finally {
-            loadedApi.libvlc_media_release(media)
         }
     }
 
-    /** Plays a user-selected provider URL. Callers must never log this URL: it contains credentials. */
+    /** Plays a user-selected provider URL. Callers must never log this URL: it contains
+     * credentials. Serialized on [nativeExecutor]; call from a background thread only. */
     fun playUrl(url: String, resumeFromMs: Long = 0L): Result<Unit> = runCatching {
         require(url.startsWith("http://") || url.startsWith("https://")) { "Unsupported playback URL." }
-        val loadedApi = requireApi()
-        val loadedInstance = checkNotNull(instance)
-        val loadedPlayer = checkNotNull(mediaPlayer)
-        loadedApi.libvlc_media_player_stop(loadedPlayer)
-        val media = checkNotNull(loadedApi.libvlc_media_new_location(loadedInstance, url)) {
-            "libvlc_media_new_location returned null."
-        }
-        try {
-            loadedApi.libvlc_media_player_set_media(loadedPlayer, media)
-            pendingResumeMs = resumeFromMs
-            check(loadedApi.libvlc_media_player_play(loadedPlayer) == 0) { "LibVLC could not start playback." }
+        pendingResumeMs = resumeFromMs
+        debugLog("play(url)")
+        submitNativeBlocking {
+            val player = requirePlayer()
+            check(player.media().play(url, "network-caching=3000")) { "LibVLC could not start playback." }
             onState(if (resumeFromMs > 0L) "Resuming stream…" else "Opening stream…")
-        } finally {
-            loadedApi.libvlc_media_release(media)
         }
     }
 
-    fun pause() = mediaPlayer?.let { requireApi().libvlc_media_player_set_pause(it, 1); onState("Paused") }
-    fun resume() = mediaPlayer?.let { requireApi().libvlc_media_player_set_pause(it, 0); onState("Playing") }
-    fun stop() = mediaPlayer?.let { requireApi().libvlc_media_player_stop(it); onState("Stopped") }
-    fun seek(position: Float) = mediaPlayer?.let { requireApi().libvlc_media_player_set_position(it, position.coerceIn(0f, 1f)); onState("Seek ${(position * 100).toInt()}%") }
-    fun positionMs(): Long = mediaPlayer?.let { requireApi().libvlc_media_player_get_time(it) }?.coerceAtLeast(0L) ?: 0L
-    fun durationMs(): Long = mediaPlayer?.let { requireApi().libvlc_media_player_get_length(it) }?.coerceAtLeast(0L) ?: 0L
+    fun pause() = submitNative { mediaPlayer?.let { it.controls().setPause(true); onState("Paused") } }
+    fun resume() = submitNative { mediaPlayer?.let { it.controls().setPause(false); onState("Playing") } }
+    /** Stop is fire-and-forget on purpose -- see [nativeExecutor]. Callers that need an immediate
+     * UI update (e.g. a manual Stop button, or the playback watchdog) should set their own state
+     * before calling this, not rely on the async "Stopped" event that may arrive late or never. */
+    fun stop() = submitNative { mediaPlayer?.controls()?.stop() }
+    fun seek(position: Float) = submitNative { mediaPlayer?.let { it.controls().setPosition(position.coerceIn(0f, 1f)); onState("Seek ${(position * 100).toInt()}%") } }
+    fun positionMs(): Long = mediaPlayer?.status()?.time()?.coerceAtLeast(0L) ?: 0L
+    fun durationMs(): Long = mediaPlayer?.status()?.length()?.coerceAtLeast(0L) ?: 0L
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        mediaPlayer?.let { player ->
-            api?.libvlc_media_player_stop(player)
-            api?.libvlc_media_player_release(player)
+        submitNative {
+            runCatching { mediaPlayer?.controls()?.stop() }
+            runCatching { mediaPlayer?.release() }
+            runCatching { factory?.release() }
+            mediaPlayer = null
+            factory = null
+            onState("Closed")
         }
-        instance?.let { api?.libvlc_release(it) }
-        mediaPlayer = null
-        instance = null
-        eventManager = null
-        eventCallback = null
-        onState("Closed")
+        nativeExecutor.shutdown()
     }
 
-    private fun requireApi(): LibVlc = checkNotNull(api) { "LibVLC is not initialised." }
+    private fun requirePlayer(): EmbeddedMediaPlayer = checkNotNull(mediaPlayer) { "LibVLC is not initialised." }
 
     private fun locateLibVlc(): File {
         val configured = sequenceOf(
@@ -136,43 +154,6 @@ internal class LibVlcPlayer(
         }
     }
 
-    private fun eventName(type: Int) = when (type) {
-        MediaPlayerOpening -> "Opening stream…"
-        MediaPlayerBuffering -> "Buffering stream…"
-        MediaPlayerPlaying -> "Playing"
-        MediaPlayerPaused -> "Paused"
-        MediaPlayerStopped -> "Stopped"
-        MediaEndReached -> "Ended"
-        MediaEncounteredError -> "Playback error. Check the stream is reachable and try again."
-        MediaPlayerPlaying -> "Playing"
-        else -> "LibVLC event $type"
-    }
-
-    private interface LibVlc : Library {
-        fun libvlc_new(argc: Int, argv: Array<String>?): Pointer?
-        fun libvlc_release(instance: Pointer)
-        fun libvlc_media_new_path(instance: Pointer, path: String): Pointer?
-        fun libvlc_media_new_location(instance: Pointer, location: String): Pointer?
-        fun libvlc_media_release(media: Pointer)
-        fun libvlc_media_player_new(instance: Pointer): Pointer?
-        fun libvlc_media_player_release(player: Pointer)
-        fun libvlc_media_player_set_media(player: Pointer, media: Pointer)
-        fun libvlc_media_player_play(player: Pointer): Int
-        fun libvlc_media_player_set_pause(player: Pointer, doPause: Int)
-        fun libvlc_media_player_stop(player: Pointer)
-        fun libvlc_media_player_set_position(player: Pointer, position: Float)
-        fun libvlc_media_player_set_time(player: Pointer, time: Long)
-        fun libvlc_media_player_get_time(player: Pointer): Long
-        fun libvlc_media_player_get_length(player: Pointer): Long
-        fun libvlc_media_player_set_hwnd(player: Pointer, drawable: Pointer)
-        fun libvlc_media_player_event_manager(player: Pointer): Pointer?
-        fun libvlc_event_attach(manager: Pointer, eventType: Int, callback: LibVlcEventCallback, userData: Pointer?): Int
-    }
-
-    private fun interface LibVlcEventCallback : Callback {
-        fun invoke(event: Pointer?, userData: Pointer?)
-    }
-
     private object NativeLibraryPath {
         fun configure(directory: File) {
             System.setProperty("jna.library.path", directory.absolutePath)
@@ -183,22 +164,6 @@ internal class LibVlcPlayer(
 
     private companion object {
         val supportedExtensions = setOf("mp4", "mkv", "ts")
-        const val MediaPlayerOpening = 258
-        const val MediaPlayerBuffering = 259
-        const val MediaPlayerPlaying = 260
-        const val MediaPlayerPaused = 261
-        const val MediaPlayerStopped = 262
-        const val MediaEndReached = 265
-        const val MediaEncounteredError = 266
-        val watchedEvents = intArrayOf(
-            MediaPlayerOpening,
-            MediaPlayerBuffering,
-            MediaPlayerPlaying,
-            MediaPlayerPaused,
-            MediaPlayerStopped,
-            MediaEndReached,
-            MediaEncounteredError,
-        )
     }
 }
 
