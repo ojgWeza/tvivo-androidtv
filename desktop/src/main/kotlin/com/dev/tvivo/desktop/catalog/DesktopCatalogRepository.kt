@@ -35,6 +35,7 @@ data class DesktopItem(
     val plot: String?,
 )
 data class DesktopEpisode(val id: String, val season: String, val title: String, val extension: String, val duration: String?, val resumeMs: Long = 0L, val episodeNumber: String? = null)
+data class DesktopSeriesResume(val series: DesktopItem, val episode: DesktopEpisode)
 data class AccountInfo(val status: String?, val expires: String?, val maxConnections: String?)
 
 /** Desktop cache. Schema versions are migrated in place; a catalog is always scoped to its account hash. */
@@ -129,9 +130,33 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
         db.prepareStatement("INSERT INTO resume_positions(account_id,content_type,content_id,position_ms,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,content_type,content_id) DO UPDATE SET position_ms=excluded.position_ms,updated_at=excluded.updated_at").use {
             it.setString(1, accountId); it.setString(2, contentType); it.setString(3, contentId); it.setLong(4, positionMs); it.setLong(5, System.currentTimeMillis()); it.executeUpdate()
         }
-        if (episode != null) return@use
+        if (episode != null) {
+            db.prepareStatement("INSERT INTO episode_resume(account_id,episode_id,series_id,season,episode_number,episode_title,extension,duration,position_ms,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,episode_id) DO UPDATE SET series_id=excluded.series_id,season=excluded.season,episode_number=excluded.episode_number,episode_title=excluded.episode_title,extension=excluded.extension,duration=excluded.duration,position_ms=excluded.position_ms,updated_at=excluded.updated_at").use {
+                it.setString(1, accountId); it.setString(2, episode.id); it.setString(3, item.id); it.setString(4, episode.season); it.setString(5, episode.episodeNumber)
+                it.setString(6, episode.title); it.setString(7, episode.extension); it.setString(8, episode.duration); it.setLong(9, positionMs); it.setLong(10, System.currentTimeMillis()); it.executeUpdate()
+            }
+            return@use
+        }
         db.prepareStatement("UPDATE items SET resume_ms=?, resume_updated_at=? WHERE account_id=? AND type=? AND id=?").use {
             it.setLong(1, positionMs); it.setLong(2, System.currentTimeMillis()); it.setString(3, accountId); it.setString(4, item.type.name); it.setString(5, item.id); it.executeUpdate()
+        }
+    }
+
+    fun recentItems(type: CatalogType, limit: Int = 3): List<DesktopItem> = connection().use { db ->
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND resume_ms>0 ORDER BY resume_updated_at DESC LIMIT ?").use { statement ->
+            statement.setString(1, accountId); statement.setString(2, type.name); statement.setInt(3, limit)
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+        }
+    }
+
+    fun recentEpisodes(limit: Int = 3): List<DesktopSeriesResume> = connection().use { db ->
+        db.prepareStatement("SELECT i.id,i.category_id,i.title,i.artwork,i.extension,i.rating,i.plot,e.episode_id,e.season,e.episode_title,e.extension,e.duration,e.position_ms,e.episode_number FROM episode_resume e JOIN items i ON i.account_id=e.account_id AND i.type='SERIES' AND i.id=e.series_id WHERE e.account_id=? ORDER BY e.updated_at DESC LIMIT ?").use { statement ->
+            statement.setString(1, accountId); statement.setInt(2, limit)
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) {
+                val series = item(rows, CatalogType.SERIES)
+                val episode = DesktopEpisode(rows.getString(8), rows.getString(9), rows.getString(10), rows.getString(11), rows.getString(12), rows.getLong(13), rows.getString(14))
+                add(DesktopSeriesResume(series, episode))
+            } } }
         }
     }
 
@@ -186,6 +211,11 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
                 sql.execute("CREATE TABLE IF NOT EXISTS resume_positions(account_id TEXT NOT NULL,content_type TEXT NOT NULL,content_id TEXT NOT NULL,position_ms INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,content_type,content_id))")
                 sql.execute("INSERT OR IGNORE INTO resume_positions(account_id,content_type,content_id,position_ms,updated_at) SELECT account_id,type,id,resume_ms,COALESCE(resume_updated_at,0) FROM items WHERE resume_ms>0")
                 sql.execute("UPDATE schema_version SET version=2")
+            }
+            if (version < 3) {
+                sql.execute("CREATE TABLE IF NOT EXISTS episode_resume(account_id TEXT NOT NULL,episode_id TEXT NOT NULL,series_id TEXT NOT NULL,season TEXT NOT NULL,episode_number TEXT,episode_title TEXT NOT NULL,extension TEXT NOT NULL,duration TEXT,position_ms INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,episode_id))")
+                sql.execute("CREATE INDEX IF NOT EXISTS episode_resume_recent ON episode_resume(account_id,updated_at DESC)")
+                sql.execute("UPDATE schema_version SET version=3")
             }
         }
     }

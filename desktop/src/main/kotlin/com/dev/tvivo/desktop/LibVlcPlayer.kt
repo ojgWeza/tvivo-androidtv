@@ -11,6 +11,7 @@ import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.zip.ZipInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -31,7 +32,7 @@ internal class LibVlcPlayer(
         NativeLibraryPath.configure(libVlcDirectory)
         api = Native.load("libvlc", LibVlc::class.java)
         val loadedApi = checkNotNull(api)
-        val createdInstance = checkNotNull(loadedApi.libvlc_new(0, null)) { "libvlc_new returned null." }
+        val createdInstance = checkNotNull(loadedApi.libvlc_new(1, arrayOf("--plugin-path=${File(libVlcDirectory, "plugins").absolutePath}"))) { "libvlc_new returned null." }
         instance = createdInstance
         val createdPlayer = checkNotNull(loadedApi.libvlc_media_player_new(createdInstance)) {
             "libvlc_media_player_new returned null."
@@ -47,9 +48,13 @@ internal class LibVlcPlayer(
             }
             onState(eventName(type))
         }.also { callback ->
-            eventManager?.let { loadedApi.libvlc_event_attach(it, MediaPlayerPlaying, callback, null) }
-            eventManager?.let { loadedApi.libvlc_event_attach(it, MediaEndReached, callback, null) }
-            eventManager?.let { loadedApi.libvlc_event_attach(it, MediaEncounteredError, callback, null) }
+            eventManager?.let { manager ->
+                watchedEvents.forEach { eventType ->
+                    check(loadedApi.libvlc_event_attach(manager, eventType, callback, null) == 0) {
+                        "LibVLC could not observe playback state."
+                    }
+                }
+            }
         }
         onState("Ready")
     }
@@ -85,9 +90,9 @@ internal class LibVlcPlayer(
         }
         try {
             loadedApi.libvlc_media_player_set_media(loadedPlayer, media)
-            check(loadedApi.libvlc_media_player_play(loadedPlayer) == 0) { "LibVLC could not start playback." }
             pendingResumeMs = resumeFromMs
-            onState(if (resumeFromMs > 0L) "Resuming" else "Opening stream…")
+            check(loadedApi.libvlc_media_player_play(loadedPlayer) == 0) { "LibVLC could not start playback." }
+            onState(if (resumeFromMs > 0L) "Resuming stream…" else "Opening stream…")
         } finally {
             loadedApi.libvlc_media_release(media)
         }
@@ -120,7 +125,7 @@ internal class LibVlcPlayer(
         val configured = sequenceOf(
             System.getProperty("tvivo.libvlc.dir"),
             System.getenv("TVIVO_LIBVLC_DIR"),
-            BundledLibVlc.install()?.absolutePath,
+            BundledLibVlc.install().absolutePath,
         ).filterNotNull().firstOrNull { File(it, "libvlc.dll").isFile }
             ?: error("The bundled LibVLC runtime could not be prepared. Reinstall Tvivo or set TVIVO_LIBVLC_DIR for development.")
         return File(configured).also {
@@ -132,6 +137,11 @@ internal class LibVlcPlayer(
     }
 
     private fun eventName(type: Int) = when (type) {
+        MediaPlayerOpening -> "Opening stream…"
+        MediaPlayerBuffering -> "Buffering stream…"
+        MediaPlayerPlaying -> "Playing"
+        MediaPlayerPaused -> "Paused"
+        MediaPlayerStopped -> "Stopped"
         MediaEndReached -> "Ended"
         MediaEncounteredError -> "Playback error. Check the stream is reachable and try again."
         MediaPlayerPlaying -> "Playing"
@@ -173,9 +183,22 @@ internal class LibVlcPlayer(
 
     private companion object {
         val supportedExtensions = setOf("mp4", "mkv", "ts")
+        const val MediaPlayerOpening = 258
+        const val MediaPlayerBuffering = 259
+        const val MediaPlayerPlaying = 260
+        const val MediaPlayerPaused = 261
+        const val MediaPlayerStopped = 262
         const val MediaEndReached = 265
         const val MediaEncounteredError = 266
-        const val MediaPlayerPlaying = 260
+        val watchedEvents = intArrayOf(
+            MediaPlayerOpening,
+            MediaPlayerBuffering,
+            MediaPlayerPlaying,
+            MediaPlayerPaused,
+            MediaPlayerStopped,
+            MediaEndReached,
+            MediaEncounteredError,
+        )
     }
 }
 
@@ -184,10 +207,10 @@ private object BundledLibVlc {
     private const val archiveResource = "/libvlc/vlc-3.0.23-win64.zip"
     private const val rootDirectory = "vlc-3.0.23/"
 
-    fun install(): File? = runCatching {
+    fun install(): File {
         val base = Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("java.io.tmpdir"), "Tvivo", "libvlc", "3.0.23")
         val runtime = base.resolve("libvlc.dll")
-        if (Files.isRegularFile(runtime)) return@runCatching base.toFile()
+        if (Files.isRegularFile(runtime)) return base.toFile()
         Files.createDirectories(base.parent)
         val staging = Files.createTempDirectory(base.parent, "3.0.23-")
         try {
@@ -198,18 +221,20 @@ private object BundledLibVlc {
                     require(target.startsWith(staging)) { "Invalid bundled runtime entry." }
                     if (entry.isDirectory) Files.createDirectories(target) else {
                         Files.createDirectories(target.parent)
-                        Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING)
+                        Files.newOutputStream(target, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
+                            zip.copyTo(output)
+                        }
                     }
                 }
             } }
             require(Files.isRegularFile(staging.resolve("libvlc.dll"))) { "Bundled LibVLC archive is incomplete." }
             runCatching { Files.move(staging, base, StandardCopyOption.ATOMIC_MOVE) }
                 .recoverCatching { Files.move(staging, base) }
-            base.toFile()
         } finally {
             if (Files.exists(staging)) Files.walk(staging).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
-    }.getOrNull()
+        return base.toFile()
+    }
 
     private fun resourceStream(): InputStream = checkNotNull(BundledLibVlc::class.java.getResourceAsStream(archiveResource)) {
         "Bundled LibVLC archive is missing."
