@@ -29,8 +29,19 @@ without executing something, say so and stop rather than guessing.
 
 ## Context discipline
 
+- **TODO/bible maintenance is binding**: `D:\HCode\bible-detail\todo-and-bible-maintenance.md`.
+  `todo-tree/` holds open items only — no dates, no completed checkboxes, no
+  session-status narrative appended at the end of a session. Closed work and its
+  lessons go into `docs/decisions.md`, not left in place in the todo-tree. This
+  project's `todo-tree/` and `bible-detail/` (66 files and two overlapping
+  slicings) drifted out of this contract once already (trimmed 2026-09-14) —
+  do not let it happen again on either tree.
 - Keep tool use proportional to the task. Read the named source and its direct
   dependencies, not whole backlogs or unrelated logs.
+- **Division of labor with Claude is binding, not per-session guidance**:
+  `bible-detail\claude-07-agent-division.md`. Read it at session start and
+  self-initialize per its "Session-start self-check" — do not wait for the
+  user to re-explain roles or re-paste a brief each session.
 - For a build or test request, make one properly configured attempt. If it is
   blocked by environment or missing tooling, report the exact blocker; do not
   retry through alternate caches, modes, or long polling unless the owner asks.

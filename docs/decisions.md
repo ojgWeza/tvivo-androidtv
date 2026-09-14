@@ -650,21 +650,110 @@ does not fit is rewritten, not wrapped.
 
 ## Desktop playback starts with LibVLC, but only after the native surface is ready
 
-**Decision (2026-09-13):** the Windows desktop spike uses dynamically loaded
-LibVLC through a narrow JNA binding. The application receives the LibVLC
-directory explicitly; the Compose/Desktop Gradle run task forwards it into the
-application JVM and sets `VLC_PLUGIN_PATH`. The native video surface is embedded
-only after its AWT canvas is displayable, so JNA can safely obtain an HWND.
+**Decision (updated 2026-09-14):** the Windows desktop application uses a
+version-pinned, dynamically loaded LibVLC runtime through a narrow JNA binding.
+The VideoLAN VLC 3.0.23 Windows x64 archive and its published SHA-256 accompany
+the desktop distribution. The application extracts it into its local runtime on
+first playback, so a user never needs to install VLC separately. A developer may
+override the location through `tvivo.libvlc.dir`. The native video surface is
+embedded only after its AWT canvas is displayable, so JNA can safely obtain an HWND.
 
 **Evidence:** a local synthetic MP4 played in the Compose Desktop window on
-Windows x64 using a locally installed LibVLC 3.0.23 ZIP whose SHA-256 was
-verified against VideoLAN's published checksum. The POC is partial: MKV, TS,
-seek/duration, tracks, media-end/error callbacks, and close/reopen teardown are
-not yet verified. No provider endpoint, credential, real stream, or native VLC
-binary entered the repository.
+Windows x64 using LibVLC 3.0.23 whose SHA-256 was verified against VideoLAN's
+published checksum. The POC is partial: MKV, TS, seek/duration, tracks,
+media-end/error callbacks, and close/reopen teardown are not yet verified. No
+provider endpoint, credential, or real stream enters automated validation.
 
 **UX consequence:** the test also showed that a naïve heavyweight native surface
 can leave a large black/matte frame and compete with Compose controls. This is
 not a desktop feature-parity green light. A design run must define the player
 viewport and control system before desktop feature work begins; Android TV gets
 the same viewport-quality review under N-16.
+
+## Archived todo-tree closures (folded 2026-09-14)
+
+`todo-tree/` was trimmed from 66 files to open-items-only per
+`D:\HCode\bible-detail\todo-and-bible-maintenance.md`. These items were closed/decided
+and are recorded here rather than kept as live todo-tree entries; each was independently
+verified present before its section file was deleted.
+
+- **Q-10 — TV IME owns the D-pad while open.** Platform constraint, not a defect: while
+  the on-screen keyboard is up, every arrow press goes to the keyboard, not the app.
+  `Show`/`Clear`/`Sign in` are reachable once the IME is dismissed with Back — the
+  standard Android TV model. Do not "fix" by intercepting keys harder; the original login
+  focus trap came from fighting this same platform behaviour.
+- **Q-11 — Sign in / Clear sit under the TV keyboard.** Fixed (D-1): centred 820px login
+  column, everything focusable above the IME ceiling. Fixed twice, survived both times.
+- **Q-12 — HD/SD stripping made distinct titles look like duplicates.** Fixed.
+- **Q-13 — Opening any listing re-downloaded the whole catalog.** Fixed.
+- **Q-15 — Icon pill drew a second rectangular focus indicator.** Fixed: `clickable`'s
+  default indication doesn't follow a pill's rounded shape; set
+  `indication = null` and rely on `tvFocusFrame`, applied to every `clickable` site.
+- **Q-16 — Exit pill glyph rendered as tofu.** Fixed: restrict placeholder glyphs to ones
+  that actually exist in Roboto/Noto on Android TV; verify each on-device.
+- **Q-17 — RIGHT from a pill sometimes landed on a tile instead of the next pill.**
+  Fixed: explicit `focusProperties` across the pill row instead of trusting the 2D focus
+  search, which can be won by a tile mid-animation.
+- **Q-18 — Overlaid card titles hard to read over bright artwork.** Fixed: scrim given
+  its own height (68dp on a 165dp poster) instead of being sized to the text.
+- **Q-19 — Category/item filter fields trapped focus.** Fixed: `ui/common/DpadField.kt`
+  lifted from `LoginScreen`'s private `dpadFieldNavigation` into a shared contract; any
+  focusable text field on a TV must carry it.
+- **Q-20 — Splash mark showed its launcher background as a box.** Fixed: separate
+  `ic_mark.xml` without the launcher background rect, for in-app use.
+- **Q-22 — Diagnostic log had almost no call sites.** Fixed, verified 2026-09-10.
+- **Q-23 — Sign out rendered as an empty focus frame.** Fixed: an unscrollable `Column`
+  squeezes its last child rather than overflowing; added `verticalScroll` so every row
+  gets its full height. Same class as Q-11 — content below the fold on a fixed-height
+  screen.
+- **Q-25 — Browse screen opened with nothing focused.** Fixed, root cause behind Q-24:
+  an Android TV screen with no focus owner has no D-pad behaviour — the first press runs
+  an originless 2D search. Fix: request focus onto the rail once categories arrive, UP
+  from the first row only opens the filter, and the field reads "Search" at rest.
+- **Q-26 — Virtual folders rendered "Loading…" forever.** Fixed: `PagingData.from(list)`
+  without explicit `LoadStates` leaves `refresh` as `Loading` forever; pass explicit
+  `NotLoading(endOfPaginationReached = true)` for a virtual folder's full in-hand list.
+- **Q-27 — Back from the episode picker skipped the pre-run page.** Fixed: now returns
+  to `Route.ItemDetail`.
+- **QA-10 — Whole-number ratings rendered with a trailing `.0`.** Fixed,
+  verified on-emulator 2026-09-14: shared `Double.asRatingLabel()`
+  (`BrowseItem.kt`) used by both the grid card badge and the detail page now
+  shows `7`/`6` for whole numbers; zero/unrated correctly shows no badge at
+  all, distinct from an independent quality badge. Fractional formatting
+  (`%.1f` branch) is unchanged code, code-reviewed but not live-verified —
+  this panel's catalog has zero non-integer ratings across 45,822 rated rows,
+  so no on-device fixture exists to exercise it.
+- **T-T1 — Room DAO and transaction tests.** Done: `CatalogDaoTest` (16) +
+  `CatalogSyncerTest` (11).
+- **T-T2 — Instrumented D-pad focus traversal tests.** Verified on API 34 emulator
+  2026-09-13; needed `androidx.test.runner.AndroidJUnitRunner` declared explicitly or
+  Android silently selects the legacy runner and discovers no JUnit4 tests.
+- **N-7 — Global search across all three content types.** Declined 2026-09-13.
+- **N-15 — Windows desktop playback POC (POC-D1).** Superseded 2026-09-14: the owner
+  dismissed the POC-D1 gate and Windows desktop is now an active product target under
+  the `D-Desktop-*` items — see `todo-tree/63-section.md` and `handoff.md`. This entry
+  is kept only as history; do not re-scope desktop work back down to a POC.
+- **D-1..D-12 (UI work batch) and D-13..D-17 (feature work batch)** — all built, see
+  `todo-tree/38-section.md`'s and `39-section.md`'s prior content for file-level detail
+  if ever needed; superseded by this archive as the summary record. Exceptions: D-9
+  (Home tile photographs), D-10 (splash mark/wordmark/progress bar polish), and D-11
+  (app mark + TV banner) were never built — kept as an open item, see `todo-tree/`.
+- **Exit placement, icon set, and title-overlay-coverage open questions** (formerly
+  `todo-tree/40-section.md`): Exit uses a two-option confirm dialog defaulting to "Stay
+  in Tvivo", last in Home's icon row. Icon set is placeholder pending T-D1. Title overlay
+  is capped at 2 lines + ellipsis because the quality badge is a separate element.
+- **Phases 0-3 + Account screen, and Phase 4 (Series).** Done — Account screen is the
+  path used to test login (Account → "Sign in to a different account", does not wipe
+  current credentials).
+- **Environment notes** (emulator quirks, formerly `todo-tree/58-section.md`/`61-section.md`
+  "Part 5"): media volume defaults to 3/15 (`adb shell input keyevent 24` x14); host
+  keyboard shortcuts need `forwardShortcutsToDevice` in
+  `HKCU\Software\Android Open Source Project\Emulator\set` (conflicts with Esc-as-Back —
+  pick per task, do not add a `KEYCODE_ESCAPE` handler to app code); prefer pasting
+  credentials over typing; `-gpu swiftshader_indirect` required; `-memory 1536` with
+  Gradle/Kotlin daemons stopped first (34s→1.4s launch); `adb exec-out` not `adb shell`
+  for binary pulls on Windows; Android TV AVDs have no touchscreen. `tools/emulator.sh`
+  already applies these.
+- **Considered and not taken:** idle dim/screensaver (not worth tracking yet), voice
+  search (declined as a whole integration for one field), `KEYCODE_ESCAPE` handling in
+  the player (emulator config artefact, not a product requirement).
