@@ -38,6 +38,22 @@ data class DesktopEpisode(val id: String, val season: String, val title: String,
 data class DesktopSeriesResume(val series: DesktopItem, val episode: DesktopEpisode)
 data class AccountInfo(val status: String?, val expires: String?, val maxConnections: String?)
 
+/**
+ * Some panels template titles as `"{title} ({quality})"` and substitute an empty string
+ * when quality metadata is missing, leaving the punctuation behind: `"Movie Name ()"`,
+ * `"Movie Name () ()"`, or a title that is *only* `"HD ()"`. Mirrors the same rule in the
+ * Android app's `NameNormalizer` (app/src/main/java/com/dev/Tvivo/data/local/
+ * NameNormalizer.kt) -- duplicated here rather than shared because `desktop` depends only
+ * on `shared-core`, not the `app` module `NameNormalizer` lives in; if a third place ever
+ * needs this rule, move it to `shared-core` instead of duplicating a third time.
+ */
+private val EMPTY_BRACKETS = Regex("[\\(\\[][\\s\\-:|]*[\\)\\]]")
+private val WHITESPACE = Regex("\\s+")
+private fun cleanTitle(name: String?): String {
+    val cleaned = WHITESPACE.replace(EMPTY_BRACKETS.replace(name ?: "", " "), " ").trim()
+    return cleaned.ifBlank { "Untitled" }
+}
+
 /** Desktop cache. Schema versions are migrated in place; a catalog is always scoped to its account hash. */
 internal class DesktopCatalogRepository(private val credentials: Credentials) : AutoCloseable {
     private val accountId = AccountIdentity.of(credentials)
@@ -68,20 +84,38 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
     }
 
     fun items(type: CatalogType, category: String, query: String): List<DesktopItem> = connection().use { db ->
-        val virtual = category.startsWith("__")
-        val where = when (category) {
-            "__favourites" -> "favourite=1"
-            "__continue" -> "resume_ms>0"
-            "__recent" -> "1=1"
-            "__all" -> "1=1"
-            else -> "category_id=?"
-        }
-        val order = if (category == "__recent") "added_at DESC" else "title COLLATE NOCASE"
-        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order LIMIT 500").use { statement ->
-            var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
-            if (!virtual) statement.setString(i++, category)
-            statement.setString(i, "%${query.trim()}%")
-            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+        // D-Desktop-16b: series continuation lives in episode_resume (one row per episode), not on
+        // the series row's own resume_ms -- recordResume() never writes items.resume_ms for a
+        // series play (see recordResume below). "__continue" for SERIES must join the episode
+        // table instead, or it silently returns nothing.
+        if (type == CatalogType.SERIES && category == "__continue") {
+            // Codex review (2026-09-15): match the resume_ms>0 semantics the MOVIES/LIVE branch
+            // below uses -- a zero-position episode_resume row (finished/reset) must not count as
+            // "continue watching" just because a row exists.
+            db.prepareStatement(
+                "SELECT i.id,i.category_id,i.title,i.artwork,i.extension,i.rating,i.plot FROM items i " +
+                    "JOIN (SELECT series_id, MAX(updated_at) AS last_watched FROM episode_resume WHERE account_id=? AND position_ms>0 GROUP BY series_id) e " +
+                    "ON e.series_id=i.id WHERE i.account_id=? AND i.type=? AND i.title LIKE ? ORDER BY e.last_watched DESC LIMIT 500"
+            ).use { statement ->
+                statement.setString(1, accountId); statement.setString(2, accountId); statement.setString(3, type.name); statement.setString(4, "%${query.trim()}%")
+                statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+            }
+        } else {
+            val virtual = category.startsWith("__")
+            val where = when (category) {
+                "__favourites" -> "favourite=1"
+                "__continue" -> "resume_ms>0"
+                "__recent" -> "1=1"
+                "__all" -> "1=1"
+                else -> "category_id=?"
+            }
+            val order = if (category == "__recent") "added_at DESC" else "title COLLATE NOCASE"
+            db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order LIMIT 500").use { statement ->
+                var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
+                if (!virtual) statement.setString(i++, category)
+                statement.setString(i, "%${query.trim()}%")
+                statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+            }
         }
     }
 
@@ -223,7 +257,7 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
         val id = if (type == CatalogType.SERIES) row.string("series_id") else row.string("stream_id")
         if (id == null) return
         statement.setString(1, accountId); statement.setString(2, type.name); statement.setString(3, id); statement.setString(4, row.string("category_id") ?: "")
-        statement.setString(5, row.string("name") ?: "Untitled"); statement.setString(6, row.string(if (type == CatalogType.SERIES) "cover" else "stream_icon"))
+        statement.setString(5, cleanTitle(row.string("name"))); statement.setString(6, row.string(if (type == CatalogType.SERIES) "cover" else "stream_icon"))
         statement.setString(7, row.string(if (type == CatalogType.LIVE) "ext" else "container_extension") ?: if (type == CatalogType.LIVE) "ts" else "mp4")
         statement.setString(8, row.string("rating")); statement.setString(9, row.string("plot")); statement.setLong(10, row.string("added")?.toLongOrNull() ?: System.currentTimeMillis()); statement.addBatch()
     }

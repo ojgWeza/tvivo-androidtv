@@ -840,3 +840,124 @@ file-lock open that succeeded immediately from the interactive session; not a pr
 defect, and not fixable from within this repo) and a real-provider-stream repeat of the
 same input checks (fixture-only verification was accepted as sufficient for closing this
 item; revisit if a provider-stream-specific input issue surfaces later).
+
+## D-Desktop-16a — Home empty-shelf/first-run fix closed (2026-09-15)
+
+**Closed:** first of five sub-items split out of D-Desktop-16 (owner: "make the main
+screen more intelligent and intuitive instead of holding empty sections and being not
+usable"), per the consolidated Claude/Codex decision recorded against the owner's
+`docs/design/desktop-home-proposal.md`. 16b-16e remain open in `todo-tree/01-open.md`.
+
+**Fix (`DesktopShell.kt`, `HomeScreen`/`HomeShelf`/`EpisodeHomeShelf`):**
+- `HomeShelf` and `EpisodeHomeShelf` now `return` immediately when their item list is
+  empty — no title, no "will appear here" placeholder copy — instead of always rendering
+  a section that explains its own absence.
+- A `loaded` flag plus a `hasAnyContinuation` check drive a new first-run/empty-library
+  message ("Nothing to continue yet" + next-action copy), shown only once the initial
+  load has resolved successfully and all three continuation lists (live, movies,
+  episode-resume) are genuinely empty.
+- Incidental bug fix found while touching this code: the manual Refresh button called
+  `repository.refresh(type)` for every catalog type but never reloaded the continuation
+  shelves afterward, so they stayed stale until app restart. `loadRecent()` (converted
+  from a fire-and-forget `scope.launch` to a `suspend fun`) is now called again after a
+  successful refresh.
+- Owner follow-up during review: removed the "Tonight's movie shelf" hero block (owner:
+  "it's meaningless") — Home now goes straight from the Welcome/Refresh header into the
+  continuation shelves.
+
+**Review process:** Codex ran a read-only adversarial review of the owner's proposal
+against `DesktopShell.kt`/`DesktopCatalogRepository.kt` before any plan was written (see
+`todo-tree/01-open.md`'s D-Desktop-16 entry for the full consolidated split and the gaps
+it surfaced — schema unit-mismatch in `added_at`, Live TV incorrectly treated as
+resumable, missing route-state preservation — none of which 16a needed to touch). Codex
+then ran the acceptance-criteria test pass: verified by direct SQLite fixture (a
+rolled-back transaction reproducing a genuinely empty cache, and the real local cache's
+existing partial state) that the empty-shelf and first-run logic behave correctly, and by
+source trace that Refresh now reloads shelves and that the continue-watching series path
+is unchanged (regression pass). Codex's pane has no interactive desktop/GDI session, so
+it could not capture a screenshot of the rendered UI — flagged plainly rather than
+fabricated.
+
+**Verification:** owner looked at the running app directly (`:desktop:run`, compiled
+clean both before and after the hero-block removal) and confirmed the result.
+
+## D-Desktop-16b — Home navigation/route-state prerequisite closed (2026-09-15)
+
+**Closed:** second of five sub-items split out of D-Desktop-16. 16c-16e remain open in
+`todo-tree/01-open.md`.
+
+**Fix (`DesktopShell.kt`):**
+- New `BrowseSavedState` class — one instance per `CatalogType`, hoisted at `DesktopShell`
+  scope (not `remember`ed inside `BrowseScreen`) so it survives leaving Browse for Detail/
+  Episodes/Player and coming back: `filter`, `categoryFilter`, `query`, `highlightedId`,
+  `items` (the last-loaded list), and a `LazyGridState`.
+- `HomeScreen`'s `onBrowse` changed from `(CatalogType) -> Unit` to `(CatalogType, String)
+  -> Unit` — a typed destination filter. Continue-watching shelves pass `"__continue"`;
+  the generic Explore tiles pass `"__all"` — `See all` now opens on the matching virtual
+  folder instead of always landing on the unfiltered catalog.
+- The card opened from Browse gets an accent-border highlight on return, and (after the
+  fix below) the grid's scroll position survives the round-trip.
+- Real bug fix found along the way (`DesktopCatalogRepository.items()`): SERIES +
+  `"__continue"` was silently always empty — `recordResume()` never writes
+  `items.resume_ms` for a series play, only `episode_resume`. Replaced with a join against
+  `episode_resume` (grouped by series, most recent `updated_at`), restricted to
+  `position_ms>0` to match the semantics the MOVIES/LIVE branch already had (a zero-position
+  row is "finished/reset," not "in progress" — Codex caught this during its test pass,
+  see below).
+
+**Review process:** Codex ran a source-trace + SQLite-fixture test pass (no live GUI —
+same display-access limitation as D-Desktop-14/16a) against four acceptance criteria (join
+correctness, non-series path unaffected, typed `See all` wiring, per-tab state isolation)
+— all four passed, plus the `position_ms>0` gap above, which was fixed immediately.
+
+**Bug found by the owner during live testing, fixed by Codex directly (first use of the
+new heavier-Codex-delegation posture, see `todo-and-bible-maintenance.md`/session memory
+`codex-heavier-usage`):** scroll position did not actually survive a Browse → Detail →
+Back round-trip, despite the highlight border working (proving `BrowseSavedState` itself
+survived). Root cause: `catalogItems` was a *local* `remember` inside `BrowseScreen`, not
+part of the hoisted state — every remount reset it to an empty list while the async reload
+ran, and `LazyGridState` clamped its saved scroll index to 0 against that transient
+zero-item frame. Fix: moved `items` into `BrowseSavedState` so the grid never renders a
+zero-item frame across a remount. Codex implemented this directly (not just diagnosed it),
+compiled clean, and reported back for review — owner re-tested live afterward and
+confirmed both scroll position and per-tab isolation (filter + scroll independent across
+Movies/Series/Live) now work.
+
+**Verification:** owner tested live against the manual step list (typed `See all`, scroll
+restoration, highlight border, per-tab isolation) twice — once before the scroll-position
+bug was found, once after Codex's fix — and confirmed pass on the second round.
+
+## Catalog title cleanup — empty bracket artifacts from panel templating (2026-09-15)
+
+**Not a D-Desktop-16 item — a standalone catalog data-quality bug**, found by the owner
+while testing D-Desktop-16b: some provider panels template titles as `"{title}
+({quality})"` and substitute an empty string when quality metadata is missing, leaving
+titles that render as literal `"()"`, `"() ()"`, or `"HD ()"`.
+
+**Fix, two places:**
+- `app/src/main/java/com/dev/Tvivo/data/local/NameNormalizer.kt` (Android/TV app): added
+  an `EMPTY_BRACKETS` regex strip, run *before* the existing quality-token stripping —
+  ordering matters, since doing it after would let `"HD ()"` reduce to a bare `"()"` (the
+  quality-token loop's "don't empty the whole title" guard only protects the token being
+  stripped, not what's left over once brackets are gone). Also changed the final fallback
+  from `s.ifEmpty { raw.trim() }` to `s.ifBlank { quality ?: "Untitled" }`, since falling
+  back to the raw string would put the original `"()"` right back for a title that was
+  nothing but empty brackets. Three new regression tests added to
+  `NameNormalizerTest.kt`.
+- `desktop/src/main/kotlin/com/dev/tvivo/desktop/catalog/DesktopCatalogRepository.kt`: the
+  desktop app did **no** title cleanup at all before this — raw provider names were stored
+  and displayed verbatim. Added a small `cleanTitle()` (same `EMPTY_BRACKETS` rule, no
+  quality-token handling since desktop doesn't render a quality badge), applied in
+  `insertItem()`. Deliberately duplicated rather than shared: `desktop` depends only on
+  `shared-core`, not the `app` module `NameNormalizer` lives in; noted in a comment as a
+  candidate to consolidate into `shared-core` if a third place ever needs the same rule.
+
+**Verification:** desktop compiled clean (Claude). Android-side handed to Codex (first
+full use of the heavier-delegation posture, see session memory `codex-heavier-usage`):
+`:app:testDebugUnitTest` — 20 tests, 0 failures (3 new + no regressions);
+`:app:compileDebugKotlin` — BUILD SUCCESSFUL. Codex also audited the rest of the Android
+app for other raw-title reads bypassing `NameNormalizer.of()` and found none on the
+movie/series/live catalog path; it did find two unrelated bypasses worth a follow-up note
+— `SeriesInfoParser.kt` reads a raw season name for the season-rail label, and
+`CategoryListParser.kt` reads a raw `category_name` for the category-rail label — neither
+is a media title, so out of scope for this fix, left untouched as instructed.

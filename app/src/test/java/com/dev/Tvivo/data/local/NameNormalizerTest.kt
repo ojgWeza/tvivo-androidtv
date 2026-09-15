@@ -37,6 +37,36 @@ class NameNormalizerTest {
     }
 
     /**
+     * Some panels template titles as `"{title} ({quality})"` and substitute an empty
+     * string when quality metadata is missing, leaving the punctuation behind.
+     */
+    @Test
+    fun `empty bracket groups from a panel template are removed`() {
+        assertEquals("Movie Name", NameNormalizer.of("Movie Name ()").display)
+        assertEquals("Movie Name", NameNormalizer.of("Movie Name () ()").display)
+        assertEquals("Movie Name", NameNormalizer.of("Movie Name [ ]").display)
+    }
+
+    /**
+     * A title that is only a quality token plus an empty bracket group ("HD ()") must not
+     * strip down to a bare "()" -- the empty-bracket removal has to run before the
+     * quality-token stripping, or the quality-stripping's own "don't empty the whole
+     * title" guard only protects against emptying "()", not against leaving it behind.
+     */
+    @Test
+    fun `title that is only a quality token and empty brackets does not display as punctuation`() {
+        val display = NameNormalizer.of("HD ()").display
+        assertFalse(display.contains("("))
+        assertFalse(display.contains(")"))
+        assertTrue(display.isNotBlank())
+    }
+
+    @Test
+    fun `title that is only empty brackets falls back to a placeholder`() {
+        assertEquals("Untitled", NameNormalizer.of("()").display)
+    }
+
+    /**
      * The exact title from the API reference: a strong LTR run opening an Arabic title is
      * what makes Compose resolve the paragraph LTR and put the ellipsis on the wrong edge.
      */

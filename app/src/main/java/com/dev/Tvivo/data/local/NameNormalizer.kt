@@ -29,6 +29,16 @@ object NameNormalizer {
     private val WHITESPACE = Regex("\\s+")
     private val COMBINING_MARKS = Regex("\\p{Mn}+")
 
+    /**
+     * Matches a bracket pair with nothing (or only punctuation/whitespace) between them --
+     * `()`, `( )`, `[]`, `[-]`. Some panels template titles as `"{title} ({quality})"` and
+     * substitute an empty string when quality metadata is missing, leaving the empty
+     * parens behind: `"Movie Name ()"`, `"Movie Name () ()"`, or -- combined with the
+     * quality-token stripping below -- a title that is *only* `"HD ()"`, which strips down
+     * to a bare `"()"` if this isn't handled first.
+     */
+    private val EMPTY_BRACKETS = Regex("[\\(\\[][\\s\\-:|]*[\\)\\]]")
+
     fun of(raw: String): Names {
         val display = toDisplay(raw)
         return Names(raw = raw, display = display, normalized = toNormalized(display))
@@ -74,6 +84,15 @@ object NameNormalizer {
         var s = raw.replace(ARABIC_DIACRITICS, "")
         s = WHITESPACE.replace(s, " ").trim()
 
+        // Empty bracket groups are removed before quality-token stripping runs, not after:
+        // "HD ()" with the emptiness left in would strip "HD" as a quality token (the "at
+        // least one token remains" guard below only protects the token being stripped, not
+        // what's left over) and leave the display as literally "()". Doing it first turns
+        // that same input into "HD" -- still not a real title, but not punctuation either --
+        // and leaves genuine multi-word titles like "Movie Name () ()" as "Movie Name".
+        s = EMPTY_BRACKETS.replace(s, " ")
+        s = WHITESPACE.replace(s, " ").trim()
+
         // Quality tokens are stripped from the edges only. Removing them mid-title would
         // mangle real names that happen to contain "4K" or "HD".
         val found = mutableListOf<String>()
@@ -96,7 +115,12 @@ object NameNormalizer {
         // Highest-fidelity token wins: "MOVIE 4K HD" is a 4K stream, and one badge is all
         // a poster caption has room for.
         val quality = found.minByOrNull { QUALITY_RANK.indexOf(it).let { i -> if (i < 0) Int.MAX_VALUE else i } }
-        return Stripped(display = s.ifEmpty { raw.trim() }, quality = quality)
+        // A raw title that was nothing but empty brackets ("()", "[ ]") strips down to
+        // blank. Falling back to `raw.trim()` here would put the original "()" right back
+        // on screen -- fall back to the quality badge text if there was one, else the
+        // catalog-wide placeholder used elsewhere for a missing name.
+        val display = s.ifBlank { quality ?: "Untitled" }
+        return Stripped(display = display, quality = quality)
     }
 
     private fun canonicalQuality(token: String): String =

@@ -90,21 +90,54 @@ private val Accent = Color(0xFFD97757)
 
 private sealed interface DesktopRoute { data object Home : DesktopRoute; data class Browse(val type: CatalogType) : DesktopRoute; data class Detail(val item: DesktopItem) : DesktopRoute; data class Episodes(val item: DesktopItem, val season: String? = null) : DesktopRoute; data class Player(val item: DesktopItem, val episode: DesktopEpisode? = null, val returnSeason: String? = null) : DesktopRoute; data object Account : DesktopRoute }
 
+/**
+ * D-Desktop-16b: one instance per [CatalogType], hoisted at [DesktopShell] scope rather than
+ * `remember`ed inside [BrowseScreen] -- so it survives leaving Browse for Detail/Episodes/Player
+ * and coming back, instead of resetting every time the route is re-entered. Field-level
+ * `mutableStateOf` (not a wrapping `MutableState<BrowseSavedState>`) is deliberate: replacing the
+ * whole object on every filter/query change would recreate [gridState] too, losing scroll
+ * position on the exact edit that's supposed to preserve it.
+ */
+private class BrowseSavedState {
+    var filter by mutableStateOf("__all")
+    var categoryFilter by mutableStateOf("")
+    var query by mutableStateOf("")
+    var highlightedId by mutableStateOf<String?>(null)
+    // Keep the last data set mounted with the grid state. On a Browse -> Detail -> Browse
+    // round-trip, a transient empty list would otherwise clamp LazyGridState back to index 0
+    // before the asynchronous reload completes.
+    var items by mutableStateOf(emptyList<DesktopItem>())
+    val gridState = androidx.compose.foundation.lazy.grid.LazyGridState()
+}
+
 @Composable
 internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     val repository = remember(credentials) { DesktopCatalogRepository(credentials) }
     var route by remember { mutableStateOf<DesktopRoute>(DesktopRoute.Home) }
     var playerFullScreen by remember { mutableStateOf(false) }
+    // D-Desktop-16b: keyed by tab so switching Movies -> Series -> Movies doesn't cross-clobber
+    // each tab's own filter/scroll/selection.
+    val browseStates = remember { mutableMapOf<CatalogType, BrowseSavedState>() }
+    fun browseState(type: CatalogType) = browseStates.getOrPut(type) { BrowseSavedState() }
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(background = Background, surface = Surface, primary = Accent, onBackground = Ink, onSurface = Ink)) {
         Column(Modifier.fillMaxSize().background(Background)) {
             if (!playerFullScreen) TopNavigation(route, onRoute = { route = it })
             when (val current = route) {
                 DesktopRoute.Home -> HomeScreen(
                     repository = repository,
-                    onBrowse = { route = DesktopRoute.Browse(it) },
+                    // D-Desktop-16b: "See all" now carries a typed destination filter (e.g.
+                    // __continue, __favourites) instead of always landing on the unfiltered "__all"
+                    // browse -- this is what lets a continuation shelf's See all actually open on
+                    // the matching virtual folder rather than the full catalog.
+                    onBrowse = { type, filter -> browseState(type).filter = filter; route = DesktopRoute.Browse(type) },
                     onPlay = { item, episode -> route = DesktopRoute.Player(item, episode, episode?.season) },
                 )
-                is DesktopRoute.Browse -> BrowseScreen(repository, current.type, onDetail = { route = if (it.type == CatalogType.SERIES) DesktopRoute.Episodes(it) else DesktopRoute.Detail(it) })
+                is DesktopRoute.Browse -> BrowseScreen(repository, current.type, browseState(current.type), onDetail = {
+                    // Remember which card was open so returning to this tab highlights it, not just
+                    // restores the scroll offset gridState already keeps for free.
+                    browseState(current.type).highlightedId = it.id
+                    route = if (it.type == CatalogType.SERIES) DesktopRoute.Episodes(it) else DesktopRoute.Detail(it)
+                })
                 is DesktopRoute.Detail -> DetailScreen(repository, current.item, onPlay = { route = DesktopRoute.Player(current.item) }, onBack = { route = DesktopRoute.Browse(current.item.type) })
                 is DesktopRoute.Episodes -> EpisodeScreen(repository, current.item, current.season, onPlay = { episode, season -> route = DesktopRoute.Player(current.item, episode, season) }, onBack = { route = DesktopRoute.Browse(CatalogType.SERIES) })
                 is DesktopRoute.Player -> DesktopPlayerScreen(
@@ -141,62 +174,86 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     verticalAlignment = Alignment.CenterVertically,
 ) { Icon(icon, contentDescription = label, tint = if (selected) Ink else Dim); Text(label, color = if (selected) Ink else Dim, modifier = Modifier.padding(start = 7.dp)) }
 
-@Composable private fun HomeScreen(repository: DesktopCatalogRepository, onBrowse: (CatalogType) -> Unit, onPlay: (DesktopItem, DesktopEpisode?) -> Unit) {
+@Composable private fun HomeScreen(repository: DesktopCatalogRepository, onBrowse: (CatalogType, String) -> Unit, onPlay: (DesktopItem, DesktopEpisode?) -> Unit) {
     val scope = rememberCoroutineScope(); var refreshMessage by remember { mutableStateOf("Loading your library…") }
+    // D-Desktop-16a: distinguishes "haven't loaded yet" from "loaded and genuinely empty" so the
+    // first-run actionable state below doesn't flash before the initial load resolves.
+    var loaded by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf(emptyList<DesktopItem>()) }; var movies by remember { mutableStateOf(emptyList<DesktopItem>()) }; var episodes by remember { mutableStateOf(emptyList<DesktopSeriesResume>()) }
-    fun loadRecent() { scope.launch { withContext(Dispatchers.IO) { Triple(repository.recentItems(CatalogType.LIVE), repository.recentItems(CatalogType.MOVIES), repository.recentEpisodes()) }.let { (recentLive, recentMovies, recentEpisodes) -> live = recentLive; movies = recentMovies; episodes = recentEpisodes } } }
-    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.ensureLoaded(it) } } }.onSuccess { refreshMessage = ""; loadRecent() }.onFailure { refreshMessage = "Library unavailable. Use Refresh library to try again." } }
+    suspend fun loadRecent() { withContext(Dispatchers.IO) { Triple(repository.recentItems(CatalogType.LIVE), repository.recentItems(CatalogType.MOVIES), repository.recentEpisodes()) }.let { (recentLive, recentMovies, recentEpisodes) -> live = recentLive; movies = recentMovies; episodes = recentEpisodes } }
+    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.ensureLoaded(it) } } }.onSuccess { refreshMessage = ""; loadRecent() }.onFailure { refreshMessage = "Library unavailable. Use Refresh library to try again." }; loaded = true }
+    val hasAnyContinuation = live.isNotEmpty() || movies.isNotEmpty() || episodes.isNotEmpty()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 42.dp, vertical = 34.dp)) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Welcome back", style = MaterialTheme.typography.headlineLarge, color = Ink); Text("Pick up where you left off, or find something new.", color = Dim, modifier = Modifier.padding(top = 6.dp)) }; Button(onClick = { scope.launch { refreshMessage = "Refreshing library…"; runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.refresh(it) } } }.onSuccess { refreshMessage = "Library refreshed." }.onFailure { refreshMessage = it.message ?: "Refresh failed; cached items are still available." } } }) { Icon(Icons.Default.Refresh, contentDescription = null); Text("Refresh", modifier = Modifier.padding(start = 6.dp)) } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Welcome back", style = MaterialTheme.typography.headlineLarge, color = Ink); Text("Pick up where you left off, or find something new.", color = Dim, modifier = Modifier.padding(top = 6.dp)) }; Button(onClick = { scope.launch { refreshMessage = "Refreshing library…"; runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.refresh(it) } } }.onSuccess { refreshMessage = "Library refreshed."; loadRecent() }.onFailure { refreshMessage = it.message ?: "Refresh failed; cached items are still available." } } }) { Icon(Icons.Default.Refresh, contentDescription = null); Text("Refresh", modifier = Modifier.padding(start = 6.dp)) } }
     if (refreshMessage.isNotBlank()) Text(refreshMessage, color = Dim, modifier = Modifier.padding(top = 10.dp))
-    Box(Modifier.fillMaxWidth().height(250.dp).padding(top = 28.dp).clip(RoundedCornerShape(18.dp)).background(Elevated).clickable { onBrowse(CatalogType.MOVIES) }) {
-        ArtworkImage(null, Modifier.fillMaxSize(), homeTile(CatalogType.MOVIES))
-        Column(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xED0A1619), Color(0xAA0A1619), Color.Transparent))).padding(30.dp), verticalArrangement = Arrangement.Bottom) { Text("Tonight’s movie shelf", color = Ink, style = MaterialTheme.typography.headlineLarge); Text("Browse films by category, favourites, and recently added.", color = Dim, modifier = Modifier.padding(top = 7.dp)); Text("Explore movies", color = Accent, modifier = Modifier.padding(top = 16.dp)) }
+    // D-Desktop-16a: a shelf with nothing in it must not occupy space or explain its own absence
+    // (proposal rule) -- each shelf composable now renders nothing at all when its list is empty.
+    HomeShelf("Continue with Live TV", live, onBrowse = { onBrowse(CatalogType.LIVE, "__continue") }, onPlay = { onPlay(it, null) })
+    HomeShelf("Continue watching movies", movies, onBrowse = { onBrowse(CatalogType.MOVIES, "__continue") }, onPlay = { onPlay(it, null) })
+    // Series continuation is tracked per-episode (episode_resume), not on the series row's own
+    // resume_ms -- "__continue" now resolves that correctly for SERIES too (see items() below).
+    EpisodeHomeShelf(episodes, onBrowse = { onBrowse(CatalogType.SERIES, "__continue") }, onPlay = onPlay)
+    // D-Desktop-16a first-run/empty-library state: once the initial load has resolved
+    // successfully and there is genuinely nothing to continue, say so with a next action instead
+    // of leaving three vanished shelves and no explanation.
+    if (loaded && refreshMessage.isBlank() && !hasAnyContinuation) {
+        Column(Modifier.fillMaxWidth().padding(top = 30.dp).clip(RoundedCornerShape(14.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(14.dp)).padding(22.dp)) {
+            Text("Nothing to continue yet", color = Ink, style = MaterialTheme.typography.titleLarge)
+            Text("Play something from Movies, Series, or Live TV and it will show up here next time.", color = Dim, modifier = Modifier.padding(top = 6.dp))
+        }
     }
-    HomeShelf("Continue with Live TV", live, onBrowse = { onBrowse(CatalogType.LIVE) }, onPlay = { onPlay(it, null) })
-    HomeShelf("Continue watching movies", movies, onBrowse = { onBrowse(CatalogType.MOVIES) }, onPlay = { onPlay(it, null) })
-    EpisodeHomeShelf(episodes, onBrowse = { onBrowse(CatalogType.SERIES) }, onPlay = onPlay)
     Text("Explore", color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        CatalogType.entries.forEach { type -> Box(Modifier.weight(1f).height(172.dp).clip(RoundedCornerShape(14.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(14.dp)).clickable { onBrowse(type) }) { ArtworkImage(null, Modifier.fillMaxSize(), homeTile(type)); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE80A1619)))).padding(18.dp), verticalArrangement = Arrangement.Bottom) { Text(type.title, color = Ink, style = MaterialTheme.typography.titleLarge); Text(if (type == CatalogType.LIVE) "Channels and live events" else "Browse your library", color = Dim, modifier = Modifier.padding(top = 3.dp)) } } }
+        CatalogType.entries.forEach { type -> Box(Modifier.weight(1f).height(172.dp).clip(RoundedCornerShape(14.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(14.dp)).clickable { onBrowse(type, "__all") }) { ArtworkImage(null, Modifier.fillMaxSize(), homeTile(type)); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE80A1619)))).padding(18.dp), verticalArrangement = Arrangement.Bottom) { Text(type.title, color = Ink, style = MaterialTheme.typography.titleLarge); Text(if (type == CatalogType.LIVE) "Channels and live events" else "Browse your library", color = Dim, modifier = Modifier.padding(top = 3.dp)) } } }
     }
     }
 }
 
+// D-Desktop-16a: renders nothing (no title, no placeholder copy) when empty -- an empty shelf must
+// not occupy space or explain its own absence.
 @Composable private fun HomeShelf(title: String, items: List<DesktopItem>, onBrowse: () -> Unit, onPlay: (DesktopItem) -> Unit) {
+    if (items.isEmpty()) return
     Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
-    if (items.isEmpty()) { Text("Play something from your library and it will appear here.", color = Dim) } else Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
 }
 
 @Composable private fun EpisodeHomeShelf(items: List<DesktopSeriesResume>, onBrowse: () -> Unit, onPlay: (DesktopItem, DesktopEpisode) -> Unit) {
+    if (items.isEmpty()) return
     Text("Continue watching series", color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
-    if (items.isEmpty()) { Text("Your last episodes will appear here.", color = Dim) } else Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { resume -> Box(Modifier.width(190.dp).height(184.dp).clip(RoundedCornerShape(12.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(12.dp)).clickable { onPlay(resume.series, resume.episode) }) { ArtworkImage(resume.series.artwork, Modifier.fillMaxSize()); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0A1619)))).padding(12.dp), verticalArrangement = Arrangement.Bottom) { Text(resume.series.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("S${resume.episode.season.padStart(2, '0')} E${(resume.episode.episodeNumber ?: "?").padStart(2, '0')}", color = Accent, modifier = Modifier.padding(top = 4.dp)) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { resume -> Box(Modifier.width(190.dp).height(184.dp).clip(RoundedCornerShape(12.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(12.dp)).clickable { onPlay(resume.series, resume.episode) }) { ArtworkImage(resume.series.artwork, Modifier.fillMaxSize()); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0A1619)))).padding(12.dp), verticalArrangement = Arrangement.Bottom) { Text(resume.series.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("S${resume.episode.season.padStart(2, '0')} E${(resume.episode.episodeNumber ?: "?").padStart(2, '0')}", color = Accent, modifier = Modifier.padding(top = 4.dp)) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
 }
 
-@Composable private fun BrowseScreen(repository: DesktopCatalogRepository, type: CatalogType, onDetail: (DesktopItem) -> Unit) {
-    val scope = rememberCoroutineScope(); var categories by remember(type) { mutableStateOf(emptyList<com.dev.tvivo.desktop.catalog.DesktopCategory>()) }; var selected by remember(type) { mutableStateOf("__all") }; var categoryFilter by remember(type) { mutableStateOf("") }; var query by remember(type) { mutableStateOf("") }; var catalogItems by remember(type, selected, query) { mutableStateOf(emptyList<DesktopItem>()) }; var message by remember(type) { mutableStateOf("Refresh to download your ${type.title.lowercase()} library.") }
-    fun load() { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(type); repository.categories(type) to repository.items(type, selected, query) } }.onSuccess { (cats, rows) -> categories = cats; catalogItems = rows; message = if (rows.isNotEmpty()) "${rows.size} items" else "No items available for this selection." }.onFailure { message = it.message ?: "Library unavailable offline." } } }
-    androidx.compose.runtime.LaunchedEffect(type, selected, query) { load() }
+// D-Desktop-16b: `saved` is hoisted at DesktopShell scope (one per CatalogType) instead of
+// `remember`ed here, so filter/category-search/search-text/scroll position/last-opened-card all
+// survive leaving this screen (Detail, Episodes, Player) and coming back -- the proposal's
+// "preserve tab, scroll position, and focused/selected card" requirement.
+@Composable private fun BrowseScreen(repository: DesktopCatalogRepository, type: CatalogType, saved: BrowseSavedState, onDetail: (DesktopItem) -> Unit) {
+    val scope = rememberCoroutineScope(); var categories by remember(type) { mutableStateOf(emptyList<com.dev.tvivo.desktop.catalog.DesktopCategory>()) }; var message by remember(type) { mutableStateOf("Refresh to download your ${type.title.lowercase()} library.") }
+    fun load() { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(type); repository.categories(type) to repository.items(type, saved.filter, saved.query) } }.onSuccess { (cats, rows) -> categories = cats; saved.items = rows; message = if (rows.isNotEmpty()) "${rows.size} items" else "No items available for this selection." }.onFailure { message = it.message ?: "Library unavailable offline." } } }
+    androidx.compose.runtime.LaunchedEffect(type, saved.filter, saved.query) { load() }
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.width(220.dp).fillMaxHeight().background(Surface).padding(12.dp)) {
-            OutlinedTextField(categoryFilter, { categoryFilter = it }, label = { Text("Filter categories") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            listOf("__all" to "All ${type.title}", "__recent" to "Recently added", "__continue" to "Continue watching", "__favourites" to "Favourites").forEach { (id, label) -> RailButton(label, selected == id) { selected = id } }
+            OutlinedTextField(saved.categoryFilter, { saved.categoryFilter = it }, label = { Text("Filter categories") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            listOf("__all" to "All ${type.title}", "__recent" to "Recently added", "__continue" to "Continue watching", "__favourites" to "Favourites").forEach { (id, label) -> RailButton(label, saved.filter == id) { saved.filter = id } }
             HorizontalDivider(color = Line, modifier = Modifier.padding(vertical = 8.dp))
-            LazyColumn { items(categories.filter { it.name.contains(categoryFilter, ignoreCase = true) }, key = { it.id }) { category -> RailButton(category.name, selected == category.id) { selected = category.id } } }
+            LazyColumn { items(categories.filter { it.name.contains(saved.categoryFilter, ignoreCase = true) }, key = { it.id }) { category -> RailButton(category.name, saved.filter == category.id) { saved.filter = category.id } } }
         }
         Column(Modifier.weight(1f).padding(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); OutlinedTextField(query, { query = it }, label = { Text("Search ${type.title}") }, singleLine = true); Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") } }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); OutlinedTextField(saved.query, { saved.query = it }, label = { Text("Search ${type.title}") }, singleLine = true); Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") } }
             Text(message, color = Dim, modifier = Modifier.padding(vertical = 10.dp))
-            LazyVerticalGrid(GridCells.Adaptive(if (type == CatalogType.LIVE) 170.dp else 140.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) { items(catalogItems, key = { it.id }) { item -> CatalogCard(item) { onDetail(item) } } }
+            LazyVerticalGrid(GridCells.Adaptive(if (type == CatalogType.LIVE) 170.dp else 140.dp), state = saved.gridState, horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) { items(saved.items, key = { it.id }) { item -> CatalogCard(item, highlighted = item.id == saved.highlightedId) { onDetail(item) } } }
         }
     }
 }
 
 @Composable private fun RailButton(label: String, selected: Boolean, onClick: () -> Unit) = Text(label, color = if (selected) Color(0xFF1A0A05) else Ink, maxLines = 2, overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).background(if (selected) Accent else Color.Transparent).clickable(onClick = onClick).padding(10.dp))
-@Composable private fun CatalogCard(item: DesktopItem, onClick: () -> Unit) {
+@Composable private fun CatalogCard(item: DesktopItem, highlighted: Boolean = false, onClick: () -> Unit) {
     val shape = RoundedCornerShape(12.dp)
     Box(
-        Modifier.height(if (item.type == CatalogType.LIVE) 112.dp else 200.dp).clip(shape).background(Elevated).border(1.dp, Line, shape).clickable(onClick = onClick),
+        // D-Desktop-16b: the card last opened from this grid (before Detail/Episodes/Player) keeps
+        // an accent border on return, so "preserve ... the focused/selected card" is visible, not
+        // just an unannounced scroll offset.
+        Modifier.height(if (item.type == CatalogType.LIVE) 112.dp else 200.dp).clip(shape).background(Elevated).border(if (highlighted) 2.dp else 1.dp, if (highlighted) Accent else Line, shape).clickable(onClick = onClick),
     ) {
         ArtworkImage(item.artwork, Modifier.fillMaxSize())
         Column(
