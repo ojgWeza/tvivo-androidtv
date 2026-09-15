@@ -17,10 +17,16 @@ calls `store.wipe()`. Do not clear app data.
 ## Current priority — Desktop (active work)
 
 - `63-section.md` — D-Desktop-1..14: D-Desktop-10's concurrency/freeze
-  regression is fixed and verified (2026-09-15); playback itself is now
-  blocked on **D-Desktop-14 (Critical, not started)** — replacing vlcj/libvlc
-  with mpv after the bundled libvlc proved unable to sustain a real provider
-  stream. Also open: full-screen, title layout, episode-picker, and rating
+  regression is fixed and verified (2026-09-15). **D-Desktop-14 (High, mpv
+  migration)** is implemented and playback-verified 2026-09-15 — a real
+  provider stream sustained 35+ seconds with no stall, the exact case libvlc
+  failed 5/5 times — but is **blocked from closing** on a newly found bug:
+  no mouse or keyboard input reaches the embedded mpv surface at all, so
+  there is currently no way to pause/seek/stop from the UI. Next session:
+  investigate the input-routing root cause (see D-Desktop-14's own entry for
+  the ordered next-step list) before touching anything else here; owner has
+  directed not to fall back to hand-built controls without checking back
+  first. Also open: full-screen, title layout, episode-picker, and rating
   defects. Read `handoff.md` alongside this.
 
 ## Android — open defects and pending verification

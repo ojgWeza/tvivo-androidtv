@@ -32,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -49,11 +48,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -239,22 +233,63 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope(); var state by remember { mutableStateOf("Preparing player…") }; var playerReady by remember { mutableStateOf(false) }
-    // Once a terminal error/timeout is shown, ignore further onState updates (including the
-    // async native "Stopped"/"Ready" events our own stop()/close() calls trigger) so they can't
-    // race and overwrite the actionable message the user is looking at. Cleared when a fresh
-    // playback attempt starts.
+    // Generation of the current playback attempt. MpvPlayer bumps its own internal generation on
+    // every play()/playUrl() and tags every onState/onPositionMs callback with it -- a late event
+    // from an attempt the watchdog already timed out (or the user navigated away from) carries a
+    // stale generation and must be ignored rather than overwriting newer state. Mirrors the old
+    // `terminal` flag's intent but ties it to the actual attempt instead of one global switch.
+    var currentGeneration by remember { mutableStateOf(0) }
     var terminal by remember { mutableStateOf(false) }
-    // Sampled by the resume-position polling loop below; onDispose reads this instead of calling
-    // the native positionMs() synchronously on the disposal path.
     var lastKnownPositionMs by remember { mutableStateOf(0L) }
+    // Two consecutive strictly-increasing time-pos samples within the same generation, not merely
+    // "state == Playing" or a nonzero resume-seek position -- see D-Desktop-14 review notes.
+    var lastObservedPositionForWatchdog by remember { mutableStateOf(-1L) }
+    var watchdogSatisfied by remember { mutableStateOf(false) }
+    var userPaused by remember { mutableStateOf(false) }
     val surface = remember { Canvas().apply { background = AwtColor.BLACK } }
-    val player = remember { LibVlcPlayer { update -> SwingUtilities.invokeLater { if (!terminal) state = update } } }
+    val player = remember {
+        // Callbacks are the only source of truth for currentGeneration -- rather than DesktopShell
+        // separately recording the generation play()/playUrl() returns (which races the owner
+        // thread's own invokeLater for the first callback of that same generation, since both are
+        // posted from different threads with no ordering guarantee between them), every callback
+        // simply advances currentGeneration forward to whatever generation it carries. A callback
+        // is only ever dropped if it's *older* than one already rendered -- never because the UI
+        // hadn't yet "caught up" to a generation the player already moved past.
+        MpvPlayer(
+            onState = { generation, update -> SwingUtilities.invokeLater {
+                if (generation < currentGeneration || terminal) return@invokeLater
+                currentGeneration = generation
+                state = update
+            } },
+            onPositionMs = { generation, positionMs -> SwingUtilities.invokeLater {
+                if (generation < currentGeneration || terminal) return@invokeLater
+                currentGeneration = generation
+                lastKnownPositionMs = positionMs
+                if (!watchdogSatisfied && positionMs > 0L && positionMs > lastObservedPositionForWatchdog) {
+                    if (lastObservedPositionForWatchdog >= 0L) watchdogSatisfied = true
+                    lastObservedPositionForWatchdog = positionMs
+                }
+            } },
+            onPauseChange = { generation, paused -> SwingUtilities.invokeLater {
+                if (generation < currentGeneration || terminal) return@invokeLater
+                currentGeneration = generation
+                userPaused = paused
+            } },
+        )
+    }
     DisposableEffect(player) {
-        player.initialise(surface).onSuccess { playerReady = true }.onFailure { terminal = true; state = "LibVLC needs setup: ${it.message}" }
+        // initialise() waits on the Canvas becoming displayable and must not run on the Compose/
+        // AWT event thread (it would deadlock against its own EventQueue.invokeAndWait) -- launch
+        // it on a background thread instead of calling it synchronously here.
+        scope.launch(Dispatchers.IO) {
+            player.initialise(surface)
+                .onSuccess { withContext(Dispatchers.Main) { playerReady = true } }
+                .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Player setup failed: $message" } }
+        }
         onDispose {
             if (lastKnownPositionMs > 0L) repository.recordResume(item, episode, lastKnownPositionMs)
-            // close() is internally serialized and non-blocking (fire-and-forget onto its own
-            // background thread) -- safe to call from this synchronous disposal callback.
+            // close() enqueues a non-blocking terminal task on the player's own owner thread --
+            // safe to call from this synchronous disposal callback.
             player.close()
         }
     }
@@ -262,68 +297,73 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         if (!playerReady) return@LaunchedEffect
         val debugFixture = System.getProperty("tvivo.debug.fixture")
         terminal = false
+        watchdogSatisfied = false
+        lastObservedPositionForWatchdog = -1L
+        userPaused = false
         state = "Preparing stream…"
         scope.launch(Dispatchers.IO) {
             if (debugFixture != null) {
-                // No optimistic "Playing" state here -- let the native opening/playing events
-                // (routed through onState) drive `state` so the watchdog's "still Opening/
-                // Buffering after 20s" check stays accurate for the fixture path too.
-                player.play(java.io.File(debugFixture)).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
+                // currentGeneration is advanced only by MpvPlayer's own callbacks (see the
+                // MpvPlayer(...) comment above) -- play()'s return value isn't used for that here,
+                // only for surfacing a synchronous validation failure (bad file, bad extension).
+                player.play(java.io.File(debugFixture))
+                    .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
                 return@launch
             }
             val prepared = runCatching { repository.playbackUrl(item, episode) to repository.resumePosition(if (episode == null) item.type else CatalogType.SERIES, episode?.id ?: item.id) }
-            // Stop/watchdog may have fired while the URL/resume-position lookup above was in
-            // flight -- don't start a stream the UI has already declared stopped/timed out.
             if (terminal) return@launch
             prepared
-                .onSuccess { (url, resumeMs) -> player.playUrl(url, resumeMs).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } } }
+                .onSuccess { (url, resumeMs) ->
+                    player.playUrl(url, resumeMs)
+                        .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
+                }
                 .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = message ?: "Unable to prepare playback." } }
         }
     }
-    // Watchdog: if the stream never reaches Playing, stop it and surface an actionable error
-    // instead of leaving the user stuck on an indefinite "Buffering/Opening" state -- the native
-    // player can otherwise block on a dead/slow connection with no built-in timeout.
-    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) {
-        if (!playerReady) return@LaunchedEffect
+    // Watchdog: if the stream never shows genuine progress, stop it and surface an actionable
+    // error instead of leaving the user stuck on an indefinite "Buffering/Opening" state. Armed
+    // per attempt (item/episode/generation). Polls in a loop rather than one delayed check so a
+    // pause genuinely suspends the budget instead of the single check landing mid-pause and
+    // skipping the timeout forever -- only time spent NOT paused counts toward the 20s budget.
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady, currentGeneration) {
+        if (!playerReady || currentGeneration == 0) return@LaunchedEffect
         val verbose = System.getProperty("tvivo.debug.verbose") != null
-        if (verbose) System.err.println("[watchdog] armed, playerReady=$playerReady")
-        delay(20_000)
-        if (verbose) System.err.println("[watchdog] checking, state=$state, terminal=$terminal")
-        if (!terminal && (state == "Buffering stream…" || state == "Opening stream…" || state == "Resuming stream…" || state == "Preparing stream…")) {
+        val watchdogGeneration = currentGeneration
+        if (verbose) System.err.println("[watchdog] armed gen=$watchdogGeneration")
+        var activeElapsedMs = 0L
+        val pollMs = 500L
+        while (activeElapsedMs < 20_000L) {
+            delay(pollMs)
+            if (terminal || watchdogGeneration != currentGeneration) return@LaunchedEffect
+            if (watchdogSatisfied) { if (verbose) System.err.println("[watchdog] satisfied gen=$watchdogGeneration"); return@LaunchedEffect }
+            if (!userPaused) activeElapsedMs += pollMs
+        }
+        if (verbose) System.err.println("[watchdog] checking gen=$watchdogGeneration current=$currentGeneration satisfied=$watchdogSatisfied paused=$userPaused terminal=$terminal")
+        if (!terminal && !watchdogSatisfied && watchdogGeneration == currentGeneration) {
             if (verbose) System.err.println("[watchdog] triggering stop+timeout")
             terminal = true
             state = "Playback timed out. The stream did not respond -- check the connection and try again."
-            player.stop() // fire-and-forget, serialized on LibVlcPlayer's own background thread
+            player.stop()
         }
     }
-    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); val position = withContext(Dispatchers.IO) { player.positionMs() }; if (position > 0L) { lastKnownPositionMs = position; withContext(Dispatchers.IO) { repository.recordResume(item, episode, position) } } } }
-    var paused by remember { mutableStateOf(false) }
-    var seek by remember { mutableStateOf(0f) }
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); if (lastKnownPositionMs > 0L) withContext(Dispatchers.IO) { repository.recordResume(item, episode, lastKnownPositionMs) } } }
     val title = episode?.let { "${item.title} · Season ${it.season} · ${it.displayLabel(item.title)}" } ?: item.title
     val outerPadding = if (fullScreen) 0.dp else 24.dp
-    Column(
-        Modifier.fillMaxSize().padding(outerPadding).onPreviewKeyEvent { event ->
-            if (event.type == KeyEventType.KeyUp && (event.key == Key.Escape || event.key == Key.F)) {
-                onFullScreenChange(!fullScreen)
-                true
-            } else {
-                false
-            }
-        },
-        verticalArrangement = Arrangement.spacedBy(if (fullScreen) 0.dp else 16.dp),
-    ) {
+    // mpv's built-in OSC (enabled in MpvPlayer.initialise) owns Play/Pause/seek inside the video
+    // surface and binds its own f/Escape fullscreen toggle -- Compose no longer intercepts those
+    // keys here (D-Desktop-14 review: two owners for the same keys inside an embedded native
+    // window is a real conflict, not a style choice). mpv's fullscreen is not wired to
+    // onFullScreenChange: whether it can promote/demote cleanly against the surrounding Compose
+    // window under --wid embedding is unverified, so D-Desktop-9 stays open rather than assuming
+    // it works. Back stays a Compose element outside the Canvas, the one control mpv's OSC has no
+    // equivalent for.
+    Column(Modifier.fillMaxSize().padding(outerPadding), verticalArrangement = Arrangement.spacedBy(if (fullScreen) 0.dp else 16.dp)) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).widthIn(min = 180.dp))
             Text(state, color = Dim, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp).padding(start = 16.dp))
+            OutlinedButton(onClick = onBack, modifier = Modifier.padding(start = 12.dp)) { Text("Back") }
         }
         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) { SwingPanel(factory = { surface }, modifier = Modifier.fillMaxSize()) }
-        Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = playerReady && !terminal, onClick = { if (paused) { player.resume(); paused = false } else { player.pause(); paused = true } }) { Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = if (paused) "Play" else "Pause"); Text(if (paused) "Play" else "Pause", modifier = Modifier.padding(start = 6.dp)) }
-            OutlinedButton(enabled = playerReady, onClick = { terminal = true; state = "Stopped"; player.stop() }) { Text("Stop") }
-            Slider(value = seek, onValueChange = { seek = it }, onValueChangeFinished = { if (playerReady) player.seek(seek) }, modifier = Modifier.weight(1f))
-            OutlinedButton(onClick = { onFullScreenChange(!fullScreen) }) { Text(if (fullScreen) "Exit full screen" else "Full screen") }
-            OutlinedButton(onClick = onBack) { Text("Back") }
-        }
     }
 }
 

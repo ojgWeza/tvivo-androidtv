@@ -309,3 +309,48 @@ without asking each time, even though a broader "you can test live streams
 this session" approval was already in place -- see
 `ask-before-build-or-deploy.md` memory, updated to be explicit that a
 session-level approval does not cover every individual build/run/kill.
+
+## Session log — 2026-09-15, D-Desktop-14 (mpv migration) implemented, blocked on OSC input
+
+Full detail lives in `todo-tree/63-section.md`'s D-Desktop-14 entry -- this is
+the short version for session pickup.
+
+**What happened:** Implemented the full vlcj->libmpv migration (new
+`MpvLibrary.kt`/`MpvPlayer.kt`, vlcj fully removed). Two Codex review rounds
+(plan, then diff) caught and fixed real bugs: `Component.getPeer()` doesn't
+exist on JDK 21 (JNA's `Native.getComponentPointer` instead), libmpv calls
+that were wrongly running off the owner thread, an init/disposal race, a
+`submitBlocking()` timeout leak, a UI generation-handoff race, and a watchdog
+that didn't resume after pause. Self-verified live: fixture plays with real
+motion, Back doesn't hang, and a **real provider stream sustained 35+ seconds
+with no buffering stall** -- the exact case libvlc failed 5/5 times on. This
+is genuine progress and the core codec/stability problem this migration was
+started to fix is resolved.
+
+**What's still broken, found by the owner (not self-caught):** mpv's OSC
+never renders and no input -- mouse or keyboard -- reaches the embedded mpv
+surface at all. There is currently no way to pause, seek, or stop from the
+UI. Confirmed by moving the mouse across the video (no OSC) and sending a
+keypress after clicking the video (no response, nothing logged). mpv's own
+options (`osc`, `input-default-bindings`, `input-vo-keyboard`) are all
+accepted without error, so this is an input-routing problem between AWT's
+`Canvas`/Compose's `SwingPanel` and mpv's `--wid`-embedded child window, not
+an mpv configuration problem.
+
+**Owner's explicit direction:** investigate the input-routing root cause
+before doing anything else with this item. Do **not** fall back to
+hand-built Compose controls without checking back first -- that would
+reverse a decision the owner already made once (rejecting hand-built
+controls as a maintenance burden) and needs their sign-off to reverse again,
+not a unilateral fallback.
+
+**Next session's first move:** read D-Desktop-14's full entry in
+`todo-tree/63-section.md` for the ordered list of things to try (mpv's own
+log messages first, then AWT focus/input-method settings on the `Canvas`,
+then whether `SwingPanel` interposes a hit-testing overlay). Get Codex's
+native/FFI-domain input on this specific bug before spending too long
+guessing solo -- this is exactly the kind of platform-embedding edge case
+its review caught twice already this session.
+
+Nothing from this session is committed -- see git status for the full
+uncommitted diff before starting.

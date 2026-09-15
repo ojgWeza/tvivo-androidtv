@@ -1,0 +1,16 @@
+Tvivo bundles a redistributable Windows x64 build of libmpv (libmpv-2.dll), the
+mpv media player's shared library, built by the shinchiro/mpv-winbuild-cmake
+project's automated Windows CI (mpv-player-windows on SourceForge). mpv itself
+is licensed LGPLv2.1+ when built in its non-GPL configuration, which these
+prebuilt libmpv "dev" archives use; see https://github.com/mpv-player/mpv/blob/master/Copyright
+for the full license and component list. Dynamic linking via JNA at runtime
+keeps this bundling compatible with LGPL.
+
+Upstream release used: mpv-dev-x86_64-20260830-git-e8673660ab.7z
+Upstream download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+Re-zipped here as libmpv-20260830-win64.zip (libmpv-2.dll only; client.h is not
+redistributed, it is a build-time header already vendored via the JNA interface
+in MpvLibrary.kt). SHA-256 of the re-zipped archive is in the .sha256 sidecar.
+
+mpv and libmpv are trademarks of their respective owners; this bundling implies
+no endorsement by the mpv project.

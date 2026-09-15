@@ -116,8 +116,77 @@ D-Desktop-14 below.
 
 **Severity: High. Decided 2026-09-15 after live-stream testing surfaced a
 libvlc-specific playback stall that tuning couldn't fix, plus user rejection
-of the hand-built control-row approach. Codex edge-case review done
-2026-09-15 (folded into this entry below); not yet implemented.**
+of the hand-built control-row approach. Implemented and playback-verified
+2026-09-15 (see "Progress" below); blocked on an OSC input-routing bug before
+this can close -- there is currently no way to pause/seek/stop from the UI at
+all.**
+
+**Progress (2026-09-15 session):** `MpvLibrary.kt` (hand-rolled JNA binding
+against `mpv/client.h`) and `MpvPlayer.kt` (single-owner-thread player,
+replacing `LibVlcPlayer.kt`) are written, `vlcj`/`libvlc` fully removed
+(dependency, bundled zip, `LibVlcPlayer.kt`, the dead POC `PlayerScreen` in
+`Main.kt`). `desktop/src/main/resources/libmpv/libmpv-20260830-win64.zip`
+(shinchiro's `mpv-dev-x86_64-20260830-git-e8673660ab`, libmpv-2.dll only,
+LGPLv2.1+) is bundled with a SHA-256 sidecar verified before extraction.
+Two full Codex review rounds (plan, then diff) caught and fixed real bugs:
+`Component.getPeer()` no longer exists on JDK 21 (replaced with JNA's
+`Native.getComponentPointer`), all libmpv calls moved onto one owner thread
+including `mpv_create`/`mpv_initialize` (were wrongly running on
+`Dispatchers.IO` in an earlier draft), an init/disposal race (Back during
+`awaitHwnd()`/the owner-thread init task), a `submitBlocking()` timeout that
+could leave a live orphaned mpv instance, a UI-side generation-handoff race
+(fixed by making `currentGeneration` advance only from player callbacks,
+never-regressing, rather than a separate caller-side assignment that could
+race the callback), and a watchdog that never resumed counting after a pause
+(rewritten as a poll loop that excludes paused time from the budget instead
+of one delayed check).
+
+**Self-verified live** (built, launched, clicked through with simulated
+mouse input, screenshotted, read the PNGs back): fixture
+(`desktop-fixtures/sintel-trailer.mp4`) plays with confirmed frame-to-frame
+motion, Back navigation during playback stays responsive and returns
+cleanly, and -- the actual point of this migration -- **a real provider
+stream played sustained for 35+ seconds with no buffering stall** (state
+hit `Playing` almost immediately and stayed there; the 20s watchdog logged
+`satisfied=true` and never fired; grepping the run log for
+Buffering/Stopped/error found nothing), which is the exact scenario libvlc
+failed 5/5 times. Evidence: `build-d14-fixture-run6.log`,
+`build-d14-realstream-run.log`, `d14-screenshot*.png` in the repo root
+(untracked, not for commit).
+
+**Blocking bug found after that verification (owner caught this, not
+self-caught):** mpv's OSC never renders and **no input reaches the embedded
+mpv surface at all** -- confirmed by moving the mouse across the video area
+(no OSC appears) and by sending a Space keypress after clicking the video
+surface (no pause, nothing logged). `osc=yes`/`input-default-bindings=yes`/
+`input-vo-keyboard=yes` are all set successfully (no error from
+`mpv_set_option_string`), so mpv itself is configured correctly -- the
+problem is native input (mouse move/click and keyboard) apparently never
+reaching mpv's embedded child window through the AWT `Canvas`/Compose
+`SwingPanel` layering, a known rough edge with `--wid` embedding into a
+foreign toolkit's window that Codex's original plan review flagged as "a
+mandatory fixture test, not an assumption" -- this is that assumption
+failing. **Owner's direction: investigate the input-routing root cause
+further (not fall back to hand-built controls) before closing this item.**
+Next session should try, roughly in order of likely payoff: (1) capture
+mpv's own log via `mpv_request_log_messages`/`MPV_EVENT_LOG_MESSAGE` at a
+verbose level while moving the mouse, to see whether mpv's input layer logs
+anything at all -- confirms whether the child window exists/receives
+messages before guessing further; (2) check whether AWT's `Canvas` needs
+`Canvas.setFocusable(true)`/`Canvas.requestFocusInWindow()` and/or
+`enableInputMethods(false)` for the embedded mpv child HWND to actually get
+raw input priority over the parent's own AWT message pump; (3) check
+whether Compose Desktop's `SwingPanel` interposes an invisible overlay for
+hit-testing/click-passthrough purposes that needs an explicit opt-out; (4)
+as a last resort if native input genuinely cannot be routed through this
+embedding shape, escalate back to the owner with the concrete finding rather
+than silently reverting to hand-built Compose controls -- that reversal is a
+real scope/architecture change the owner already weighed in on once
+(rejecting hand-built controls) and should decide again explicitly, not have
+decided for them.
+
+**Original plan below is now historical context (already executed), kept
+for the Codex review detail it carried:**
 
 **Problem this replaces:** `LibVlcPlayer.kt`'s bundled libvlc 3.0.23 reliably
 starts a real provider stream, then falls into a `Buffering` state that
@@ -232,16 +301,18 @@ mpv "to match the app's look" unless explicitly asked later; don't
 scope-creep into implementing `D-Desktop-9`/`D-Desktop-13` this pass beyond
 the re-validation notes above.
 
-**Verification (next session):** (1) fixture playback through mpv with OSC
-visible/functional; (2) real provider stream retest -- confirm sustained
-playback, not just a brief `Playing` before falling back to buffering; (3)
-repeat this session's close-during-in-flight-operation checks against mpv's
-actual async/blocking call surface; (4) Codex adversarial review of the new
-player wrapper's threading model before calling it done, per
-`bible-detail/claude-07-agent-division.md`'s loop -- same discipline that
-caught 4 real races in the vlcj version (and would have caught the HWND/OSC
-timing hazards above before they became bugs) should apply to the mpv
-rewrite too.
+**Verification -- status as of 2026-09-15:** (1) fixture playback through
+mpv -- **done**, motion confirmed; OSC visible/functional -- **not done,
+blocking bug above**; (2) real provider stream retest, sustained playback --
+**done**, 35+ seconds with no stall; (3) close-during-in-flight-operation
+checks against mpv's actual async/blocking call surface -- **partially
+done** (Back-after-Playing verified clean; Back-during-still-initialising
+race is guarded in code but not actually triggered/observed in testing yet);
+(4) Codex adversarial review of the new player wrapper's threading model --
+**done, two rounds**, both caught real bugs (see "Progress" above), both
+fixed and re-verified; a third round on the latest fixes has not happened
+yet. **Do not close this item until the OSC/input-routing bug above is
+resolved or the owner explicitly accepts a different control mechanism.**
 
 ### D-Desktop-11 — Sign-in button re-enables mid-check
 
