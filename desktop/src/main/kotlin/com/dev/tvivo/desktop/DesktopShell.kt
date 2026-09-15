@@ -34,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +80,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Canvas
 import java.awt.Color as AwtColor
+import java.awt.KeyboardFocusManager
+import java.beans.PropertyChangeListener
 import javax.swing.SwingUtilities
 import java.net.URL
 import java.time.Instant
@@ -80,15 +89,10 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import org.jetbrains.skia.Image as SkiaImage
 
-private val Background = Color(0xFF0A1619)
 private val Surface = Color(0xFF0F2126)
-private val Elevated = Color(0xFF163036)
-private val Line = Color(0xFF1E4149)
-private val Ink = Color(0xFFE8F1F2)
-private val Dim = Color(0xFF93ACB1)
 private val Accent = Color(0xFFD97757)
 
-private sealed interface DesktopRoute { data object Home : DesktopRoute; data class Browse(val type: CatalogType) : DesktopRoute; data class Detail(val item: DesktopItem) : DesktopRoute; data class Episodes(val item: DesktopItem, val season: String? = null) : DesktopRoute; data class Player(val item: DesktopItem, val episode: DesktopEpisode? = null, val returnSeason: String? = null) : DesktopRoute; data object Account : DesktopRoute }
+internal sealed interface DesktopRoute { data object Home : DesktopRoute; data class Browse(val type: CatalogType) : DesktopRoute; data class Detail(val item: DesktopItem) : DesktopRoute; data class Episodes(val item: DesktopItem, val season: String? = null) : DesktopRoute; data class Player(val item: DesktopItem, val episode: DesktopEpisode? = null, val returnSeason: String? = null) : DesktopRoute; data object Account : DesktopRoute }
 
 /**
  * D-Desktop-16b: one instance per [CatalogType], hoisted at [DesktopShell] scope rather than
@@ -113,47 +117,101 @@ private class BrowseSavedState {
 @Composable
 internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     val repository = remember(credentials) { DesktopCatalogRepository(credentials) }
+    val scope = rememberCoroutineScope()
+    val idleController = remember { DesktopIdleController(scope) }
     var route by remember { mutableStateOf<DesktopRoute>(DesktopRoute.Home) }
     var playerFullScreen by remember { mutableStateOf(false) }
+    var featuredSeries by remember { mutableStateOf(emptyList<DesktopItem>()) }
+    var idleOverlayVisible by remember { mutableStateOf(false) }
     // D-Desktop-16b: keyed by tab so switching Movies -> Series -> Movies doesn't cross-clobber
     // each tab's own filter/scroll/selection.
     val browseStates = remember { mutableMapOf<CatalogType, BrowseSavedState>() }
     fun browseState(type: CatalogType) = browseStates.getOrPut(type) { BrowseSavedState() }
+
+    LaunchedEffect(route) {
+        idleController.onRouteChanged(route)
+    }
+    val idleState by idleController.state
+    LaunchedEffect(idleState) {
+        if (idleState == IdleState.Idle) idleOverlayVisible = true
+        else if (idleOverlayVisible) {
+            delay(200)
+            idleOverlayVisible = false
+        }
+    }
+    LaunchedEffect(repository) { featuredSeries = runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(CatalogType.SERIES); repository.regenerateSuggestions(CatalogType.SERIES, emptySet(), limit = 6) } }.getOrElse { emptyList() } }
+    DisposableEffect(idleController) {
+        val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        val listener = PropertyChangeListener { idleController.onWindowFocusChanged(it.newValue != null) }
+        focusManager.addPropertyChangeListener("activeWindow", listener)
+        idleController.onWindowFocusChanged(focusManager.activeWindow != null)
+        onDispose {
+            focusManager.removePropertyChangeListener("activeWindow", listener)
+            idleController.dispose()
+        }
+    }
+    fun onAnyInput(reason: String) = idleController.onInput(reason)
+
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(background = Background, surface = Surface, primary = Accent, onBackground = Ink, onSurface = Ink)) {
-        Column(Modifier.fillMaxSize().background(Background)) {
-            if (!playerFullScreen) TopNavigation(route, onRoute = { route = it })
-            when (val current = route) {
-                DesktopRoute.Home -> HomeScreen(
-                    repository = repository,
-                    // D-Desktop-16b: "See all" now carries a typed destination filter (e.g.
-                    // __continue, __favourites) instead of always landing on the unfiltered "__all"
-                    // browse -- this is what lets a continuation shelf's See all actually open on
-                    // the matching virtual folder rather than the full catalog.
-                    onBrowse = { type, filter -> browseState(type).filter = filter; route = DesktopRoute.Browse(type) },
-                    onPlay = { item, episode -> route = DesktopRoute.Player(item, episode, episode?.season) },
+        Box(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown) {
+                val consume = idleOverlayVisible
+                onAnyInput("keyboard")
+                consume
+            } else false
+        }.pointerInput(idleState) {
+            awaitPointerEventScope { while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.type == PointerEventType.Move || event.type == PointerEventType.Press) {
+                    if (onAnyInput("mouse")) event.changes.forEach { it.consume() }
+                }
+            } }
+        }) {
+            Column(Modifier.fillMaxSize().background(Background)) {
+                if (!playerFullScreen) TopNavigation(route, onRoute = { route = it; onAnyInput("navigation") })
+                when (val current = route) {
+                    DesktopRoute.Home -> HomeScreen(
+                        repository = repository,
+                        // D-Desktop-16b: "See all" now carries a typed destination filter (e.g.
+                        // __continue, __favourites) instead of always landing on the unfiltered "__all"
+                        // browse -- this is what lets a continuation shelf's See all actually open on
+                        // the matching virtual folder rather than the full catalog.
+                        onBrowse = { type, filter -> browseState(type).filter = filter; route = DesktopRoute.Browse(type); onAnyInput("navigation") },
+                        onPlay = { item, episode -> route = DesktopRoute.Player(item, episode, episode?.season); onAnyInput("navigation") },
+                    )
+                    is DesktopRoute.Browse -> BrowseScreen(repository, current.type, browseState(current.type), onDetail = {
+                        // Remember which card was open so returning to this tab highlights it, not just
+                        // restores the scroll offset gridState already keeps for free.
+                        browseState(current.type).highlightedId = it.id
+                        route = if (it.type == CatalogType.SERIES) DesktopRoute.Episodes(it) else DesktopRoute.Detail(it)
+                        onAnyInput("navigation")
+                    })
+                    is DesktopRoute.Detail -> DetailScreen(repository, current.item, onPlay = { route = DesktopRoute.Player(current.item); onAnyInput("navigation") }, onBack = { route = DesktopRoute.Browse(current.item.type); onAnyInput("navigation") })
+                    is DesktopRoute.Episodes -> EpisodeScreen(repository, current.item, current.season, onPlay = { episode, season -> route = DesktopRoute.Player(current.item, episode, season); onAnyInput("navigation") }, onBack = { route = DesktopRoute.Browse(CatalogType.SERIES); onAnyInput("navigation") })
+                    is DesktopRoute.Player -> DesktopPlayerScreen(
+                        repository = repository,
+                        item = current.item,
+                        episode = current.episode,
+                        fullScreen = playerFullScreen,
+                        onFullScreenChange = { enabled -> playerFullScreen = enabled; onAnyInput("player-control") },
+                        onBack = {
+                            if (playerFullScreen) {
+                                playerFullScreen = false
+                            }
+                            route = if (current.item.type == CatalogType.SERIES) DesktopRoute.Episodes(current.item, current.returnSeason) else DesktopRoute.Detail(current.item)
+                            onAnyInput("navigation")
+                        },
+                    )
+                    DesktopRoute.Account -> AccountScreen(repository, credentials, onSignOut = onSignOut)
+                }
+            }
+
+            // D-Desktop-16e: Idle overlay on top of all content
+            if (idleOverlayVisible) {
+                IdleEntryScreen(
+                    items = featuredSeries,
+                    onExit = ::onAnyInput,
                 )
-                is DesktopRoute.Browse -> BrowseScreen(repository, current.type, browseState(current.type), onDetail = {
-                    // Remember which card was open so returning to this tab highlights it, not just
-                    // restores the scroll offset gridState already keeps for free.
-                    browseState(current.type).highlightedId = it.id
-                    route = if (it.type == CatalogType.SERIES) DesktopRoute.Episodes(it) else DesktopRoute.Detail(it)
-                })
-                is DesktopRoute.Detail -> DetailScreen(repository, current.item, onPlay = { route = DesktopRoute.Player(current.item) }, onBack = { route = DesktopRoute.Browse(current.item.type) })
-                is DesktopRoute.Episodes -> EpisodeScreen(repository, current.item, current.season, onPlay = { episode, season -> route = DesktopRoute.Player(current.item, episode, season) }, onBack = { route = DesktopRoute.Browse(CatalogType.SERIES) })
-                is DesktopRoute.Player -> DesktopPlayerScreen(
-                    repository = repository,
-                    item = current.item,
-                    episode = current.episode,
-                    fullScreen = playerFullScreen,
-                    onFullScreenChange = { enabled -> playerFullScreen = enabled },
-                    onBack = {
-                        if (playerFullScreen) {
-                            playerFullScreen = false
-                        }
-                        route = if (current.item.type == CatalogType.SERIES) DesktopRoute.Episodes(current.item, current.returnSeason) else DesktopRoute.Detail(current.item)
-                    },
-                )
-                DesktopRoute.Account -> AccountScreen(repository, credentials, onSignOut = onSignOut)
             }
         }
     }

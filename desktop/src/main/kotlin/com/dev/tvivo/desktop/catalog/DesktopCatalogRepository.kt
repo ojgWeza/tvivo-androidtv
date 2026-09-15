@@ -137,6 +137,20 @@ internal class DesktopCatalogRepository(
         }
     }
 
+    /**
+     * The idle screen deliberately uses a deterministic local shelf. It never triggers a
+     * provider request as part of entering idle, and choosing oldest-indexed rows avoids the
+     * per-session randomness of Home suggestions.
+     */
+    fun featuredSeries(limit: Int = 6): List<DesktopItem> = connection().use { db ->
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? ORDER BY first_indexed_at,id LIMIT ?").use { statement ->
+            statement.setString(1, accountId)
+            statement.setString(2, CatalogType.SERIES.name)
+            statement.setInt(3, limit)
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, CatalogType.SERIES)) } }
+        }
+    }
+
     @Synchronized
     fun ensureSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> {
         if (suggestionIds[type] == null) regenerateSuggestions(type, excludeIds, limit)
