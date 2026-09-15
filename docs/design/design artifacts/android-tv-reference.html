@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<!--
+  Tvivo design comps v2 — rendered at exactly 1920x1080 device pixels.
+  Density 320, so 1dp = 2px. Card art (220x330 / 220x124) is in real px and is 1:1 here.
+  Palette copied verbatim from ui/theme/Palette.kt. Review artifact, not shipped code.
+  Server/username shown are PLACEHOLDERS. This repo is public: never put a real panel
+  hostname, port or account name in here (see CLAUDE.md, provider-agnostic constraint).
+
+  v2 applies the user's edits: refresh/account/exit as a Home icon row with focus labels,
+  login controls centred and the subscription stub removed, subscription as its own
+  read-only screen, titles overlaid on the thumbnail, conditional rail tooltip.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --bg:#0A1619; --surface:#0F2126; --elevated:#163036; --line:#1E4149;
+    --ink:#E8F1F2; --dim:#93ACB1; --accent:#D97757; --accentText:#E08466; --onAccent:#1A0A05;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#000;font-family:Roboto,"Segoe UI",system-ui,sans-serif}
+  .frame{width:1920px;height:1080px;background:var(--bg);position:relative;overflow:hidden;margin:0 0 40px}
+  .caption{color:#fff;font:600 26px/1.3 Roboto,sans-serif;padding:22px 0 8px}
+  .sub{color:#9aa;font:400 19px/1.45 Roboto,sans-serif;padding:0 0 14px;max-width:1600px}
+
+  .t-display{font:400 64px/1.1 Roboto,sans-serif}
+  .t-headline{font:500 48px/1.2 Roboto,sans-serif}
+  .t-title{font:500 36px/1.25 Roboto,sans-serif}
+  .t-body{font:400 32px/1.4 Roboto,sans-serif}
+  .t-label{font:500 28px/1.3 Roboto,sans-serif}
+  .t-caption{font:500 24px/1.3 Roboto,sans-serif}
+
+  .btn{height:84px;border-radius:42px;padding:0 44px;display:inline-flex;align-items:center;
+    justify-content:center;background:var(--elevated);color:var(--ink);border:3px solid var(--line)}
+  .btn.primary{background:var(--accent);color:var(--onAccent);border-color:var(--accent)}
+  .btn.ghost{background:transparent}
+  .btn.focused{border-color:var(--accent);box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+
+  /* ---------- Home icon row ---------- */
+  .home{position:absolute;inset:0;padding:56px 96px}
+  .home-top{display:flex;align-items:center;justify-content:space-between}
+  .iconrow{display:flex;gap:20px;align-items:center}
+  .ico{height:88px;min-width:88px;border-radius:44px;background:var(--surface);border:3px solid var(--line);
+    display:flex;align-items:center;gap:18px;justify-content:center;color:var(--ink);padding:0 22px}
+  .ico .g{font:400 42px/1 "Segoe UI Symbol",Roboto,sans-serif}
+  .ico .lbl{display:none;white-space:nowrap;color:var(--ink)}
+  .ico.focused{border-color:var(--accent);background:var(--elevated);
+    box-shadow:0 0 0 6px rgba(217,119,87,.18);padding:0 34px 0 26px}
+  .ico.focused .lbl{display:inline}
+  .tiles{display:flex;gap:40px;margin-top:110px}
+  .tile{width:520px;height:300px;border-radius:18px;background:var(--surface);border:3px solid var(--line);
+    display:flex;align-items:flex-end;padding:36px;position:relative;overflow:hidden}
+  .tile img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55}
+  .tile .scrim{position:absolute;inset:0;
+    background:linear-gradient(to top,rgba(6,15,17,.94) 0%,rgba(6,15,17,.55) 55%,rgba(6,15,17,.15) 100%)}
+  .tile span{position:relative}
+  .tile.focused{border-color:var(--accent);box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+  .who{color:var(--dim)}
+
+  /* ---------- Login (centred) ---------- */
+  .lg{position:absolute;left:0;right:0;top:0;height:594px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;padding:0 96px}
+  .lg-col{width:820px}
+  .lg-brand{color:var(--ink);text-align:center}
+  .lg-sub{color:var(--dim);text-align:center;margin:8px 0 30px}
+  .fld{margin-bottom:20px}
+  .fld-l{color:var(--dim);margin-bottom:6px;display:block;letter-spacing:.12em}
+  .fld-b{height:92px;border-radius:12px;background:var(--elevated);border:3px solid var(--line);
+    display:flex;align-items:center;padding:0 28px;color:var(--ink)}
+  .fld-b.focused{border-color:var(--accent);box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+  .fld-b.bad{border-color:var(--accentText)}
+  .fld-pair{display:flex;gap:24px}
+  .fld-pair>div{flex:1}
+  .lg-actions{display:flex;gap:20px;justify-content:center;margin-top:6px}
+  .lg-err{display:flex;gap:14px;align-items:center;justify-content:center;color:var(--accentText);margin:0 0 16px}
+  .imeline{position:absolute;left:0;right:0;top:594px;border-top:3px dashed rgba(217,119,87,.5)}
+  .imeline span{position:absolute;right:24px;top:-44px;color:var(--accentText);
+    font:500 24px/1 Roboto,sans-serif;background:var(--bg);padding:8px 14px;border-radius:6px}
+  .ime{position:absolute;left:0;right:0;top:594px;bottom:0;background:rgba(0,0,0,.55);
+    display:flex;align-items:center;justify-content:center;color:#8fa;font:500 26px/1 Roboto,sans-serif;
+    letter-spacing:.1em}
+
+  /* ---------- Browse ---------- */
+  .br{position:absolute;inset:0;display:flex}
+  .rail{width:560px;flex:0 0 560px;background:var(--surface);padding:28px 0;position:relative}
+  .ritem{display:flex;justify-content:space-between;gap:20px;padding:22px 40px;color:var(--dim)}
+  .ritem.on{background:var(--elevated);color:var(--ink);border-left:8px solid var(--accent);padding-left:32px}
+  .tip{position:absolute;left:536px;background:var(--elevated);border:3px solid var(--accent);
+    border-radius:12px;padding:18px 26px;color:var(--ink);white-space:nowrap;z-index:5;
+    box-shadow:0 12px 40px rgba(0,0,0,.6)}
+  .grid{flex:1;padding:28px 48px}
+  .grid-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+  .grid-h .iconrow{gap:16px}
+  .searchbar{display:flex;align-items:center;gap:20px;background:var(--elevated);border:3px solid var(--accent);
+    border-radius:14px;padding:0 28px;height:88px;color:var(--ink);box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+  .searchbar .ph{color:#4d6a70}
+  .railfilter{display:flex;align-items:center;gap:16px;margin:0 24px 18px;padding:0 22px;height:76px;
+    background:var(--elevated);border:3px solid var(--line);border-radius:12px;color:var(--dim)}
+  .railfilter.on{border-color:var(--accent);color:var(--ink);box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+  .railfilter .g{font:400 32px/1 "Segoe UI Symbol",Roboto,sans-serif}
+  .searchpill{display:flex;align-items:center;gap:18px;height:88px;padding:0 14px 0 28px;
+    background:var(--elevated);border:3px solid var(--accent);border-radius:44px;color:var(--ink);
+    box-shadow:0 0 0 6px rgba(217,119,87,.18)}
+  .searchpill .ph{color:#4d6a70}
+  .clearbtn{height:60px;min-width:60px;border-radius:30px;background:var(--surface);border:3px solid var(--line);
+    display:flex;align-items:center;justify-content:center;color:var(--dim);font:400 30px/1 Roboto,sans-serif}
+  .scope{display:flex;gap:14px;margin:24px 0 8px}
+  .chip{border:3px solid var(--line);border-radius:40px;padding:12px 30px;color:var(--dim)}
+  .chip.on{border-color:var(--accent);background:var(--elevated);color:var(--ink)}
+  .cards{display:flex;gap:28px;flex-wrap:wrap}
+  .thumb{width:220px;height:330px;border-radius:10px;background:var(--elevated);position:relative;overflow:hidden}
+  .thumb.f{outline:6px solid var(--accent)}
+  .art{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#2b4a52;
+    font:700 30px/1.2 Roboto,sans-serif;text-align:center;padding:0 10px}
+  .badge{position:absolute;left:0;top:0;background:rgba(10,22,25,.82);color:var(--ink);
+    padding:5px 11px;border-radius:0 0 10px 0;font:500 24px/1 Roboto,sans-serif}
+  .tover{position:absolute;left:0;right:0;bottom:0;padding:34px 12px 10px;
+    background:linear-gradient(to top,rgba(6,15,17,.96) 0%,rgba(6,15,17,.86) 45%,rgba(6,15,17,0) 100%);
+    color:var(--ink);font:500 28px/1.25 Roboto,sans-serif;direction:rtl;text-align:right}
+  .measure{position:absolute;top:0;height:100%;border-right:3px dashed rgba(217,119,87,.65)}
+  .mlabel{position:absolute;top:14px;left:12px;color:var(--accentText);font:500 24px/1 Roboto,sans-serif;
+    background:rgba(10,22,25,.9);padding:8px 12px;border-radius:6px;white-space:nowrap}
+
+  /* ---------- Account ---------- */
+  .ac{position:absolute;inset:0;padding:56px 96px}
+  .arow{padding:30px 36px;border-radius:14px;color:var(--ink);margin-bottom:18px;background:var(--surface);
+    border:3px solid transparent}
+  .arow .h{color:var(--dim);margin-top:8px}
+  .arow.on{border-color:var(--accent);background:var(--elevated)}
+  .arow.danger{border-color:rgba(217,119,87,.35)}
+  .arow.danger .t{color:var(--accentText)}
+  .divider{height:3px;background:var(--line);margin:34px 0}
+  .confirm{position:absolute;inset:0;background:rgba(5,11,13,.86);display:flex;align-items:center;justify-content:center}
+  .dlg{width:940px;background:var(--surface);border:3px solid var(--line);border-radius:20px;padding:52px}
+  .dlg p{color:var(--dim);margin:22px 0 42px}
+  .dlg .row{display:flex;gap:22px;justify-content:flex-end}
+
+  /* ---------- Subscription ---------- */
+  .subs{position:absolute;inset:0;padding:56px 96px}
+  .srow{display:flex;justify-content:space-between;align-items:baseline;padding:30px 0;
+    border-bottom:2px solid var(--line);max-width:1300px}
+  .srow .k{color:var(--dim)}
+  .srow .v{color:var(--ink);text-align:right}
+  .srow .v.warn{color:var(--accentText)}
+  .ro{display:inline-flex;align-items:center;gap:14px;color:var(--dim);margin-top:10px}
+</style>
+</head>
+<body>
+
+<div class="caption">A &nbsp;Home — Refresh / Account / Exit as one icon row, label revealed on focus</div>
+<div class="sub">Refresh is a global action so it lives here, not inside Account. Exit has nothing to do with the account either. Focus expands the pill and reveals the label, so nothing stays a mystery glyph.</div>
+<div id="fA" class="frame">
+  <div class="home">
+    <div class="home-top">
+      <div class="t-display" style="color:var(--ink)">Tvivo</div>
+      <div class="iconrow">
+        <div class="ico"><span class="g">&#8635;</span></div>
+        <div class="ico focused"><span class="g">&#9673;</span><span class="lbl t-label">Account</span></div>
+        <div class="ico"><span class="g">&#9099;</span></div>
+      </div>
+    </div>
+    <div class="who t-body" style="margin-top:14px">demo-user &middot; Expires 18 Apr 2027</div>
+    <div class="tiles">
+      <div class="tile"><img src="img/livetv.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Live TV</span></div>
+      <div class="tile"><img src="img/movies.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Movies</span></div>
+      <div class="tile"><img src="img/series.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Series</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">A2 &nbsp;Home — Refresh focused, and refreshing without blocking the screen</div>
+<div id="fA2" class="frame">
+  <div class="home">
+    <div class="home-top">
+      <div class="t-display" style="color:var(--ink)">Tvivo</div>
+      <div class="iconrow">
+        <div class="ico focused"><span class="g">&#8635;</span><span class="lbl t-label">Refresh everything</span></div>
+        <div class="ico"><span class="g">&#9673;</span></div>
+        <div class="ico"><span class="g">&#9099;</span></div>
+      </div>
+    </div>
+    <div class="who t-body" style="margin-top:14px">demo-user &middot; Expires 18 Apr 2027</div>
+    <div class="tiles">
+      <div class="tile focused"><img src="img/livetv.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Live TV</span></div>
+      <div class="tile"><img src="img/movies.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Movies</span></div>
+      <div class="tile"><img src="img/series.jpg" alt=""><div class="scrim"></div><span class="t-headline" style="color:var(--ink)">Series</span></div>
+    </div>
+    <div class="t-body" style="color:var(--accentText);margin-top:56px">Refreshing &mdash; 12,480 of 48,761 movies. You can keep browsing.</div>
+  </div>
+</div>
+
+<div class="caption">B &nbsp;Login — controls centred, side panel removed</div>
+<div class="sub">The subscription card is gone. While typing it could only show placeholder values, which is decoration pretending to be feedback. Everything focusable stays above the IME ceiling.</div>
+<div id="fB" class="frame">
+  <div class="lg">
+    <div class="lg-col">
+      <div class="lg-brand t-headline">Tvivo</div>
+      <div class="lg-sub t-body">Sign in to your provider</div>
+      <div class="fld">
+        <span class="fld-l t-caption">SERVER</span>
+        <div class="fld-b t-body">panel.example:8080</div>
+      </div>
+      <div class="fld fld-pair">
+        <div><span class="fld-l t-caption">USERNAME</span><div class="fld-b t-body">demo-user</div></div>
+        <div><span class="fld-l t-caption">PASSWORD</span><div class="fld-b focused t-body">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div></div>
+      </div>
+      <div class="lg-actions">
+        <div class="btn primary t-label focused">Sign in</div>
+        <div class="btn ghost t-label">Show</div>
+        <div class="btn ghost t-label">Clear</div>
+      </div>
+    </div>
+  </div>
+  <div class="ime">IME occupies this half &mdash; nothing focusable lives here</div>
+  <div class="imeline"><span>IME ceiling &middot; 297dp</span></div>
+</div>
+
+<div class="caption">B2 &nbsp;Login — the error sits with the field that caused it</div>
+<div id="fB2" class="frame">
+  <div class="lg">
+    <div class="lg-col">
+      <div class="lg-brand t-headline">Tvivo</div>
+      <div class="lg-sub t-body">Sign in to your provider</div>
+      <div class="lg-err t-label"><span>&#9888;</span><span>Can't reach that server. Check the address and port.</span></div>
+      <div class="fld">
+        <span class="fld-l t-caption" style="color:var(--accentText)">SERVER</span>
+        <div class="fld-b focused bad t-body">example.invalid:8080</div>
+      </div>
+      <div class="fld fld-pair">
+        <div><span class="fld-l t-caption">USERNAME</span><div class="fld-b t-body">wronguser</div></div>
+        <div><span class="fld-l t-caption">PASSWORD</span><div class="fld-b t-body">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div></div>
+      </div>
+      <div class="lg-actions">
+        <div class="btn primary t-label">Try again</div>
+        <div class="btn ghost t-label">Show</div>
+        <div class="btn ghost t-label">Clear</div>
+      </div>
+    </div>
+  </div>
+  <div class="imeline"><span>IME ceiling &middot; 297dp</span></div>
+</div>
+
+<div class="caption">C &nbsp;Browse — persistent category filter in the rail, search icon collapsed above the items</div>
+<div class="sub">Search is not universal: it exists only where there is something to browse. The rail carries its own always-visible filter for categories; the grid header carries a separate one for items.</div>
+<div id="fC" class="frame">
+  <div class="br">
+    <div class="rail">
+      <div class="railfilter t-label"><span class="g">&#9906;</span><span>Filter categories</span></div>
+      <div class="ritem t-title"><span>EGYPT SERIES NEW</span><span>35</span></div>
+      <div class="ritem t-title"><span>ENGLISH SERIES NEW</span><span>169</span></div>
+      <div class="ritem t-title"><span>GULF SERIES NEW</span><span>60</span></div>
+      <div class="ritem t-title"><span>TURKEY SERIES NEW</span><span>134</span></div>
+      <div class="ritem t-title"><span>ASIAN SERIES NEW</span><span>495</span></div>
+      <div class="ritem t-title"><span>TALK SHOW NEW</span><span>23</span></div>
+      <div class="ritem on t-title"><span>RAMADAN EGYPT 2026 SD</span><span>25</span></div>
+      <div class="ritem t-title"><span>RAMADAN GULF 2026</span><span>55</span></div>
+      <div class="ritem t-title"><span>ANIME SERIES NEW</span><span>9</span></div>
+    </div>
+    <div class="grid">
+      <div class="grid-h">
+        <div class="t-headline" style="color:var(--ink)">EGYPT SERIES NEW</div>
+        <div class="iconrow">
+          <div class="ico"><span class="g">&#9906;</span></div>
+          <div class="ico"><span class="g">&#8635;</span></div>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="thumb f"><div class="art">ابن الشركة</div><div class="badge">HD</div><div class="tover">ابن الشركة</div></div>
+        <div class="thumb"><div class="art">ابن الشركة</div><div class="badge">SD</div><div class="tover">ابن الشركة</div></div>
+        <div class="thumb"><div class="art">اتنين قهوة</div><div class="badge">SD</div><div class="tover">اتنين قهوة</div></div>
+        <div class="thumb"><div class="art">اتنين قهوة</div><div class="badge">HD</div><div class="tover">اتنين قهوة</div></div>
+        <div class="thumb"><div class="art">الفرنساوي</div><div class="badge">SD</div><div class="tover">الفرنساوي</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="measure" style="left:720px"><div class="mlabel">old rail edge &middot; 360dp</div></div>
+  <div class="measure" style="left:560px"><div class="mlabel" style="left:-250px">new &middot; 280dp</div></div>
+</div>
+
+<div class="caption">C2 &nbsp;Browse — typing in the rail filter narrows the categories live</div>
+<div id="fC2" class="frame">
+  <div class="br">
+    <div class="rail">
+      <div class="railfilter on t-label"><span class="g">&#9906;</span><span>ramadan</span><span style="margin-left:auto;color:var(--dim)">4</span></div>
+      <div class="ritem on t-title"><span>RAMADAN EGYPT 2026 SD</span><span>25</span></div>
+      <div class="ritem t-title"><span>RAMADAN EGYPT 2026 HD</span><span>43</span></div>
+      <div class="ritem t-title"><span>RAMADAN GULF 2026</span><span>55</span></div>
+      <div class="ritem t-title"><span>RAMADAN SYRIA 2026</span><span>31</span></div>
+    </div>
+    <div class="grid">
+      <div class="grid-h">
+        <div class="t-headline" style="color:var(--ink)">RAMADAN EGYPT 2026 SD</div>
+        <div class="iconrow">
+          <div class="ico"><span class="g">&#9906;</span></div>
+          <div class="ico"><span class="g">&#8635;</span></div>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="thumb f"><div class="art">ابن الشركة</div><div class="badge">HD</div><div class="tover">ابن الشركة</div></div>
+        <div class="thumb"><div class="art">ابن الشركة</div><div class="badge">SD</div><div class="tover">ابن الشركة</div></div>
+        <div class="thumb"><div class="art">اتنين قهوة</div><div class="badge">SD</div><div class="tover">اتنين قهوة</div></div>
+        <div class="thumb"><div class="art">اتنين قهوة</div><div class="badge">HD</div><div class="tover">اتنين قهوة</div></div>
+        <div class="thumb"><div class="art">الفرنساوي</div><div class="badge">SD</div><div class="tover">الفرنساوي</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">C3 &nbsp;Browse — the search icon expands in place into a pill that filters items while typing</div>
+<div class="sub">The pill opens next to the icon rather than on a new screen, so the grid stays visible and filters live. The round button clears the query without leaving the field.</div>
+<div id="fC3" class="frame">
+  <div class="br">
+    <div class="rail">
+      <div class="railfilter t-label"><span class="g">&#9906;</span><span>Filter categories</span></div>
+      <div class="ritem t-title"><span>EGYPT SERIES NEW</span><span>35</span></div>
+      <div class="ritem t-title"><span>ENGLISH SERIES NEW</span><span>169</span></div>
+      <div class="ritem t-title"><span>GULF SERIES NEW</span><span>60</span></div>
+      <div class="ritem t-title"><span>TURKEY SERIES NEW</span><span>134</span></div>
+      <div class="ritem t-title"><span>ASIAN SERIES NEW</span><span>495</span></div>
+      <div class="ritem t-title"><span>TALK SHOW NEW</span><span>23</span></div>
+      <div class="ritem on t-title"><span>RAMADAN EGYPT 2026 SD</span><span>25</span></div>
+      <div class="ritem t-title"><span>RAMADAN GULF 2026</span><span>55</span></div>
+      <div class="ritem t-title"><span>ANIME SERIES NEW</span><span>9</span></div>
+    </div>
+    <div class="grid">
+      <div class="grid-h">
+        <div class="t-headline" style="color:var(--ink)">EGYPT SERIES NEW <span class="t-label" style="color:var(--dim)">&middot; 4 of 35</span></div>
+        <div class="iconrow">
+          <div class="searchpill t-body"><span>&#9906;</span><span>بطل</span><span class="clearbtn">&times;</span></div>
+          <div class="ico"><span class="g">&#8635;</span></div>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="thumb f"><div class="art">بطل العالم</div><div class="badge">HD</div><div class="tover">بطل العالم</div></div>
+        <div class="thumb"><div class="art">بطل العالم</div><div class="badge">SD</div><div class="tover">بطل العالم</div></div>
+        <div class="thumb"><div class="art">الأبطال</div><div class="badge">HD</div><div class="tover">الأبطال</div></div>
+        <div class="thumb"><div class="art">بطل من ورق</div><div class="badge">SD</div><div class="tover">بطل من ورق</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="ime">IME occupies this half &mdash; the filtered grid stays above it</div>
+  <div class="imeline"><span>IME ceiling &middot; 297dp</span></div>
+</div>
+
+<div class="caption">D &nbsp;Account — only account business now; Refresh and Exit moved to Home</div>
+<div id="fD" class="frame">
+  <div class="ac">
+    <div class="t-display" style="color:var(--ink)">Account</div>
+    <div class="t-body" style="color:var(--dim);margin-top:12px">demo-user &middot; panel.example:8080</div>
+    <div style="margin-top:44px">
+      <div class="arow on"><div class="t-title">Show subscription</div><div class="h t-label">Status, expiry and connections in use</div></div>
+      <div class="arow"><div class="t-title">Sign in to a different account</div><div class="h t-label">Keeps this account signed in until the new one is accepted</div></div>
+      <div class="divider"></div>
+      <div class="arow danger"><div class="t t-title">Sign out</div><div class="h t-label">Erases the saved credentials from this device. They cannot be recovered.</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">D2 &nbsp;Account — confirm before an irreversible wipe, safe option focused</div>
+<div id="fD2" class="frame">
+  <div class="ac">
+    <div class="t-display" style="color:var(--ink)">Account</div>
+    <div class="t-body" style="color:var(--dim);margin-top:12px">demo-user &middot; panel.example:8080</div>
+    <div style="margin-top:44px">
+      <div class="arow"><div class="t-title">Show subscription</div><div class="h t-label">Status, expiry and connections in use</div></div>
+      <div class="arow"><div class="t-title">Sign in to a different account</div><div class="h t-label">Keeps this account signed in until the new one is accepted</div></div>
+      <div class="divider"></div>
+      <div class="arow danger"><div class="t t-title">Sign out</div><div class="h t-label">Erases the saved credentials from this device. They cannot be recovered.</div></div>
+    </div>
+  </div>
+  <div class="confirm">
+    <div class="dlg">
+      <div class="t-headline" style="color:var(--ink)">Sign out of demo-user?</div>
+      <p class="t-body">The saved password is erased from this TV and cannot be recovered. You will need to type the server, username and password again to sign back in.</p>
+      <div class="row">
+        <div class="btn ghost t-label focused">Keep me signed in</div>
+        <div class="btn primary t-label">Sign out</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">E &nbsp;Subscription — its own read-only screen. Nothing editable, so no keyboard can ever appear.</div>
+<div id="fE" class="frame">
+  <div class="subs">
+    <div class="t-display" style="color:var(--ink)">Subscription</div>
+    <div class="ro t-label"><span>&#128274;</span><span>Read only &middot; reported by the provider</span></div>
+    <div style="margin-top:40px">
+      <div class="srow"><span class="k t-body">Signed in as</span><span class="v t-body">demo-user</span></div>
+      <div class="srow"><span class="k t-body">Server</span><span class="v t-body">panel.example:8080</span></div>
+      <div class="srow"><span class="k t-body">Status</span><span class="v t-body">Active</span></div>
+      <div class="srow"><span class="k t-body">Expires</span><span class="v t-body">18 Apr 2027</span></div>
+      <div class="srow"><span class="k t-body">Connections</span><span class="v warn t-body">0 of 1 in use</span></div>
+      <div class="srow"><span class="k t-body">Trial</span><span class="v t-body">No</span></div>
+    </div>
+    <div class="t-label" style="color:var(--dim);margin-top:38px">This account allows 1 stream at a time. Other accounts may allow more &mdash; this value is read from your provider.</div>
+    <div style="margin-top:44px"><div class="btn ghost t-label focused">Back</div></div>
+  </div>
+</div>
+
+<div class="caption">F &nbsp;Type scale</div>
+<div id="fF" class="frame" style="height:720px">
+  <div style="padding:52px 96px">
+    <div style="color:var(--dim)" class="t-label">Every size is a role, not a number chosen per screen. 12dp is the 10-foot floor.</div>
+    <div style="margin-top:36px">
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0;border-bottom:2px solid var(--line)"><span class="t-caption" style="color:var(--dim);width:300px">display &middot; 32dp</span><span class="t-display" style="color:var(--ink)">Tvivo</span></div>
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0;border-bottom:2px solid var(--line)"><span class="t-caption" style="color:var(--dim);width:300px">headline &middot; 24dp</span><span class="t-headline" style="color:var(--ink)">EGYPT SERIES NEW</span></div>
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0;border-bottom:2px solid var(--line)"><span class="t-caption" style="color:var(--dim);width:300px">title &middot; 18dp</span><span class="t-title" style="color:var(--ink)">Sign in to a different account</span></div>
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0;border-bottom:2px solid var(--line)"><span class="t-caption" style="color:var(--dim);width:300px">body &middot; 16dp</span><span class="t-body" style="color:var(--ink)">Keeps this account signed in until the new one is accepted</span></div>
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0;border-bottom:2px solid var(--line)"><span class="t-caption" style="color:var(--dim);width:300px">label &middot; 14dp</span><span class="t-label" style="color:var(--ink)">ابن الشركة &mdash; card titles, overlaid</span></div>
+      <div style="display:flex;align-items:baseline;gap:32px;padding:16px 0"><span class="t-caption" style="color:var(--dim);width:300px">caption &middot; 12dp floor</span><span class="t-caption" style="color:var(--ink)">HD</span><span class="t-caption" style="color:var(--accentText)">&larr; quality badge, was 10dp: below the floor</span></div>
+    </div>
+  </div>
+</div>
+
+
+<div class="caption">H &nbsp;Splash screen</div>
+<div class="sub">Shown while credentials are decrypted and the cached catalog opens. The bar is real progress, not a spinner.</div>
+<div id="fH" class="frame">
+  <img src="img/splash.svg" width="1920" height="1080" alt="">
+</div>
+
+<div class="caption">I &nbsp;App mark — the pulse, not a letter</div>
+<div class="sub">Tvivo is TV + vivo (vivre: alive, quick, vivid), so the mark is a live signal inside a screen, not a monogram. The beat cuts a sharp V trough, so the V of vivo falls out of the pulse instead of being spelled.</div>
+<div id="fI" class="frame" style="height:560px;display:flex;align-items:center;gap:72px;padding:0 96px">
+  <img src="img/icon.svg" width="320" height="320" alt="">
+  <div>
+    <img src="img/banner.svg" width="320" height="180" alt="" style="border:2px solid #1E4149;border-radius:8px">
+    <div class="t-label" style="color:var(--dim);margin-top:16px">Android TV launcher banner, 320&times;180</div>
+  </div>
+  <div style="max-width:560px">
+    <div class="t-title" style="color:var(--ink)">A screen carrying a live signal.</div>
+    <div class="t-body" style="color:var(--dim);margin-top:16px">Reads as heartbeat and as broadcast waveform. Vector, so it stays sharp at every density, and it survives being shrunk to launcher size because it is one stroke, not lettering.</div>
+  </div>
+</div>
+
+</body>
+</html>

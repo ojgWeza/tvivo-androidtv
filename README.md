@@ -5,9 +5,18 @@ Live TV, Movies (VOD), and Series.
 
 ## Status
 
-Discovery phase complete. API surface fully mapped and verified against a live
-panel. No code written yet. See `docs/` for everything needed to start
-implementation.
+**Phases 0-4 built and running against a live panel** on an API 34 Android TV
+emulator (2026-09-08). The app authenticates, browses Live TV, Movies and Series
+by category, plays movies, and shows a season/episode picker per show. All three
+catalogs sync in full and cache locally. 132 unit tests pass.
+
+Phase 5 (hardening: RTL verification, state coverage, `RefreshWorker`, on-device
+diagnostics) is next, together with the one round of physical-TV validation.
+Live `.ts` and series episode playback are the paths never executed — the
+account's `max_connections` is 1, so no automated test may open a stream.
+
+Open work, with the context to pick it up cold, is in
+[`TODOS.md`](TODOS.md).
 
 ## Stack
 
@@ -27,7 +36,9 @@ implementation.
   states, D-pad/10-foot constraints, the content realities that break naive
   layouts, what is already locked, and the open design questions.
 - [`docs/decisions.md`](docs/decisions.md) — key decisions made during
-  discovery and during plan review, and why.
+  discovery, during plan review, and while building each phase, and why.
+- [`TODOS.md`](TODOS.md) — open defects, missing test coverage, remaining
+  phases, and the emulator environment gotchas that each cost real time.
 
 ## Entry point for Claude Code
 

@@ -23,3 +23,26 @@ secrets.properties
 *.aab
 *.jks
 *.keystore
+
+# Reference screenshots of third-party apps — this repo is public,
+# and these carry other providers' branding. Keep them local.
+docs/*.jpeg
+docs/*.jpg
+docs/*.png
+
+# Tool output: QA reports and their screenshots. The screenshots show the
+# panel's own posters and category names, which is exactly the provider-
+# identifying material the rule above exists to keep out of a public repo.
+# Findings live in TODOS.md instead.
+.gstack/
+
+# Local scratch: screenshots, probe dumps, device logs
+.local/
+/desktop-fixtures/
+
+# Playwright MCP scratch output
+.playwright-mcp/
+
+# Local QA screenshots. These capture the live panel hostname and account, and this
+# repo is public and provider-agnostic — they must never be committed.
+.qa/

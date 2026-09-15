@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the generated, sanitized diagnostic snapshot is shareable. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="diagnostics"
+        path="tvivo-diagnostics.txt" />
+</paths>

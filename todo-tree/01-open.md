@@ -1,0 +1,67 @@
+## Suggested order for the next session
+
+1. **Get the physical TV in early, ahead of Phase 5.** Live `.ts` playback, the
+   `/series/` episode path, `max_connections` behaviour and remote key-repeat
+   (T-D2b) are all unverifiable on the emulator, and both live and episode
+   playback are shipped-but-never-executed code. This retires more risk than
+   further emulator work.
+2. **P-1 — player baseline on the physical TV.** Validate the existing player
+   before adding controls: movie, live and episode playback; seek; back; audio
+   metadata; connection teardown; error mapping; and resume after process death.
+   This is the gate for the player-control work in `62-section.md`.
+3. **Phase 5 — hardening.** RTL verification, empty/loading/error states,
+   `RefreshWorker`, on-device diagnostic log. **Take N-3 and N-4 inside this**,
+   not after it — they are error states, and building the state table twice is
+   the same mistake D-4/D-5 avoided.
+4. **N-1 first among the new items (Part 2c).** It is small, and Q-14 cannot
+   move at all until a stack trace exists on a device with no adb attached.
+   **N-2 before the physical-TV session**, since that session is the only place
+   an exhausted `max_connections` can be provoked on purpose.
+
+**T-T1 is done.** `CatalogDaoTest` (16 tests) covers `replaceCategory`, the
+generation flip, account scoping and the per-type table separation;
+`CatalogSyncerTest` (11) drives the full-catalog tier over MockWebServer against
+in-memory Room, including the zero-row guard for all three content types.
+
+## Next approved emulator-validation run
+
+Run this as one batch after the pending patch is built and installed. It needs
+explicit deployment approval; no automated check may open a stream.
+
+1. **QA-11 — connection teardown.** Play a movie, leave it, then immediately
+   start Live. The second launch must not report that another device is using the
+   account.
+2. **Visual/focus fixes.** Verify QA-3..QA-7, QA-9, QA-10, Q-25 and Q-27, plus
+   Q-24's expanded item-filter path: RTL paragraphs, grid clipping, logo fallback,
+   title layout, rail tint, header focus targets, ratings, field escapes, initial
+   browse focus and picker Back.
+3. **Phase-5 error states.** Verify N-3 and N-4: cached browsing during an
+   unavailable network, and a clear partial-sync state with retry.
+4. **N-5 — resume after process stop.** During the same permitted playback
+   session, stop the app after a movie has progressed, reopen it and confirm the
+   saved position remains available.
+
+**Physical TV only:** live `.ts`, episode `/series/` playback, remote key-repeat,
+and the final physical-device connection-limit checks remain outside this emulator
+batch.
+
+`DESIGN.md` (T-D1) can wait — the shared `tvFocusFrame` and `BrowseItem` /
+`CardShape` now enforce most of what it would have said. Multi-account (T-A1) is
+speculative until a second panel actually exists.
+
+---
+
+# Part 1 — Open defects
+
+Ten defects have been found on this project. **Every one of them passed a green
+build and a green unit suite**, and every one was found by driving the emulator
+over `adb` and looking at a screenshot. Budget for that on every UI change.
+
+Seven are fixed and verified (Q-1, Q-2, Q-3, Q-6, Q-7, Q-9, and the two Home
+nits found while verifying them). Phase 4 found three more the same way and all
+three are fixed: the detail screen opened with focus on nothing, the picker
+showed "1 min" for 40-minute episodes because this panel's `duration_secs` is
+wrong, and episode titles carried the `HD` token the grid strips. What is left
+is below. The durable lessons
+from the fixed ones live in `docs/ui-scope.md` and `docs/decisions.md`, not
+here — this file is for what is still open.
