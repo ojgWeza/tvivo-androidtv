@@ -16,34 +16,36 @@ calls `store.wipe()`. Do not clear app data.
 
 ## Current priority — Desktop (active work)
 
-- **D-Desktop-15 (owner request, 2026-09-15) — App should launch full screen.**
-  Not started. Currently opens windowed; owner wants the desktop app to start
-  full screen on launch, same spirit as the TV app's fixed 10-foot assumption.
-  Check how `fullScreen`/`onFullScreenChange` state already works for the
-  player (`DesktopShell.kt`) and whether the same window-level full-screen API
-  can be applied to the app's own top-level window at startup, not just the
-  player surface. Consider whether a windowed/restore path should still exist
-  (e.g. Escape or a title-bar control) — ask the owner if unclear rather than
-  assuming full screen means "no way out."
+- **D-Desktop-16e — entry/idle screen (IMPLEMENTED 2026-09-16, regressions found).**
+  Idle/entry screen with 5-minute timer and featured series carousel is complete
+  (`fbe8bb1`). Five regressions found post-implementation require fixes:
+  - **D-Desktop-15-REGR — Full-screen launch retains Windows title bar/frame.** Entry
+    screen launches but does not go full screen on startup; the title bar and
+    window frame remain visible. Check `Main.kt`'s window setup and apply the
+    full-screen API at app launch time, not only during player entry.
+  - **D-Desktop-16-REGR — Malformed titles remain (e.g., "( ) HD", "()", "0 HD").**
+    These should have been fixed in the catalog cleanup, but empty-bracket titles
+    still appear in Suggested Movies and other shelves. Verify `NameNormalizer`
+    is being applied to all title sources, not just the main grid.
+  - **D-Desktop-17-REGR — Ratings must render as star + number, no fallback.**
+    Missing ratings should not fall back to "Movies" or "Series" text. Show a star
+    icon + the numeric rating only, or omit the rating entirely if absent.
+  - **D-Desktop-18-REGR — Suggested Movies "See all" link is vertically clipped at
+    right edge.** The link needs reserved space or should be removed entirely (owner
+    prefers removal). Check `DesktopShell.kt`'s Suggested Movies section layout.
+  - **D-Desktop-19-REGR — Suggested Movies must be ordered by highest rating.**
+    Currently unsorted or sorted wrong. Apply descending rating sort in
+    `DesktopCatalogRepository.kt` when fetching the Suggested Movies list.
+
 - **D-Desktop-16 (owner request, 2026-09-15) — Home screen is empty/unintuitive.**
-  Not started. Owner: "make the main screen more intelligent and intuitive
-  instead of holding empty sections and being not usable." Owner's proposed
-  direction is `docs/design/desktop-home-proposal.md`; Claude reviewed it
-  against `DesktopShell.kt`/`DesktopCatalogRepository.kt`, then Codex did an
-  adversarial read-only review of the same files (2026-09-15) and found the
+  Owner's proposed direction is `docs/design/desktop-home-proposal.md`; Claude
+  reviewed it against `DesktopShell.kt`/`DesktopCatalogRepository.kt`, then Codex
+  did an adversarial read-only review of the same files (2026-09-15) and found the
   split needs to be finer than a simple "schema-safe vs schema-work" cut.
   Consolidated decision — split into five ordered sub-items, plus folders
   tracked separately. **D-Desktop-16a, D-Desktop-16b, D-Desktop-16c, and
-  D-Desktop-16d are closed** (see `docs/decisions.md`); 16e remains open:
-  - **D-Desktop-16e — entry/idle screen.** New state machine: input/lifecycle
-    contract covering mouse, keyboard, click, navigation change, dialogs,
-    window focus change, and player entry, all of which must cancel/restart
-    the 5-minute idle timer; rotation must stop when hidden; restoring from
-    idle needs the same saved-browse-state 16b introduces. Do not bundle
-    with 16a — it depends on 16b's restoration state, not just empty-shelf
-    logic. **Blocker:** needs a design plan (idle/entry screen visuals and
-    rotation content) before implementation. File as separate design task for
-    next session.
+  D-Desktop-16d are closed** (see `docs/decisions.md`); **D-Desktop-16e is now
+  complete** with regressions listed above; D-Desktop-16f remains open:
   - **Favourite folders — tracked as a separate item, not part of D-Desktop-16.**
     Schema today is a single `favourite INTEGER` bit per item, preserved
     across refresh. Folder membership, ordering, naming, delete semantics,
@@ -395,9 +397,6 @@ are real features. Nothing here is built unless noted. File the decision in
   backend design, not a 2-line item.
 
 ## Design backlog
-
-- **D-Desktop-16e-design — Entry/Idle screen visuals and rotation content (2026-09-15, blocked implementation).**
-  Not started. The idle screen needs: visual design (entry state on first run, idle state after 5 minutes, rotation carousel content/imagery), and a clear spec on what rotates (app brand? suggested content? static carousel?). Currently blocks D-Desktop-16e implementation. Schedule for next session alongside other design work.
 
 - **D-9, D-10, D-11 — never built.** The rest of the original D-1..D-12 UI
   batch is built (see `docs/decisions.md`, "Archived todo-tree closures").
