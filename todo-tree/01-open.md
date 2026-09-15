@@ -41,7 +41,9 @@ calls `store.wipe()`. Do not clear app data.
     the 5-minute idle timer; rotation must stop when hidden; restoring from
     idle needs the same saved-browse-state 16b introduces. Do not bundle
     with 16a — it depends on 16b's restoration state, not just empty-shelf
-    logic.
+    logic. **Blocker:** needs a design plan (idle/entry screen visuals and
+    rotation content) before implementation. File as separate design task for
+    next session.
   - **Favourite folders — tracked as a separate item, not part of D-Desktop-16.**
     Schema today is a single `favourite INTEGER` bit per item, preserved
     across refresh. Folder membership, ordering, naming, delete semantics,
@@ -405,6 +407,9 @@ are real features. Nothing here is built unless noted. File the decision in
   backend design, not a 2-line item.
 
 ## Design backlog
+
+- **D-Desktop-16e-design — Entry/Idle screen visuals and rotation content (2026-09-15, blocked implementation).**
+  Not started. The idle screen needs: visual design (entry state on first run, idle state after 5 minutes, rotation carousel content/imagery), and a clear spec on what rotates (app brand? suggested content? static carousel?). Currently blocks D-Desktop-16e implementation. Schedule for next session alongside other design work.
 
 - **D-9, D-10, D-11 — never built.** The rest of the original D-1..D-12 UI
   batch is built (see `docs/decisions.md`, "Archived todo-tree closures").
