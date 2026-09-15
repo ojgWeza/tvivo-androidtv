@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -139,7 +140,7 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
             idleOverlayVisible = false
         }
     }
-    LaunchedEffect(repository) { featuredSeries = runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(CatalogType.SERIES); repository.regenerateSuggestions(CatalogType.SERIES, emptySet(), limit = 6) } }.getOrElse { emptyList() } }
+    LaunchedEffect(repository) { featuredSeries = runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(CatalogType.SERIES); repository.featuredSeries(20) } }.getOrElse { emptyList() } }
     DisposableEffect(idleController) {
         val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
         val listener = PropertyChangeListener { idleController.onWindowFocusChanged(it.newValue != null) }
@@ -210,7 +211,8 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
             if (idleOverlayVisible) {
                 IdleEntryScreen(
                     items = featuredSeries,
-                    onExit = ::onAnyInput,
+                    onBackgroundInput = ::onAnyInput,
+                    onFeaturedSelected = { item -> onAnyInput("featured-card"); route = DesktopRoute.Episodes(item) },
                 )
             }
         }
@@ -280,13 +282,13 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
 @Composable private fun HomeShelf(title: String, items: List<DesktopItem>, onBrowse: () -> Unit, onPlay: (DesktopItem) -> Unit) {
     if (items.isEmpty()) return
     Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
 }
 
 @Composable private fun EpisodeHomeShelf(items: List<DesktopSeriesResume>, onBrowse: () -> Unit, onPlay: (DesktopItem, DesktopEpisode) -> Unit) {
     if (items.isEmpty()) return
     Text("Continue watching series", color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items.forEach { resume -> Box(Modifier.width(190.dp).height(184.dp).clip(RoundedCornerShape(12.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(12.dp)).clickable { onPlay(resume.series, resume.episode) }) { ArtworkImage(resume.series.artwork, Modifier.fillMaxSize()); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0A1619)))).padding(12.dp), verticalArrangement = Arrangement.Bottom) { Text(resume.series.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("S${resume.episode.season.padStart(2, '0')} E${(resume.episode.episodeNumber ?: "?").padStart(2, '0')}", color = Accent, modifier = Modifier.padding(top = 4.dp)) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) { items.forEach { resume -> Box(Modifier.width(190.dp).height(184.dp).clip(RoundedCornerShape(12.dp)).background(Elevated).border(1.dp, Line, RoundedCornerShape(12.dp)).clickable { onPlay(resume.series, resume.episode) }) { ArtworkImage(resume.series.artwork, Modifier.fillMaxSize()); Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0A1619)))).padding(12.dp), verticalArrangement = Arrangement.Bottom) { Text(resume.series.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("S${resume.episode.season.padStart(2, '0')} E${(resume.episode.episodeNumber ?: "?").padStart(2, '0')}", color = Accent, modifier = Modifier.padding(top = 4.dp)) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
 }
 
 // D-Desktop-16b: `saved` is hoisted at DesktopShell scope (one per CatalogType) instead of
@@ -327,7 +329,7 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
             verticalArrangement = Arrangement.Bottom,
         ) {
             Text(item.title, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(item.rating.positiveRating()?.let { "Rating $it" } ?: item.type.title, color = Dim, style = MaterialTheme.typography.labelSmall)
+            item.rating.positiveRating()?.let { Text("★ $it", color = Dim, style = MaterialTheme.typography.labelSmall) }
         }
     }
 }

@@ -142,8 +142,8 @@ internal class DesktopCatalogRepository(
      * provider request as part of entering idle, and choosing oldest-indexed rows avoids the
      * per-session randomness of Home suggestions.
      */
-    fun featuredSeries(limit: Int = 6): List<DesktopItem> = connection().use { db ->
-        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? ORDER BY first_indexed_at,id LIMIT ?").use { statement ->
+    fun featuredSeries(limit: Int = 20): List<DesktopItem> = connection().use { db ->
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT ?").use { statement ->
             statement.setString(1, accountId)
             statement.setString(2, CatalogType.SERIES.name)
             statement.setInt(3, limit)
@@ -161,7 +161,7 @@ internal class DesktopCatalogRepository(
     fun regenerateSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> = connection().use { db ->
         val exclusions = excludeIds.toList()
         val exclusionClause = if (exclusions.isEmpty()) "" else " AND id NOT IN (${exclusions.joinToString(",") { "?" }})"
-        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY RANDOM() LIMIT ?").use { statement ->
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT ?").use { statement ->
             var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
             exclusions.forEach { statement.setString(i++, it) }
             statement.setInt(i, limit)
@@ -327,6 +327,16 @@ internal class DesktopCatalogRepository(
             if (version < 5) {
                 sql.execute("CREATE INDEX IF NOT EXISTS episode_resume_series_recent ON episode_resume(account_id,series_id,updated_at DESC,episode_id DESC)")
                 sql.execute("UPDATE schema_version SET version=5")
+            }
+            if (version < 6) {
+                sql.execute("""
+                    UPDATE items SET title = TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        title, '( )', ' '), '( - )', ' '), '(-)', ' '), '()', ' '),
+                        '[ ]', ' '), '[ - ]', ' '), '[-]', ' '), '[]', ' '),
+                        '  ', ' '), '   ', ' '), '    ', ' '))
+                    WHERE title IS NOT NULL AND (title LIKE '%(%' OR title LIKE '%[%')
+                """)
+                sql.execute("UPDATE schema_version SET version=6")
             }
         }
     }
