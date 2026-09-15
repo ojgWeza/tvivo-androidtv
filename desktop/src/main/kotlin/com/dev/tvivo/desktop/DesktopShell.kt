@@ -246,7 +246,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
     var lastObservedPositionForWatchdog by remember { mutableStateOf(-1L) }
     var watchdogSatisfied by remember { mutableStateOf(false) }
     var userPaused by remember { mutableStateOf(false) }
-    val surface = remember { Canvas().apply { background = AwtColor.BLACK } }
+    val surface = remember { Canvas().apply { background = AwtColor.BLACK; isFocusable = true } }
     val player = remember {
         // Callbacks are the only source of truth for currentGeneration -- rather than DesktopShell
         // separately recording the generation play()/playUrl() returns (which races the owner
@@ -291,6 +291,64 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
             // close() enqueues a non-blocking terminal task on the player's own owner thread --
             // safe to call from this synchronous disposal callback.
             player.close()
+        }
+    }
+    // D-Desktop-14 input forwarding (Codex-reviewed 2026-09-15): mpv's --wid child window is
+    // created WS_DISABLED on Windows and never receives OS input directly, so every mouse/
+    // keyboard event that should reach mpv's own OSC/keybindings is forwarded explicitly through
+    // MpvPlayer's client-API commands instead. requestFocusInWindow() on press is required for
+    // the AWT KeyListener below to receive anything at all.
+    DisposableEffect(surface, player) {
+        val mouseListener = object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: java.awt.event.MouseEvent) {
+                surface.requestFocusInWindow()
+                // Codex review (2026-09-15): use this event's own coordinates, not whatever move
+                // happened to be coalesced last -- a press immediately on Canvas entry, or right
+                // after a coalesced move, must not activate an OSC control at a stale position.
+                player.sendMouseMove(e.x, e.y)
+                mpvMouseButtonName(e.button)?.let { player.sendMouseButton(it, pressed = true) }
+            }
+            override fun mouseReleased(e: java.awt.event.MouseEvent) {
+                player.sendMouseMove(e.x, e.y)
+                mpvMouseButtonName(e.button)?.let { player.sendMouseButton(it, pressed = false) }
+            }
+            // Codex research (2026-09-15, mpv issue #9910): forwarded mouse-move alone never
+            // triggers OSC's own hover detector, so visibility is forced explicitly instead.
+            override fun mouseEntered(e: java.awt.event.MouseEvent) = player.setOscVisibility("always")
+            override fun mouseExited(e: java.awt.event.MouseEvent) = player.setOscVisibility("auto")
+        }
+        val motionListener = object : java.awt.event.MouseMotionAdapter() {
+            override fun mouseMoved(e: java.awt.event.MouseEvent) = player.sendMouseMove(e.x, e.y)
+            override fun mouseDragged(e: java.awt.event.MouseEvent) = player.sendMouseMove(e.x, e.y)
+        }
+        val wheelListener = java.awt.event.MouseWheelListener { e -> player.sendWheel(up = e.wheelRotation < 0) }
+        val keyListener = object : java.awt.event.KeyAdapter() {
+            override fun keyPressed(e: java.awt.event.KeyEvent) { mpvKeyName(e)?.let { player.sendKey(it, pressed = true) } }
+            override fun keyReleased(e: java.awt.event.KeyEvent) { mpvKeyName(e)?.let { player.sendKey(it, pressed = false) } }
+        }
+        val focusListener = object : java.awt.event.FocusAdapter() {
+            // A key or button that never gets its matching keyup (focus stolen mid-press) would
+            // otherwise stay logically down inside mpv forever (Codex review, 2026-09-15).
+            override fun focusLost(e: java.awt.event.FocusEvent) { player.releaseAllHeldKeys(); player.setOscVisibility("auto") }
+        }
+        val resizeListener = object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) { player.updateCanvasSize(surface.width, surface.height) }
+        }
+        surface.addMouseListener(mouseListener)
+        surface.addMouseMotionListener(motionListener)
+        surface.addMouseWheelListener(wheelListener)
+        surface.addKeyListener(keyListener)
+        surface.addFocusListener(focusListener)
+        surface.addComponentListener(resizeListener)
+        player.updateCanvasSize(surface.width, surface.height)
+        onDispose {
+            player.releaseAllHeldKeys()
+            surface.removeMouseListener(mouseListener)
+            surface.removeMouseMotionListener(motionListener)
+            surface.removeMouseWheelListener(wheelListener)
+            surface.removeKeyListener(keyListener)
+            surface.removeFocusListener(focusListener)
+            surface.removeComponentListener(resizeListener)
         }
     }
     androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) {
@@ -368,3 +426,29 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
 }
 
 private fun formatPosition(positionMs: Long): String { val seconds = positionMs / 1_000; return "%d:%02d".format(seconds / 60, seconds % 60) }
+
+/** D-Desktop-14 input forwarding: maps AWT mouse buttons to mpv's synthetic MBTN_* key names,
+ * the mechanism mpv's own OSC/keybindings recognise (mpv's `mouse` command only ever moves the
+ * cursor; clicks are ordinary keydown/keyup on these names -- mpv issues #2596/#9910). */
+private fun mpvMouseButtonName(awtButton: Int): String? = when (awtButton) {
+    java.awt.event.MouseEvent.BUTTON1 -> "MBTN_LEFT"
+    java.awt.event.MouseEvent.BUTTON2 -> "MBTN_MID"
+    java.awt.event.MouseEvent.BUTTON3 -> "MBTN_RIGHT"
+    else -> null
+}
+
+/** D-Desktop-14 input forwarding: maps the AWT keys mpv's default OSC/keybindings actually use
+ * (play/pause, seek, fullscreen, mute, volume) to mpv's own key-name syntax
+ * (https://github.com/mpv-player/mpv/blob/master/DOCS/man/input.rst#key-names). Printable keys
+ * fall back to the typed character, since mpv expects layout-translated text names there, not
+ * physical keycodes. */
+private fun mpvKeyName(e: java.awt.event.KeyEvent): String? = when (e.keyCode) {
+    java.awt.event.KeyEvent.VK_SPACE -> "SPACE"
+    java.awt.event.KeyEvent.VK_LEFT -> "LEFT"
+    java.awt.event.KeyEvent.VK_RIGHT -> "RIGHT"
+    java.awt.event.KeyEvent.VK_UP -> "UP"
+    java.awt.event.KeyEvent.VK_DOWN -> "DOWN"
+    java.awt.event.KeyEvent.VK_ESCAPE -> "ESC"
+    java.awt.event.KeyEvent.VK_ENTER -> "ENTER"
+    else -> e.keyChar.takeIf { it.code != java.awt.event.KeyEvent.CHAR_UNDEFINED.code && !Character.isISOControl(it) }?.toString()
+}

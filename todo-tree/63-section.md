@@ -116,10 +116,11 @@ D-Desktop-14 below.
 
 **Severity: High. Decided 2026-09-15 after live-stream testing surfaced a
 libvlc-specific playback stall that tuning couldn't fix, plus user rejection
-of the hand-built control-row approach. Implemented and playback-verified
-2026-09-15 (see "Progress" below); blocked on an OSC input-routing bug before
-this can close -- there is currently no way to pause/seek/stop from the UI at
-all.**
+of the hand-built control-row approach. Closed 2026-09-15** -- playback,
+input forwarding, and OSC visibility are all implemented, Codex-reviewed
+(three rounds total across this item), and owner-verified live with real
+mouse/keyboard on the fixture. Full root-cause and fix story in
+`docs/decisions.md` ("D-Desktop-14 — mpv OSC input-routing bug closed").
 
 **Progress (2026-09-15 session):** `MpvLibrary.kt` (hand-rolled JNA binding
 against `mpv/client.h`) and `MpvPlayer.kt` (single-owner-thread player,
@@ -155,35 +156,41 @@ failed 5/5 times. Evidence: `build-d14-fixture-run6.log`,
 (untracked, not for commit).
 
 **Blocking bug found after that verification (owner caught this, not
-self-caught):** mpv's OSC never renders and **no input reaches the embedded
-mpv surface at all** -- confirmed by moving the mouse across the video area
-(no OSC appears) and by sending a Space keypress after clicking the video
-surface (no pause, nothing logged). `osc=yes`/`input-default-bindings=yes`/
-`input-vo-keyboard=yes` are all set successfully (no error from
-`mpv_set_option_string`), so mpv itself is configured correctly -- the
-problem is native input (mouse move/click and keyboard) apparently never
-reaching mpv's embedded child window through the AWT `Canvas`/Compose
-`SwingPanel` layering, a known rough edge with `--wid` embedding into a
-foreign toolkit's window that Codex's original plan review flagged as "a
-mandatory fixture test, not an assumption" -- this is that assumption
-failing. **Owner's direction: investigate the input-routing root cause
-further (not fall back to hand-built controls) before closing this item.**
-Next session should try, roughly in order of likely payoff: (1) capture
-mpv's own log via `mpv_request_log_messages`/`MPV_EVENT_LOG_MESSAGE` at a
-verbose level while moving the mouse, to see whether mpv's input layer logs
-anything at all -- confirms whether the child window exists/receives
-messages before guessing further; (2) check whether AWT's `Canvas` needs
-`Canvas.setFocusable(true)`/`Canvas.requestFocusInWindow()` and/or
-`enableInputMethods(false)` for the embedded mpv child HWND to actually get
-raw input priority over the parent's own AWT message pump; (3) check
-whether Compose Desktop's `SwingPanel` interposes an invisible overlay for
-hit-testing/click-passthrough purposes that needs an explicit opt-out; (4)
-as a last resort if native input genuinely cannot be routed through this
-embedding shape, escalate back to the owner with the concrete finding rather
-than silently reverting to hand-built Compose controls -- that reversal is a
-real scope/architecture change the owner already weighed in on once
-(rejecting hand-built controls) and should decide again explicitly, not have
-decided for them.
+self-caught), now resolved:** mpv's OSC never rendered and no input reached
+the embedded mpv surface. Root cause (found via mpv's own Windows source and
+upstream issues, not the Compose/SwingPanel layering originally suspected):
+mpv's `--wid` embedding on Windows creates the child window `WS_CHILD |
+WS_VISIBLE` then explicitly calls `EnableWindow(child, 0)` whenever it has a
+parent (`video/out/w32_common.c`) -- a disabled window never receives OS
+mouse/keyboard input, by design, regardless of AWT/Compose layering. Matches
+mpv issues #4795 and #6762, whose resolution is to forward input explicitly
+through mpv's own client-API commands rather than fight the disabled window.
+
+**Fix:** `MpvPlayer.kt` gained `sendMouseMove`/`sendMouseButton`/`sendKey`/
+`sendWheel`/`setOscVisibility`, all forwarding through `mpv_command`'s
+`mouse`/`keydown`/`keyup`/`keypress`/`script-message` -- mpv's own OSC and
+keybindings still own playback control, preserving the owner's earlier
+rejection of hand-built Compose controls. `DesktopShell.kt` wires AWT mouse/
+keyboard/wheel/focus listeners on the video `Canvas` to those methods.
+Second bug found live-testing after the first fix compiled clean: the
+synthetic `mouse` command updates mpv's pointer position but does not itself
+trigger OSC's own hover/mouse-activity detector, so OSC still never
+rendered -- exactly mpv issue #9910. Fix: `setOscVisibility` sends
+`script-message osc-visibility always|auto`, tied to Canvas mouse-enter and
+mouse-exit/focus-loss.
+
+Three Codex review rounds on this half of the item: (1) plan review before
+any code (flagged that OSC absence isn't proof of a routing failure --
+recommended a `WindowFromPoint` OS-level probe, which became moot once
+source-level root cause was found via research instead); (2) diff review
+(caught stale click coordinates in `mousePressed`/`mouseReleased` and held
+keys not released on `onDispose` -- both fixed); (3) final diff confirm
+after debug-logging additions (clean). Owner-verified live with real mouse/
+keyboard on the fixture: OSC appears on hover, click and Space both
+pause/resume. Real-provider-stream input verification and a from-scratch
+Codex GUI-automation pass were both attempted but blocked by an unrelated
+Herdr pane environment limitation (no interactive desktop/GDI access in
+that pane) -- not a product defect, noted for whoever configures Herdr next.
 
 **Original plan below is now historical context (already executed), kept
 for the Codex review detail it carried:**

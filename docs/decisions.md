@@ -784,3 +784,59 @@ including a Codex edge-case review (HWND embedding timing, native-input ownershi
 conflicts between mpv's OSC and Compose key handling, resume-tracking via
 `mpv_observe_property`, and shutdown-ordering discipline carried over from this
 session's races), is filed as `D-Desktop-14` in `todo-tree/63-section.md`. Not started.
+
+## D-Desktop-14 — mpv OSC input-routing bug closed (2026-09-15)
+
+**Closed:** the mpv/libmpv migration itself (see the D-Desktop-10 entry above) had
+already restored stable playback, but the owner caught a blocking follow-on bug after
+that verification: mpv's OSC never rendered and no mouse or keyboard input reached the
+embedded video surface at all, leaving no way to pause/seek/stop from the UI.
+
+**Root cause:** not a Compose/SwingPanel layering problem, despite that being the
+original suspicion carried into this session. mpv's `--wid` embedding on Windows creates
+its child window `WS_CHILD | WS_VISIBLE`, then explicitly calls `EnableWindow(child, 0)`
+whenever it has a parent (confirmed directly in mpv's `video/out/w32_common.c`) — a
+disabled window never receives OS mouse/keyboard input, by design, regardless of how the
+host toolkit layers its own components around it. Matches mpv issues #4795 and #6762,
+whose resolution is to forward input explicitly through mpv's own client-API commands
+rather than fight the disabled window.
+
+**Fix, part 1 (input forwarding):** `MpvPlayer.kt` gained `sendMouseMove`/
+`sendMouseButton`/`sendKey`/`sendWheel`, forwarding AWT input through `mpv_command`'s
+`mouse`/`keydown`/`keyup`/`keypress` — mpv's own OSC and keybindings still own playback
+control, preserving the owner's earlier rejection of hand-built Compose transport
+controls rather than reversing that decision. `DesktopShell.kt` wires AWT mouse/
+keyboard/wheel/focus listeners on the video `Canvas` to those methods, with rapid
+mouse-move coalesced to one queued owner-thread task at a time and Canvas-pixel
+coordinates scaled to mpv's own `osd-width`/`osd-height`.
+
+**Fix, part 2 (OSC visibility):** live-testing the first fix (compiled clean, Codex
+diff-reviewed) surfaced a second, distinct bug: the synthetic `mouse` command updates
+mpv's pointer position but does not itself trigger OSC's own hover/mouse-activity
+detector, so OSC still never rendered — this turned out to be exactly mpv issue #9910
+("osc (overlay) does not respond to mouse actions transmitted by the command"). Fix:
+`MpvPlayer.setOscVisibility(mode)` sends `script-message osc-visibility always|auto`
+(osc.lua's own documented modes), tied to Canvas mouse-enter (`always`) and mouse-exit/
+focus-loss (`auto`) in `DesktopShell.kt`.
+
+**Review process:** three Codex passes across this half of the item, per
+`bible-detail/claude-07-agent-division.md`'s binding loop — (1) a plan review before any
+code was written, which flagged that OSC's absence alone wasn't proof of a routing
+failure and proposed an OS-level `WindowFromPoint` probe (superseded once the real root
+cause was found via direct research into mpv's own source and issue tracker instead of
+guessing further); (2) a diff review that caught two real bugs — stale click coordinates
+in `mousePressed`/`mouseReleased` (fixed to use the click event's own `e.x`/`e.y` rather
+than whatever mouse-move happened to be coalesced last) and held keys never released on
+`onDispose` (fixed by calling `releaseAllHeldKeys()` before listener teardown); (3) a
+final short diff confirm after debug-logging additions, which came back clean.
+
+**Verification:** owner-verified live with real mouse and keyboard on the fixture
+(`desktop-fixtures/sintel-trailer.mp4`) — OSC now appears on hover, and both a mouse
+click and the Space key pause/resume playback. Two verification paths were attempted and
+explicitly not completed: a from-scratch Codex GUI-automation pass (blocked by an
+unrelated Herdr pane environment limitation — that particular pane has no interactive
+desktop/GDI access, confirmed by both a failing `CopyFromScreen` and a failing exclusive
+file-lock open that succeeded immediately from the interactive session; not a product
+defect, and not fixable from within this repo) and a real-provider-stream repeat of the
+same input checks (fixture-only verification was accepted as sufficient for closing this
+item; revisit if a provider-stream-specific input issue surfaces later).

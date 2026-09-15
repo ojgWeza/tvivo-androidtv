@@ -238,6 +238,141 @@ internal class MpvPlayer(
     fun positionMs(): Long = lastKnownPositionMs
     fun durationMs(): Long = lastKnownDurationMs
 
+    // --- D-Desktop-14 input forwarding -----------------------------------------------------
+    // mpv's --wid child window is created WS_DISABLED on Windows whenever it has a parent (see
+    // mpv's video/out/w32_common.c and mpv issues #4795/#6762) -- it never receives OS mouse/
+    // keyboard input, by design, regardless of AWT/Compose layering. The documented fix (same
+    // issues, and #2596/#9910 for OSC specifically) is to forward input explicitly through
+    // mpv's own client-API commands so mpv's own OSC/keybindings still own playback control.
+
+    @Volatile private var lastCanvasWidth = 0
+    @Volatile private var lastCanvasHeight = 0
+    @Volatile private var osdScaleX = 1.0
+    @Volatile private var osdScaleY = 1.0
+
+    /** Cheap on the calling (AWT) thread; the actual mpv_get_property_string call happens on the
+     * owner thread. Called on Canvas resize and once after every file-loaded event, since
+     * osd-width/osd-height can only be read once mpv has a configured video output. */
+    fun updateCanvasSize(width: Int, height: Int) {
+        lastCanvasWidth = width
+        lastCanvasHeight = height
+        submit {
+            val lib = mpv ?: return@submit
+            val ctx = handle ?: return@submit
+            refreshOsdScale(lib, ctx)
+        }
+    }
+
+    private fun refreshOsdScale(lib: MpvLibrary, ctx: Pointer) {
+        val osdWidth = readIntProperty(lib, ctx, "osd-width")
+        val osdHeight = readIntProperty(lib, ctx, "osd-height")
+        if (osdWidth != null && osdWidth > 0 && lastCanvasWidth > 0) osdScaleX = osdWidth.toDouble() / lastCanvasWidth
+        if (osdHeight != null && osdHeight > 0 && lastCanvasHeight > 0) osdScaleY = osdHeight.toDouble() / lastCanvasHeight
+        debugLog("refreshOsdScale osdWidth=$osdWidth osdHeight=$osdHeight canvas=$lastCanvasWidth x $lastCanvasHeight -> scale=$osdScaleX,$osdScaleY")
+    }
+
+    private fun readIntProperty(lib: MpvLibrary, ctx: Pointer, name: String): Int? {
+        val ptr = lib.mpv_get_property_string(ctx, name) ?: return null
+        return try { ptr.getString(0).toDoubleOrNull()?.toInt() } finally { lib.mpv_free(ptr) }
+    }
+
+    private val moveLock = Any()
+    private var pendingMoveCoords: DoubleArray? = null
+    private var moveTaskQueued = false
+
+    /** Coalesces rapid AWT mouse-move events (up to display refresh rate) into at most one queued
+     * owner-thread task at a time, so a fast mouse doesn't back up the single command queue behind
+     * playback control commands -- only the most recent position is ever sent (Codex review,
+     * 2026-09-15). Coordinates are Canvas-pixel, scaled to mpv's OSD pixel space before sending. */
+    fun sendMouseMove(canvasX: Int, canvasY: Int) {
+        val shouldQueue: Boolean
+        synchronized(moveLock) {
+            pendingMoveCoords = doubleArrayOf(canvasX * osdScaleX, canvasY * osdScaleY)
+            shouldQueue = !moveTaskQueued
+            if (shouldQueue) moveTaskQueued = true
+        }
+        if (!shouldQueue) return
+        submit {
+            val coords: DoubleArray?
+            synchronized(moveLock) {
+                coords = pendingMoveCoords
+                pendingMoveCoords = null
+                moveTaskQueued = false
+            }
+            val lib = mpv ?: return@submit
+            val ctx = handle ?: return@submit
+            coords?.let {
+                val result = lib.mpv_command(ctx, arrayOf("mouse", it[0].toInt().toString(), it[1].toInt().toString(), null))
+                if (result < 0) debugLog("mouse command failed: ${lib.mpv_error_string(result)}")
+                else debugLog("mouse ${it[0].toInt()} ${it[1].toInt()} (scale=$osdScaleX,$osdScaleY canvas=$lastCanvasWidth x $lastCanvasHeight)")
+            }
+        }
+    }
+
+    private val heldKeys = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** mpv's `mouse` command only ever sets position -- clicks are forwarded as ordinary
+     * keydown/keyup on the synthetic MBTN_* key names (mpv issues #2596/#9910: a synthetic single
+     * click via the mouse command was specifically reported not to drive OSC controls). Flushes
+     * the latest pending move first so a press can't act on a stale position mid-drag. */
+    fun sendMouseButton(mpvButtonName: String, pressed: Boolean) {
+        flushPendingMoveNow()
+        sendKey(mpvButtonName, pressed)
+    }
+
+    /** Forced OSC visibility (Codex research, 2026-09-15, mpv issue #9910): the synthetic `mouse`
+     * command updates mpv's pointer position but does not itself trigger the OSC script's own
+     * hover/mouse-activity detector, so OSC never renders from forwarded input alone. `always`/
+     * `auto` are osc.lua's own documented script-message modes
+     * (https://mpv.io/manual/master/#on-screen-controller) -- tie `always` to Canvas mouse-enter
+     * and `auto` to mouse-exit/focus-loss so OSC still auto-hides once the pointer leaves. */
+    fun setOscVisibility(mode: String) = submit {
+        val lib = mpv ?: return@submit
+        val ctx = handle ?: return@submit
+        val result = lib.mpv_command(ctx, arrayOf("script-message", "osc-visibility", mode, null))
+        if (result < 0) debugLog("osc-visibility $mode failed: ${lib.mpv_error_string(result)}")
+        else debugLog("osc-visibility $mode sent ok")
+    }
+
+    fun sendWheel(up: Boolean) = submit {
+        val lib = mpv ?: return@submit
+        val ctx = handle ?: return@submit
+        lib.mpv_command(ctx, arrayOf("keypress", if (up) "WHEEL_UP" else "WHEEL_DOWN", null))
+    }
+
+    fun sendKey(mpvKeyName: String, pressed: Boolean) {
+        if (pressed) heldKeys.add(mpvKeyName) else heldKeys.remove(mpvKeyName)
+        submit {
+            val lib = mpv ?: return@submit
+            val ctx = handle ?: return@submit
+            lib.mpv_command(ctx, arrayOf(if (pressed) "keydown" else "keyup", mpvKeyName, null))
+        }
+    }
+
+    /** Called on Canvas focus loss/disposal: a key or button that never got its matching keyup
+     * (focus stolen mid-press, window closed while dragging) would otherwise stay logically down
+     * inside mpv forever (Codex review, 2026-09-15). */
+    fun releaseAllHeldKeys() {
+        val keys = synchronized(heldKeys) { heldKeys.toList() }
+        heldKeys.clear()
+        keys.forEach { key -> submit {
+            val lib = mpv ?: return@submit
+            val ctx = handle ?: return@submit
+            lib.mpv_command(ctx, arrayOf("keyup", key, null))
+        } }
+    }
+
+    private fun flushPendingMoveNow() {
+        val coords: DoubleArray?
+        synchronized(moveLock) { coords = pendingMoveCoords; pendingMoveCoords = null }
+        if (coords == null) return
+        submit {
+            val lib = mpv ?: return@submit
+            val ctx = handle ?: return@submit
+            lib.mpv_command(ctx, arrayOf("mouse", coords[0].toInt().toString(), coords[1].toInt().toString(), null))
+        }
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         forceClose()
@@ -296,6 +431,9 @@ internal class MpvPlayer(
                     pendingResumeMs = 0L
                     lib.mpv_command(ctx, arrayOf("seek", (resumeMs / 1000.0).toString(), "absolute", null))
                 }
+                // osd-width/osd-height are only meaningful once mpv has a configured video
+                // output, not at initialise()-time -- refresh the mouse-move scale factor here.
+                refreshOsdScale(lib, ctx)
                 onState(generation, "Playing")
             }
             MpvLibrary.MPV_EVENT_END_FILE -> {

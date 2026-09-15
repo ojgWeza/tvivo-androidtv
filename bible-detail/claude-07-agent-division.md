@@ -94,6 +94,13 @@ percentage (its status line already shows this — copy the number into the writ
 report, don't leave it implicit) so the number is comparable run over run instead of
 read off a screenshot of the pane after the fact.
 
+**Auto-clear at ~35% (added 2026-09-15):** once Codex's status line shows context
+around 35% used, Claude resets it with `herdr agent send-keys <name> /clear` (Codex's
+own in-CLI context-reset command — not exiting the process, since exiting loses the
+`codex resume` handle) before handing it the next review/test task. Do this proactively
+between tasks rather than waiting for Codex to balloon past the point where a reset
+mid-task would lose useful state.
+
 ## Escalation
 
 If Codex's review surfaces a scope/architecture disagreement (not a straightforward
