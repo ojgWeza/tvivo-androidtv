@@ -60,6 +60,20 @@ class DesktopCatalogRepositoryTest {
         assertEquals(listOf("live-2", "live-1"), repository.recentItems(CatalogType.LIVE, 2).map { it.id })
     }
 
+    @Test fun `recent episodes keeps only each series most recently played resumable episode`() = withRepository { repository, database, credentials, server ->
+        server.series = """[
+            {"series_id":"series-a","category_id":"series","name":"Series A","cover":"https://example.com/a.jpg"},
+            {"series_id":"series-b","category_id":"series","name":"Series B","cover":"https://example.com/b.jpg"}
+        ]"""
+        runBlocking { repository.refresh(CatalogType.SERIES) }
+        insertEpisodeResume(database, credentials, "episode-5", "series-a", positionMs = 100L, updatedAt = 100L)
+        insertEpisodeResume(database, credentials, "episode-2", "series-a", positionMs = 200L, updatedAt = 300L)
+        insertEpisodeResume(database, credentials, "episode-1", "series-b", positionMs = 100L, updatedAt = 200L)
+        insertEpisodeResume(database, credentials, "finished", "series-a", positionMs = 0L, updatedAt = 400L)
+
+        assertEquals(listOf("episode-2", "episode-1"), repository.recentEpisodes().map { it.episode.id })
+    }
+
     @Test fun `suggestions stay stable across repeated home and browse access`() = withRepository { repository, _, _, server ->
         server.movies = movieFixtures(20)
         runBlocking { repository.refresh(CatalogType.MOVIES) }
@@ -139,6 +153,15 @@ class DesktopCatalogRepositoryTest {
         }
     }
 
+    private fun insertEpisodeResume(database: Path, credentials: Credentials, episodeId: String, seriesId: String, positionMs: Long, updatedAt: Long) {
+        DriverManager.getConnection("jdbc:sqlite:${database.toAbsolutePath()}").use { db ->
+            db.prepareStatement("INSERT INTO episode_resume(account_id,episode_id,series_id,season,episode_number,episode_title,extension,duration,position_ms,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)").use { statement ->
+                statement.setString(1, AccountIdentity.of(credentials)); statement.setString(2, episodeId); statement.setString(3, seriesId); statement.setString(4, "1"); statement.setString(5, "1")
+                statement.setString(6, episodeId); statement.setString(7, "mp4"); statement.setString(8, null); statement.setLong(9, positionMs); statement.setLong(10, updatedAt); statement.executeUpdate()
+            }
+        }
+    }
+
     private fun movieFixtures(count: Int) = (1..count).joinToString(prefix = "[", postfix = "]") { number ->
         """{"stream_id":"movie-$number","category_id":"movies","name":"Movie $number","container_extension":"mp4","added":"1700000000"}"""
     }
@@ -147,6 +170,7 @@ class DesktopCatalogRepositoryTest {
         private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         var movies = "[]"
         var live = "[]"
+        var series = "[]"
         val port get() = server.address.port
 
         init {
@@ -157,6 +181,8 @@ class DesktopCatalogRepositoryTest {
                     "get_vod_streams" -> movies
                     "get_live_categories" -> """[{"category_id":"live","category_name":"Live"}]"""
                     "get_live_streams" -> live
+                    "get_series_categories" -> """[{"category_id":"series","category_name":"Series"}]"""
+                    "get_series" -> series
                     else -> error("Unexpected action: $action")
                 }
                 exchange.sendResponseHeaders(200, body.toByteArray().size.toLong())

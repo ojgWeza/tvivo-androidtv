@@ -235,7 +235,9 @@ internal class DesktopCatalogRepository(
     }
 
     fun recentEpisodes(limit: Int = 3): List<DesktopSeriesResume> = connection().use { db ->
-        db.prepareStatement("SELECT i.id,i.category_id,i.title,i.artwork,i.extension,i.rating,i.plot,e.episode_id,e.season,e.episode_title,e.extension,e.duration,e.position_ms,e.episode_number FROM episode_resume e JOIN items i ON i.account_id=e.account_id AND i.type='SERIES' AND i.id=e.series_id WHERE e.account_id=? ORDER BY e.updated_at DESC LIMIT ?").use { statement ->
+        // Home presents one continuation card per series. A later revisit to an earlier episode
+        // must replace that series' former card, so recency comes from updated_at, never insert order.
+        db.prepareStatement("SELECT i.id,i.category_id,i.title,i.artwork,i.extension,i.rating,i.plot,e.episode_id,e.season,e.episode_title,e.extension,e.duration,e.position_ms,e.episode_number FROM episode_resume e JOIN items i ON i.account_id=e.account_id AND i.type='SERIES' AND i.id=e.series_id WHERE e.account_id=? AND e.position_ms>0 AND NOT EXISTS (SELECT 1 FROM episode_resume newer WHERE newer.account_id=e.account_id AND newer.series_id=e.series_id AND newer.position_ms>0 AND (newer.updated_at>e.updated_at OR (newer.updated_at=e.updated_at AND newer.episode_id>e.episode_id))) ORDER BY e.updated_at DESC,e.episode_id DESC LIMIT ?").use { statement ->
             statement.setString(1, accountId); statement.setInt(2, limit)
             statement.executeQuery().use { rows -> buildList { while (rows.next()) {
                 val series = item(rows, CatalogType.SERIES)
@@ -307,6 +309,10 @@ internal class DesktopCatalogRepository(
                 sql.execute("ALTER TABLE items ADD COLUMN last_tuned_at INTEGER")
                 sql.execute("UPDATE items SET first_indexed_at=added_at")
                 sql.execute("UPDATE schema_version SET version=4")
+            }
+            if (version < 5) {
+                sql.execute("CREATE INDEX IF NOT EXISTS episode_resume_series_recent ON episode_resume(account_id,series_id,updated_at DESC,episode_id DESC)")
+                sql.execute("UPDATE schema_version SET version=5")
             }
         }
     }

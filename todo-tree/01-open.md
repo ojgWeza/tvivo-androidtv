@@ -49,26 +49,14 @@ calls `store.wipe()`. Do not clear app data.
     across refresh. Folder membership, ordering, naming, delete semantics,
     starter-set, and account scoping are new persistence and UI work with
     their own plan — do not fold into Home shelf work.
-  - **D-Desktop-16f (owner observation, 2026-09-15) — series "Continue
-    watching" only ever surfaces the single most-recently-watched episode,
-    not one entry per in-progress episode.** Not started/not investigated.
-    Two candidate sites in `DesktopCatalogRepository.kt`: the SERIES branch
-    of `items()`'s `"__continue"` filter (~line 91-102) explicitly does
-    `GROUP BY series_id` with `MAX(updated_at)`, collapsing to one row per
-    series by design (a Browse grid card represents a series, not an
-    episode) — that collapse may be intentional and not the bug. The
-    `recentEpisodes()` query (~line 186-195) used by Home's episode
-    continuation shelf has no `GROUP BY` and should already return multiple
-    distinct in-progress episodes across different series up to its `limit`
-    — but if two *different* episodes of the *same* series are both
-    in-progress, both would currently render as separate cards there today
-    (no series-level de-dup), which may not match what the owner is
-    describing either. Investigate which surface (Browse grid vs. Home
-    shelf) the owner observed this on and what "all" should mean per
-    series (all in-progress episodes for one series? or just correctly
-    keep multiple distinct series each showing their own latest episode?)
-    before changing either query — do not guess the fix without
-    reproducing first.
+  - **D-Desktop-16f (owner clarification, 2026-09-15) — Home's series
+    `Continue watching` shelf shows at most one resumable episode per series:
+    the episode with the most recent playback.** If episode 5 was watched
+    and episode 2 is played later, show episode 2. Different series remain
+    independently represented and ordered by their latest playback. Browse's
+    series-level `"__continue"` folder is already one-card-per-series by
+    design and remains out of scope. Implementation and regression-test
+    validation are pending; do not change D-Desktop-16e's design blocker.
 
 - **Season/category raw-label bypass (Codex finding, 2026-09-15, low priority)** —
   found while verifying the catalog title-cleanup fix (`docs/decisions.md`'s
