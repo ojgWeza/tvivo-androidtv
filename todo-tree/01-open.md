@@ -33,32 +33,8 @@ calls `store.wipe()`. Do not clear app data.
   adversarial read-only review of the same files (2026-09-15) and found the
   split needs to be finer than a simple "schema-safe vs schema-work" cut.
   Consolidated decision — split into five ordered sub-items, plus folders
-  tracked separately. **D-Desktop-16a and D-Desktop-16b are closed** (see
-  `docs/decisions.md`); 16c-16e remain open:
-  - **D-Desktop-16c — durable recency/live-history schema.** `added_at`
-    exists but is not reliable enough to label "Recently added": provider
-    values are epoch *seconds*, the `System.currentTimeMillis()` fallback is
-    epoch *milliseconds* (unit mismatch sorts fallback rows wrong), and the
-    fallback is rewritten on every refresh, so it means "this refresh
-    inserted this row," not a stable first-seen time. Needs a normalized
-    provider-timestamp-validity flag plus a stable `first_indexed_at`
-    preserved across refreshes. Separately, Live TV has no real "recently
-    watched channels" model: `DesktopPlayerScreen` calls `recordResume` for
-    every content type on disposal, so Live incorrectly gets `resume_ms`/
-    `resume_updated_at` writes and `recentItems(LIVE)` reads them back as if
-    Live were resumable — which the proposal explicitly says it is not. Add
-    a separate `last_tuned_at`, updated on a meaningful successful tune, and
-    stop using resume position for Live history. Schema migration + repo
-    tests.
-  - **D-Desktop-16d — Suggestions v0.** No schema change needed, but must be
-    a session-owned snapshot keyed by tab/content type (not composable-local
-    `remember { }` randomness, which reshuffles on recomposition/navigation).
-    Regenerate only after a *successful* catalog refresh, not a failed one.
-    "Exclude unplayable/broken" is underspecified — cache has ID/type/
-    extension but no verified-playability state; constrain v0 to
-    structurally valid records (non-blank ID, valid type/extension), do not
-    imply runtime stream validation. Depends on 16b's typed browse
-    destination for its own `See all`.
+  tracked separately. **D-Desktop-16a, D-Desktop-16b, D-Desktop-16c, and
+  D-Desktop-16d are closed** (see `docs/decisions.md`); 16e remains open:
   - **D-Desktop-16e — entry/idle screen.** New state machine: input/lifecycle
     contract covering mouse, keyboard, click, navigation change, dialogs,
     window focus change, and player entry, all of which must cancel/restart
@@ -71,6 +47,26 @@ calls `store.wipe()`. Do not clear app data.
     across refresh. Folder membership, ordering, naming, delete semantics,
     starter-set, and account scoping are new persistence and UI work with
     their own plan — do not fold into Home shelf work.
+  - **D-Desktop-16f (owner observation, 2026-09-15) — series "Continue
+    watching" only ever surfaces the single most-recently-watched episode,
+    not one entry per in-progress episode.** Not started/not investigated.
+    Two candidate sites in `DesktopCatalogRepository.kt`: the SERIES branch
+    of `items()`'s `"__continue"` filter (~line 91-102) explicitly does
+    `GROUP BY series_id` with `MAX(updated_at)`, collapsing to one row per
+    series by design (a Browse grid card represents a series, not an
+    episode) — that collapse may be intentional and not the bug. The
+    `recentEpisodes()` query (~line 186-195) used by Home's episode
+    continuation shelf has no `GROUP BY` and should already return multiple
+    distinct in-progress episodes across different series up to its `limit`
+    — but if two *different* episodes of the *same* series are both
+    in-progress, both would currently render as separate cards there today
+    (no series-level de-dup), which may not match what the owner is
+    describing either. Investigate which surface (Browse grid vs. Home
+    shelf) the owner observed this on and what "all" should mean per
+    series (all in-progress episodes for one series? or just correctly
+    keep multiple distinct series each showing their own latest episode?)
+    before changing either query — do not guess the fix without
+    reproducing first.
 
 - **Season/category raw-label bypass (Codex finding, 2026-09-15, low priority)** —
   found while verifying the catalog title-cleanup fix (`docs/decisions.md`'s
@@ -82,13 +78,10 @@ calls `store.wipe()`. Do not clear app data.
   as an actual observed bug (unlike the title one, which was owner-reported) —
   investigate only if it's actually seen in practice, don't fix speculatively.
 
-  Build order: 16a can start immediately (no dependency). 16b is the
-  prerequisite for 16d and 16e and for 16a's `See all` wiring specifically
-  (16a's empty-shelf/first-run/routing fix does not itself need 16b). 16c is
-  independent and can run in parallel with 16b. Sequence: 16a → 16b (+16c in
-  parallel) → 16d → 16e. Favourite folders whenever scheduled separately.
-  Check `docs/design/design artifacts/desktop-journey-states.html` for the
-  original intended Home layout before implementing any sub-item.
+  Build order: 16a-16d are closed; 16e is the only sub-item left. Favourite
+  folders and 16f whenever scheduled separately. Check
+  `docs/design/design artifacts/desktop-journey-states.html` for the original
+  intended Home layout before implementing 16e.
 - **D-Desktop-17 (owner request, 2026-09-15) — Player should open truly full
   screen.** Not started. Owner: "player should start as full screen holding
   the full screen really" — read as dissatisfaction with the current player

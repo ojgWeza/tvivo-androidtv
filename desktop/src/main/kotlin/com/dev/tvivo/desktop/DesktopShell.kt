@@ -180,11 +180,16 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     // first-run actionable state below doesn't flash before the initial load resolves.
     var loaded by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf(emptyList<DesktopItem>()) }; var movies by remember { mutableStateOf(emptyList<DesktopItem>()) }; var episodes by remember { mutableStateOf(emptyList<DesktopSeriesResume>()) }
-    suspend fun loadRecent() { withContext(Dispatchers.IO) { Triple(repository.recentItems(CatalogType.LIVE), repository.recentItems(CatalogType.MOVIES), repository.recentEpisodes()) }.let { (recentLive, recentMovies, recentEpisodes) -> live = recentLive; movies = recentMovies; episodes = recentEpisodes } }
+    var suggestions by remember { mutableStateOf(emptyMap<CatalogType, List<DesktopItem>>()) }
+    suspend fun loadRecent(regenerateSuggestions: Boolean = false) { withContext(Dispatchers.IO) {
+        val recent = Triple(repository.recentItems(CatalogType.LIVE), repository.recentItems(CatalogType.MOVIES), repository.recentEpisodes())
+        val exclusions = mapOf(CatalogType.LIVE to recent.first.map { it.id }.toSet(), CatalogType.MOVIES to recent.second.map { it.id }.toSet(), CatalogType.SERIES to recent.third.map { it.series.id }.toSet())
+        recent to CatalogType.entries.associateWith { type -> if (regenerateSuggestions) repository.regenerateSuggestions(type, exclusions.getValue(type)) else repository.ensureSuggestions(type, exclusions.getValue(type)) }
+    }.let { (recent, loadedSuggestions) -> live = recent.first; movies = recent.second; episodes = recent.third; suggestions = loadedSuggestions } }
     androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.ensureLoaded(it) } } }.onSuccess { refreshMessage = ""; loadRecent() }.onFailure { refreshMessage = "Library unavailable. Use Refresh library to try again." }; loaded = true }
     val hasAnyContinuation = live.isNotEmpty() || movies.isNotEmpty() || episodes.isNotEmpty()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 42.dp, vertical = 34.dp)) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Welcome back", style = MaterialTheme.typography.headlineLarge, color = Ink); Text("Pick up where you left off, or find something new.", color = Dim, modifier = Modifier.padding(top = 6.dp)) }; Button(onClick = { scope.launch { refreshMessage = "Refreshing library…"; runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.refresh(it) } } }.onSuccess { refreshMessage = "Library refreshed."; loadRecent() }.onFailure { refreshMessage = it.message ?: "Refresh failed; cached items are still available." } } }) { Icon(Icons.Default.Refresh, contentDescription = null); Text("Refresh", modifier = Modifier.padding(start = 6.dp)) } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Welcome back", style = MaterialTheme.typography.headlineLarge, color = Ink); Text("Pick up where you left off, or find something new.", color = Dim, modifier = Modifier.padding(top = 6.dp)) }; Button(onClick = { scope.launch { refreshMessage = "Refreshing library…"; runCatching { withContext(Dispatchers.IO) { CatalogType.entries.forEach { repository.refresh(it) } } }.onSuccess { refreshMessage = "Library refreshed."; loadRecent(regenerateSuggestions = true) }.onFailure { refreshMessage = it.message ?: "Refresh failed; cached items are still available." } } }) { Icon(Icons.Default.Refresh, contentDescription = null); Text("Refresh", modifier = Modifier.padding(start = 6.dp)) } }
     if (refreshMessage.isNotBlank()) Text(refreshMessage, color = Dim, modifier = Modifier.padding(top = 10.dp))
     // D-Desktop-16a: a shelf with nothing in it must not occupy space or explain its own absence
     // (proposal rule) -- each shelf composable now renders nothing at all when its list is empty.
@@ -193,6 +198,9 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     // Series continuation is tracked per-episode (episode_resume), not on the series row's own
     // resume_ms -- "__continue" now resolves that correctly for SERIES too (see items() below).
     EpisodeHomeShelf(episodes, onBrowse = { onBrowse(CatalogType.SERIES, "__continue") }, onPlay = onPlay)
+    HomeShelf("Suggested movies", suggestions[CatalogType.MOVIES].orEmpty(), onBrowse = { onBrowse(CatalogType.MOVIES, "__suggestions") }, onPlay = { onPlay(it, null) })
+    HomeShelf("Suggested series", suggestions[CatalogType.SERIES].orEmpty(), onBrowse = { onBrowse(CatalogType.SERIES, "__suggestions") }, onPlay = { onPlay(it, null) })
+    HomeShelf("Suggested live channels", suggestions[CatalogType.LIVE].orEmpty(), onBrowse = { onBrowse(CatalogType.LIVE, "__suggestions") }, onPlay = { onPlay(it, null) })
     // D-Desktop-16a first-run/empty-library state: once the initial load has resolved
     // successfully and there is genuinely nothing to continue, say so with a next action instead
     // of leaving three vanished shelves and no explanation.
@@ -340,11 +348,14 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         // it on a background thread instead of calling it synchronously here.
         scope.launch(Dispatchers.IO) {
             player.initialise(surface)
-                .onSuccess { withContext(Dispatchers.Main) { playerReady = true } }
+                .onSuccess {
+                    if (item.type == CatalogType.LIVE) repository.recordTuned(item)
+                    withContext(Dispatchers.Main) { playerReady = true }
+                }
                 .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Player setup failed: $message" } }
         }
         onDispose {
-            if (lastKnownPositionMs > 0L) repository.recordResume(item, episode, lastKnownPositionMs)
+            if (item.type != CatalogType.LIVE && lastKnownPositionMs > 0L) repository.recordResume(item, episode, lastKnownPositionMs)
             // close() enqueues a non-blocking terminal task on the player's own owner thread --
             // safe to call from this synchronous disposal callback.
             player.close()
@@ -461,7 +472,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
             player.stop()
         }
     }
-    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); if (lastKnownPositionMs > 0L) withContext(Dispatchers.IO) { repository.recordResume(item, episode, lastKnownPositionMs) } } }
+    androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); if (item.type != CatalogType.LIVE && lastKnownPositionMs > 0L) withContext(Dispatchers.IO) { repository.recordResume(item, episode, lastKnownPositionMs) } } }
     val title = episode?.let { "${item.title} · Season ${it.season} · ${it.displayLabel(item.title)}" } ?: item.title
     val outerPadding = if (fullScreen) 0.dp else 24.dp
     // mpv's built-in OSC (enabled in MpvPlayer.initialise) owns Play/Pause/seek inside the video

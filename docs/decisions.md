@@ -961,3 +961,71 @@ movie/series/live catalog path; it did find two unrelated bypasses worth a follo
 — `SeriesInfoParser.kt` reads a raw season name for the season-rail label, and
 `CategoryListParser.kt` reads a raw `category_name` for the category-rail label — neither
 is a media title, so out of scope for this fix, left untouched as instructed.
+
+## D-Desktop-16c — durable recency/live-history schema (closed 2026-09-15)
+
+**Fixed**, implemented by Codex under the Claude-plans/Codex-implements division of
+labor (`bible-detail/claude-07-agent-division.md`), Claude-reviewed. Three bugs in
+`DesktopCatalogRepository.kt`:
+- `added_at` unit mismatch (provider epoch *seconds* vs. `System.currentTimeMillis()`
+  fallback epoch *milliseconds*) — `insertItem()` now normalizes any parsed `added`
+  value under `10_000_000_000L` (i.e. plausibly seconds) to milliseconds before storing.
+- `added_at` was rewritten on every `refresh()` (delete-all/reinsert), so "Recently
+  added" meant "last refresh touched this row," not first-seen time. Added a
+  `first_indexed_at` column (schema v4) preserved across refresh by widening the
+  existing favourite/resume savedState↔restore round-trip in `refresh()` to cover
+  every existing row, not just favourited/resumed ones — new rows get
+  `first_indexed_at` = their normalized `added_at` at insert time; previously-seen
+  rows keep their original value. `items()`'s `__recent` category now orders by
+  `first_indexed_at DESC`.
+- Live TV had no real "recently watched" concept — `DesktopPlayerScreen` called
+  `recordResume()` for every content type including LIVE (on player dispose and on a
+  5s polling effect), and `recentItems(LIVE)` read that fake resume state back as if
+  Live were resumable, contradicting `docs/design/desktop-home-proposal.md`. Fixed
+  with a new `last_tuned_at` column + `recordTuned()`, called once per successful LIVE
+  playback start (the `playerReady` transition), not on the polling loop; both
+  `recordResume()` call sites in `DesktopShell.kt` now skip LIVE; `recentItems(LIVE)`
+  reads `last_tuned_at` instead of `resume_ms`/`resume_updated_at`.
+
+Schema v4 backfills `first_indexed_at = added_at` on migration — a one-time
+best-effort backfill that inherits the pre-fix unit-mismatch for existing rows;
+accepted rather than trying to retroactively un-mix historical units.
+
+Added `desktop/src/test/kotlin/.../DesktopCatalogRepositoryTest.kt` (new JUnit test
+infra for the desktop module — `junit:junit:4.13.2` added to `desktop/build.gradle.kts`,
+mirroring `app/build.gradle.kts`'s existing pattern) using a real SQLite temp-file DB
+and a local `HttpServer` fixture standing in for the provider API: seconds-timestamp
+normalization, `first_indexed_at` stability across two real `refresh()` calls,
+`recordTuned()` leaving Live resume fields untouched, and `recentItems(LIVE)` ordering
+by tune history rather than resume history. `./gradlew.bat :desktop:compileKotlin
+:desktop:test` green, 4/4 tests passing.
+
+## D-Desktop-16d — Suggestions v0 (closed 2026-09-15)
+
+**Fixed**, implemented by Codex under the same plan/implement/review division of labor
+as 16c, Claude-reviewed. Scope explicitly narrowed from the proposal's larger
+"unfolded shelves per Browse tab" idea (not yet filed as its own item) to a Home-only
+Suggestions shelf per content type, reusing the existing `HomeShelf`/typed-`onBrowse`
+pattern from 16b/16c.
+
+`DesktopCatalogRepository` gained a process-local (not persisted — regenerates on next
+app open, per the proposal) `suggestionIds: MutableMap<CatalogType, List<String>>` plus
+`ensureSuggestions()` (returns the existing session snapshot, generating one only if
+absent) and `regenerateSuggestions()` (always draws a fresh `ORDER BY RANDOM()` sample,
+excluding ids already visible in that type's continuation shelf). `items()`'s virtual
+category switch gained `"__suggestions"`, matching the stored snapshot via a
+**parameterized** `id IN (?,?,...)` clause (ids are provider-controlled but still bound
+as statement parameters, not string-interpolated, to avoid the SQL-injection-shaped
+pattern) with a `1=0` fallback when no snapshot exists yet (reuses Browse's existing
+"No items available" empty state rather than a special case). `DesktopShell.kt`'s
+`HomeScreen` calls `ensureSuggestions` on initial load and `regenerateSuggestions` only
+inside the Refresh button's `onSuccess` — a failed refresh leaves the prior snapshot
+untouched, matching the proposal's "regenerate only after a successful catalog
+refresh" rule.
+
+9 repository tests (4 from 16c + 5 new), including session-stability across repeated
+Home/Browse access, Browse's `__suggestions` matching the Home snapshot exactly (not a
+fresh independent draw), exclusion of continuation-shelf ids, the pre-snapshot empty
+state, and a failed-refresh-preserves-snapshot case (fixture returns an empty catalog,
+`refresh()`'s own `check(items.size() > 0)` throws, and the snapshot survives). All
+green.

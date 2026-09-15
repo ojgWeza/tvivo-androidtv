@@ -15,6 +15,8 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
+import java.sql.PreparedStatement
+import java.sql.Types
 import java.time.Duration
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,6 +39,14 @@ data class DesktopItem(
 data class DesktopEpisode(val id: String, val season: String, val title: String, val extension: String, val duration: String?, val resumeMs: Long = 0L, val episodeNumber: String? = null)
 data class DesktopSeriesResume(val series: DesktopItem, val episode: DesktopEpisode)
 data class AccountInfo(val status: String?, val expires: String?, val maxConnections: String?)
+private data class SavedItemState(
+    val id: String,
+    val favourite: Long,
+    val resumeMs: Long,
+    val resumeUpdatedAt: Long?,
+    val firstIndexedAt: Long,
+    val lastTunedAt: Long?,
+)
 
 /**
  * Some panels template titles as `"{title} ({quality})"` and substitute an empty string
@@ -55,11 +65,16 @@ private fun cleanTitle(name: String?): String {
 }
 
 /** Desktop cache. Schema versions are migrated in place; a catalog is always scoped to its account hash. */
-internal class DesktopCatalogRepository(private val credentials: Credentials) : AutoCloseable {
+internal class DesktopCatalogRepository(
+    private val credentials: Credentials,
+    private val database: Path = Path.of(System.getenv("APPDATA") ?: ".", "Tvivo", "catalog.db"),
+) : AutoCloseable {
     private val accountId = AccountIdentity.of(credentials)
-    private val database = Path.of(System.getenv("APPDATA") ?: ".", "Tvivo", "catalog.db")
     private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
     private val refreshMutex = Mutex()
+    // Deliberately process-local: Suggestions are stable only for this app session and regenerate
+    // after a successful explicit Home refresh or on the next app open.
+    private val suggestionIds = mutableMapOf<CatalogType, List<String>>()
 
     init {
         Files.createDirectories(database.parent)
@@ -102,19 +117,42 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
             }
         } else {
             val virtual = category.startsWith("__")
+            val suggestions = suggestionIds[type].orEmpty()
             val where = when (category) {
                 "__favourites" -> "favourite=1"
                 "__continue" -> "resume_ms>0"
                 "__recent" -> "1=1"
                 "__all" -> "1=1"
+                "__suggestions" -> if (suggestions.isEmpty()) "1=0" else "id IN (${suggestions.joinToString(",") { "?" }})"
                 else -> "category_id=?"
             }
-            val order = if (category == "__recent") "added_at DESC" else "title COLLATE NOCASE"
+            val order = if (category == "__recent") "first_indexed_at DESC" else "title COLLATE NOCASE"
             db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order LIMIT 500").use { statement ->
                 var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
                 if (!virtual) statement.setString(i++, category)
+                if (category == "__suggestions") suggestions.forEach { statement.setString(i++, it) }
                 statement.setString(i, "%${query.trim()}%")
                 statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+            }
+        }
+    }
+
+    @Synchronized
+    fun ensureSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> {
+        if (suggestionIds[type] == null) regenerateSuggestions(type, excludeIds, limit)
+        return items(type, "__suggestions", "")
+    }
+
+    @Synchronized
+    fun regenerateSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> = connection().use { db ->
+        val exclusions = excludeIds.toList()
+        val exclusionClause = if (exclusions.isEmpty()) "" else " AND id NOT IN (${exclusions.joinToString(",") { "?" }})"
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY RANDOM() LIMIT ?").use { statement ->
+            var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
+            exclusions.forEach { statement.setString(i++, it) }
+            statement.setInt(i, limit)
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }.also { items ->
+                suggestionIds[type] = items.map { it.id }
             }
         }
     }
@@ -126,9 +164,14 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
         connection().use { db ->
             db.autoCommit = false
             try {
-                val savedState = db.prepareStatement("SELECT id,favourite,resume_ms,resume_updated_at FROM items WHERE account_id=? AND type=? AND (favourite=1 OR resume_ms>0)").use { state ->
+                // The table is rewritten on refresh, so state needed to survive it must be saved
+                // for every existing item, not merely favourite/resumed rows.
+                val savedState = db.prepareStatement("SELECT id,favourite,resume_ms,resume_updated_at,first_indexed_at,last_tuned_at FROM items WHERE account_id=? AND type=?").use { state ->
                     state.setString(1, accountId); state.setString(2, type.name)
-                    state.executeQuery().use { rows -> buildList { while (rows.next()) add(listOf(rows.getString(1), rows.getLong(2).toString(), rows.getLong(3).toString(), rows.getLong(4).toString())) } }
+                    state.executeQuery().use { rows -> buildList { while (rows.next()) add(SavedItemState(
+                        id = rows.getString(1), favourite = rows.getLong(2), resumeMs = rows.getLong(3),
+                        resumeUpdatedAt = rows.getNullableLong(4), firstIndexedAt = rows.getLong(5), lastTunedAt = rows.getNullableLong(6),
+                    )) } }
                 }
                 db.prepareStatement("DELETE FROM categories WHERE account_id=? AND type=?").use { it.setString(1, accountId); it.setString(2, type.name); it.executeUpdate() }
                 db.prepareStatement("DELETE FROM items WHERE account_id=? AND type=?").use { it.setString(1, accountId); it.setString(2, type.name); it.executeUpdate() }
@@ -138,13 +181,14 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
                         insert.setString(4, row.string("category_name") ?: "Unnamed category"); insert.setInt(5, index); insert.addBatch()
                     }}; insert.executeBatch()
                 }
-                db.prepareStatement("INSERT INTO items(account_id,type,id,category_id,title,artwork,extension,rating,plot,added_at) VALUES(?,?,?,?,?,?,?,?,?,?)").use { insert ->
+                db.prepareStatement("INSERT INTO items(account_id,type,id,category_id,title,artwork,extension,rating,plot,added_at,first_indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").use { insert ->
                     items.forEach { raw -> insertItem(insert, type, raw.asJsonObject) }; insert.executeBatch()
                 }
-                db.prepareStatement("UPDATE items SET favourite=?,resume_ms=?,resume_updated_at=? WHERE account_id=? AND type=? AND id=?").use { restore ->
+                db.prepareStatement("UPDATE items SET favourite=?,resume_ms=?,resume_updated_at=?,first_indexed_at=?,last_tuned_at=? WHERE account_id=? AND type=? AND id=?").use { restore ->
                     savedState.forEach { state ->
-                        restore.setLong(1, state[1].toLong()); restore.setLong(2, state[2].toLong()); restore.setLong(3, state[3].toLong())
-                        restore.setString(4, accountId); restore.setString(5, type.name); restore.setString(6, state[0]); restore.addBatch()
+                        restore.setLong(1, state.favourite); restore.setLong(2, state.resumeMs); restore.setNullableLong(3, state.resumeUpdatedAt)
+                        restore.setLong(4, state.firstIndexedAt); restore.setNullableLong(5, state.lastTunedAt)
+                        restore.setString(6, accountId); restore.setString(7, type.name); restore.setString(8, state.id); restore.addBatch()
                     }; restore.executeBatch()
                 }
                 db.commit()
@@ -176,8 +220,15 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
         }
     }
 
+    fun recordTuned(item: DesktopItem) = connection().use { db ->
+        db.prepareStatement("UPDATE items SET last_tuned_at=? WHERE account_id=? AND type=? AND id=?").use {
+            it.setLong(1, System.currentTimeMillis()); it.setString(2, accountId); it.setString(3, item.type.name); it.setString(4, item.id); it.executeUpdate()
+        }
+    }
+
     fun recentItems(type: CatalogType, limit: Int = 3): List<DesktopItem> = connection().use { db ->
-        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND resume_ms>0 ORDER BY resume_updated_at DESC LIMIT ?").use { statement ->
+        val recentClause = if (type == CatalogType.LIVE) "last_tuned_at IS NOT NULL ORDER BY last_tuned_at DESC" else "resume_ms>0 ORDER BY resume_updated_at DESC"
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $recentClause LIMIT ?").use { statement ->
             statement.setString(1, accountId); statement.setString(2, type.name); statement.setInt(3, limit)
             statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
         }
@@ -251,6 +302,12 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
                 sql.execute("CREATE INDEX IF NOT EXISTS episode_resume_recent ON episode_resume(account_id,updated_at DESC)")
                 sql.execute("UPDATE schema_version SET version=3")
             }
+            if (version < 4) {
+                sql.execute("ALTER TABLE items ADD COLUMN first_indexed_at INTEGER")
+                sql.execute("ALTER TABLE items ADD COLUMN last_tuned_at INTEGER")
+                sql.execute("UPDATE items SET first_indexed_at=added_at")
+                sql.execute("UPDATE schema_version SET version=4")
+            }
         }
     }
     private fun insertItem(statement: java.sql.PreparedStatement, type: CatalogType, row: JsonObject) {
@@ -259,8 +316,11 @@ internal class DesktopCatalogRepository(private val credentials: Credentials) : 
         statement.setString(1, accountId); statement.setString(2, type.name); statement.setString(3, id); statement.setString(4, row.string("category_id") ?: "")
         statement.setString(5, cleanTitle(row.string("name"))); statement.setString(6, row.string(if (type == CatalogType.SERIES) "cover" else "stream_icon"))
         statement.setString(7, row.string(if (type == CatalogType.LIVE) "ext" else "container_extension") ?: if (type == CatalogType.LIVE) "ts" else "mp4")
-        statement.setString(8, row.string("rating")); statement.setString(9, row.string("plot")); statement.setLong(10, row.string("added")?.toLongOrNull() ?: System.currentTimeMillis()); statement.addBatch()
+        val addedAt = row.string("added")?.toLongOrNull()?.let { if (it < 10_000_000_000L) it * 1_000L else it } ?: System.currentTimeMillis()
+        statement.setString(8, row.string("rating")); statement.setString(9, row.string("plot")); statement.setLong(10, addedAt); statement.setLong(11, addedAt); statement.addBatch()
     }
+    private fun java.sql.ResultSet.getNullableLong(index: Int): Long? = getLong(index).takeUnless { wasNull() }
+    private fun PreparedStatement.setNullableLong(index: Int, value: Long?) = if (value == null) setNull(index, Types.INTEGER) else setLong(index, value)
     private fun item(rows: java.sql.ResultSet, type: CatalogType) = DesktopItem(rows.getString(1), type, rows.getString(2), rows.getString(3), rows.getString(4), rows.getString(5), rows.getString(6), rows.getString(7))
     private fun JsonObject.string(name: String): String? = get(name)?.takeUnless { it.isJsonNull }?.asString
     override fun close() = Unit
