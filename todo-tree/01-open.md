@@ -16,6 +16,43 @@ calls `store.wipe()`. Do not clear app data.
 
 ## Current priority — Desktop (active work)
 
+- **D-Desktop-15 (owner request, 2026-09-15) — App should launch full screen.**
+  Not started. Currently opens windowed; owner wants the desktop app to start
+  full screen on launch, same spirit as the TV app's fixed 10-foot assumption.
+  Check how `fullScreen`/`onFullScreenChange` state already works for the
+  player (`DesktopShell.kt`) and whether the same window-level full-screen API
+  can be applied to the app's own top-level window at startup, not just the
+  player surface. Consider whether a windowed/restore path should still exist
+  (e.g. Escape or a title-bar control) — ask the owner if unclear rather than
+  assuming full screen means "no way out."
+- **D-Desktop-16 (owner request, 2026-09-15) — Home screen is empty/unintuitive.**
+  Not started. Owner: "make the main screen more intelligent and intuitive
+  instead of holding empty sections and being not usable." Needs a proper
+  audit before building — likely candidates: sections that render even with
+  no data (empty "Continue watching"/"Continue with Live TV" blocks per the
+  current `HomeScreen.kt`), unclear next-action guidance for a
+  first-run/empty-library state, and general information-hierarchy/usability
+  review. Owner explicitly invited "all other recommendations" for a more
+  user-friendly, optimized main screen — treat this as an open design
+  question, not a fixed spec. Consider running `/design-review` or
+  `/plan-design-review` on the current Home screen before implementing,
+  since this is exactly the kind of design-quality question those skills
+  are for, and check `docs/design/design artifacts/desktop-journey-states.html`
+  for the original intended Home layout before redesigning from scratch.
+- **D-Desktop-17 (owner request, 2026-09-15) — Player should open truly full
+  screen.** Not started. Owner: "player should start as full screen holding
+  the full screen really" — read as dissatisfaction with the current player
+  full-screen behavior specifically (`63-section.md`'s D-Desktop-9 already
+  tracks a related but distinct defect: full screen currently maximizes the
+  *whole app* rather than giving the player its own native-viewport full-
+  screen state with a non-overlapping control dock). Likely the same
+  underlying fix as D-Desktop-9 plus making full screen the *default* entry
+  state when opening the player, rather than an opt-in toggle. Do these
+  together rather than separately — implementing one without the other risks
+  contradicting behavior (e.g. player opens windowed then immediately jumps
+  full screen, or full-screen-by-default fights D-Desktop-9's windowed/full
+  toggle logic).
+
 - `63-section.md` — D-Desktop-1..14: D-Desktop-10's concurrency/freeze
   regression is fixed and verified (2026-09-15). **D-Desktop-14 (High, mpv
   migration) closed 2026-09-15** — playback (35+s real-stream stability),
