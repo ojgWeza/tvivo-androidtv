@@ -757,3 +757,30 @@ verified present before its section file was deleted.
 - **Considered and not taken:** idle dim/screensaver (not worth tracking yet), voice
   search (declined as a whole integration for one field), `KEYCODE_ESCAPE` handling in
   the player (emulator config artefact, not a product requirement).
+
+## D-Desktop-10 — vlcj concurrency/freeze bug closed; playback moved to D-Desktop-14 (2026-09-15)
+
+**Closed:** the UI-freeze/hang regression that motivated the vlcj migration. A fresh
+Codex review of `LibVlcPlayer.kt`/`DesktopShell.kt` found 4 more real races beyond the
+4 already fixed pre-session: resume-seek firing on an already-released player,
+`positionMs()`/`durationMs()` racing release outside the serial executor, `close()`
+queuing a redundant blocking `stop()` behind one already in flight, and the
+playback-launch coroutine calling `playUrl()` after `terminal` was already set. All four
+fixed and live-verified: fixture playback confirmed working, and 3 real-provider-stream
+attempts all ended in `opening → playing → buffering → watchdog timeout → clean stop`
+with the UI staying responsive throughout — no freeze, no crash, no double-block.
+
+**Not closed — moved to `D-Desktop-14`:** the stream never reaches sustained playback,
+stalling in `Buffering` at 100% cache regardless of tuning (`network-caching` raised to
+10000ms, `--clock-jitter=0`/`--clock-synchro=0` tried, both reverted — no benefit). User
+confirmed the same content plays fine in other apps on the same connection, ruling out a
+provider/network cause and pointing at the bundled libvlc 3.0.23 itself.
+
+**Decision:** replace vlcj/libvlc with mpv (libmpv) entirely, using mpv's own built-in
+on-screen controls (OSC) rendered on the video surface instead of hand-built Compose
+transport controls (Play/Pause/Stop/seek/Full screen) — the user rejected the ongoing
+cost of maintaining that control layer, independent of the libvlc bug. Full scope,
+including a Codex edge-case review (HWND embedding timing, native-input ownership
+conflicts between mpv's OSC and Compose key handling, resume-tracking via
+`mpv_observe_property`, and shutdown-ordering discipline carried over from this
+session's races), is filed as `D-Desktop-14` in `todo-tree/63-section.md`. Not started.

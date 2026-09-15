@@ -137,6 +137,179 @@ provider stream that previously hung, and confirm the watchdog fires with the
 UI staying responsive (own screenshot evidence, not just "no exception").
 Do not close this item until that live pass is done.
 
+**Closed 2026-09-15 -- concurrency/freeze bug fixed and verified; playback
+itself moved to D-Desktop-14, not closed here.** A fresh Codex review of
+`LibVlcPlayer.kt`/`DesktopShell.kt` (the review this item's Status note above
+asked for) found 4 more real races beyond the 4 already fixed, all corrected
+and live-verified this session:
+- Resume-seek callback could fire `setTime()` on an already-released player if
+  Back/close landed between the native "playing" event and the queued seek
+  task running (`LibVlcPlayer.kt`, now guarded on `closed.get()`).
+- `positionMs()`/`durationMs()` called native status APIs directly outside the
+  serial executor, so the 5s polling loop could race a stop/release (now
+  wrapped in `runCatching`, returns 0 on failure instead of crashing).
+- `close()` unconditionally queued a second native `stop()` even when the
+  watchdog/manual Stop had already queued one, serializing two blocking calls
+  back-to-back instead of one (now a `stopRequested` flag skips the redundant
+  call).
+- The playback-launch coroutine could still call `player.playUrl()` after
+  Stop/watchdog had already set `terminal = true` while the URL/resume-position
+  lookup was in flight (now re-checks `terminal` before calling play).
+- Also dropped the fixture path's optimistic "Playing ... fixture" state (set
+  before the native `playing` event), which was a watchdog blind spot: if
+  fixture playback stalled after `media().play()` returned, the watchdog's
+  state-string check wouldn't recognize it as stuck.
+
+**Live verification (2026-09-15):** fixture playback (`sintel-trailer.mp4`)
+confirmed working after the vlcj migration. Real provider stream tested 3x:
+each time the sequence was `opening -> playing -> buffering (climbing to
+100%) -> stuck -> watchdog fires at 20s -> clean stop, actionable message, UI
+stays responsive` -- **no freeze, no crash, no double-block**, which is what
+this item's fix was actually for. That regression is closed.
+
+**What's still broken (moved to D-Desktop-14, not blocking this item's
+close):** the stream never reaches sustained playback -- it stalls after the
+initial buffer regardless of tuning (`network-caching` raised 3000ms ->
+10000ms, `--clock-jitter=0`/`--clock-synchro=0` tried) -- all reverted after
+testing, no benefit. User confirmed the same content plays fine in other apps
+on the same connection, ruling out provider/network cause; this points at the
+bundled libvlc 3.0.23 itself mishandling this stream's demux/clock behavior.
+Combined with a separate, unrelated pushback on maintaining hand-built Compose
+transport controls, the decision this session was to replace vlcj with mpv
+entirely rather than keep chasing libvlc-version-specific tuning -- see
+D-Desktop-14 below.
+
+### D-Desktop-14 — Replace vlcj/libvlc with mpv (libmpv) for desktop playback
+
+**Severity: High. Decided 2026-09-15 after live-stream testing surfaced a
+libvlc-specific playback stall that tuning couldn't fix, plus user rejection
+of the hand-built control-row approach. Codex edge-case review done
+2026-09-15 (folded into this entry below); not yet implemented.**
+
+**Problem this replaces:** `LibVlcPlayer.kt`'s bundled libvlc 3.0.23 reliably
+starts a real provider stream, then falls into a `Buffering` state that
+climbs to 100% cache and never returns to `Playing` -- reproduced 5x (3x
+stock, 2x after raising `network-caching` to 10000ms and disabling
+`--clock-jitter`/`--clock-synchro`, both reverted after testing, no benefit).
+Confirmed not provider/network-side: the same content plays in other apps on
+the same connection. Separately, `DesktopShell.kt`'s `DesktopPlayerScreen`
+hand-builds every transport control (Play/Pause, Stop, seek `Slider`, Full
+screen, Back) around a raw AWT `Canvas` (`SwingPanel`) video surface -- user
+rejected this as ongoing maintenance burden (makes `D-Desktop-13`'s
+unfinished seek-bar/skip-controls work moot).
+
+**Action:**
+- Replace vlcj/vlcj-natives/JNA LibVLC usage with libmpv via a hand-rolled
+  JNA `Library` interface against `mpv/client.h` -- no mature Kotlin/JVM mpv
+  wrapper exists, and this repo's only two current JNA consumers
+  (`LibVlcPlayer.kt`'s raw `NativeLibrary.addSearchPath`, and
+  `auth/WindowsCredentialsStore.kt`'s `jna-platform` `Crypt32Util`) both use
+  pre-built wrappers, not hand-rolled `Native.load()` interfaces -- this will
+  be the first of that kind in the codebase.
+- Bundle a Windows `libmpv-2.dll` runtime the same way `BundledLibVlc`
+  extracts `vlc-3.0.23-win64.zip` today (checked-in zip resource under
+  `desktop/src/main/resources/libvlc/`, extracted once to
+  `%LOCALAPPDATA%\Tvivo\<name>\<version>\` on first run) -- reuse that
+  pattern, don't redesign it. Stay Windows-only, matching this module's
+  existing scope (`vlc-3.0.23-win64.zip` is win64-only, credentials storage
+  is Windows DPAPI-only, no cross-platform Gradle machinery exists here).
+- Embed mpv via `--wid` HWND embedding into the existing AWT `Canvas`
+  (confirmed technically compatible -- mpv creates a child window under the
+  given HWND on Windows). **Timing hazard carried over from the original
+  HWND-race bug this session fixed once already:** obtain/configure `wid`
+  only after the `Canvas` is actually displayable (Compose's `SwingPanel`
+  attaching it is not synchronous with `remember`/`DisposableEffect` running)
+  and set it before `mpv_initialize()` -- do not assume today's
+  `DisposableEffect(player) { player.initialise(surface) }` ordering is safe
+  to port as-is.
+- Turn on mpv's built-in OSC so Play/Pause/seek/Full screen are rendered and
+  handled by mpv itself; remove `DesktopPlayerScreen`'s hand-built control
+  `Row` (Play/Pause `Button`, Stop `OutlinedButton`, seek `Slider`). Keep
+  title header, Back button, and resume-position/watchdog logic app-side.
+  **Input-ownership conflict (Codex review):** once the embedded mpv child
+  has focus, Compose's `onPreviewKeyEvent` (currently handling Escape/F for
+  full screen) will not reliably receive those keys -- mpv's OSC already
+  binds `f`/Escape to its own fullscreen toggle. Pick one owner: let mpv own
+  keys inside the video surface, remove Compose's F/Escape handler, and keep
+  Back as a Compose button outside the `Canvas`. Verify mouse clicks on the
+  OSC don't swallow clicks meant for Back.
+  **Fullscreen-mapping risk (Codex review):** mpv's own OSC fullscreen cycles
+  mpv's fullscreen state, which is not guaranteed to promote/demote cleanly
+  relative to the surrounding Compose window when mpv is a `--wid` child --
+  this is a mandatory fixture test, not an assumption; if unreliable, disable
+  OSC's fullscreen control rather than ship a broken button, and drive full
+  screen from the app side (ties into `D-Desktop-9`, still open).
+- Resume-position tracking is preserved but the mechanism changes: libmpv
+  exposes `time-pos`/`duration` properties. A thin JNA binding can either
+  poll them every 5s (matching today's `positionMs()` polling model) or use
+  `mpv_observe_property()` + a dedicated `mpv_wait_event()` loop (Codex
+  recommends this is fine either way). **Keep app-owned Room resume writes as
+  the single authority -- do not also enable mpv's own watch-later
+  persistence**, which would create a second, conflicting resume source.
+- Design the new state machine around mpv's actual events rather than
+  porting vlcj's callback shape 1:1 (Codex review): treat
+  `MPV_EVENT_FILE_LOADED`, `START_FILE`, `END_FILE`, `SHUTDOWN`, and observed
+  `pause`/`time-pos` as the events replacing vlcj's
+  opening/buffering/playing/paused/stopped/finished/error adapter. The
+  startup/stall watchdog should arm at `loadfile` and only cancel on an
+  actual playback-*progress* signal (e.g. `time-pos` advancing), not merely
+  `file-loaded` -- and keep a `terminal`/generation-style guard so a stale
+  async event can't overwrite a timeout/error message already on screen,
+  same contract as today's `terminal` flag in `DesktopShell.kt`.
+- **Concurrency (Codex review, carries over this session's hard-won
+  lessons):** keep all libmpv API calls, including destruction, on one owner
+  thread -- design this fresh rather than porting `LibVlcPlayer`'s
+  single-thread executor 1:1, since mpv's event-draining
+  (`mpv_wait_event()`)/property-observation model differs from vlcj's
+  callback-adapter style. Explicitly design shutdown ordering: never let
+  `Canvas` disposal (Back navigation) destroy the mpv instance concurrently
+  with an in-flight `mpv_wait_event()` call or property observation --
+  this is the same class of bug (`close()` racing an in-flight native call)
+  that took 8 rounds of fixes across `D-Desktop-10` to close out for vlcj;
+  don't reintroduce it by assuming mpv's API is safe to call from multiple
+  threads without the same discipline.
+- Update `D-Desktop-13` (seek bar/skip controls) to note it's
+  superseded/moot once mpv's OSC supplies seeking natively -- don't build
+  both.
+- Re-verify `D-Desktop-9` (true full-screen player mode) and
+  `docs/design/desktop-player.md` against mpv's embedding model before
+  reusing either verbatim: that design doc's "heavyweight-native-surface
+  boundary" / "Compose chrome as sibling dock" model was written assuming
+  hand-built Compose controls remain, and becomes largely moot for playback
+  controls once mpv's OSC draws directly onto the video surface. The doc
+  also predates the vlcj migration and needs a pass regardless.
+- First validation step for the next session, mirroring this session's
+  approach: get `desktop-fixtures/sintel-trailer.mp4` playing through
+  mpv/JNA embedded in the Compose window (with OSC visible/functional)
+  before attempting the real provider stream that stalled vlcj 5x.
+
+**Files most relevant (read fully before starting):**
+`desktop/src/main/kotlin/com/dev/tvivo/desktop/LibVlcPlayer.kt` (player
+wrapper being replaced -- keep as the resume/watchdog/terminal-flag contract
+reference), `desktop/src/main/kotlin/com/dev/tvivo/desktop/DesktopShell.kt`
+(`DesktopPlayerScreen` -- surface, watchdog, resume-poller, control `Row` to
+remove), `desktop/build.gradle.kts` (vlcj/JNA dependency declarations +
+`vlc-3.0.23-win64.zip` resource packaging pattern to mirror for mpv),
+`docs/design/desktop-player.md` (full-screen design spec, needs
+re-validation).
+
+**What NOT to do:** don't keep vlcj installed as a fallback/feature flag --
+this is a full replacement; don't hand-build Compose controls again on top of
+mpv "to match the app's look" unless explicitly asked later; don't
+scope-creep into implementing `D-Desktop-9`/`D-Desktop-13` this pass beyond
+the re-validation notes above.
+
+**Verification (next session):** (1) fixture playback through mpv with OSC
+visible/functional; (2) real provider stream retest -- confirm sustained
+playback, not just a brief `Playing` before falling back to buffering; (3)
+repeat this session's close-during-in-flight-operation checks against mpv's
+actual async/blocking call surface; (4) Codex adversarial review of the new
+player wrapper's threading model before calling it done, per
+`bible-detail/claude-07-agent-division.md`'s loop -- same discipline that
+caught 4 real races in the vlcj version (and would have caught the HWND/OSC
+timing hazards above before they became bugs) should apply to the mpv
+rewrite too.
+
 ### D-Desktop-11 — Sign-in button re-enables mid-check
 
 **Severity: Medium. Reported 2026-09-14, manual desktop run.**

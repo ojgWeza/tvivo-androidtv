@@ -265,10 +265,17 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         state = "Preparing stream…"
         scope.launch(Dispatchers.IO) {
             if (debugFixture != null) {
+                // No optimistic "Playing" state here -- let the native opening/playing events
+                // (routed through onState) drive `state` so the watchdog's "still Opening/
+                // Buffering after 20s" check stays accurate for the fixture path too.
                 player.play(java.io.File(debugFixture)).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
                 return@launch
             }
-            runCatching { repository.playbackUrl(item, episode) to repository.resumePosition(if (episode == null) item.type else CatalogType.SERIES, episode?.id ?: item.id) }
+            val prepared = runCatching { repository.playbackUrl(item, episode) to repository.resumePosition(if (episode == null) item.type else CatalogType.SERIES, episode?.id ?: item.id) }
+            // Stop/watchdog may have fired while the URL/resume-position lookup above was in
+            // flight -- don't start a stream the UI has already declared stopped/timed out.
+            if (terminal) return@launch
+            prepared
                 .onSuccess { (url, resumeMs) -> player.playUrl(url, resumeMs).onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } } }
                 .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = message ?: "Unable to prepare playback." } }
         }

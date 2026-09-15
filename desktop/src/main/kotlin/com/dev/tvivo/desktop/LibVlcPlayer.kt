@@ -28,6 +28,10 @@ internal class LibVlcPlayer(
     private var mediaPlayer: EmbeddedMediaPlayer? = null
     @Volatile private var pendingResumeMs = 0L
     private val closed = AtomicBoolean(false)
+    // Set once a native stop() has been queued (watchdog timeout or the manual Stop button), so
+    // close() -- which always needs to happen on Back -- doesn't queue a second blocking native
+    // stop() behind the first and double the time it can hang on a stalled socket.
+    private val stopRequested = AtomicBoolean(false)
     private val verboseLogging = System.getProperty("tvivo.debug.fixture") != null || System.getProperty("tvivo.debug.verbose") != null
 
     // stop()/close() are blocking native calls that can themselves hang on a stalled network
@@ -69,10 +73,13 @@ internal class LibVlcPlayer(
                 debugLog("event playing")
                 if (pendingResumeMs > 0L) {
                     // This callback runs on vlcj's own event thread, not nativeExecutor -- route
-                    // the seek through it so it can't race a Back-triggered close()/release.
+                    // the seek through it so it can't race a Back-triggered close()/release. Guard
+                    // on `closed` inside the queued task: close() may run first if Back/Stop landed
+                    // between the event firing and this task executing, and the callback's captured
+                    // `mediaPlayer` reference stays non-null even after close() has released it.
                     val resumeMs = pendingResumeMs
                     pendingResumeMs = 0L
-                    submitNative { mediaPlayer.controls().setTime(resumeMs) }
+                    submitNative { if (!closed.get()) mediaPlayer.controls().setTime(resumeMs) }
                 }
                 onState("Playing")
             }
@@ -119,15 +126,21 @@ internal class LibVlcPlayer(
     /** Stop is fire-and-forget on purpose -- see [nativeExecutor]. Callers that need an immediate
      * UI update (e.g. a manual Stop button, or the playback watchdog) should set their own state
      * before calling this, not rely on the async "Stopped" event that may arrive late or never. */
-    fun stop() = submitNative { mediaPlayer?.controls()?.stop() }
+    fun stop() = submitNative { stopRequested.set(true); mediaPlayer?.controls()?.stop() }
     fun seek(position: Float) = submitNative { mediaPlayer?.let { it.controls().setPosition(position.coerceIn(0f, 1f)); onState("Seek ${(position * 100).toInt()}%") } }
-    fun positionMs(): Long = mediaPlayer?.status()?.time()?.coerceAtLeast(0L) ?: 0L
-    fun durationMs(): Long = mediaPlayer?.status()?.length()?.coerceAtLeast(0L) ?: 0L
+    // Native status reads, not routed through nativeExecutor (the polling loop calls these every
+    // 5s and must never block behind an in-flight stop()/close()) -- catch failures from a racing
+    // release instead of propagating a crash from this read-only sampling path.
+    fun positionMs(): Long = runCatching { mediaPlayer?.status()?.time()?.coerceAtLeast(0L) }.getOrNull() ?: 0L
+    fun durationMs(): Long = runCatching { mediaPlayer?.status()?.length()?.coerceAtLeast(0L) }.getOrNull() ?: 0L
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         submitNative {
-            runCatching { mediaPlayer?.controls()?.stop() }
+            // Skip a redundant native stop() if one was already queued (watchdog/manual Stop) --
+            // it already ran serialized ahead of this task, so calling it again only risks a
+            // second blocking hang on the same stalled socket before release can proceed.
+            if (!stopRequested.get()) runCatching { mediaPlayer?.controls()?.stop() }
             runCatching { mediaPlayer?.release() }
             runCatching { factory?.release() }
             mediaPlayer = null
