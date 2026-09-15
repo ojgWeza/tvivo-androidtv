@@ -43,9 +43,9 @@ routes to Login and keeps the current credentials until a new sign-in is
 app data destroys credentials that cannot be recovered — the Tink keyset is not
 exportable.
 
-**Start here:** `TODOS.md`. It carries the open QA defects (Part 1), the missing
-test coverage (Part 2), the remaining phases (Part 3), and the emulator
-environment gotchas that each cost real time to rediscover (Part 5).
+**Start here:** `todo-tree/01-open.md`. It indexes every open QA defect and
+remaining phase of work. Emulator environment gotchas that each cost real time
+to rediscover now live in `claude-05.md`.
 
 **Phase 5 (hardening) is next.** Phase 4 landed as one `CatalogSource` factory in
 `BrowseViewModel`, a `series` table and the `get_series_info` season parsing —
@@ -56,5 +56,5 @@ browse UI stays typed to `BrowseItem`, not to any entity.
 
 Run the emulator with `tools/emulator.sh`, never bare `emulator.exe`: it stops
 the Gradle daemons first and passes the two flags this machine requires. Details
-in `TODOS.md` Part 5.
+in `claude-05.md`.
 

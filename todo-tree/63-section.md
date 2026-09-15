@@ -107,76 +107,9 @@ URLs out of logs and UI. First validate the LibVLC surface with a local
 synthetic fixture; a real provider stream may be opened only in an
 owner-approved manual validation session.
 
-**Status as of 2026-09-14, end of session -- uncommitted, not yet re-verified live:**
-Root cause of the original "no video" symptom was an HWND-timing race in the
-hand-rolled JNA `LibVlcPlayer`; fixed once, then during live-stream testing a
-second, more serious bug surfaced: `EmbeddedMediaPlayer`/native `stop()` calls
-could block indefinitely on a stalled provider socket, freezing the whole UI
-thread (not just the player) since they ran on the same dispatcher as
-everything else. Rather than patch the hand-rolled JNA bindings further, the
-player was migrated to `vlcj` (mature LibVLC binding) end to end, plus:
-- A 20s playback watchdog (`DesktopShell.kt`) that stops and shows an
-  actionable timeout message if a stream never reaches Playing.
-- All native control/lifecycle calls (`play`, `playUrl`, `pause`, `resume`,
-  `stop`, `close`, the resume-seek in the `playing` callback) serialized
-  through a single background executor in `LibVlcPlayer.kt`, so `close()`
-  (Back navigation) can never race a blocked `stop()` or an in-flight `play()`.
-- A `terminal` flag in `DesktopShell.kt` so a stale async "Stopped"/"Ready"
-  event can't overwrite the watchdog's timeout message on screen.
-
-Went through 4 rounds of Codex review (`bible-detail/claude-07-agent-division.md`
-loop) -- each round found a real race, now fixed; Codex's context ran out
-before it could run the actual test (fixture or live). **The fixture-playback
-fix from before the vlcj migration was visually confirmed working twice**
-(local `sintel-trailer.mp4`, moving video + working controls), but **the vlcj
-migration + all the serialization/watchdog fixes above have only been
-compile-checked, not run live yet.** Next session: build+run with
-`-Dtvivo.debug.fixture=desktop-fixtures\sintel-trailer.mp4` first to confirm
-the vlcj migration didn't regress the fixture path, then retest the same real
-provider stream that previously hung, and confirm the watchdog fires with the
-UI staying responsive (own screenshot evidence, not just "no exception").
-Do not close this item until that live pass is done.
-
-**Closed 2026-09-15 -- concurrency/freeze bug fixed and verified; playback
-itself moved to D-Desktop-14, not closed here.** A fresh Codex review of
-`LibVlcPlayer.kt`/`DesktopShell.kt` (the review this item's Status note above
-asked for) found 4 more real races beyond the 4 already fixed, all corrected
-and live-verified this session:
-- Resume-seek callback could fire `setTime()` on an already-released player if
-  Back/close landed between the native "playing" event and the queued seek
-  task running (`LibVlcPlayer.kt`, now guarded on `closed.get()`).
-- `positionMs()`/`durationMs()` called native status APIs directly outside the
-  serial executor, so the 5s polling loop could race a stop/release (now
-  wrapped in `runCatching`, returns 0 on failure instead of crashing).
-- `close()` unconditionally queued a second native `stop()` even when the
-  watchdog/manual Stop had already queued one, serializing two blocking calls
-  back-to-back instead of one (now a `stopRequested` flag skips the redundant
-  call).
-- The playback-launch coroutine could still call `player.playUrl()` after
-  Stop/watchdog had already set `terminal = true` while the URL/resume-position
-  lookup was in flight (now re-checks `terminal` before calling play).
-- Also dropped the fixture path's optimistic "Playing ... fixture" state (set
-  before the native `playing` event), which was a watchdog blind spot: if
-  fixture playback stalled after `media().play()` returned, the watchdog's
-  state-string check wouldn't recognize it as stuck.
-
-**Live verification (2026-09-15):** fixture playback (`sintel-trailer.mp4`)
-confirmed working after the vlcj migration. Real provider stream tested 3x:
-each time the sequence was `opening -> playing -> buffering (climbing to
-100%) -> stuck -> watchdog fires at 20s -> clean stop, actionable message, UI
-stays responsive` -- **no freeze, no crash, no double-block**, which is what
-this item's fix was actually for. That regression is closed.
-
-**What's still broken (moved to D-Desktop-14, not blocking this item's
-close):** the stream never reaches sustained playback -- it stalls after the
-initial buffer regardless of tuning (`network-caching` raised 3000ms ->
-10000ms, `--clock-jitter=0`/`--clock-synchro=0` tried) -- all reverted after
-testing, no benefit. User confirmed the same content plays fine in other apps
-on the same connection, ruling out provider/network cause; this points at the
-bundled libvlc 3.0.23 itself mishandling this stream's demux/clock behavior.
-Combined with a separate, unrelated pushback on maintaining hand-built Compose
-transport controls, the decision this session was to replace vlcj with mpv
-entirely rather than keep chasing libvlc-version-specific tuning -- see
+**Closed 2026-09-15.** Concurrency/freeze bug fixed and verified; full story
+in `docs/decisions.md` ("D-Desktop-10 — vlcj concurrency/freeze bug closed;
+playback moved to D-Desktop-14"). Playback itself was not restored — moved to
 D-Desktop-14 below.
 
 ### D-Desktop-14 — Replace vlcj/libvlc with mpv (libmpv) for desktop playback

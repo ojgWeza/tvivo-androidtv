@@ -11,8 +11,9 @@ items only, no dates, no session narrative. Maintenance rules:
 panel on the API 34 emulator; 149+ unit tests pass; VOD/live/series sync in
 full; movie playback works end to end. Phase 5 (hardening) is in progress.
 Desktop — active product target (not a POC) per `handoff.md`; foundation and
-catalog/player shell exist, D-Desktop-1..10 is the current open batch and
-takes priority over the Android list.
+catalog/player shell exist, D-Desktop-1..14 is the current open batch
+(D-Desktop-10 closed, playback now blocked on D-Desktop-14) and takes
+priority over the Android list.
 
 **Credentials were re-entered by hand on 2026-09-08** after an earlier session
 cleared app data and destroyed the previous set. Never clear app data — use
