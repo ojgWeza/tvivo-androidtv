@@ -10,16 +10,20 @@ See `TODO-ARCHIVE.md` for closed items and `docs/decisions.md` for rationale.
 
 ## Desktop (Priority — active batch)
 
-### D-Desktop-16 (Approved 2026-09-16, see `D-DESKTOP-16-PLAN.md`)
+### D-Desktop-16 (partially complete; revise `D-DESKTOP-16-PLAN.md` before implementation)
 
-Six user requirements across suggestions, account display, recently-added ordering, fullscreen/OSC, back control consistency, and search UI. Implementation sequence: Req3 → Req2 → Req1 → Req6 → Req5 → Req4.
+Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and search UI.
 
-- [ ] **Req 3: Recently Added (500 limit, provider timestamp)** — Change `__recent` sort to `added_at DESC + id ASC`, limit 500, add index, fix missing timestamp fallback (use 0 not current time).
-- [ ] **Req 2: Account Username Display** — Add optional `username` field to `AccountInfo`, extract `user_info.username`, fallback to `credentials.username`.
-- [ ] **Req 1: Suggestions Regenerate Per Session** — Generate one random snapshot after initial load, keep stable within session, inject randomness for deterministic tests.
-- [ ] **Req 6: Search UI (Magnifier, Collapse/Expand)** — Add `searchExpanded` to BrowseSavedState, magnifier icon ↔ expanded input, clear X clears query only, escape closes search.
-- [ ] **Req 5: Back Control Consistency** — Extract common `BackControl` composable, apply to Browse/Detail/Episodes/Player, overlay for fullscreen.
-- [ ] **Req 4: Fullscreen & OSC Title** — Hide header when fullscreen, set `force-media-title` on mpv owner thread before loadfile, cover all content types.
+- [ ] **Req 3: Recently Added verification** — Implementation and repository coverage are present: `added_at DESC + id ASC`, 500 limit, index, and a zero fallback. Verify the desktop UI against a populated catalog.
+- [ ] **Req 1: Suggestions verification** — Implemented as a 20-title, session-stable, rating-weighted shelf; mouse drag horizontally reveals hidden cards without changing order. Verify the interaction and shelf density in the desktop UI.
+- [ ] **Req 6: Search UI verification** — Implemented as a contained collapsible pill. Verify expansion, clear-then-collapse, Escape, saved state, and filtered results in the desktop UI.
+- [ ] **Req 4: Fullscreen & OSC Title verification** — Implementation is present: fullscreen hides the header and `force-media-title` is set on the mpv owner thread before `loadfile`. Verify with a local fixture for every content type.
+
+### D-Desktop-20 (new visual/navigation batch)
+
+- [ ] **Main-screen Exit control** — Add an intentional, reachable Exit button from the main screen, with behavior and confirmation appropriate to desktop use.
+- [ ] **Login visual alignment** — Redesign Login to use the same dark-theme layout, colour roles, typography, and component language as the rest of the desktop app.
+- [ ] **Dark splash screen** — Replace the white startup/splash screen with a themed dark presentation consistent with the application palette.
 
 **Old regressions (superseded by D-Desktop-16):**
 - D-Desktop-15-REGR, D-Desktop-16-REGR, D-Desktop-17-REGR, D-Desktop-18-REGR, D-Desktop-19-REGR (scope rolled into Req 4,6,5)
@@ -93,15 +97,6 @@ Phase 5 work depends on open QA items closing. Planned scope:
 - Physical TV validation (once `max_connections` > 1 or test pool available)
 
 ---
-
-## Meta: Documentation Restructuring (Completed 2026-09-16)
-
-- [x] **Phase 1 (2026-09-16):** Consolidate 7 claude-*.md files → PROJECT-BIBLE.md §1-6
-- [x] **Phase 2 (2026-09-16):** Consolidate todo-tree/ → unified TODO.md indexed by area
-- [x] **Phase 3 (2026-09-16):** Extract PRODUCT-BIBLE.md from 11 product-*.md files + update session protocol
-- [x] **Phase 4 (2026-09-16):** Archive old bible-detail/ and todo-tree/ → _archive/ with README
-
-**Rationale:** Tvivo had 17 scattered detail files with 3 conflicting entry points, undefined "relevant" rule, and ~170 lines of mandatory loading per session with guesswork. Restructured following EMR project pattern: single unified PROJECT-BIBLE (§0-8), clear session protocol, zero ambiguity. All content preserved. See MIGRATION-SUMMARY.md for verification checklist.
 
 ---
 

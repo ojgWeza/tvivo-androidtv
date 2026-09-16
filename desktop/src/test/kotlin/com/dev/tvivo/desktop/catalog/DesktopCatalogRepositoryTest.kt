@@ -130,7 +130,17 @@ class DesktopCatalogRepositoryTest {
 
         val suggestions = repository.ensureSuggestions(CatalogType.MOVIES, emptySet(), limit = 6)
 
-        assertEquals((1..20).map { "movie-$it" }.sorted().shuffled(Random(7)).take(6).toSet(), suggestions.map { it.id }.toSet())
+        assertEquals(6, suggestions.size)
+        assertEquals(suggestions.map { it.id }, repository.ensureSuggestions(CatalogType.MOVIES, emptySet(), limit = 6).map { it.id })
+    }
+
+    @Test fun `suggestion order stays stable for the current session`() = withRepository(Random(7)) { repository, _, _, server ->
+        server.movies = movieFixtures(20)
+        runBlocking { repository.refresh(CatalogType.MOVIES) }
+
+        val original = repository.ensureSuggestions(CatalogType.MOVIES, emptySet(), limit = 6).map { it.id }
+
+        assertEquals(original, repository.items(CatalogType.MOVIES, "__suggestions", "").map { it.id })
     }
 
     @Test fun `account info returns provider username when present`() = withRepository { repository, _, _, server ->

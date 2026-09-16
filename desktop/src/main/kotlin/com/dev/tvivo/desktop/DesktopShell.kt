@@ -28,6 +28,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -276,9 +277,9 @@ internal fun DesktopShell(credentials: Credentials, onExit: () -> Unit, onSignOu
     // Series continuation is tracked per-episode (episode_resume), not on the series row's own
     // resume_ms -- "__continue" now resolves that correctly for SERIES too (see items() below).
     EpisodeHomeShelf(episodes, onBrowse = { onBrowse(CatalogType.SERIES, "__continue") }, onPlay = onPlay)
-    HomeShelf("Suggested movies", suggestions[CatalogType.MOVIES].orEmpty(), onBrowse = { onBrowse(CatalogType.MOVIES, "__suggestions") }, onPlay = { onPlay(it, null) })
-    HomeShelf("Suggested series", suggestions[CatalogType.SERIES].orEmpty(), onBrowse = { onBrowse(CatalogType.SERIES, "__suggestions") }, onPlay = { onPlay(it, null) })
-    HomeShelf("Suggested live channels", suggestions[CatalogType.LIVE].orEmpty(), onBrowse = { onBrowse(CatalogType.LIVE, "__suggestions") }, onPlay = { onPlay(it, null) })
+    CatalogType.entries.forEach { type ->
+        HomeShelf("Suggested ${type.title.lowercase()}", suggestions[type].orEmpty(), onBrowse = { onBrowse(type, "__suggestions") }, onPlay = { onPlay(it, null) })
+    }
     // D-Desktop-16a first-run/empty-library state: once the initial load has resolved
     // successfully and there is genuinely nothing to continue, say so with a next action instead
     // of leaving three vanished shelves and no explanation.
@@ -299,8 +300,13 @@ internal fun DesktopShell(credentials: Credentials, onExit: () -> Unit, onSignOu
 // not occupy space or explain its own absence.
 @Composable private fun HomeShelf(title: String, items: List<DesktopItem>, onBrowse: () -> Unit, onPlay: (DesktopItem) -> Unit) {
     if (items.isEmpty()) return
-    Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 30.dp, bottom = 14.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } }; Text("See all", color = Accent, modifier = Modifier.align(Alignment.CenterVertically).clickable(onClick = onBrowse).padding(12.dp)) }
+    val scrollState = rememberScrollState()
+    Row(Modifier.fillMaxWidth().padding(top = 30.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        if (items.size > 4) Text("Drag to explore", color = Dim, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 12.dp))
+        Text("See all", color = Accent, modifier = Modifier.clickable(onClick = onBrowse).padding(vertical = 8.dp))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(scrollState)) { items.forEach { item -> Box(Modifier.width(190.dp)) { CatalogCard(item) { onPlay(item) } } } }
 }
 
 @Composable private fun EpisodeHomeShelf(items: List<DesktopSeriesResume>, onBrowse: () -> Unit, onPlay: (DesktopItem, DesktopEpisode) -> Unit) {
@@ -329,10 +335,28 @@ internal fun DesktopShell(credentials: Credentials, onExit: () -> Unit, onSignOu
             LazyColumn { items(categories.filter { it.name.contains(saved.categoryFilter, ignoreCase = true) }, key = { it.id }) { category -> RailButton(category.name, saved.filter == category.id) { saved.filter = category.id } } }
         }
         Column(Modifier.weight(1f).padding(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); if (saved.searchExpanded) { OutlinedTextField(saved.query, { saved.query = it }, label = { Text("Search ${type.title}") }, singleLine = true, modifier = Modifier.focusRequester(searchFocus)); OutlinedButton(onClick = { saved.query = "" }, modifier = Modifier.padding(start = 8.dp)) { Icon(Icons.Default.Close, contentDescription = "Clear search") } } else { OutlinedButton(onClick = { saved.searchExpanded = true }) { Icon(Icons.Default.Search, contentDescription = "Search ${type.title}") } }; Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") }; BackControl(onBack, Modifier.padding(start = 10.dp)) }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); SearchPill(type, saved, searchFocus); Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") }; BackControl(onBack, Modifier.padding(start = 10.dp)) }
             Text(message, color = Dim, modifier = Modifier.padding(vertical = 10.dp))
             LazyVerticalGrid(GridCells.Adaptive(if (type == CatalogType.LIVE) 170.dp else 140.dp), state = saved.gridStateFor(saved.filter), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) { items(saved.items, key = { it.id }) { item -> CatalogCard(item, highlighted = item.id == saved.highlightedId) { onDetail(item) } } }
         }
+    }
+}
+
+@Composable private fun SearchPill(type: CatalogType, saved: BrowseSavedState, focusRequester: FocusRequester) {
+    val shape = RoundedCornerShape(24.dp)
+    if (saved.searchExpanded) {
+        OutlinedTextField(
+            value = saved.query,
+            onValueChange = { saved.query = it },
+            placeholder = { Text("Search ${type.title}") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search ${type.title}") },
+            trailingIcon = { IconButton(onClick = { if (saved.query.isBlank()) saved.searchExpanded = false else saved.query = "" }) { Icon(Icons.Default.Close, contentDescription = if (saved.query.isBlank()) "Collapse search" else "Clear search") } },
+            singleLine = true,
+            shape = shape,
+            modifier = Modifier.width(300.dp).focusRequester(focusRequester),
+        )
+    } else {
+        OutlinedButton(onClick = { saved.searchExpanded = true }, shape = shape) { Icon(Icons.Default.Search, contentDescription = null); Text("Search", modifier = Modifier.padding(start = 6.dp)) }
     }
 }
 

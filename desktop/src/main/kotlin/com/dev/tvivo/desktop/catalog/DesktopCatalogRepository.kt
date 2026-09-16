@@ -136,7 +136,10 @@ internal class DesktopCatalogRepository(
                 if (!virtual) statement.setString(i++, category)
                 if (category == "__suggestions") suggestions.forEach { statement.setString(i++, it) }
                 statement.setString(i, "%${query.trim()}%")
-                statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+                statement.executeQuery().use { rows ->
+                    buildList { while (rows.next()) add(item(rows, type)) }
+                        .let { result -> if (category == "__suggestions") result.sortedBy { suggestions.indexOf(it.id) } else result }
+                }
             }
         }
     }
@@ -156,24 +159,42 @@ internal class DesktopCatalogRepository(
     }
 
     @Synchronized
-    fun ensureSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> {
+    fun ensureSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 20): List<DesktopItem> {
         if (suggestionIds[type] == null) regenerateSuggestions(type, excludeIds, limit)
         return items(type, "__suggestions", "")
     }
 
     @Synchronized
-    fun regenerateSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> = connection().use { db ->
+    fun regenerateSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 20): List<DesktopItem> = connection().use { db ->
         val exclusions = excludeIds.toList()
         val exclusionClause = if (exclusions.isEmpty()) "" else " AND id NOT IN (${exclusions.joinToString(",") { "?" }})"
         db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY id ASC").use { statement ->
             var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
             exclusions.forEach { statement.setString(i++, it) }
             statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
-                .shuffled(random).take(limit).also { items ->
+                .weightedShuffle().take(limit).also { items ->
                 suggestionIds[type] = items.map { it.id }
             }
         }
     }
+
+    private fun List<DesktopItem>.weightedShuffle(): List<DesktopItem> {
+        val remaining = toMutableList()
+        return buildList(size) {
+            while (remaining.isNotEmpty()) {
+                val total = remaining.sumOf { it.suggestionWeight() }
+                var pick = random.nextDouble(total)
+                val index = remaining.indexOfFirst { item ->
+                    pick -= item.suggestionWeight()
+                    pick <= 0.0
+                }.takeIf { it >= 0 } ?: remaining.lastIndex
+                add(remaining.removeAt(index))
+            }
+        }
+    }
+
+    private fun DesktopItem.suggestionWeight(): Double = rating?.trim()?.toDoubleOrNull()
+        ?.coerceIn(0.0, 10.0)?.plus(1.0) ?: 1.0
 
     suspend fun refresh(type: CatalogType) = refreshMutex.withLock {
         val categories = request("get_${type.apiName}_categories").asJsonArray

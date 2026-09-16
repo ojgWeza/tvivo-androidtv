@@ -1,6 +1,6 @@
 # D-Desktop-16 Implementation Plan
 
-**Status:** Approved (Codex review + user confirmation)  
+**Status:** Partially implemented; desktop verification pending
 **Approved:** 2026-09-16  
 **Batch:** 6 user requirements across suggestions, account, recently-added, fullscreen/OSC, back control, search UI
 
@@ -207,4 +207,3 @@
 - Verify search state (expanded/collapsed, query, filter) survives Browse→Detail→Browse.
 - Verify fullscreen Back control placement and accessibility.
 - Manual testing uses local fixture only; no real provider streams.
-
