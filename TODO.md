@@ -25,6 +25,16 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 - [ ] **Login visual alignment** — Redesign Login to use the same dark-theme layout, colour roles, typography, and component language as the rest of the desktop app.
 - [ ] **Dark splash screen** — Replace the white startup/splash screen with a themed dark presentation consistent with the application palette.
 
+### Desktop distribution & performance
+
+- [ ] **Windows distribution (MSI)** — Configure Compose native Windows packaging for a signed-ready MSI installer: bundled compatible JRE, application icon, product/version/vendor metadata, Start Menu and uninstall integration, and the libmpv runtime archive. Produce an optional portable EXE only if a verified use case remains after the MSI path works.
+- [ ] **Release documentation correction** — Update `desktop/README.md` to describe the current libmpv-based player/runtime accurately; it still refers to removed LibVLC code.
+- [ ] **Artwork cache and decode budget** — Replace full-resolution `URL.readBytes()` image loading with cancellable, card-size-downsampled artwork; retain a bounded memory cache and bounded disk cache so scrolling does not repeatedly download/decode images or grow the heap without limit.
+- [ ] **Suggestion sampling at catalog scale** — Replace the full-catalog quadratic `weightedShuffle()` with deterministic-testable weighted sampling without replacement that selects only the required shelf size (20), without materializing/shuffling every catalog item.
+- [ ] **Catalog browse memory/query budget** — Profile the largest provider categories and introduce bounded/paged retrieval where needed; preserve complete discoverability while avoiding a full catalog/result set and artwork data accumulating in RAM.
+- [ ] **Player lifecycle audit** — Verify that leaving playback immediately releases mpv native resources, video surfaces, callbacks, and retained frames; add focused tests/diagnostics that never open a provider stream.
+- [ ] **Desktop performance acceptance budget** — Define and record baseline/target measurements for idle Home, 60-second large-catalog scrolling, and local-fixture playback: working set, private bytes, CPU, network/image-cache behavior, and post-navigation recovery. Verify no sustained memory growth across repeat cycles.
+
 **Old regressions (superseded by D-Desktop-16):**
 - D-Desktop-15-REGR, D-Desktop-16-REGR, D-Desktop-17-REGR, D-Desktop-18-REGR, D-Desktop-19-REGR (scope rolled into Req 4,6,5)
 - D-Desktop-16f, D-Desktop-17 (handled by Req 4)
