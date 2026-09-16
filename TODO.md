@@ -25,6 +25,10 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 - [ ] **Login visual alignment** — Redesign Login to use the same dark-theme layout, colour roles, typography, and component language as the rest of the desktop app.
 - [ ] **Dark splash screen** — Replace the white startup/splash screen with a themed dark presentation consistent with the application palette.
 
+### D-Desktop-21 — Tvivo-owned player controls (planned)
+
+- [ ] **Replace libmpv OSC** — Implement `D-DESKTOP-21-OWNED-PLAYER-OVERLAY-PLAN.md`: disable mpv's OSC and ship a fully Tvivo-owned Compose overlay controller. Begin with a libmpv render-API feasibility spike because the current heavyweight `wid` Canvas cannot safely accept Compose controls above it. Fullscreen/cinema mode is blocked on fixture verification because prior mpv-property attempts could not resize the Compose parent.
+
 ### Desktop distribution & performance
 
 - [ ] **Windows distribution (MSI)** — Configure Compose native Windows packaging for a signed-ready MSI installer: bundled compatible JRE, application icon, product/version/vendor metadata, Start Menu and uninstall integration, and the libmpv runtime archive. Produce an optional portable EXE only if a verified use case remains after the MSI path works.
