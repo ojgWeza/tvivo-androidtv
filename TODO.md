@@ -89,6 +89,17 @@ Phase 5 work depends on open QA items closing. Planned scope:
 
 ---
 
+## Meta: Documentation Restructuring (Completed 2026-09-16, Phase 3-4 pending)
+
+- [x] **Phase 1 (2026-09-16):** Consolidate 17 detail files → PROJECT-BIBLE.md + simplified CLAUDE.md
+- [x] **Phase 2 (2026-09-16):** Consolidate todo-tree/ → unified TODO.md indexed by area
+- [ ] **Phase 3 (deferred):** Extract PRODUCT-BIBLE.md from 9 product-*.md files (optional, low priority)
+- [ ] **Phase 4 (deferred):** Archive/delete old bible-detail/ and todo-tree/ directories after Phase 3 verification
+
+**Rationale:** Tvivo had 17 scattered detail files with 3 conflicting entry points, undefined "relevant" rule, and ~170 lines of mandatory loading per session with guesswork. Restructured following EMR project pattern: single unified PROJECT-BIBLE (§0-8), clear session protocol, zero ambiguity. All content preserved. See MIGRATION-SUMMARY.md for verification checklist.
+
+---
+
 ## Out of Scope (Explicitly Deferred or Declined)
 
 See `PROJECT-BIBLE.md` §5 for rationale. These include:
