@@ -97,23 +97,129 @@ Each chunk is independently reviewable. Do not begin the next chunk until its su
 
 ### Chunk 0 — Baseline and render-API contract
 
-**Purpose:** establish a measurable baseline and isolate the minimum native API surface before changing production playback.
+**Purpose:** establish a testable, Windows-x64-only render contract before any production player/UI change. Chunk 0 is documentation, inspection, bindings-only work, and fixture preparation; it must not alter `MpvPlayer`'s `wid` path, disable OSC, or add an overlay.
 
-**Workload:**
+#### 0.1 Decision and non-negotiable integration shape
 
-- Record the exact current local fixture(s), window size, playback state, CPU, working set, and resize behavior of the `wid` player.
-- Identify the libmpv render API functions, render parameters, OpenGL/Skia interop requirements, callback/thread rules, and destruction order required for Windows x64 only.
-- Add no production UI. If bindings are introduced, place them behind a new internal prototype boundary rather than altering `MpvPlayer`'s production path.
-- Write the prototype's thread-ownership contract: Compose render thread, mpv owner/event thread, and any graphics-context thread must never call libmpv concurrently unless the render API explicitly permits it.
-- Define exact comparison thresholds before implementation: no persistent CPU increase above the baseline by more than 10%, no continually rising working set over five create/play/dispose cycles, and no dropped/black frame after a resize.
+`Full screen` is **cinema mode**, not an OS window-state transition and not the mpv `fullscreen` property. `Main.kt` already owns one undecorated `WindowPlacement.Fullscreen` window. Chunk 5 changes only the composition inside that existing window: normal player chrome versus picture-first chrome-hiding. It must not call `WindowState.placement`, create/reparent a native window, change display mode, or ask mpv to create/manage a fullscreen window. If a future product requirement needs exclusive/fullscreen window-state behavior, it is a separately planned feature.
 
-**Success criteria:**
+The only acceptable render-API route is one OpenGL context that is both current and owned by the actual Skiko layer which Compose Desktop uses to paint this `ComposeWindow`. mpv renders first into an off-screen OpenGL FBO owned by the prototype; Skia then draws that texture as the video background in the same Skiko frame; ordinary Compose draws the controller above it. There is no `SwingPanel`, `Canvas`, child HWND, second GL window, readback to CPU, or attempt to place Compose above a heavyweight component.
 
-- The required native symbols, parameter structs, ownership, and teardown order are documented in the plan or implementation comments from primary libmpv documentation.
-- The baseline is recorded for one seekable fixture and one live-style/non-seekable fixture, without opening a provider stream.
-- The prototype has a bounded file/API scope and does not replace `wid` yet.
+Compose Desktop/Skiko does not promise a general stable public API for injecting arbitrary OpenGL into the compositor. Therefore the spike must pin and inspect the exact Compose/Skiko versions resolved by this project and prove one of these equivalent mechanisms **before coding the player migration**:
 
-**Stop conditions:** missing render API support in the bundled libmpv, uncertain graphics-context ownership, or no viable Compose/Skia interop route. Stop and report rather than improvising a renderer.
+1. a supported Skiko render-delegate/frame hook on the existing `ComposeWindow` `SkiaLayer` which runs while its GL context is current and before the Compose scene is painted; or
+2. a version-pinned, isolated adapter around the exact Skiko API used by the resolved runtime that obtains the current `DirectContext`/GL context and performs the ordered frame below.
+
+The adapter is prototype-only, has a compile-time version guard/documented dependency, and may not use reflection into Skiko internals. A second shared WGL context is rejected: mpv requires the same current GL context for a render context, and sharing textures would add unproven synchronization/lifecycle behavior. If the resolved runtime is not OpenGL-backed, lacks a callable before-Compose hook, or cannot wrap/use the FBO texture in Skia without CPU copying, Chunk 0 stops. The team must report that no safe Compose Desktop/Skiko OpenGL path was proven; it must not substitute software rendering, a heavyweight sibling, or an undocumented private-API hack.
+
+Per frame, the adapter must bind a private RGBA8 FBO sized in **physical pixels** (`round(logicalSize * density)`), call mpv, restore the GL state it changes, wrap/draw the FBO texture with Skia, then let Compose paint chrome. The initial acceptance format is SDR 8-bit sRGB only. The FBO is recreated only on a committed physical-size change, never on every pointer/control recomposition.
+
+#### 0.2 Thread, callback, and lifecycle contract
+
+There are exactly two libmpv lanes. No lane waits synchronously for the other.
+
+```text
+Compose/Skiko render thread (the current GL context)       MpvPlayer owner/event thread
+-----------------------------------------------------       ----------------------------
+create GL FBO + mpv_render_context_create()  <--- async ---- create/init mpv core; commands;
+  (only while Skiko GL context is current)                 mpv_wait_event/property callbacks
+set update callback; retain callback objects                never call mpv_render_*
+        |                                                               |
+        | update callback: atomic pendingRender=true;                  |
+        | enqueue/request Skiko repaint only; NO mpv/GL call            |
+        v                                                               |
+next Skiko frame: update(); if FRAME render(FBO);                       |
+draw FBO texture with Skia; compose overlay; present                    |
+report_swap() after that frame is presented ----------------------------+
+```
+
+- The **owner/event thread** exclusively owns `mpv_create`, options, `mpv_initialize`, load/stop/seek/pause/property calls, event draining, and final `mpv_terminate_destroy`. It publishes immutable UI state and never makes a GL context current or invokes `mpv_render_*`.
+- The **Skiko render thread** exclusively owns `mpv_render_context_create`, `mpv_render_context_update`, `mpv_render_context_render`, `mpv_render_context_report_swap`, callback installation/removal, and `mpv_render_context_free`, always with that same Skiko OpenGL context current. The creation thread must also be recorded; the bundled DLL must report an API new enough for cross-thread rendering only if that is ever contemplated. This design deliberately uses one render thread throughout.
+- `MPV_RENDER_PARAM_ADVANCED_CONTROL=1` is required. The render thread must never wait for the mpv core; owner-thread commands that might otherwise block must use the existing asynchronous command path. The update callback must be installed immediately after create and each callback is acknowledged by one later `update()`; multiple callbacks may coalesce into one frame.
+- The native update callback may arrive on an arbitrary mpv thread. It performs only `pendingRender.compareAndSet(false, true)` plus a thread-safe Skiko repaint request. It does not call `update`, `render`, any other mpv API, GL, Compose state, or throw through JNA. Callback references and their context pointer remain strongly retained until unregistration and render-context free complete.
+- Frame scheduling is edge-coalesced: callback -> at most one queued repaint; render thread clears/loops the atomic around `update()` so a callback racing `update()` schedules another frame. Render only when `update() & MPV_RENDER_UPDATE_FRAME != 0`, except a resize/restore invalidation explicitly requests redraw. Call `report_swap()` after the Skiko frame containing the mpv frame is presented, with `mpv_get_time_us()` sampled on the owner thread or a documented equivalent; failure to establish a trustworthy presentation point means omit `report_swap` and record it, rather than inventing timestamps.
+
+Teardown is a barrier, not best effort:
+
+```text
+UI disposal -> reject new commands/repaint requests -> owner stops/load generation invalidated
+ -> render thread: make Skiko GL current -> unregister callback (null) -> drain/inhibit queued repaint
+ -> mpv_render_context_free(renderCtx) -> delete FBO/Skia texture while GL is current
+ -> acknowledge render teardown -> owner thread mpv_terminate_destroy(handle) -> join/clear references
+```
+
+`mpv_render_context_free` must happen before destruction of its mpv core; destroying the GL context/FBO first is forbidden. UI disposal waits only for the bounded render-teardown acknowledgement; timeout is a failed lifecycle diagnostic, not permission to destroy mpv anyway. Context loss follows the same order: stop rendering, free the old render context while the old context is current if possible; otherwise fail the prototype safely and destroy neither core nor resources out of order. No render call is permitted after free or during a rapid load/close generation change.
+
+#### 0.3 Required `MpvLibrary` ABI surface and DLL validation
+
+Add only a prototype-scoped `MpvRenderLibrary` portion of `MpvLibrary.kt`. It must bind these exported functions with JNA's default Windows x64 C calling convention:
+
+- `mpv_render_context_create(PointerByReference, Pointer mpv, MpvRenderParam[] params): Int`
+- `mpv_render_context_render(Pointer, MpvRenderParam[] params): Int`
+- `mpv_render_context_update(Pointer): Long` (unsigned 64-bit bitset represented as `Long`)
+- `mpv_render_context_report_swap(Pointer)` and `mpv_render_context_free(Pointer)`
+- `mpv_render_context_set_update_callback(Pointer, MpvRenderUpdateCallback?, Pointer?)`
+- `mpv_get_time_us(Pointer): Long`, only if presentation timing is implemented.
+
+Required callback types are retained Kotlin/JNA objects: `MpvRenderUpdateCallback : Callback` (`void invoke(Pointer)`), and `MpvOpenGlGetProcAddressCallback : Callback` (`Pointer invoke(Pointer ctx, String name)`). The GL callback is passed through `MpvOpenGlInitParams`; it resolves every requested symbol from the **current Skiko/WGL context**, using `wglGetProcAddress` with documented `GetProcAddress(opengl32.dll)` fallback for WGL sentinel returns. It must not return a pointer from a temporary library handle.
+
+ABI structures use `@Structure.FieldOrder` and are allocated/read/written before native calls:
+
+| C declaration | JNA layout on Windows x64 |
+| --- | --- |
+| `mpv_render_param { int type; void *data; }` | `Int type`, `Pointer data` (16 bytes including x64 padding) |
+| `mpv_opengl_init_params { get_proc_address; void *get_proc_address_ctx; }` | callback pointer, `Pointer` (16 bytes) |
+| `mpv_opengl_fbo { int fbo; int w; int h; int internal_format; }` | four `Int`s (16 bytes) |
+| parameter arrays | native contiguous array, terminated by `{ MPV_RENDER_PARAM_INVALID, null }` |
+
+Use `MPV_RENDER_API_TYPE_OPENGL` (`"opengl"`), `MPV_RENDER_PARAM_API_TYPE=1`, `OPENGL_INIT_PARAMS=2`, `OPENGL_FBO=3`, `FLIP_Y=4`, `DEPTH=5`, `ADVANCED_CONTROL=10`, and `MPV_RENDER_UPDATE_FRAME=1`. The create parameter array contains API type, GL init params, advanced-control `int(1)`, terminator. Render parameter array contains current FBO, `flip_y=1` for the GL FBO convention, depth `8`, terminator. Keep all `Memory`, structure, callback, string, and parameter-array objects strongly reachable for the native call/lifetime they serve; specifically GL-init callback/context live through render-context free.
+
+Before the prototype is allowed to use a pixel:
+
+1. Load the bundled `libmpv-2.dll` only; call `mpv_client_api_version`, decode major/minor, and record it plus DLL SHA-256 and package source. Fail if it is below the documented render-API baseline or lacks the required exports (`NativeLibrary.getInstance(...).getFunction(...)`), rather than relying on a development DLL.
+2. Compare field offsets/sizes (`Structure.size()`) with a tiny header-derived Windows-x64 C ABI probe built against the **bundled archive's headers**, or a checked-in generated expected-layout table whose header version/SHA is recorded. Do not infer layout from Kotlin/JNA behavior.
+3. Create/free one render context against a current throwaway Skiko GL frame with no media, then run the fixture matrix. Log every negative mpv error with `mpv_error_string` and preserve the version/layout result as Chunk-0 evidence.
+
+#### 0.4 Fixture and baseline contract
+
+No provider URL, credential, or live account is used. Baseline `wid` and prototype observations use the same machine, build, display, power mode, 1920x1080 logical window (and one 150%-DPI monitor pass), audio setting, and a 60-second steady-play period after a 10-second settle. Record private bytes, working set, process CPU averaged over 60 seconds, first frame time, frame/black-frame observations, and five create/play/dispose cycles; keep raw measurement command/output as an artifact and summarize only values in the plan/evidence.
+
+| Fixture | Required purpose | Source/status |
+| --- | --- | --- |
+| `sintel-trailer-12s-subtitles.mkv` (751,857 bytes; SHA-256 `5b9d9af10aaaf19ddfbb18fdbf7ae07f52a91112ed20dc0b630e58df0681494a`; 12.031000 s) | pause, resume, absolute/relative seek, subtitle compositing | H.264 High, 854×480, AAC-LC stereo, embedded SubRip/English fixture caption. Derived from the 480p Sintel trailer at `http://download.blender.org/durian/trailer/sintel_trailer-480p.mp4`. Durian Open Movie Project, CC BY 3.0; attribution `© copyright Blender Foundation | durian.blender.org`. See `desktop/src/test/resources/fixtures/README.md`. |
+| `sintel-trailer-12s.ts` (893,940 bytes; SHA-256 `c4cac9daf488e9d4a754cde6eb9a0547ae82247c06c43576be944ca40cb9f2f9`; 12.010667 s) | direct-file TS demux/decode, seeking where supported | H.264 High, 854×480, AAC-LC stereo. Same Sintel source/license/attribution and derivation README. This TS fixture is seekable and is not evidence of live/non-seekable behavior. |
+| Live-style, non-seekable input | absent/indefinite duration, rejected seek, no false timeline, stop/error behavior | Fixture-only `:desktop:fixtureLiveRelay` serves `sintel-trailer-12s.ts` on loopback at `http://127.0.0.1:8765/fixture`, omits `Content-Length`, rejects `Range`, and repeats bytes slowly. Start manually after approval with `./gradlew :desktop:fixtureLiveRelay`; stop with Ctrl+C. No provider data. |
+
+The plan must name each exact file, checksum, codecs, duration, license/source, and how the relay is started. If an MKV/TS fixture is unavailable, obtain a licensed sample before Chunk 1; if the non-seekable relay cannot make mpv expose unavailable/non-finite duration, document the observed behavior and add a deterministic fixture that can. Do not paper over it by hard-coding `CatalogType.LIVE` as non-seekable.
+
+Baseline/prototype pass thresholds are: no sustained CPU increase greater than 10% of the `wid` baseline; after each of five fully disposed cycles, working set must return to within `max(10%, 100 MiB)` of its post-settle baseline and show no monotonic increase; no persistent black/corrupt frame after normal/rapid resize, monitor-DPI move, minimize/restore, or cinema chrome change; and no duplicate native render context/player. These are gates, not aspirational targets.
+
+#### 0.5 Playback/control behavior contract for later chunks
+
+- **Stop/resume:** `stop` invalidates the active generation, sends exactly one owner-thread stop command, clears position/duration/buffering state, and remains on the player route with the terminal `Stopped` state. Back/route disposal is separate: it records a non-live position only if the existing five-second rule permits it, then tears down once. Stop itself creates no resume write. New load, Next episode, Back, and error each invalidate stale callbacks before publishing their own state.
+- **Seek and drag:** only finite duration `> 0` is seekable. Button seeks are clamped to `[0, duration]`. Slider press snapshots the displayed position; while dragging, UI displays the drag target and sends no continuous native seek. Release/cancel sends at most one absolute seek (none when cancelled/no material delta); keyboard repeats are coalesced to one owner-thread command per 100 ms, with a final command on key-up. A new load/stop/dispose cancels pending seek work by generation.
+- **Volume:** `PlayerUiState` holds `volumePercent: Int` clamped 0..100 and `muted: Boolean`, initialized/observed from mpv `volume` (`MPV_FORMAT_DOUBLE`) and `mute` (`MPV_FORMAT_FLAG`). Owner-thread APIs are `setVolume(percent)`, `adjustVolume(delta)`, and `setMuted(Boolean)`/`toggleMuted()`, using mpv properties; mute preserves the selected nonzero volume. The dock has a labelled mute toggle and labelled 0–100% slider, keyboard-accessible with visible value and focus; `M` toggles mute and Up/Down adjust 5% only when no control owns the key. Accessible names announce e.g. “Mute, on” and “Volume, 45 percent”; unavailable audio disables controls truthfully rather than pretending volume changed.
+- **Focus-aware keys:** a window-level dispatcher acts only when the player route is active and no text input, menu/dropdown, dialog, tooltip/actionable error, button, or slider owns the event. In that neutral video focus, Space/K toggle pause; Left/Right seek 5 seconds; Shift+Left/Right seek 30 seconds; S stops; F toggles cinema; Esc exits cinema first, otherwise delegates to normal Back. When a Compose button/slider has focus, Enter/Space and arrows retain that component's standard behavior; global transport never steals them. Text input receives all printable/navigation/editing keys. Dialog/menu handlers get Escape first. Tooltips never take focus; an actionable error does, suppressing transport keys until dismissed.
+- **Auto-hide:** cinema controls begin visible for 2.5 seconds and fade over 120 ms only while playback is active, pointer is not over a control/menu/tooltip, no dropdown/dialog/actionable error is open, no control has keyboard focus, no slider is dragging, and no pointer press is active. Pointer movement over video, a supported neutral-video key, or entry into a control reveals/resets the timer. Dragging, menus, tooltips associated with a hovered control, focus traversal, paused/buffering/ended/actionable-error states keep chrome visible. Leaving a control may restart the timer only after all those holds clear. Hiding changes alpha/hit testing only; it never resizes/reloads the render surface.
+
+#### 0.6 Episode cache and deterministic successor contract
+
+Hoist episode loading from `EpisodeScreen` into a route-owned `SeriesEpisodeStore` in `DesktopShell` (or equivalent presenter) keyed by `seriesId`. It exposes `Loading/Ready(immutable ordered list)/Error`, deduplicates an in-flight fetch, retains a successful list while the player route is open, and is passed to both episode picker and `PlayerScreen`. `Next episode` reads only that `Ready` snapshot—no request is initiated by visibility or click. A direct resume-route episode that has no ready snapshot may load the list once before enabling Next; failure leaves Next absent and playback unaffected.
+
+Canonical ordering is total and deterministic: season key first, episode key second, then normalized nonblank title, then lexical `id`. A numeric key is a trimmed string matching `^[+]?[0-9]+$`, parsed as arbitrary-precision non-negative integer; numeric values sort before non-numeric values; non-numeric/blank values sort by `trim().lowercase(Locale.ROOT)` with blank last. Duplicate season/episode numbers are **not** silently collapsed: their title/id tie-breakers provide stable order, and the successor is the next element after the current `episode.id` in the full ordered list. Missing current ID, duplicate ID, or no following element means no Next button. This explicitly handles blank, duplicate, formatted (`01`), and non-numeric season/`episode_num` values without provider-dependent iteration order.
+
+#### 0.7 Expanded render gate and evidence
+
+Chunk 1 may start only when the following matrix has named procedure and evidence rows: normal/rapid resize; rapid load/seek/stop/dispose; 100% and 150% DPI plus moving across monitors; minimize/restore; simulated/reported GL context loss; MKV subtitles on/off; SDR color/levels; HDR input behavior; and hardware decoding (`auto`, then documented software fallback only for diagnosis). HDR is not accepted merely because it displays: the initial product contract is SDR output with no crash/washed-out uncontrolled conversion; native HDR/color-management delivery requires a separate approved design. `hwdec` is accepted only if the bundled DLL/Skiko GL backend supports it without corruption or leaks; otherwise the diagnostic result is recorded and the user decides whether an explicit supported fallback is acceptable.
+
+**Success criteria:** the exact current fixtures/baseline are recorded; the pinned Skiko integration path, ABI validation result, callback retention, and teardown barrier are documented; every behavior above has a testable owner; and the prototype boundary is limited to render bindings/adapter/fixture diagnostics. No production route changes in Chunk 0.
+
+**Stop conditions:** missing required DLL export or ABI proof; unsupported/currently inaccessible Skiko OpenGL context; no safe before-Compose frame hook; inability to create/free in the stated order; non-seekable fixture absent; any unresolved context-loss/DPI/hwdec/subtitle/color outcome; or a need for private/reflection-based Skiko access. Stop and report evidence rather than improvising a renderer.
+
+#### 0.8 Current-state divergence to resolve before Chunk 1
+
+- `MpvPlayer.close()` currently enqueues a termination marker and returns without joining (`MpvPlayer.kt:389-405`). The Chunk 0 teardown barrier requires a bounded, acknowledged render-teardown-then-mpv-terminate sequence, so `close()` must become bounded blocking (or awaitable) teardown before render-context work can rely on it.
+- The `handle` assignment is a pre-existing ownership/visibility correctness question: the code assigns it during initialisation (`MpvPlayer.kt:92`) despite the owner-thread-only mutation comment (`MpvPlayer.kt:46`). Resolve this, or explicitly accept it as safe and document why, before the render thread depends on the handle's visibility guarantees.
 
 ### Chunk 1 — Render-API prototype
 

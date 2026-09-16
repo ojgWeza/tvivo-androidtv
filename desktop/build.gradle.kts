@@ -54,3 +54,15 @@ tasks.withType<org.gradle.api.tasks.JavaExec>().configureEach {
         systemProperty("tvivo.debug.verbose", flag)
     }
 }
+
+tasks.register<org.gradle.api.tasks.JavaExec>("fixtureLiveRelay") {
+    group = "verification"
+    description = "Serve the local TS fixture as a loopback-only, non-seekable live-style input."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.dev.tvivo.desktop.FixtureLiveRelayKt")
+    args(
+        "--fixture",
+        layout.projectDirectory.file("src/test/resources/fixtures/sintel-trailer-12s.ts").asFile.absolutePath,
+    )
+}
