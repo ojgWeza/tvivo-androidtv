@@ -110,7 +110,7 @@ internal class DesktopCatalogRepository(
             db.prepareStatement(
                 "SELECT i.id,i.category_id,i.title,i.artwork,i.extension,i.rating,i.plot FROM items i " +
                     "JOIN (SELECT series_id, MAX(updated_at) AS last_watched FROM episode_resume WHERE account_id=? AND position_ms>0 GROUP BY series_id) e " +
-                    "ON e.series_id=i.id WHERE i.account_id=? AND i.type=? AND i.title LIKE ? ORDER BY e.last_watched DESC LIMIT 500"
+                    "ON e.series_id=i.id WHERE i.account_id=? AND i.type=? AND i.title LIKE ? ORDER BY e.last_watched DESC"
             ).use { statement ->
                 statement.setString(1, accountId); statement.setString(2, accountId); statement.setString(3, type.name); statement.setString(4, "%${query.trim()}%")
                 statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
@@ -127,7 +127,9 @@ internal class DesktopCatalogRepository(
                 else -> "category_id=?"
             }
             val order = if (category == "__recent") "first_indexed_at DESC" else "title COLLATE NOCASE"
-            db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order LIMIT 500").use { statement ->
+            // Browse results must be complete: a provider category may legitimately exceed 500
+            // rows, and truncating it makes content impossible to discover from the desktop app.
+            db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order").use { statement ->
                 var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
                 if (!virtual) statement.setString(i++, category)
                 if (category == "__suggestions") suggestions.forEach { statement.setString(i++, it) }
@@ -338,6 +340,23 @@ internal class DesktopCatalogRepository(
                 """)
                 sql.execute("UPDATE schema_version SET version=6")
             }
+            if (version < 7) {
+                sql.executeQuery("SELECT account_id, type, id, title FROM items WHERE title LIKE '%(%' OR title LIKE '%[%'").use { rows ->
+                    buildList {
+                        while (rows.next()) add(Triple(rows.getString(1), rows.getString(2), rows.getString(3)) to cleanTitle(rows.getString(4)))
+                    }
+                }.forEach { (accountTypeId, cleanedTitle) ->
+                    val (accountId, type, id) = accountTypeId
+                    db.prepareStatement("UPDATE items SET title=? WHERE account_id=? AND type=? AND id=?").use { update ->
+                        update.setString(1, cleanedTitle)
+                        update.setString(2, accountId)
+                        update.setString(3, type)
+                        update.setString(4, id)
+                        update.executeUpdate()
+                    }
+                }
+                sql.execute("UPDATE schema_version SET version=7")
+            }
         }
     }
     private fun insertItem(statement: java.sql.PreparedStatement, type: CatalogType, row: JsonObject) {
@@ -351,7 +370,7 @@ internal class DesktopCatalogRepository(
     }
     private fun java.sql.ResultSet.getNullableLong(index: Int): Long? = getLong(index).takeUnless { wasNull() }
     private fun PreparedStatement.setNullableLong(index: Int, value: Long?) = if (value == null) setNull(index, Types.INTEGER) else setLong(index, value)
-    private fun item(rows: java.sql.ResultSet, type: CatalogType) = DesktopItem(rows.getString(1), type, rows.getString(2), rows.getString(3), rows.getString(4), rows.getString(5), rows.getString(6), rows.getString(7))
+    private fun item(rows: java.sql.ResultSet, type: CatalogType) = DesktopItem(rows.getString(1), type, rows.getString(2), cleanTitle(rows.getString(3)), rows.getString(4), rows.getString(5), rows.getString(6), rows.getString(7))
     private fun JsonObject.string(name: String): String? = get(name)?.takeUnless { it.isJsonNull }?.asString
     override fun close() = Unit
 }
