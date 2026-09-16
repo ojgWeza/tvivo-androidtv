@@ -10,15 +10,20 @@ See `TODO-ARCHIVE.md` for closed items and `docs/decisions.md` for rationale.
 
 ## Desktop (Priority — active batch)
 
-- [ ] **D-Desktop-15-REGR:** Full-screen launch retains Windows title bar/frame. Entry screen launches but window remains windowed; apply full-screen at app launch time.
-- [ ] **D-Desktop-16-REGR:** Malformed titles remain (e.g., "( ) HD", "()", "0 HD"). Verify `NameNormalizer` applied to all title sources, not just main grid.
-- [ ] **D-Desktop-17-REGR:** Ratings must render as star + number, no fallback. Missing ratings should omit entirely, not fall back to "Movies"/"Series" text.
-- [ ] **D-Desktop-18-REGR:** Suggested Movies "See all" link vertically clipped. Needs reserved space or removal (owner prefers removal).
-- [ ] **D-Desktop-19-REGR:** Suggested Movies unsorted or wrong order. Apply descending rating sort in `DesktopCatalogRepository.kt`.
-- [ ] **D-Desktop-16f:** Home's series `Continue watching` shelf shows at most one resumable episode per series (most recent playback).
-- [ ] **D-Desktop-17:** Player should open truly full screen as default state, holding full-screen on open.
-- [ ] **Season/category raw-label bypass:** `SeriesInfoParser.kt`'s season-rail label and `CategoryListParser.kt`'s `category_name` render raw provider strings, bypassing `NameNormalizer`. Low priority — investigate only if observed in practice.
-- [ ] **D-Desktop-1..14:** See `63-section.md` for detailed list. D-Desktop-14 closed 2026-09-15 (mpv migration); full-screen, title layout, episode-picker, rating defects remain open.
+### D-Desktop-16 (Approved 2026-09-16, see `D-DESKTOP-16-PLAN.md`)
+
+Six user requirements across suggestions, account display, recently-added ordering, fullscreen/OSC, back control consistency, and search UI. Implementation sequence: Req3 → Req2 → Req1 → Req6 → Req5 → Req4.
+
+- [ ] **Req 3: Recently Added (500 limit, provider timestamp)** — Change `__recent` sort to `added_at DESC + id ASC`, limit 500, add index, fix missing timestamp fallback (use 0 not current time).
+- [ ] **Req 2: Account Username Display** — Add optional `username` field to `AccountInfo`, extract `user_info.username`, fallback to `credentials.username`.
+- [ ] **Req 1: Suggestions Regenerate Per Session** — Generate one random snapshot after initial load, keep stable within session, inject randomness for deterministic tests.
+- [ ] **Req 6: Search UI (Magnifier, Collapse/Expand)** — Add `searchExpanded` to BrowseSavedState, magnifier icon ↔ expanded input, clear X clears query only, escape closes search.
+- [ ] **Req 5: Back Control Consistency** — Extract common `BackControl` composable, apply to Browse/Detail/Episodes/Player, overlay for fullscreen.
+- [ ] **Req 4: Fullscreen & OSC Title** — Hide header when fullscreen, set `force-media-title` on mpv owner thread before loadfile, cover all content types.
+
+**Old regressions (superseded by D-Desktop-16):**
+- D-Desktop-15-REGR, D-Desktop-16-REGR, D-Desktop-17-REGR, D-Desktop-18-REGR, D-Desktop-19-REGR (scope rolled into Req 4,6,5)
+- D-Desktop-16f, D-Desktop-17 (handled by Req 4)
 
 ---
 
