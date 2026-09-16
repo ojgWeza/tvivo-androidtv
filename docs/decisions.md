@@ -1029,3 +1029,22 @@ fresh independent draw), exclusion of continuation-shelf ids, the pre-snapshot e
 state, and a failed-refresh-preserves-snapshot case (fixture returns an empty catalog,
 `refresh()`'s own `check(items.size() > 0)` throws, and the snapshot survives). All
 green.
+
+## Desktop player fullscreen ownership (follow-up to D-Desktop-16)
+
+**Decision:** libmpv remains the playback library and its bundled Lua on-screen
+controller (`osc.lua`) remains the playback-control surface. Its `osc-visibility`
+script message is the supported way to select `never`, `auto`, or `always` visibility.
+
+**Root cause:** the OSC fullscreen button changes libmpv's `fullscreen` property. With
+libmpv embedded through `wid`, it is only a child surface and cannot resize the
+Compose-owned desktop window. The visual action therefore appeared to do nothing.
+
+**Implementation:** observe libmpv's `fullscreen` flag on the mpv owner thread and
+route changes into `DesktopShell`'s player-content fullscreen state. The OSC button,
+the app control, F/Escape, and the overlay Back control now share that property. The
+desktop chrome supplies a guarded Exit action with `Stay in Tvivo` as the safe choice.
+
+**Verification status:** the earlier desktop test suite passed before this follow-up.
+A fresh follow-up Gradle run could not complete because the machine's shell launcher
+was blocked by policy; D-Desktop-16 remains open until a rebuilt app is manually tested.

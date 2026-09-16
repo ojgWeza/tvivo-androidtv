@@ -50,8 +50,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -62,12 +66,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tv
 import com.dev.Tvivo.auth.Credentials
 import com.dev.tvivo.desktop.catalog.CatalogType
@@ -100,23 +107,27 @@ internal sealed interface DesktopRoute { data object Home : DesktopRoute; data c
  * `remember`ed inside [BrowseScreen] -- so it survives leaving Browse for Detail/Episodes/Player
  * and coming back, instead of resetting every time the route is re-entered. Field-level
  * `mutableStateOf` (not a wrapping `MutableState<BrowseSavedState>`) is deliberate: replacing the
- * whole object on every filter/query change would recreate [gridState] too, losing scroll
+ * whole object on every filter/query change would recreate [gridStateFor] too, losing scroll
  * position on the exact edit that's supposed to preserve it.
  */
 private class BrowseSavedState {
     var filter by mutableStateOf("__all")
     var categoryFilter by mutableStateOf("")
     var query by mutableStateOf("")
+    var searchExpanded by mutableStateOf(false)
     var highlightedId by mutableStateOf<String?>(null)
     // Keep the last data set mounted with the grid state. On a Browse -> Detail -> Browse
     // round-trip, a transient empty list would otherwise clamp LazyGridState back to index 0
     // before the asynchronous reload completes.
     var items by mutableStateOf(emptyList<DesktopItem>())
-    val gridState = androidx.compose.foundation.lazy.grid.LazyGridState()
+    // Each rail selection needs an independent position. A single grid state makes switching
+    // from the end of one category open every other category at that same deep offset.
+    private val gridStates = mutableMapOf<String, androidx.compose.foundation.lazy.grid.LazyGridState>()
+    fun gridStateFor(filter: String) = gridStates.getOrPut(filter) { androidx.compose.foundation.lazy.grid.LazyGridState() }
 }
 
 @Composable
-internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
+internal fun DesktopShell(credentials: Credentials, onExit: () -> Unit, onSignOut: () -> Unit) {
     val repository = remember(credentials) { DesktopCatalogRepository(credentials) }
     val scope = rememberCoroutineScope()
     val idleController = remember { DesktopIdleController(scope) }
@@ -140,7 +151,16 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
             idleOverlayVisible = false
         }
     }
-    LaunchedEffect(repository) { featuredSeries = runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(CatalogType.SERIES); repository.featuredSeries(20) } }.getOrElse { emptyList() } }
+    LaunchedEffect(repository) {
+        featuredSeries = runCatching {
+            withContext(Dispatchers.IO) {
+                repository.ensureLoaded(CatalogType.SERIES)
+                repository.featuredSeries(20)
+            }
+        }.onSuccess { items ->
+            idleTrace("featured series loaded: ${items.take(3).joinToString { "${it.title}(${it.rating})" }}")
+        }.getOrElse { emptyList() }
+    }
     DisposableEffect(idleController) {
         val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
         val listener = PropertyChangeListener { idleController.onWindowFocusChanged(it.newValue != null) }
@@ -160,16 +180,16 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
                 onAnyInput("keyboard")
                 consume
             } else false
-        }.pointerInput(idleState) {
+        }.pointerInput(idleOverlayVisible, idleState) {
             awaitPointerEventScope { while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.type == PointerEventType.Move || event.type == PointerEventType.Press) {
+                if (!idleOverlayVisible && (event.type == PointerEventType.Move || event.type == PointerEventType.Press)) {
                     if (onAnyInput("mouse")) event.changes.forEach { it.consume() }
                 }
             } }
         }) {
             Column(Modifier.fillMaxSize().background(Background)) {
-                if (!playerFullScreen) TopNavigation(route, onRoute = { route = it; onAnyInput("navigation") })
+                if (!playerFullScreen) TopNavigation(route, onExit = onExit, onRoute = { route = it; onAnyInput("navigation") })
                 when (val current = route) {
                     DesktopRoute.Home -> HomeScreen(
                         repository = repository,
@@ -180,7 +200,7 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
                         onBrowse = { type, filter -> browseState(type).filter = filter; route = DesktopRoute.Browse(type); onAnyInput("navigation") },
                         onPlay = { item, episode -> route = DesktopRoute.Player(item, episode, episode?.season); onAnyInput("navigation") },
                     )
-                    is DesktopRoute.Browse -> BrowseScreen(repository, current.type, browseState(current.type), onDetail = {
+                    is DesktopRoute.Browse -> BrowseScreen(repository, current.type, browseState(current.type), onBack = { route = DesktopRoute.Home; onAnyInput("navigation") }, onDetail = {
                         // Remember which card was open so returning to this tab highlights it, not just
                         // restores the scroll offset gridState already keeps for free.
                         browseState(current.type).highlightedId = it.id
@@ -196,9 +216,6 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
                         fullScreen = playerFullScreen,
                         onFullScreenChange = { enabled -> playerFullScreen = enabled; onAnyInput("player-control") },
                         onBack = {
-                            if (playerFullScreen) {
-                                playerFullScreen = false
-                            }
                             route = if (current.item.type == CatalogType.SERIES) DesktopRoute.Episodes(current.item, current.returnSeason) else DesktopRoute.Detail(current.item)
                             onAnyInput("navigation")
                         },
@@ -212,14 +229,14 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
                 IdleEntryScreen(
                     items = featuredSeries,
                     onBackgroundInput = ::onAnyInput,
-                    onFeaturedSelected = { item -> onAnyInput("featured-card"); route = DesktopRoute.Episodes(item) },
+                    onFeaturedSelected = { item -> onAnyInput("featured-card-click"); route = DesktopRoute.Episodes(item) },
                 )
             }
         }
     }
 }
 
-@Composable private fun TopNavigation(route: DesktopRoute, onRoute: (DesktopRoute) -> Unit) = Row(Modifier.fillMaxWidth().height(64.dp).background(Surface).border(1.dp, Line).padding(horizontal = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+@Composable private fun TopNavigation(route: DesktopRoute, onExit: () -> Unit, onRoute: (DesktopRoute) -> Unit) = Row(Modifier.fillMaxWidth().height(64.dp).background(Surface).border(1.dp, Line).padding(horizontal = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     Text("TVIVO", color = Ink, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(end = 26.dp))
     NavButton("Home", Icons.Default.Home, route is DesktopRoute.Home) { onRoute(DesktopRoute.Home) }
     NavButton("Movies", Icons.Default.Movie, route is DesktopRoute.Browse && route.type == CatalogType.MOVIES) { onRoute(DesktopRoute.Browse(CatalogType.MOVIES)) }
@@ -227,6 +244,7 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
     NavButton("Live TV", Icons.Default.LiveTv, route is DesktopRoute.Browse && route.type == CatalogType.LIVE) { onRoute(DesktopRoute.Browse(CatalogType.LIVE)) }
     Box(Modifier.weight(1f))
     NavButton("Account", Icons.Default.AccountCircle, route is DesktopRoute.Account) { onRoute(DesktopRoute.Account) }
+    NavButton("Exit", Icons.Default.Close, false, onExit)
 }
 
 @Composable private fun NavButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) = Row(
@@ -295,11 +313,15 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
 // `remember`ed here, so filter/category-search/search-text/scroll position/last-opened-card all
 // survive leaving this screen (Detail, Episodes, Player) and coming back -- the proposal's
 // "preserve tab, scroll position, and focused/selected card" requirement.
-@Composable private fun BrowseScreen(repository: DesktopCatalogRepository, type: CatalogType, saved: BrowseSavedState, onDetail: (DesktopItem) -> Unit) {
+@Composable private fun BrowseScreen(repository: DesktopCatalogRepository, type: CatalogType, saved: BrowseSavedState, onBack: () -> Unit, onDetail: (DesktopItem) -> Unit) {
     val scope = rememberCoroutineScope(); var categories by remember(type) { mutableStateOf(emptyList<com.dev.tvivo.desktop.catalog.DesktopCategory>()) }; var message by remember(type) { mutableStateOf("Refresh to download your ${type.title.lowercase()} library.") }
-    fun load() { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(type); repository.categories(type) to repository.items(type, saved.filter, saved.query) } }.onSuccess { (cats, rows) -> categories = cats; saved.items = rows; message = if (rows.isNotEmpty()) "${rows.size} items" else "No items available for this selection." }.onFailure { message = it.message ?: "Library unavailable offline." } } }
+    val searchFocus = remember { FocusRequester() }
+    suspend fun load() { runCatching { withContext(Dispatchers.IO) { repository.ensureLoaded(type); repository.categories(type) to repository.items(type, saved.filter, saved.query) } }.onSuccess { (cats, rows) -> categories = cats; saved.items = rows; message = if (rows.isNotEmpty()) "${rows.size} items" else "No items available for this selection." }.onFailure { message = it.message ?: "Library unavailable offline." } }
     androidx.compose.runtime.LaunchedEffect(type, saved.filter, saved.query) { load() }
-    Row(Modifier.fillMaxSize()) {
+    androidx.compose.runtime.LaunchedEffect(saved.searchExpanded) { if (saved.searchExpanded) searchFocus.requestFocus() }
+    Row(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && saved.searchExpanded) { saved.searchExpanded = false; true } else false
+    }) {
         Column(Modifier.width(220.dp).fillMaxHeight().background(Surface).padding(12.dp)) {
             OutlinedTextField(saved.categoryFilter, { saved.categoryFilter = it }, label = { Text("Filter categories") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             listOf("__all" to "All ${type.title}", "__recent" to "Recently added", "__continue" to "Continue watching", "__favourites" to "Favourites").forEach { (id, label) -> RailButton(label, saved.filter == id) { saved.filter = id } }
@@ -307,12 +329,14 @@ internal fun DesktopShell(credentials: Credentials, onSignOut: () -> Unit) {
             LazyColumn { items(categories.filter { it.name.contains(saved.categoryFilter, ignoreCase = true) }, key = { it.id }) { category -> RailButton(category.name, saved.filter == category.id) { saved.filter = category.id } } }
         }
         Column(Modifier.weight(1f).padding(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); OutlinedTextField(saved.query, { saved.query = it }, label = { Text("Search ${type.title}") }, singleLine = true); Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") } }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text(type.title, style = MaterialTheme.typography.headlineMedium, color = Ink); Box(Modifier.weight(1f)); if (saved.searchExpanded) { OutlinedTextField(saved.query, { saved.query = it }, label = { Text("Search ${type.title}") }, singleLine = true, modifier = Modifier.focusRequester(searchFocus)); OutlinedButton(onClick = { saved.query = "" }, modifier = Modifier.padding(start = 8.dp)) { Icon(Icons.Default.Close, contentDescription = "Clear search") } } else { OutlinedButton(onClick = { saved.searchExpanded = true }) { Icon(Icons.Default.Search, contentDescription = "Search ${type.title}") } }; Button(onClick = { scope.launch { message = "Refreshing…"; runCatching { withContext(Dispatchers.IO) { repository.refresh(type) } }.onSuccess { load(); message = "Library refreshed." }.onFailure { message = it.message ?: "Refresh failed." } } }, modifier = Modifier.padding(start = 10.dp)) { Text("Refresh") }; BackControl(onBack, Modifier.padding(start = 10.dp)) }
             Text(message, color = Dim, modifier = Modifier.padding(vertical = 10.dp))
-            LazyVerticalGrid(GridCells.Adaptive(if (type == CatalogType.LIVE) 170.dp else 140.dp), state = saved.gridState, horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) { items(saved.items, key = { it.id }) { item -> CatalogCard(item, highlighted = item.id == saved.highlightedId) { onDetail(item) } } }
+            LazyVerticalGrid(GridCells.Adaptive(if (type == CatalogType.LIVE) 170.dp else 140.dp), state = saved.gridStateFor(saved.filter), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) { items(saved.items, key = { it.id }) { item -> CatalogCard(item, highlighted = item.id == saved.highlightedId) { onDetail(item) } } }
         }
     }
 }
+
+@Composable private fun BackControl(onClick: () -> Unit, modifier: Modifier = Modifier) = OutlinedButton(onClick = onClick, modifier = modifier) { Icon(Icons.Default.ArrowBack, contentDescription = null); Text("Back", modifier = Modifier.padding(start = 6.dp)) }
 
 @Composable private fun RailButton(label: String, selected: Boolean, onClick: () -> Unit) = Text(label, color = if (selected) Color(0xFF1A0A05) else Ink, maxLines = 2, overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).background(if (selected) Accent else Color.Transparent).clickable(onClick = onClick).padding(10.dp))
 @Composable private fun CatalogCard(item: DesktopItem, highlighted: Boolean = false, onClick: () -> Unit) {
@@ -341,14 +365,14 @@ private fun homeTile(type: CatalogType) = when (type) { CatalogType.LIVE -> "til
     Box(modifier.background(Elevated)) { bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) } }
 }
 
-@Composable private fun DetailScreen(repository: DesktopCatalogRepository, item: DesktopItem, onPlay: () -> Unit, onBack: () -> Unit) { val scope = rememberCoroutineScope(); Column(Modifier.fillMaxSize().padding(42.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { Text(item.title, color = Ink, style = MaterialTheme.typography.headlineLarge); Text(item.plot ?: "No description is available from your provider.", color = Dim, modifier = Modifier.widthIn(max = 720.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onPlay) { Text("Play") }; OutlinedButton(onClick = { scope.launch(Dispatchers.IO) { repository.toggleFavourite(item) } }) { Text("Add or remove favourite") }; OutlinedButton(onClick = onBack) { Text("Back") } } } }
-@Composable private fun EpisodeScreen(repository: DesktopCatalogRepository, item: DesktopItem, restoredSeason: String?, onPlay: (DesktopEpisode, String) -> Unit, onBack: () -> Unit) { val scope = rememberCoroutineScope(); var episodes by remember(item.id) { mutableStateOf(emptyList<DesktopEpisode>()) }; var selectedSeason by remember(item.id) { mutableStateOf(restoredSeason) }; var seasonMenuOpen by remember { mutableStateOf(false) }; var message by remember(item.id) { mutableStateOf("Loading episodes…") }; androidx.compose.runtime.LaunchedEffect(item.id) { runCatching { withContext(Dispatchers.IO) { repository.episodes(item) } }.onSuccess { loaded -> episodes = loaded; selectedSeason = selectedSeason?.takeIf { season -> loaded.any { it.season == season } } ?: loaded.firstOrNull()?.season; message = if (loaded.isEmpty()) "No episodes are currently available." else "Choose an episode to start playback." }.onFailure { message = it.message ?: "Episodes could not be loaded." } }; val seasons = episodes.map { it.season }.distinct(); val visibleEpisodes = episodes.filter { it.season == selectedSeason }; Column(Modifier.fillMaxSize().padding(42.dp)) { Text(item.title, color = Ink, style = MaterialTheme.typography.headlineLarge); Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) { Box { Button(onClick = { seasonMenuOpen = true }, enabled = seasons.isNotEmpty()) { Text(selectedSeason?.let { "Season $it" } ?: "Choose season"); Icon(Icons.Default.ArrowDropDown, contentDescription = "Choose season") }; DropdownMenu(expanded = seasonMenuOpen, onDismissRequest = { seasonMenuOpen = false }) { seasons.forEach { season -> DropdownMenuItem(text = { Text("Season $season") }, onClick = { selectedSeason = season; seasonMenuOpen = false }) } } }; OutlinedButton(onClick = onBack) { Text("Back") } }; Text(message, color = Dim, modifier = Modifier.padding(vertical = 12.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) { items(visibleEpisodes, key = { it.id }) { episode -> val label = episode.displayLabel(item.title); Button(onClick = { onPlay(episode, selectedSeason ?: episode.season) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.PlayArrow, contentDescription = "Play $label"); Text("Play $label${episode.duration?.let { " · $it" } ?: ""}${episode.resumeMs.takeIf { it > 0 }?.let { " · Resume ${formatPosition(it)}" } ?: ""}", modifier = Modifier.padding(start = 8.dp)) } } } } }
+@Composable private fun DetailScreen(repository: DesktopCatalogRepository, item: DesktopItem, onPlay: () -> Unit, onBack: () -> Unit) { val scope = rememberCoroutineScope(); Column(Modifier.fillMaxSize().padding(42.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(item.title, color = Ink, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); BackControl(onBack) }; Text(item.plot ?: "No description is available from your provider.", color = Dim, modifier = Modifier.widthIn(max = 720.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onPlay) { Text("Play") }; OutlinedButton(onClick = { scope.launch(Dispatchers.IO) { repository.toggleFavourite(item) } }) { Text("Add or remove favourite") } } } }
+@Composable private fun EpisodeScreen(repository: DesktopCatalogRepository, item: DesktopItem, restoredSeason: String?, onPlay: (DesktopEpisode, String) -> Unit, onBack: () -> Unit) { val scope = rememberCoroutineScope(); var episodes by remember(item.id) { mutableStateOf(emptyList<DesktopEpisode>()) }; var selectedSeason by remember(item.id) { mutableStateOf(restoredSeason) }; var seasonMenuOpen by remember { mutableStateOf(false) }; var message by remember(item.id) { mutableStateOf("Loading episodes…") }; androidx.compose.runtime.LaunchedEffect(item.id) { runCatching { withContext(Dispatchers.IO) { repository.episodes(item) } }.onSuccess { loaded -> episodes = loaded; selectedSeason = selectedSeason?.takeIf { season -> loaded.any { it.season == season } } ?: loaded.firstOrNull()?.season; message = if (loaded.isEmpty()) "No episodes are currently available." else "Choose an episode to start playback." }.onFailure { message = it.message ?: "Episodes could not be loaded." } }; val seasons = episodes.map { it.season }.distinct(); val visibleEpisodes = episodes.filter { it.season == selectedSeason }; Column(Modifier.fillMaxSize().padding(42.dp)) { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(item.title, color = Ink, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); BackControl(onBack) }; Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) { Box { Button(onClick = { seasonMenuOpen = true }, enabled = seasons.isNotEmpty()) { Text(selectedSeason?.let { "Season $it" } ?: "Choose season"); Icon(Icons.Default.ArrowDropDown, contentDescription = "Choose season") }; DropdownMenu(expanded = seasonMenuOpen, onDismissRequest = { seasonMenuOpen = false }) { seasons.forEach { season -> DropdownMenuItem(text = { Text("Season $season") }, onClick = { selectedSeason = season; seasonMenuOpen = false }) } } } }; Text(message, color = Dim, modifier = Modifier.padding(vertical = 12.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) { items(visibleEpisodes, key = { it.id }) { episode -> val label = episode.displayLabel(item.title); Button(onClick = { onPlay(episode, selectedSeason ?: episode.season) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.PlayArrow, contentDescription = "Play $label"); Text("Play $label${episode.duration?.let { " · $it" } ?: ""}${episode.resumeMs.takeIf { it > 0 }?.let { " · Resume ${formatPosition(it)}" } ?: ""}", modifier = Modifier.padding(start = 8.dp)) } } } } }
 
 private fun String.removePrefixIgnoreCase(prefix: String): String = if (startsWith(prefix, ignoreCase = true)) substring(prefix.length) else this
 private fun String?.positiveRating(): String? = this?.trim()?.toDoubleOrNull()?.takeIf { it > 0.0 }?.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }
 private fun DesktopEpisode.displayLabel(seriesTitle: String): String { val number = episodeNumber?.takeIf { it.isNotBlank() } ?: id; val remainder = title.removePrefixIgnoreCase("Season $season").trimStart(' ', '-', '·', ':').removePrefixIgnoreCase(seriesTitle).trimStart(' ', '-', '·', ':'); val normalizedTitle = title.lowercase().filter(Char::isLetterOrDigit); val normalizedSeries = seriesTitle.lowercase().filter(Char::isLetterOrDigit); return when { remainder.isBlank() || remainder.equals("Episode $number", ignoreCase = true) || (normalizedTitle.startsWith(normalizedSeries) && Regex("s\\d{1,2}e\\d{1,3}").containsMatchIn(normalizedTitle)) -> "Episode $number"; else -> "Episode $number · $remainder" } }
 private fun String?.expiryDate(): String? = runCatching { val seconds = this?.trim()?.toLongOrNull()?.takeIf { it in 1..253402300799 } ?: return null; DateTimeFormatter.ISO_LOCAL_DATE.format(Instant.ofEpochSecond(seconds).atOffset(ZoneOffset.UTC)) }.getOrNull()
-@Composable private fun AccountScreen(repository: DesktopCatalogRepository, credentials: Credentials, onSignOut: () -> Unit) { val scope = rememberCoroutineScope(); var info by remember { mutableStateOf("Loading account…") }; androidx.compose.runtime.LaunchedEffect(Unit) { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.accountInfo() } }.onSuccess { info = "Status: ${it.status ?: "Unknown"}\nExpiry: ${it.expires.expiryDate() ?: "Not supplied"}\nMaximum connections: ${it.maxConnections ?: "Not supplied"}" }.onFailure { info = "Account details unavailable offline." } } }; Column(Modifier.fillMaxSize().padding(42.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { Text("Account", color = Ink, style = MaterialTheme.typography.headlineLarge); Text(credentials.hostAndPort(), color = Dim); Text(info, color = Ink); OutlinedButton(onClick = onSignOut) { Text("Sign out") } } }
+@Composable private fun AccountScreen(repository: DesktopCatalogRepository, credentials: Credentials, onSignOut: () -> Unit) { val scope = rememberCoroutineScope(); var info by remember { mutableStateOf("Loading account…") }; var username by remember { mutableStateOf(credentials.username) }; androidx.compose.runtime.LaunchedEffect(Unit) { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.accountInfo() } }.onSuccess { account -> username = account.username?.takeIf { it.isNotBlank() } ?: credentials.username; info = "Status: ${account.status ?: "Unknown"}\nExpiry: ${account.expires.expiryDate() ?: "Not supplied"}\nMaximum connections: ${account.maxConnections ?: "Not supplied"}" }.onFailure { info = "Account details unavailable offline." } } }; Column(Modifier.fillMaxSize().padding(42.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { Text("Account", color = Ink, style = MaterialTheme.typography.headlineLarge); Text(username, color = Dim); Text(info, color = Ink); OutlinedButton(onClick = onSignOut) { Text("Sign out") } } }
 @Composable private fun DesktopPlayerScreen(
     repository: DesktopCatalogRepository,
     item: DesktopItem,
@@ -358,6 +382,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope(); var state by remember { mutableStateOf("Preparing player…") }; var playerReady by remember { mutableStateOf(false) }
+    val title = episode?.let { "${item.title} · Season ${it.season} · ${it.displayLabel(item.title)}" } ?: item.title
     // Generation of the current playback attempt. MpvPlayer bumps its own internal generation on
     // every play()/playUrl() and tags every onState/onPositionMs callback with it -- a late event
     // from an attempt the watchdog already timed out (or the user navigated away from) carries a
@@ -400,6 +425,10 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
                 currentGeneration = generation
                 userPaused = paused
             } },
+            // The OSC's own fullscreen button changes libmpv's property. In a --wid embed mpv
+            // cannot resize the Compose parent, so property changes bridge OSC input to the
+            // actual content surface.
+            onFullScreenChange = { enabled -> SwingUtilities.invokeLater { onFullScreenChange(enabled) } },
         )
     }
     DisposableEffect(player) {
@@ -426,7 +455,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
     // keyboard event that should reach mpv's own OSC/keybindings is forwarded explicitly through
     // MpvPlayer's client-API commands instead. requestFocusInWindow() on press is required for
     // the AWT KeyListener below to receive anything at all.
-    DisposableEffect(surface, player) {
+    DisposableEffect(surface, player, fullScreen) {
         val mouseListener = object : java.awt.event.MouseAdapter() {
             override fun mousePressed(e: java.awt.event.MouseEvent) {
                 surface.requestFocusInWindow()
@@ -451,8 +480,18 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         }
         val wheelListener = java.awt.event.MouseWheelListener { e -> player.sendWheel(up = e.wheelRotation < 0) }
         val keyListener = object : java.awt.event.KeyAdapter() {
-            override fun keyPressed(e: java.awt.event.KeyEvent) { mpvKeyName(e)?.let { player.sendKey(it, pressed = true) } }
-            override fun keyReleased(e: java.awt.event.KeyEvent) { mpvKeyName(e)?.let { player.sendKey(it, pressed = false) } }
+            override fun keyPressed(e: java.awt.event.KeyEvent) {
+                when {
+                    e.keyCode == java.awt.event.KeyEvent.VK_F -> { player.setFullScreen(!fullScreen); e.consume() }
+                    e.keyCode == java.awt.event.KeyEvent.VK_ESCAPE && fullScreen -> { player.setFullScreen(false); e.consume() }
+                    else -> mpvKeyName(e)?.let { player.sendKey(it, pressed = true) }
+                }
+            }
+            override fun keyReleased(e: java.awt.event.KeyEvent) {
+                if (e.keyCode != java.awt.event.KeyEvent.VK_F && e.keyCode != java.awt.event.KeyEvent.VK_ESCAPE) {
+                    mpvKeyName(e)?.let { player.sendKey(it, pressed = false) }
+                }
+            }
         }
         val focusListener = object : java.awt.event.FocusAdapter() {
             // A key or button that never gets its matching keyup (focus stolen mid-press) would
@@ -492,7 +531,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
                 // currentGeneration is advanced only by MpvPlayer's own callbacks (see the
                 // MpvPlayer(...) comment above) -- play()'s return value isn't used for that here,
                 // only for surfacing a synchronous validation failure (bad file, bad extension).
-                player.play(java.io.File(debugFixture))
+                player.play(java.io.File(debugFixture), title)
                     .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
                 return@launch
             }
@@ -500,7 +539,7 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
             if (terminal) return@launch
             prepared
                 .onSuccess { (url, resumeMs) ->
-                    player.playUrl(url, resumeMs)
+                    player.playUrl(url, resumeMs, title)
                         .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = "Playback error: $message" } }
                 }
                 .onFailure { val message = it.message; withContext(Dispatchers.Main) { terminal = true; state = message ?: "Unable to prepare playback." } }
@@ -533,23 +572,20 @@ private fun String?.expiryDate(): String? = runCatching { val seconds = this?.tr
         }
     }
     androidx.compose.runtime.LaunchedEffect(item.id, episode?.id, playerReady) { while (playerReady) { delay(5_000); if (item.type != CatalogType.LIVE && lastKnownPositionMs > 0L) withContext(Dispatchers.IO) { repository.recordResume(item, episode, lastKnownPositionMs) } } }
-    val title = episode?.let { "${item.title} · Season ${it.season} · ${it.displayLabel(item.title)}" } ?: item.title
     val outerPadding = if (fullScreen) 0.dp else 24.dp
-    // mpv's built-in OSC (enabled in MpvPlayer.initialise) owns Play/Pause/seek inside the video
-    // surface and binds its own f/Escape fullscreen toggle -- Compose no longer intercepts those
-    // keys here (D-Desktop-14 review: two owners for the same keys inside an embedded native
-    // window is a real conflict, not a style choice). mpv's fullscreen is not wired to
-    // onFullScreenChange: whether it can promote/demote cleanly against the surrounding Compose
-    // window under --wid embedding is unverified, so D-Desktop-9 stays open rather than assuming
-    // it works. Back stays a Compose element outside the Canvas, the one control mpv's OSC has no
-    // equivalent for.
     Column(Modifier.fillMaxSize().padding(outerPadding), verticalArrangement = Arrangement.spacedBy(if (fullScreen) 0.dp else 16.dp)) {
-        Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).widthIn(min = 180.dp))
-            Text(state, color = Dim, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp).padding(start = 16.dp))
-            OutlinedButton(onClick = onBack, modifier = Modifier.padding(start = 12.dp)) { Text("Back") }
+        if (!fullScreen) {
+            Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, color = Ink, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).widthIn(min = 180.dp))
+                Text(state, color = Dim, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp).padding(start = 16.dp))
+                OutlinedButton(onClick = { player.setFullScreen(true) }, modifier = Modifier.padding(start = 12.dp)) { Text("Full screen") }
+                BackControl(onBack, Modifier.padding(start = 12.dp))
+            }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) { SwingPanel(factory = { surface }, modifier = Modifier.fillMaxSize()) }
+        Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+            SwingPanel(factory = { surface }, modifier = Modifier.fillMaxSize())
+            if (fullScreen) BackControl({ player.setFullScreen(false) }, Modifier.align(Alignment.TopEnd).padding(18.dp).background(Surface.copy(alpha = 0.82f), RoundedCornerShape(8.dp)))
+        }
     }
 }
 

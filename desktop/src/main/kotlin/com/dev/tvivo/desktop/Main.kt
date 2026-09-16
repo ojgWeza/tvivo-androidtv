@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -32,8 +33,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.WindowState
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.ServerAddress
 import com.dev.tvivo.desktop.auth.DesktopAuthRepository
@@ -50,15 +52,23 @@ import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
-    Window(onCloseRequest = ::exitApplication, title = "Tvivo desktop", state = WindowState(width = 1000.dp, height = 720.dp)) {
+    var exitRequested by remember { mutableStateOf(false) }
+    Window(onCloseRequest = { exitRequested = true }, title = "Tvivo desktop", state = rememberWindowState(placement = WindowPlacement.Fullscreen), undecorated = true) {
         MaterialTheme {
-            DesktopApp()
+            DesktopApp(onExit = { exitRequested = true })
+            if (exitRequested) AlertDialog(
+                onDismissRequest = { exitRequested = false },
+                title = { Text("Exit Tvivo?") },
+                text = { Text("Your account and downloaded library will stay on this device.") },
+                dismissButton = { OutlinedButton(onClick = { exitRequested = false }) { Text("Stay in Tvivo") } },
+                confirmButton = { Button(onClick = ::exitApplication) { Text("Exit") } },
+            )
         }
     }
 }
 
 @Composable
-private fun DesktopApp() {
+private fun DesktopApp(onExit: () -> Unit) {
     val store = remember { WindowsCredentialsStore() }
     val scope = rememberCoroutineScope()
     var loaded by remember { mutableStateOf(false) }
@@ -77,7 +87,7 @@ private fun DesktopApp() {
             }
         }
     } else {
-        DesktopShell(credentials!!, onSignOut = {
+        DesktopShell(credentials!!, onExit = onExit, onSignOut = {
             scope.launch {
                 withContext(Dispatchers.IO) { store.wipe() }
                 credentials = null
@@ -122,4 +132,3 @@ private fun SignInScreen(onAuthenticated: (Credentials) -> Unit) {
         }
     }
 }
-

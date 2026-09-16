@@ -38,7 +38,7 @@ data class DesktopItem(
 )
 data class DesktopEpisode(val id: String, val season: String, val title: String, val extension: String, val duration: String?, val resumeMs: Long = 0L, val episodeNumber: String? = null)
 data class DesktopSeriesResume(val series: DesktopItem, val episode: DesktopEpisode)
-data class AccountInfo(val status: String?, val expires: String?, val maxConnections: String?)
+data class AccountInfo(val status: String?, val expires: String?, val maxConnections: String?, val username: String? = null)
 private data class SavedItemState(
     val id: String,
     val favourite: Long,
@@ -68,6 +68,7 @@ private fun cleanTitle(name: String?): String {
 internal class DesktopCatalogRepository(
     private val credentials: Credentials,
     private val database: Path = Path.of(System.getenv("APPDATA") ?: ".", "Tvivo", "catalog.db"),
+    private val random: kotlin.random.Random = kotlin.random.Random.Default,
 ) : AutoCloseable {
     private val accountId = AccountIdentity.of(credentials)
     private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
@@ -126,10 +127,11 @@ internal class DesktopCatalogRepository(
                 "__suggestions" -> if (suggestions.isEmpty()) "1=0" else "id IN (${suggestions.joinToString(",") { "?" }})"
                 else -> "category_id=?"
             }
-            val order = if (category == "__recent") "first_indexed_at DESC" else "title COLLATE NOCASE"
+            val order = if (category == "__recent") "added_at DESC, id ASC" else "title COLLATE NOCASE"
+            val limit = if (category == "__recent") " LIMIT 500" else ""
             // Browse results must be complete: a provider category may legitimately exceed 500
             // rows, and truncating it makes content impossible to discover from the desktop app.
-            db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order").use { statement ->
+            db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? AND $where AND title LIKE ? ORDER BY $order$limit").use { statement ->
                 var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
                 if (!virtual) statement.setString(i++, category)
                 if (category == "__suggestions") suggestions.forEach { statement.setString(i++, it) }
@@ -141,8 +143,8 @@ internal class DesktopCatalogRepository(
 
     /**
      * The idle screen deliberately uses a deterministic local shelf. It never triggers a
-     * provider request as part of entering idle, and choosing oldest-indexed rows avoids the
-     * per-session randomness of Home suggestions.
+     * provider request as part of entering idle. D-Desktop-16e deliberately prioritizes the
+     * highest numeric ratings rather than Home's per-session random suggestions.
      */
     fun featuredSeries(limit: Int = 20): List<DesktopItem> = connection().use { db ->
         db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=? ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT ?").use { statement ->
@@ -163,11 +165,11 @@ internal class DesktopCatalogRepository(
     fun regenerateSuggestions(type: CatalogType, excludeIds: Set<String>, limit: Int = 12): List<DesktopItem> = connection().use { db ->
         val exclusions = excludeIds.toList()
         val exclusionClause = if (exclusions.isEmpty()) "" else " AND id NOT IN (${exclusions.joinToString(",") { "?" }})"
-        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT ?").use { statement ->
+        db.prepareStatement("SELECT id,category_id,title,artwork,extension,rating,plot FROM items WHERE account_id=? AND type=?$exclusionClause ORDER BY id ASC").use { statement ->
             var i = 1; statement.setString(i++, accountId); statement.setString(i++, type.name)
             exclusions.forEach { statement.setString(i++, it) }
-            statement.setInt(i, limit)
-            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }.also { items ->
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(item(rows, type)) } }
+                .shuffled(random).take(limit).also { items ->
                 suggestionIds[type] = items.map { it.id }
             }
         }
@@ -208,6 +210,9 @@ internal class DesktopCatalogRepository(
                     }; restore.executeBatch()
                 }
                 db.commit()
+                // Suggestions are a session snapshot of the current catalog. A successful refresh
+                // invalidates only this type; the next Home load creates its replacement.
+                suggestionIds.remove(type)
             } catch (failure: Throwable) { db.rollback(); throw failure } finally { db.autoCommit = true }
         }
     }
@@ -282,7 +287,7 @@ internal class DesktopCatalogRepository(
     fun accountInfo(): AccountInfo {
         val root = request().asJsonObject
         val user = root.getAsJsonObject("user_info")
-        return AccountInfo(user?.string("status"), user?.string("exp_date"), user?.string("max_connections"))
+        return AccountInfo(user?.string("status"), user?.string("exp_date"), user?.string("max_connections"), user?.string("username"))
     }
 
     fun playbackUrl(item: DesktopItem, episode: DesktopEpisode? = null): String = when {
@@ -357,6 +362,10 @@ internal class DesktopCatalogRepository(
                 }
                 sql.execute("UPDATE schema_version SET version=7")
             }
+            if (version < 8) {
+                sql.execute("CREATE INDEX IF NOT EXISTS items_recent_added ON items(account_id,type,added_at DESC)")
+                sql.execute("UPDATE schema_version SET version=8")
+            }
         }
     }
     private fun insertItem(statement: java.sql.PreparedStatement, type: CatalogType, row: JsonObject) {
@@ -365,8 +374,10 @@ internal class DesktopCatalogRepository(
         statement.setString(1, accountId); statement.setString(2, type.name); statement.setString(3, id); statement.setString(4, row.string("category_id") ?: "")
         statement.setString(5, cleanTitle(row.string("name"))); statement.setString(6, row.string(if (type == CatalogType.SERIES) "cover" else "stream_icon"))
         statement.setString(7, row.string(if (type == CatalogType.LIVE) "ext" else "container_extension") ?: if (type == CatalogType.LIVE) "ts" else "mp4")
-        val addedAt = row.string("added")?.toLongOrNull()?.let { if (it < 10_000_000_000L) it * 1_000L else it } ?: System.currentTimeMillis()
-        statement.setString(8, row.string("rating")); statement.setString(9, row.string("plot")); statement.setLong(10, addedAt); statement.setLong(11, addedAt); statement.addBatch()
+        // A missing provider timestamp is unknown, not "just indexed". Zero sorts after dated
+        // entries in Recently added; first_indexed_at remains local bookkeeping only.
+        val addedAt = row.string("added")?.toLongOrNull()?.let { if (it < 10_000_000_000L) it * 1_000L else it } ?: 0L
+        statement.setString(8, row.string("rating")); statement.setString(9, row.string("plot")); statement.setLong(10, addedAt); statement.setLong(11, System.currentTimeMillis()); statement.addBatch()
     }
     private fun java.sql.ResultSet.getNullableLong(index: Int): Long? = getLong(index).takeUnless { wasNull() }
     private fun PreparedStatement.setNullableLong(index: Int, value: Long?) = if (value == null) setNull(index, Types.INTEGER) else setLong(index, value)

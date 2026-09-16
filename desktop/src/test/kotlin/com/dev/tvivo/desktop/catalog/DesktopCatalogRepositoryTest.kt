@@ -8,12 +8,28 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
 import kotlinx.coroutines.runBlocking
+import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DesktopCatalogRepositoryTest {
+    @Test fun `browse results are not limited to five hundred items`() = withRepository { repository, _, _, server ->
+        server.movies = movieFixtures(501)
+        server.series = seriesFixtures(501)
+
+        runBlocking {
+            repository.refresh(CatalogType.MOVIES)
+            repository.refresh(CatalogType.SERIES)
+        }
+
+        assertEquals(501, repository.items(CatalogType.MOVIES, "__all", "").size)
+        assertEquals(501, repository.items(CatalogType.MOVIES, "movies", "").size)
+        assertEquals(501, repository.items(CatalogType.SERIES, "__all", "").size)
+        assertEquals(501, repository.items(CatalogType.SERIES, "series", "").size)
+    }
+
     @Test fun `refresh normalizes provider added seconds to milliseconds`() = withRepository { repository, database, credentials, server ->
         server.movies = """[{"stream_id":"movie-1","category_id":"movies","name":"Movie","container_extension":"mp4","added":"1700000000"}]"""
 
@@ -32,6 +48,28 @@ class DesktopCatalogRepositoryTest {
 
         assertEquals(firstIndexedAt, itemLong(database, credentials, CatalogType.MOVIES, "movie-1", "first_indexed_at"))
         assertEquals(1_700_000_010_000L, itemLong(database, credentials, CatalogType.MOVIES, "movie-1", "added_at"))
+    }
+
+    @Test fun `recently added is provider ordered, capped, and leaves unknown timestamps last`() = withRepository { repository, _, _, server ->
+        server.movies = (1..501).joinToString(prefix = "[", postfix = "]") { number ->
+            val added = when (number) { 501 -> null; else -> 1_700_000_000L + number }
+            """{"stream_id":"movie-$number","category_id":"movies","name":"Movie $number","container_extension":"mp4"${added?.let { ",\"added\":\"$it\"" } ?: ""}}"""
+        }
+        runBlocking { repository.refresh(CatalogType.MOVIES) }
+
+        val recent = repository.items(CatalogType.MOVIES, "__recent", "")
+
+        assertEquals(500, recent.size)
+        assertEquals("movie-500", recent.first().id)
+        assertEquals("movie-1", recent.last().id)
+        assertTrue(recent.none { it.id == "movie-501" })
+    }
+
+    @Test fun `missing provider timestamp is stored as zero`() = withRepository { repository, database, credentials, server ->
+        server.movies = """[{"stream_id":"movie-1","category_id":"movies","name":"Movie","container_extension":"mp4"}]"""
+        runBlocking { repository.refresh(CatalogType.MOVIES) }
+
+        assertEquals(0L, itemLong(database, credentials, CatalogType.MOVIES, "movie-1", "added_at"))
     }
 
     @Test fun `record tuned does not create a live resume`() = withRepository { repository, database, credentials, server ->
@@ -86,6 +124,27 @@ class DesktopCatalogRepositoryTest {
         assertEquals(homeSnapshot.map { it.id }.toSet(), returnedHomeSnapshot.map { it.id }.toSet())
     }
 
+    @Test fun `suggestions use the injected session random source`() = withRepository(Random(7)) { repository, _, _, server ->
+        server.movies = movieFixtures(20)
+        runBlocking { repository.refresh(CatalogType.MOVIES) }
+
+        val suggestions = repository.ensureSuggestions(CatalogType.MOVIES, emptySet(), limit = 6)
+
+        assertEquals((1..20).map { "movie-$it" }.sorted().shuffled(Random(7)).take(6).toSet(), suggestions.map { it.id }.toSet())
+    }
+
+    @Test fun `account info returns provider username when present`() = withRepository { repository, _, _, server ->
+        server.accountInfo = """{"user_info":{"username":"provider-user","status":"Active"}}"""
+
+        assertEquals("provider-user", repository.accountInfo().username)
+    }
+
+    @Test fun `account info leaves username absent when the provider omits it`() = withRepository { repository, _, _, server ->
+        server.accountInfo = """{"user_info":{"status":"Active"}}"""
+
+        assertNull(repository.accountInfo().username)
+    }
+
     @Test fun `regenerated suggestions update the home snapshot used by browse`() = withRepository { repository, _, _, server ->
         server.movies = movieFixtures(20)
         runBlocking { repository.refresh(CatalogType.MOVIES) }
@@ -122,12 +181,12 @@ class DesktopCatalogRepositoryTest {
         assertEquals(beforeFailure, repository.ensureSuggestions(CatalogType.MOVIES, emptySet()).map { it.id }.toSet())
     }
 
-    private fun withRepository(block: (DesktopCatalogRepository, Path, Credentials, FixtureServer) -> Unit) {
+    private fun withRepository(random: Random = Random.Default, block: (DesktopCatalogRepository, Path, Credentials, FixtureServer) -> Unit) {
         val database = Files.createTempFile("tvivo-catalog-test", ".db")
         FixtureServer().use { server ->
             val credentials = Credentials("127.0.0.1", server.port, "test-user", "test-password")
             try {
-                DesktopCatalogRepository(credentials, database).use { repository -> block(repository, database, credentials, server) }
+                DesktopCatalogRepository(credentials, database, random).use { repository -> block(repository, database, credentials, server) }
             } finally {
                 Files.deleteIfExists(database)
             }
@@ -166,11 +225,16 @@ class DesktopCatalogRepositoryTest {
         """{"stream_id":"movie-$number","category_id":"movies","name":"Movie $number","container_extension":"mp4","added":"1700000000"}"""
     }
 
+    private fun seriesFixtures(count: Int) = (1..count).joinToString(prefix = "[", postfix = "]") { number ->
+        """{"series_id":"series-$number","category_id":"series","name":"Series $number","cover":"https://example.com/$number.jpg"}"""
+    }
+
     private class FixtureServer : AutoCloseable {
         private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         var movies = "[]"
         var live = "[]"
         var series = "[]"
+        var accountInfo = """{"user_info":{}}"""
         val port get() = server.address.port
 
         init {
@@ -183,6 +247,7 @@ class DesktopCatalogRepositoryTest {
                     "get_live_streams" -> live
                     "get_series_categories" -> """[{"category_id":"series","category_name":"Series"}]"""
                     "get_series" -> series
+                    "" -> accountInfo
                     else -> error("Unexpected action: $action")
                 }
                 exchange.sendResponseHeaders(200, body.toByteArray().size.toLong())

@@ -36,6 +36,7 @@ internal class MpvPlayer(
     private val onState: (generation: Int, state: String) -> Unit,
     private val onPositionMs: (generation: Int, positionMs: Long) -> Unit,
     private val onPauseChange: (generation: Int, paused: Boolean) -> Unit = { _, _ -> },
+    private val onFullScreenChange: (Boolean) -> Unit = {},
 ) : AutoCloseable {
     private val verboseLogging = System.getProperty("tvivo.debug.fixture") != null || System.getProperty("tvivo.debug.verbose") != null
     private val closed = AtomicBoolean(false)
@@ -112,8 +113,9 @@ internal class MpvPlayer(
                 check(obsTimePos >= 0) { "mpv_observe_property(time-pos) failed: ${lib.mpv_error_string(obsTimePos)}" }
                 val obsPause = lib.mpv_observe_property(ctx, OBSERVE_PAUSE, "pause", MpvLibrary.MPV_FORMAT_FLAG)
                 val obsDuration = lib.mpv_observe_property(ctx, OBSERVE_DURATION, "duration", MpvLibrary.MPV_FORMAT_DOUBLE)
-                if (obsPause < 0 || obsDuration < 0) {
-                    debugLog("mpv_observe_property returned an error: pause=$obsPause duration=$obsDuration")
+                val obsFullScreen = lib.mpv_observe_property(ctx, OBSERVE_FULLSCREEN, "fullscreen", MpvLibrary.MPV_FORMAT_FLAG)
+                if (obsPause < 0 || obsDuration < 0 || obsFullScreen < 0) {
+                    debugLog("mpv_observe_property returned an error: pause=$obsPause duration=$obsDuration fullscreen=$obsFullScreen")
                 }
             } catch (e: Throwable) {
                 runCatching { lib.mpv_terminate_destroy(ctx) }
@@ -174,30 +176,33 @@ internal class MpvPlayer(
     /** Returns the generation assigned to this attempt on success, synchronously and before the
      * loadfile command (and its first state update) is submitted to the owner thread -- callers
      * must record it before any callback for this attempt can possibly arrive. */
-    fun play(file: File): Result<Int> = runCatching {
+    fun play(file: File, title: String = file.nameWithoutExtension): Result<Int> = runCatching {
         require(file.isFile) { "Choose an existing local media file." }
         require(file.extension.lowercase() in supportedExtensions) { "Only .mp4, .mkv, and .ts are supported by this POC." }
         val generation = generationCounter.incrementAndGet()
         currentGeneration = generation
         debugLog("play(fixture .${file.extension.lowercase()}) gen=$generation")
-        submit { loadfile(generation, file.absolutePath, isResume = false) }
+        submit { loadfile(generation, file.absolutePath, isResume = false, title = title) }
         generation
     }
 
-    fun playUrl(url: String, resumeFromMs: Long = 0L): Result<Int> = runCatching {
+    fun playUrl(url: String, resumeFromMs: Long = 0L, title: String): Result<Int> = runCatching {
         require(url.startsWith("http://") || url.startsWith("https://")) { "Unsupported playback URL." }
         pendingResumeMs = resumeFromMs
         val generation = generationCounter.incrementAndGet()
         currentGeneration = generation
         debugLog("play(url) gen=$generation")
-        submit { loadfile(generation, url, isResume = resumeFromMs > 0L) }
+        submit { loadfile(generation, url, isResume = resumeFromMs > 0L, title = title) }
         generation
     }
 
-    private fun loadfile(generation: Int, target: String, isResume: Boolean) {
+    private fun loadfile(generation: Int, target: String, isResume: Boolean, title: String) {
         val lib = mpv ?: return
         val ctx = handle ?: return
         if (generation != currentGeneration) return
+        // mpv's OSC reads media-title. force-media-title must be set by the owner thread before
+        // loadfile so the filename never flashes as the title for a new item.
+        lib.mpv_set_property_string(ctx, "force-media-title", title.ifBlank { "Tvivo" })
         onState(generation, if (isResume) "Resuming stream…" else "Opening stream…")
         val result = lib.mpv_command(ctx, arrayOf("loadfile", target, "replace", null))
         if (result < 0) {
@@ -332,6 +337,14 @@ internal class MpvPlayer(
         val result = lib.mpv_command(ctx, arrayOf("script-message", "osc-visibility", mode, null))
         if (result < 0) debugLog("osc-visibility $mode failed: ${lib.mpv_error_string(result)}")
         else debugLog("osc-visibility $mode sent ok")
+    }
+
+    /** Requests fullscreen through libmpv so the OSC and app controls share one state source. */
+    fun setFullScreen(enabled: Boolean) = submit {
+        val lib = mpv ?: return@submit
+        val ctx = handle ?: return@submit
+        val result = lib.mpv_set_property_string(ctx, "fullscreen", if (enabled) "yes" else "no")
+        if (result < 0) debugLog("fullscreen=$enabled failed: ${lib.mpv_error_string(result)}")
     }
 
     fun sendWheel(up: Boolean) = submit {
@@ -477,6 +490,12 @@ internal class MpvPlayer(
                             onPauseChange(generation, ptr.getInt(0) != 0)
                         }
                     }
+                    "fullscreen" -> {
+                        if (property.format == MpvLibrary.MPV_FORMAT_FLAG) {
+                            val ptr = property.data ?: return
+                            onFullScreenChange(ptr.getInt(0) != 0)
+                        }
+                    }
                 }
             }
             else -> Unit
@@ -501,6 +520,7 @@ internal class MpvPlayer(
         const val OBSERVE_TIME_POS = 1L
         const val OBSERVE_PAUSE = 2L
         const val OBSERVE_DURATION = 3L
+        const val OBSERVE_FULLSCREEN = 4L
         val supportedExtensions = setOf("mp4", "mkv", "ts")
     }
 }
