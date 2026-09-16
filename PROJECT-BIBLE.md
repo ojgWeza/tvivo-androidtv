@@ -10,10 +10,11 @@ Read in this order:
 
 1. **`D:\HCode\DEV-BIBLE.md`** — global rules for all D:\HCode projects (constitutional)
 2. **This file: `PROJECT-BIBLE.md`** — project-specific rules and state (§1-7 below)
-3. **Memory files** in `C:\Users\Dell\.claude\projects\D--HCode-Tvivo\memory\`:
+3. **`PRODUCT-BIBLE.md`** — product spec, users, design principles, commitments
+4. **Memory files** in `C:\Users\Dell\.claude\projects\D--HCode-Tvivo\memory\`:
    - `MEMORY.md` (auto-loaded index)
    - Relevant topic files (see memory index for what exists)
-4. **Work queue:** `TODO.md` (open items only) when picking a task
+5. **Work queue:** `TODO.md` (open items only) when picking a task
 
 ### Session-start self-check (Claude/Codex both)
 
@@ -241,7 +242,7 @@ If Codex's review surfaces a scope/architecture disagreement (not a straightforw
 
 ## §7 Lessons Learned
 
-### 2026-09-16 (Session: Context Restructuring)
+### 2026-09-16 (Session: Complete Documentation Restructuring)
 
 **Decision:** Consolidated 17 scattered detail files (8 `claude-*.md` + 9 `product-*.md`) into this unified `PROJECT-BIBLE.md`, following the EMR project pattern.
 

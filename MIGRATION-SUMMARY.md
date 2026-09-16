@@ -1,8 +1,8 @@
 # Tvivo Documentation Migration Summary
 
 **Date:** 2026-09-16  
-**Scope:** Consolidated 17 detail files into unified PROJECT-BIBLE.md + simplified TODO.md  
-**Status:** Phase 1 & 2 complete; verification in progress
+**Scope:** Consolidated 17 detail files into unified PROJECT-BIBLE.md + PRODUCT-BIBLE.md + simplified TODO.md  
+**Status:** Phase 1-3 complete; Phase 4 (cleanup) ready
 
 ---
 
@@ -20,7 +20,7 @@
 | `bible-detail/claude-05.md` | Testing + emulator | PROJECT-BIBLE.md §4 |
 | `bible-detail/claude-06.md` | Conventions | PROJECT-BIBLE.md §5 |
 | `bible-detail/claude-07-agent-division.md` | Claude/Codex workflow | PROJECT-BIBLE.md §6 |
-| `bible-detail/product-00.md` through `product-10.md` (9 files) | Product spec | Optional PRODUCT-BIBLE.md (not yet created) |
+| `bible-detail/product-00.md` through `product-10.md` (11 files) | Product spec | PRODUCT-BIBLE.md (created Phase 3) |
 | `todo-tree/00-overview.md` + `todo-tree/01-open.md` | Open work | TODO.md (simplified, indexed by area) |
 | `CLAUDE.md` (39 lines, complex) | Entry point | CLAUDE.md (simplified to 3 lines + pointer) |
 
@@ -40,9 +40,15 @@
    - Session-end duty documented
 
 3. **`CLAUDE.md`** (simplified to 8 lines)
-   - Thin entry point pointing to PROJECT-BIBLE.md
-   - Session protocol: read DEV-BIBLE → PROJECT-BIBLE → Memory → TODO
+   - Thin entry point pointing to PROJECT-BIBLE.md and PRODUCT-BIBLE.md
+   - Session protocol: read DEV-BIBLE → PROJECT-BIBLE → PRODUCT-BIBLE → Memory → TODO
    - Constitutional note
+
+4. **`PRODUCT-BIBLE.md`** (~200 lines, Phase 3)
+   - Product spec consolidated from 11 product-*.md files
+   - Users, principles, brand commitments, accessibility
+   - Operating context and at-scale catalog facts
+   - Deferred/out-of-scope items with rationale
 
 ### Files Retained (Unchanged)
 
@@ -52,13 +58,13 @@
 - `todo-tree/` — old structure (safe to delete after verification)
 - `bible-detail/` — old structure (safe to delete after verification)
 
-### Files to Archive
+### Files Archived (2026-09-16)
 
-After verification, these can be moved to a backup or deleted:
+Moved to `_archive/` with dating and README:
 ```
-bible-detail/claude-*.md (7 files, content preserved)
-bible-detail/product-*.md (9 files, content not yet migrated to PRODUCT-BIBLE)
-todo-tree/ (2 files, content preserved)
+_archive/bible-detail-2026-09-16/ (16 files, all content migrated)
+_archive/todo-tree-2026-09-16/ (8 files, all content migrated)
+_archive/README.md (explains what was archived and why)
 ```
 
 ---
@@ -73,7 +79,7 @@ todo-tree/ (2 files, content preserved)
 - [x] Session protocol consolidated from 3 sources into §0
 - [x] All open items from `todo-tree/01-open.md` listed in TODO.md (grouped by area)
 - [x] Lessons learned from `claude-02` historical notes moved to PROJECT-BIBLE §7
-- [ ] Product spec from `product-00.md` through `product-10.md` (optional, not yet in PRODUCT-BIBLE)
+- [x] Product spec from `product-00.md` through `product-10.md` consolidated in PRODUCT-BIBLE.md
 
 ### Structure Verification
 
@@ -86,19 +92,36 @@ todo-tree/ (2 files, content preserved)
 ### Context Load Reduction
 
 **Before:** ~170 lines before seeing task, plus guesswork about which detail files to load  
-**After:** ~209 lines (DEV-BIBLE + PROJECT-BIBLE §0-3) crystal clear, no guesswork
+**After:** ~410 lines (DEV-BIBLE + PROJECT-BIBLE §0-3 + PRODUCT-BIBLE) crystal clear, no guesswork
+- DEV-BIBLE: ~70 lines (global rules)
+- PROJECT-BIBLE §0-3: ~140 lines (implementation, test strategy)
+- PRODUCT-BIBLE: ~200 lines (product spec)
+- All 3 are constitutional and must be read at session start
 
 ---
 
-## Missing Pieces (Not Part of Phase 1-2)
+## Completed Phases
 
-### Phase 3 (Optional)
+### Phase 1 (Complete 2026-09-16)
 
-- **PRODUCT-BIBLE.md:** Extract product spec from `bible-detail/product-*.md` files (9 files). Optional — user can defer if not needed immediately.
+- Consolidated 7 `claude-*.md` files → PROJECT-BIBLE.md §1-6
+- Created unified session protocol in PROJECT-BIBLE.md §0
 
-### Phase 4 (Cleanup)
+### Phase 2 (Complete 2026-09-16)
 
-- Delete or archive `bible-detail/` and `todo-tree/` directories after verification passes
+- Consolidated `todo-tree/01-open.md` → TODO.md (grouped by area)
+- Simplified CLAUDE.md (3-line entry point)
+
+### Phase 3 (Complete 2026-09-16)
+
+- Extracted 11 `product-*.md` files → PRODUCT-BIBLE.md
+- Updated CLAUDE.md and PROJECT-BIBLE.md §0 to load PRODUCT-BIBLE.md
+
+### Phase 4 (Complete 2026-09-16)
+
+- Archived `bible-detail/` → `_archive/bible-detail-2026-09-16/`
+- Archived `todo-tree/` → `_archive/todo-tree-2026-09-16/`
+- Created `_archive/README.md` documenting what was moved and why
 
 ---
 
@@ -139,10 +162,9 @@ wc -l TODO.md                        # Should be ~130+ lines
 
 ## Next Steps
 
-1. **Verify this migration** (user review)
-2. **Optional Phase 3:** Extract PRODUCT-BIBLE.md if needed
-3. **Phase 4:** Archive/delete old structure
-4. **Update git:** One commit with PROJECT-BIBLE.md + TODO.md + simplified CLAUDE.md, documenting the consolidation
+1. ✅ **Phase 3 verification** — PRODUCT-BIBLE.md created and loaded in session protocol
+2. ✅ **Phase 4 archival** — old structure moved to `_archive/` with README
+3. **Update git:** One commit documenting Phase 3-4 consolidation and archival
 
 ---
 
