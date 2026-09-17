@@ -1,0 +1,26 @@
+<Window
+    x:Class="Tvivo.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ContentControl x:Name="VideoHost"
+                        Grid.Row="0"
+                        Background="{StaticResource AppPanelSurfaceBrush}" />
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12">
+            <TextBox x:Name="PathBox"
+                     Width="520"
+                     PlaceholderText="Enter a local media path or URI" />
+            <Button Content="Play" Click="Play_Click" />
+            <Button Content="Stop" Click="Stop_Click" />
+            <TextBlock x:Name="StatusText"
+                       VerticalAlignment="Center"
+                       Text="Ready" />
+        </StackPanel>
+    </Grid>
+</Window>
