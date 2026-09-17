@@ -23,7 +23,10 @@ import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.sun.jna.Native
+import com.sun.jna.Memory
 import com.sun.jna.Pointer
+import com.sun.jna.Structure
+import com.sun.jna.ptr.IntByReference
 import com.dev.tvivo.desktop.MpvPlayer
 import java.awt.BorderLayout
 import java.awt.Canvas
@@ -38,11 +41,17 @@ import java.awt.event.ComponentEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import java.lang.management.ManagementFactory
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.Timer
 import javax.swing.WindowConstants
+import kotlin.system.exitProcess
 import kotlin.math.max
+
+private const val PROCESS_MEMORY_COUNTERS_EX_SIZE = 80L
+private const val THREADENTRY32_SIZE = 28L
 
 /**
  * Fixture-only entry point. Run through the dedicated Gradle JavaExec task after explicit user
@@ -57,26 +66,46 @@ fun main(args: Array<String>) {
     require(fixture.isFile && fixture.extension.lowercase() in setOf("mp4", "mkv", "ts")) {
         "Fixture must be an existing local .mp4, .mkv, or .ts file: ${fixture.absolutePath}"
     }
-    EventQueue.invokeLater { TwoWindowOverlaySpike(fixture).start() }
+    val cycles = System.getProperty("tvivo.overlay.cycles")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    val runId = System.getProperty("tvivo.overlay.runId") ?: UUID.randomUUID().toString()
+    EventQueue.invokeLater { runCycles(fixture, runId, cycles, 1) }
 }
 
-private class TwoWindowOverlaySpike(private val fixture: File) {
+private fun runCycles(fixture: File, runId: String, cycles: Int, cycleId: Int) {
+    TwoWindowOverlaySpike(fixture, runId, cycleId) {
+        if (cycleId < cycles) runCycles(fixture, runId, cycles, cycleId + 1) else exitProcess(0)
+    }.start()
+}
+
+private class TwoWindowOverlaySpike(
+    private val fixture: File,
+    private val runId: String,
+    private val cycleId: Int,
+    private val onDisposed: () -> Unit,
+) {
     private val host = Frame("Tvivo two-window overlay spike")
     private val canvas = Canvas().apply { background = AwtColor.BLACK; isFocusable = true }
     private val overlay = ComposeWindow()
     private val controlRegions = mutableStateOf(emptyList<Win32OverlayBridge.Region>())
     private val overlayVisible = AtomicBoolean(false)
     private val overlayCreations = AtomicInteger(0)
+    private val playerCreations = AtomicInteger(0)
+    private val playerGenerations = AtomicInteger(0)
     private var bridge: Win32OverlayBridge? = null
     private var cinemaMode = false
     private var windowedBounds = Rectangle(80, 80, 960, 540)
     private var player: MpvPlayer? = null
     private var geometryTimer: Timer? = null
     private var autoCloseTimer: Timer? = null
+    private var metricsTimer: Timer? = null
+    private var firstFrameLogged = false
+    private var disposed = false
     private val startedAtNanos = System.nanoTime()
 
     fun start() {
         check(EventQueue.isDispatchThread())
+        log("host created fixture=${fixture.name} pid=${ProcessHandle.current().pid()} cycles=${System.getProperty("tvivo.overlay.cycles") ?: 1}")
+        log("evidence_manifest runId=$runId cycleId=$cycleId compiled=true compiledRevision=${System.getProperty("tvivo.overlay.revision") ?: "unspecified"}")
         host.layout = BorderLayout()
         host.add(canvas, BorderLayout.CENTER)
         host.minimumSize = Dimension(640, 360)
@@ -87,13 +116,13 @@ private class TwoWindowOverlaySpike(private val fixture: File) {
                 EventQueue.invokeLater {
                     val active = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().activeWindow
                     if (active !== overlay && active !== host) {
-                        overlay.isVisible = false
-                        overlayVisible.set(false)
+                        hideOverlay("foreground lost")
+                        logWindowState()
                     }
                 }
             }
             override fun windowActivated(e: WindowEvent) { if (player != null) showOverlay() }
-            override fun windowIconified(e: WindowEvent) { overlay.isVisible = false; overlayVisible.set(false) }
+            override fun windowIconified(e: WindowEvent) { hideOverlay("host iconified") }
             override fun windowDeiconified(e: WindowEvent) { if (player != null) showOverlay() }
         })
         host.addComponentListener(object : ComponentAdapter() {
@@ -102,25 +131,43 @@ private class TwoWindowOverlaySpike(private val fixture: File) {
         })
         host.isVisible = true
         createOverlay()
+        host.extendedState = Frame.NORMAL
+        host.toFront()
+        host.requestFocus()
+        host.requestFocusInWindow()
+        bridge?.requestForeground()
+        log("host visible=${host.isVisible} displayable=${host.isDisplayable} focused=${host.isFocused} active=${host.isActive} iconified=${host.extendedState == Frame.ICONIFIED}")
+        playerCreations.incrementAndGet()
         player = MpvPlayer(
-            onState = { generation, state -> log("state generation=$generation state=$state") },
+            onState = { generation, state ->
+                playerGenerations.set(maxOf(playerGenerations.get(), generation))
+                log("state generation=$generation state=$state")
+                if (state == "Playing" && !firstFrameLogged) {
+                    firstFrameLogged = true
+                    log("first frame generation=$generation")
+                }
+            },
             onPositionMs = { _, _ -> },
-            onPauseChange = { _, paused -> log("paused=$paused") },
+            onPauseChange = { generation, paused -> log("state generation=$generation ${if (paused) "paused" else "playing"}") },
         )
         Thread {
             val current = checkNotNull(player)
             current.initialise(canvas)
                 .onSuccess { result ->
-                    log("player initialized; fixture=${fixture.name}")
+                    log("player initialized; fixture=${fixture.name} canvasHwnd=${pointerValue(Native.getComponentPointer(canvas))}")
+                    log("lifecycle=player initialized")
                     current.play(fixture, fixture.nameWithoutExtension)
-                        .onSuccess { generation -> log("play requested generation=$generation") }
+                        .onSuccess { generation -> playerGenerations.set(generation); log("lifecycle=load requested generation=$generation") }
                         .onFailure { log("play failed: ${it.message}") }
                 }
                 .onFailure { error -> log("player initialize failed: ${error.message}") }
         }.apply { isDaemon = true; name = "two-window-overlay-fixture"; start() }
         showOverlay()
         geometryTimer = Timer(50) { syncGeometry() }.also { it.start() }
-        System.getProperty("tvivo.overlay.autoCloseMs")?.toIntOrNull()?.takeIf { it > 0 }?.let { delayMs ->
+        metricsTimer = Timer(1000) { logProcessMetrics("periodic") }.also { it.start() }
+        val closeDelay = System.getProperty("tvivo.overlay.playMs")?.toIntOrNull()
+            ?: System.getProperty("tvivo.overlay.autoCloseMs")?.toIntOrNull()
+        closeDelay?.takeIf { it > 0 }?.let { delayMs ->
             autoCloseTimer = Timer(delayMs) { dispose() }.also {
                 it.isRepeats = false
                 it.start()
@@ -141,8 +188,10 @@ private class TwoWindowOverlaySpike(private val fixture: File) {
         overlay.isVisible = true
         val hostHwnd = Native.getComponentPointer(host)
         val overlayHwnd = Native.getComponentPointer(overlay)
-        bridge = Win32OverlayBridge(hostHwnd, overlayHwnd, { controlRegions.value }, { overlay.locationOnScreen })
+        bridge = Win32OverlayBridge(hostHwnd, overlayHwnd, { controlRegions.value }, { overlay.locationOnScreen }, ::log)
         overlayCreations.incrementAndGet()
+        log("lifecycle=overlay created hostHwnd=${pointerValue(hostHwnd)} overlayHwnd=${pointerValue(overlayHwnd)} canvasHwnd=${pointerValue(Native.getComponentPointer(canvas))} overlayCreations=${overlayCreations.get()}")
+        log("lifecycle=bridge installed")
         syncGeometry()
     }
 
@@ -217,27 +266,211 @@ private class TwoWindowOverlaySpike(private val fixture: File) {
         if (!canvas.isShowing || canvas.width <= 0 || canvas.height <= 0) return
         val screen = canvas.locationOnScreen
         overlay.setBounds(screen.x, screen.y, canvas.width, canvas.height)
-        bridge?.let { /* The bridge reads the overlay's current screen origin during hit testing. */ }
+        val configuration = canvas.graphicsConfiguration
+        val transform = configuration?.defaultTransform
+        log("geometry logical=canvas(${canvas.width}x${canvas.height}) overlay(${overlay.width}x${overlay.height}) screen=($screen ${canvas.width}x${canvas.height}) monitor=${configuration?.device?.getIDstring()} dpi=${transform?.scaleX}x${transform?.scaleY} visible=${overlay.isVisible} displayable=${overlay.isDisplayable} focused=${overlay.isFocused} active=${overlay.isActive}")
+        bridge?.logWindowState()
     }
 
     private fun dispose() {
+        if (disposed) return
+        disposed = true
         geometryTimer?.stop()
         geometryTimer = null
+        metricsTimer?.stop()
+        metricsTimer = null
         autoCloseTimer?.stop()
         autoCloseTimer = null
-        overlay.isVisible = false
-        overlayVisible.set(false)
-        bridge?.close()
+        hideOverlay("dispose")
+        logProcessMetrics("after overlay hidden")
+        check(!overlay.isVisible) { "Overlay must be hidden before player.close()" }
+        log("assert overlay hidden before player close=true")
+        val bridgeToClose = bridge
         bridge = null
+        runCatching { bridgeToClose?.close() }
+            .onSuccess { log("lifecycle=bridge closed") }
+            .onFailure { log("bridge close failed: ${it.message}") }
+        logProcessMetrics("after bridge close wndproc restored")
         overlay.dispose()
-        player?.close()
+        log("lifecycle=overlay disposed")
+        logProcessMetrics("after ComposeWindow dispose")
+        val closeStarted = System.nanoTime()
+        val closeTimeoutMs = System.getProperty("tvivo.overlay.closeTimeoutMs")?.toLongOrNull()?.coerceAtLeast(1) ?: 6000
+        runCatching { player?.close() }
+            .onSuccess {
+                val closeMs = (System.nanoTime() - closeStarted) / 1_000_000
+                log("lifecycle=player closed closeMs=$closeMs closeTimeoutMs=$closeTimeoutMs timeout=${closeMs > closeTimeoutMs}")
+            }
+            .onFailure { log("player close failed: ${it.message}") }
         player = null
+        logProcessMetrics("after MpvPlayer.close completed")
+        logThreads("after player close")
         host.dispose()
-        log("disposed overlayCreations=${overlayCreations.get()}")
+        log("lifecycle=host disposed overlayCreations=${overlayCreations.get()} playerCreations=${playerCreations.get()} playerGenerations=${playerGenerations.get()}")
+        logProcessMetrics("after host dispose")
+        settleBeforeNextCycle()
     }
 
     private fun log(message: String) {
         val elapsedMs = (System.nanoTime() - startedAtNanos) / 1_000_000
-        println("[two-window-overlay +${elapsedMs}ms] $message")
+        println("[two-window-overlay runId=$runId cycleId=$cycleId timestamp=${java.time.Instant.now()} elapsedMs=$elapsedMs] $message")
     }
+
+    private fun hideOverlay(reason: String) {
+        overlay.isVisible = false
+        overlayVisible.set(false)
+        log("lifecycle=overlay hidden reason=$reason")
+    }
+
+    private fun settleBeforeNextCycle() {
+        val quietMs = System.getProperty("tvivo.overlay.quietMs")?.toLongOrNull()?.coerceAtLeast(0) ?: 2500
+        Thread {
+            runCatching { Thread.sleep(quietMs) }
+                .onFailure { log("settle sleep interrupted: ${it.message}") }
+            System.gc()
+            System.runFinalization()
+            // Give reference/finalizer processing a short opportunity after the explicit GC.
+            runCatching { Thread.sleep(500) }
+                .onFailure { log("settle post-GC sleep interrupted: ${it.message}") }
+            EventQueue.invokeLater {
+                logProcessMetrics("settled after quiet=${quietMs}ms gc=true")
+                logThreads("settled")
+                onDisposed()
+            }
+        }.apply {
+            // A disposed AWT window can let the JVM's AWT auto-shutdown run before a daemon
+            // settler gets to post the next cycle. Keep this handoff alive until onDisposed().
+            isDaemon = false
+            name = "two-window-overlay-settler"
+            start()
+        }
+    }
+
+    private fun logProcessMetrics(stage: String) {
+        val os = ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean
+        val pid = ProcessHandle.current().pid()
+        val windows = WindowsProcessMetrics.readCurrentProcess()
+        log(
+            "process_metrics stage=$stage pid=$pid cpu=${os?.processCpuLoad} " +
+                "cpuTimeNs=${os?.processCpuTime} heapUsed=${Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()} " +
+                "handles=${windows?.handles ?: "unavailable"} workingSetBytes=${windows?.workingSetBytes ?: "unavailable"} " +
+                "privateBytes=${windows?.privateBytes ?: "unavailable"} nativeThreads=${windows?.nativeThreads ?: "unavailable"} " +
+                "jvmThreads=${Thread.activeCount()}",
+        )
+    }
+
+    private data class WindowsProcessMetrics(
+        val handles: Long,
+        val workingSetBytes: Long,
+        val privateBytes: Long,
+        val nativeThreads: Long,
+    ) {
+        companion object {
+            private val kernel32 = Native.load("kernel32", Kernel32::class.java)
+            private val psapi = Native.load("psapi", Psapi::class.java)
+
+            fun readCurrentProcess(): WindowsProcessMetrics? = runCatching {
+                val process = kernel32.GetCurrentProcess()
+                val handleCount = IntByReference()
+                check(kernel32.GetProcessHandleCount(process, handleCount))
+
+                val counters = ProcessMemoryCountersEx()
+                counters.cb = counters.size()
+                counters.write()
+                check(psapi.GetProcessMemoryInfo(process, counters, counters.size()))
+                counters.read()
+
+                val processId = kernel32.GetCurrentProcessId()
+                val snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+                check(Pointer.nativeValue(snapshot) != INVALID_HANDLE_VALUE)
+                var nativeThreads = 0L
+                try {
+                    val entry = ThreadEntry32()
+                    entry.dwSize = entry.size()
+                    entry.write()
+                    if (kernel32.Thread32First(snapshot, entry)) {
+                        do {
+                            entry.read()
+                            if (entry.th32OwnerProcessID == processId) nativeThreads++
+                        } while (kernel32.Thread32Next(snapshot, entry))
+                    }
+                } finally {
+                    kernel32.CloseHandle(snapshot)
+                }
+                WindowsProcessMetrics(
+                    handles = handleCount.value.toLong(),
+                    workingSetBytes = counters.workingSetSize,
+                    privateBytes = counters.privateUsage,
+                    nativeThreads = nativeThreads,
+                )
+            }.onFailure { println("[two-window-overlay] WindowsProcessMetrics.readCurrentProcess failed: $it") }
+                .getOrNull()
+        }
+    }
+
+    private interface Kernel32 : com.sun.jna.Library {
+        fun GetCurrentProcess(): Pointer
+        fun GetCurrentProcessId(): Int
+        fun GetProcessHandleCount(process: Pointer, handleCount: IntByReference): Boolean
+        fun CreateToolhelp32Snapshot(flags: Int, processId: Int): Pointer
+        fun Thread32First(snapshot: Pointer, entry: ThreadEntry32): Boolean
+        fun Thread32Next(snapshot: Pointer, entry: ThreadEntry32): Boolean
+        fun CloseHandle(handle: Pointer): Boolean
+    }
+
+    private interface Psapi : com.sun.jna.Library {
+        fun GetProcessMemoryInfo(process: Pointer, counters: ProcessMemoryCountersEx, size: Int): Boolean
+    }
+
+    // JNA reflects Structure fields after the native call. These classes must be
+    // publicly reflectable; private nested classes make Field.get(...) fail even
+    // when the Win32 function itself succeeds.
+    class ProcessMemoryCountersEx : Structure(Memory(PROCESS_MEMORY_COUNTERS_EX_SIZE), ALIGN_NONE) {
+        @JvmField var cb = 0
+        @JvmField var pageFaultCount = 0
+        @JvmField var peakWorkingSetSize = 0L
+        @JvmField var workingSetSize = 0L
+        @JvmField var quotaPeakPagedPoolUsage = 0L
+        @JvmField var quotaPagedPoolUsage = 0L
+        @JvmField var quotaPeakNonPagedPoolUsage = 0L
+        @JvmField var quotaNonPagedPoolUsage = 0L
+        @JvmField var pagefileUsage = 0L
+        @JvmField var peakPagefileUsage = 0L
+        @JvmField var privateUsage = 0L
+
+        override fun getFieldOrder() = listOf(
+            "cb", "pageFaultCount", "peakWorkingSetSize", "workingSetSize",
+            "quotaPeakPagedPoolUsage", "quotaPagedPoolUsage", "quotaPeakNonPagedPoolUsage",
+            "quotaNonPagedPoolUsage", "pagefileUsage", "peakPagefileUsage", "privateUsage",
+        )
+
+    }
+
+    class ThreadEntry32 : Structure(Memory(THREADENTRY32_SIZE), ALIGN_NONE) {
+        @JvmField var dwSize = 0
+        @JvmField var cntUsage = 0
+        @JvmField var th32ThreadID = 0
+        @JvmField var th32OwnerProcessID = 0
+        @JvmField var tpBasePri = 0
+        @JvmField var tpDeltaPri = 0
+        @JvmField var dwFlags = 0
+
+        override fun getFieldOrder() = listOf(
+            "dwSize", "cntUsage", "th32ThreadID", "th32OwnerProcessID", "tpBasePri", "tpDeltaPri", "dwFlags",
+        )
+
+    }
+
+    private companion object {
+        const val TH32CS_SNAPTHREAD = 0x00000004
+        const val INVALID_HANDLE_VALUE = -1L
+    }
+
+    private fun logThreads(stage: String) {
+        log("threads stage=$stage " + Thread.getAllStackTraces().keys.joinToString(",") { "${it.name}:${it.isAlive}" })
+    }
+
+    private fun pointerValue(pointer: Pointer): String = "0x${Pointer.nativeValue(pointer).toString(16)}"
+
+    private fun logWindowState() = bridge?.logWindowState()
 }

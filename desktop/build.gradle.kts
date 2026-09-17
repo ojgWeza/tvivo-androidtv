@@ -83,4 +83,10 @@ tasks.register<org.gradle.api.tasks.JavaExec>("twoWindowOverlaySpike") {
     System.getProperty("tvivo.libmpv.dir")?.let { systemProperty("tvivo.libmpv.dir", it) }
     System.getProperty("tvivo.debug.verbose")?.let { systemProperty("tvivo.debug.verbose", it) }
     System.getProperty("tvivo.overlay.autoCloseMs")?.let { systemProperty("tvivo.overlay.autoCloseMs", it) }
+    System.getProperty("tvivo.overlay.playMs")?.let { systemProperty("tvivo.overlay.playMs", it) }
+    System.getProperty("tvivo.overlay.cycles")?.let { systemProperty("tvivo.overlay.cycles", it) }
+    System.getProperty("tvivo.overlay.quietMs")?.let { systemProperty("tvivo.overlay.quietMs", it) }
+    System.getProperty("tvivo.overlay.runId")?.let { systemProperty("tvivo.overlay.runId", it) }
+    System.getProperty("tvivo.overlay.revision")?.let { systemProperty("tvivo.overlay.revision", it) }
+    System.getProperty("tvivo.overlay.closeTimeoutMs")?.let { systemProperty("tvivo.overlay.closeTimeoutMs", it) }
 }
