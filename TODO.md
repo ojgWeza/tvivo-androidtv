@@ -28,6 +28,7 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 ### D-Desktop-21 — Tvivo-owned player controls (planned)
 
 - [ ] **Replace libmpv OSC** — Implement `D-DESKTOP-21-OWNED-PLAYER-OVERLAY-PLAN.md`: disable mpv's OSC and ship a fully Tvivo-owned Compose overlay controller. Begin with a libmpv render-API feasibility spike because the current heavyweight `wid` Canvas cannot safely accept Compose controls above it. Fullscreen/cinema mode is blocked on fixture verification because prior mpv-property attempts could not resize the Compose parent.
+- [ ] **D-Desktop-21 spike gate remains blocked** — The fixture-only two-window host and Win32 `WM_NCHITTEST` bridge were added without changing `MpvPlayer.kt` or `DesktopShell.kt`. A local MKV reached `Playing` for over 60 seconds with observed working-set/private-byte samples, but input/alignment/DPI/z-order evidence, five lifecycle cycles, graceful teardown, and a measured `wid` baseline comparison were not completed. Do not begin production overlay work until the remaining 0.1.3 acceptance evidence is captured.
 
 ### Desktop distribution & performance
 

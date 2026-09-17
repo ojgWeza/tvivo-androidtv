@@ -72,3 +72,15 @@ tasks.register<org.gradle.api.tasks.JavaExec>("fixtureLiveRelay") {
         layout.projectDirectory.file("src/test/resources/fixtures/sintel-trailer-12s.ts").asFile.absolutePath,
     )
 }
+
+tasks.register<org.gradle.api.tasks.JavaExec>("twoWindowOverlaySpike") {
+    group = "verification"
+    description = "Run the Windows-only, fixture-only wid plus Compose overlay spike."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.dev.tvivo.desktop.overlay.TwoWindowOverlaySpikeKt")
+    System.getProperty("tvivo.overlay.fixture")?.let { systemProperty("tvivo.overlay.fixture", it) }
+    System.getProperty("tvivo.libmpv.dir")?.let { systemProperty("tvivo.libmpv.dir", it) }
+    System.getProperty("tvivo.debug.verbose")?.let { systemProperty("tvivo.debug.verbose", it) }
+    System.getProperty("tvivo.overlay.autoCloseMs")?.let { systemProperty("tvivo.overlay.autoCloseMs", it) }
+}
