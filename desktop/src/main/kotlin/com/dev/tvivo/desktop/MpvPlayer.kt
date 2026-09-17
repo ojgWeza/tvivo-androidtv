@@ -43,15 +43,16 @@ internal class MpvPlayer(
     private val generationCounter = AtomicInteger(0)
     @Volatile private var currentGeneration = 0
     @Volatile private var pendingResumeMs = 0L
-    // Only ever mutated on the owner thread (set during the init task, cleared during shutdown);
-    // safe to read from other threads because LinkedBlockingQueue's offer/poll pair establishes a
-    // happens-before edge for every cross-thread read that matters (submit()/submitBlocking()).
+    // mpv is loaded before the owner thread starts. handle is only assigned/cleared on the owner
+    // thread; volatile provides visibility for defensive cross-thread reads, while all libmpv
+    // calls remain confined to the owner thread.
     private var mpv: MpvLibrary? = null
-    private var handle: Pointer? = null
+    @Volatile private var handle: Pointer? = null
 
     private val queue = LinkedBlockingQueue<() -> Unit>()
     private val loopThread = Thread({ runLoop() }, "MpvPlayer-owner").apply { isDaemon = true }
     private val TERMINATE_MARKER: () -> Unit = {}
+    private val teardownComplete = CompletableFuture<Unit>()
 
     private fun submit(block: () -> Unit) {
         if (closed.get()) return
@@ -387,8 +388,16 @@ internal class MpvPlayer(
     }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        forceClose()
+        if (closed.compareAndSet(false, true)) forceClose()
+        if (Thread.currentThread() === loopThread) return
+        try {
+            teardownComplete.get(5, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            debugLog("Timed out waiting for mpv owner thread to terminate.")
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            debugLog("Interrupted while waiting for mpv owner thread to terminate.")
+        }
     }
 
     /** Queues the owner thread's shutdown unconditionally -- called both from the public,
@@ -400,26 +409,31 @@ internal class MpvPlayer(
         // itself the last thing that thread does before exiting -- mpv_terminate_destroy() must
         // never run concurrently with a queued play/pause/stop, nor while mpv_wait_event is
         // blocked mid-call on this same thread (it can't be, since this thread issues both).
-        if (!loopThread.isAlive) return
+        if (!loopThread.isAlive) {
+            teardownComplete.complete(Unit)
+            return
+        }
         queue.offer(TERMINATE_MARKER)
-        // Do not join from the UI/Compose thread -- Back navigation must stay non-blocking even
-        // if mpv_terminate_destroy takes a moment to flush.
     }
 
     private fun runLoop() {
-        while (true) {
-            val task = queue.poll(50, TimeUnit.MILLISECONDS)
-            if (task === TERMINATE_MARKER) break
-            task?.let { runCatching(it).onFailure { e -> debugLog("queued task failed: $e") } }
+        try {
+            while (true) {
+                val task = queue.poll(50, TimeUnit.MILLISECONDS)
+                if (task === TERMINATE_MARKER) break
+                task?.let { runCatching(it).onFailure { e -> debugLog("queued task failed: $e") } }
+                val lib = mpv
+                val ctx = handle
+                if (lib != null && ctx != null) drainMpvEvents(lib, ctx)
+            }
+        } finally {
             val lib = mpv
             val ctx = handle
-            if (lib != null && ctx != null) drainMpvEvents(lib, ctx)
+            if (lib != null && ctx != null) runCatching { lib.mpv_terminate_destroy(ctx) }
+            mpv = null
+            handle = null
+            teardownComplete.complete(Unit)
         }
-        val lib = mpv
-        val ctx = handle
-        if (lib != null && ctx != null) runCatching { lib.mpv_terminate_destroy(ctx) }
-        mpv = null
-        handle = null
     }
 
     private fun drainMpvEvents(lib: MpvLibrary, ctx: Pointer) {

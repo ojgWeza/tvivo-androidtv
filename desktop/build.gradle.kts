@@ -55,6 +55,12 @@ tasks.withType<org.gradle.api.tasks.JavaExec>().configureEach {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    System.getProperty("tvivo.mpv.altDllPath")?.let { path ->
+        systemProperty("tvivo.mpv.altDllPath", path)
+    }
+}
+
 tasks.register<org.gradle.api.tasks.JavaExec>("fixtureLiveRelay") {
     group = "verification"
     description = "Serve the local TS fixture as a loopback-only, non-seekable live-style input."
