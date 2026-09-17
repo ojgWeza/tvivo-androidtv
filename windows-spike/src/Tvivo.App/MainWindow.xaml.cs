@@ -15,6 +15,7 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _playback = App.Services.GetRequiredService<PlaybackService>();
         InitializeComponent();
+        PathBox.Text = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
         LaunchDiagnostics.Write("MainWindow XAML initialized");
         VideoHost.Content = App.Services.GetRequiredService<WindowsPlaybackEngine>().Element;
         Closed += OnClosed;

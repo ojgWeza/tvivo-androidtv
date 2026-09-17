@@ -46,3 +46,28 @@ docs/*.png
 # Local QA screenshots. These capture the live panel hostname and account, and this
 # repo is public and provider-agnostic — they must never be committed.
 .qa/
+
+# WinUI3 spike build/debug scratch: build logs, thread dumps, crash artifacts, and
+# scraped web-research output from diagnosing the LibVLCSharp.WinUI/XAML crash and
+# the FFmpegInteropX toolchain investigation. Findings live in .spike-decision-log.md
+# and windows-spike/WINUI3-PLAYBACK-HANDOFF-REPORT.md instead.
+.tmp-*.log
+.tmp-*.txt
+.firecrawl/
+.gradle-user-home/
+.gradle-user/
+.android-user/
+.qa-evidence-*/
+.tmp-skiko-spike/
+windows-spike/.vs/
+windows-spike/**/bin/
+windows-spike/**/obj/
+windows-spike/*.log
+windows-spike/step1-*.log
+windows-spike/step1-*.txt
+windows-spike/step2-*.log
+windows-spike/step2-*.csv
+windows-spike/step2-*.txt
+windows-spike/step2-publish-xaml-diagnostics/
+windows-spike/step3b-artifacts/
+winui-hello/

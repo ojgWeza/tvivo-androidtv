@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml.Controls;
+using FFmpegInteropX;
 using Tvivo.Core;
 using Windows.Foundation;
-using Windows.Media.Core;
 using Windows.Media.Playback;
 
 namespace Tvivo.Playback;
@@ -50,7 +50,8 @@ public sealed class WindowsPlaybackEngine : IPlaybackEngine
 
             try
             {
-                player.Source = MediaSource.CreateFromUri(source.DirectUri);
+                var ffmpegMediaSource = await FFmpegMediaSource.CreateFromUriAsync(source.DirectUri);
+                player.Source = ffmpegMediaSource.CreateMediaPlaybackItem();
                 player.Play();
 
                 using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

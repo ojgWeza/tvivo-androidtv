@@ -32,8 +32,26 @@ public partial class App : Application
         LaunchDiagnostics.Write("App constructor entered");
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        ConfigureXamlDiagnostics();
         InitializeComponent();
         LaunchDiagnostics.Write("App XAML initialized");
+    }
+
+    private void ConfigureXamlDiagnostics()
+    {
+        var debugSettings = DebugSettings;
+        debugSettings.IsXamlResourceReferenceTracingEnabled = true;
+        debugSettings.IsBindingTracingEnabled = true;
+        debugSettings.XamlResourceReferenceFailed += (_, args) =>
+            LaunchDiagnostics.Write($"XAML resource reference failed: {args.Message}");
+        debugSettings.BindingFailed += (_, args) =>
+            LaunchDiagnostics.Write($"XAML binding failed: {args.Message}");
+#if TVIVO_XAML_DIAGNOSTICS
+        debugSettings.FailFastOnErrors = true;
+        LaunchDiagnostics.Write("XAML diagnostics enabled: FailFastOnErrors=true");
+#else
+        LaunchDiagnostics.Write("XAML diagnostics enabled: FailFastOnErrors=false");
+#endif
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
