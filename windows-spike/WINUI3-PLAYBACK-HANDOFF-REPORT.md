@@ -155,11 +155,32 @@ audit post-Visual-Studio-update (dotnet SDK/runtime list, `vswhere` state, resol
 VS update may resolve this on its own. If it still fails, fall back to Gate 0 on libmpv-HWND
 instead of continuing to chase FFmpegInteropX toolchain alignment.
 
+## 2026-09-18 update — the "unfixable at app-code level" claim below is PARTIALLY OVERTURNED
+
+A same-day, outside-Tvivo re-investigation (`D:\Scratch\winui3-repro`, `D:\Scratch\winui3-libvlc-gate`,
+full narrative in `.spike-decision-log.md`) found real, verified evidence that narrows this:
+
+- The **self-contained** deployment case matches a real, documented, fixable Windows App SDK defect
+  (`WindowsAppSDK#6720`: `dotnet publish` silently omits the app's own `.pri` file for unpackaged
+  apps) — confirmed on disk (app `.pri` present in build output, absent from self-contained publish
+  output) and matched to a moderator-confirmed community fix (`EnableMsixTooling=true`). **Not yet
+  tested against our repro** — treat as a real, promising lead, not a confirmed fix.
+- **Framework-dependent** deployment of plain `XamlControlsResources`/Acrylic usage is **clean, not
+  crashing** (24/24 runs) — the original "any use of `XamlControlsResources` crashes" framing was
+  too broad; the self-contained/framework-dependent distinction matters and wasn't isolated before.
+- **However**, `LibVLCSharp.WinUI` specifically, under framework-dependent, still failed 10/10 in a
+  fresh isolated Gate — and a same-session attempt to get a WinDbg native stack for it was blocked
+  by newly-discovered environment nondeterminism (the LibVLC-free control app also started crashing
+  after previously running clean). **This is unresolved, not disproven and not confirmed** — see
+  `.spike-decision-log.md`'s 2026-09-18 section for the full evidence chain and the pending
+  post-reboot baseline check.
+
+**Do not treat `LibVLCSharp.WinUI` as cleared for use, and do not treat this as re-closed/dead
+either.** The next owner should pick up at the post-reboot golden-vs-baseline check described in
+the decision log before drawing further conclusions.
+
 ## Do NOT do these things (already closed / ruled out)
 
-- Do not revisit `LibVLCSharp.WinUI`, `XamlControlsResources` workarounds, bootstrap flag changes
-  (`WindowsAppSdkBootstrapInitialize`, `WindowsAppSDKSelfContained`), or `OnLaunched`-ordering
-  tricks for the XAML crash — proven dead, Microsoft-confirmed unfixable at app-code level.
 - Do not assume MSIX packaging is a shortcut fix — it changes the failure mode but was not
   proven to solve it (no window, no log, in the one experiment run).
 - Do not build/test/deploy without presenting the change set first (standing project rule,
