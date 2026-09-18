@@ -77,7 +77,7 @@ public partial class App : Application
         services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
         services.AddSingleton<WindowsPlaybackEngine>();
         services.AddSingleton<VlcPlaybackEngine>();
-        services.AddSingleton<IPlaybackEngine>(sp => sp.GetRequiredService<WindowsPlaybackEngine>());
+        services.AddSingleton<IPlaybackEngine>(sp => sp.GetRequiredService<VlcPlaybackEngine>());
         services.AddSingleton<PlaybackService>();
         return services.BuildServiceProvider();
     }

@@ -9,15 +9,17 @@ namespace Tvivo.App;
 public sealed partial class MainWindow : Window
 {
     private readonly PlaybackService _playback;
+    private readonly VlcPlaybackEngine _engine;
 
     public MainWindow()
     {
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _playback = App.Services.GetRequiredService<PlaybackService>();
+        _engine = App.Services.GetRequiredService<VlcPlaybackEngine>();
         InitializeComponent();
         PathBox.Text = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
         LaunchDiagnostics.Write("MainWindow XAML initialized");
-        VideoHost.Content = App.Services.GetRequiredService<WindowsPlaybackEngine>().Element;
+        VideoHost.Content = _engine.View;
         Closed += OnClosed;
         LaunchDiagnostics.Write("MainWindow constructor completed");
     }
@@ -44,6 +46,32 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         LaunchDiagnostics.Write("MainWindow closed");
-        await Task.CompletedTask;
+        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            await _playback.StopAsync(cleanupCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            LaunchDiagnostics.Write("Playback stop timed out during window close");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Playback stop failed during window close", exception);
+        }
+
+        try
+        {
+            await _engine.DisposeAsync().AsTask().WaitAsync(cleanupCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            LaunchDiagnostics.Write("Playback engine disposal timed out during window close");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Playback engine disposal failed during window close", exception);
+        }
     }
 }
