@@ -1,0 +1,36 @@
+<UserControl
+    x:Class="Tvivo.App.Pages.CatalogLandingPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="52,40" Background="{StaticResource AppCanvasBrush}">
+        <StackPanel Spacing="18">
+            <TextBlock Foreground="{StaticResource AppAccentBrush}" FontSize="13" FontWeight="Bold"
+                       CharacterSpacing="180" Text="YOUR PROVIDER" />
+            <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="38" FontWeight="SemiBold"
+                       Text="Catalog" />
+            <TextBlock x:Name="LoadingState" Visibility="Collapsed" Foreground="{StaticResource AppMutedTextBrush}"
+                       FontSize="17" Text="◌ Loading channel groups and channels…" />
+            <StackPanel x:Name="EmptyState" Visibility="Collapsed" Spacing="8">
+                <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="22" Text="No channels found" />
+                <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
+                           Text="This provider returned no channel groups or channels. Check the account or try again later." />
+            </StackPanel>
+            <StackPanel x:Name="ErrorState" Visibility="Collapsed" Spacing="8">
+                <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="22" Text="Catalog could not be loaded" />
+                <TextBlock x:Name="ErrorMessage" Foreground="#FFFF8A80" FontSize="16" TextWrapping="Wrap" />
+                <Button Content="Retry" Click="Retry_Click" HorizontalAlignment="Left" />
+            </StackPanel>
+            <Grid x:Name="ContentState" Visibility="Collapsed" ColumnSpacing="28">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="320" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <StackPanel Spacing="8">
+                    <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" Text="CHANNEL GROUPS" />
+                    <ListView x:Name="GroupsList" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" Text="CHANNELS" />
+                    <ListView x:Name="ChannelsList" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Grid>
+</UserControl>

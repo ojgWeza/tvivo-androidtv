@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -238,9 +239,92 @@ internal static class JsonValue
     public static DateTimeOffset? Expiry(JsonElement parent, string name) => long.TryParse(String(parent, name), out var value) && value > 0 ? DateTimeOffset.FromUnixTimeSeconds(value) : null;
 }
 
+[SupportedOSPlatform("windows")]
 public sealed class DpapiCredentialStore : ICredentialStore
 {
-    public Task<ProviderConnection?> LoadAsync(CancellationToken cancellationToken = default) => throw new NotImplementedException();
-    public Task SaveAsync(ProviderConnection connection, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-    public Task DeleteAsync(CancellationToken cancellationToken = default) => throw new NotImplementedException();
+    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Tvivo.ProviderConnection.v1");
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = false };
+    private readonly string _filePath;
+
+    public DpapiCredentialStore(string? filePath = null)
+    {
+        _filePath = filePath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Tvivo",
+            "provider-connection.bin");
+    }
+
+    public async Task<ProviderConnection?> LoadAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        byte[] protectedBytes;
+        try
+        {
+            protectedBytes = await File.ReadAllBytesAsync(_filePath, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            var json = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
+            cancellationToken.ThrowIfCancellationRequested();
+            var connection = JsonSerializer.Deserialize<ProviderConnection>(json, JsonOptions);
+            if (connection?.Endpoint is null || connection.Username is null || connection.Password is null)
+                throw new InvalidDataException("Stored provider connection is incomplete.");
+            return connection;
+        }
+        catch (CryptographicException exception)
+        {
+            throw new InvalidDataException("Stored provider connection could not be decrypted.", exception);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("Stored provider connection is not valid JSON.", exception);
+        }
+    }
+
+    public async Task SaveAsync(ProviderConnection connection, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        cancellationToken.ThrowIfCancellationRequested();
+        var json = JsonSerializer.SerializeToUtf8Bytes(connection, JsonOptions);
+        var protectedBytes = ProtectedData.Protect(json, Entropy, DataProtectionScope.CurrentUser);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var directory = Path.GetDirectoryName(_filePath)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_filePath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await stream.WriteAsync(protectedBytes, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, _filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
+    public Task DeleteAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        File.Delete(_filePath);
+        return Task.CompletedTask;
+    }
 }

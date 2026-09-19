@@ -10,8 +10,8 @@ public sealed partial class HomePage : UserControl
         InitializeComponent();
     }
 
-    public event EventHandler? OpenPlayerRequested;
+    public event EventHandler? ProviderSetupRequested;
 
-    private void OpenPlayer_Click(object sender, RoutedEventArgs args) =>
-        OpenPlayerRequested?.Invoke(this, EventArgs.Empty);
+    private void SetupProvider_Click(object sender, RoutedEventArgs args) =>
+        ProviderSetupRequested?.Invoke(this, EventArgs.Empty);
 }

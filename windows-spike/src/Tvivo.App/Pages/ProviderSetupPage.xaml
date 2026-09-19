@@ -1,0 +1,39 @@
+<UserControl
+    x:Class="Tvivo.App.Pages.ProviderSetupPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="52,40" Background="{StaticResource AppCanvasBrush}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="720" Spacing="14">
+                <TextBlock Foreground="{StaticResource AppAccentBrush}" FontSize="13" FontWeight="Bold"
+                           CharacterSpacing="180" Text="PROVIDER CONNECTION" />
+                <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="38" FontWeight="SemiBold"
+                           Text="Connect your provider" />
+                <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
+                           Text="Enter the server address and account details supplied by your provider." />
+                <Grid ColumnSpacing="12" RowSpacing="10">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="120" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="HostBox" Header="Server host" PlaceholderText="panel.example.com" />
+                    <TextBox x:Name="PortBox" Grid.Column="1" Header="Port" PlaceholderText="8080" />
+                    <ComboBox x:Name="SchemeBox" Grid.Row="1" Header="Connection" SelectedIndex="0" Width="180">
+                        <ComboBoxItem Content="http" /><ComboBoxItem Content="https" />
+                    </ComboBox>
+                    <TextBox x:Name="UsernameBox" Grid.Row="2" Header="Username" />
+                    <PasswordBox x:Name="PasswordBox" Grid.Row="3" Header="Password" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <Button x:Name="ConnectButton" Style="{StaticResource AppPrimaryButtonStyle}"
+                            Content="Authenticate and save" Click="Connect_Click" />
+                    <TextBlock x:Name="LoadingText" Foreground="{StaticResource AppMutedTextBrush}"
+                               VerticalAlignment="Center" Visibility="Collapsed" Text="◌ Authenticating and saving…" />
+                </StackPanel>
+                <TextBlock x:Name="ErrorText" Foreground="#FFFF8A80" FontSize="15" TextWrapping="Wrap"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

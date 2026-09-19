@@ -28,6 +28,9 @@
                     <controls:ShellNavigationButton x:Name="PlayerNavigation"
                                                     Label="Player"
                                                     Clicked="PlayerNavigation_Clicked" />
+                    <controls:ShellNavigationButton x:Name="CatalogNavigation"
+                                                    Label="Catalog"
+                                                    Clicked="CatalogNavigation_Clicked" />
                 </StackPanel>
                 <TextBlock Grid.Row="2"
                            Foreground="{StaticResource AppMutedTextBrush}"
@@ -62,6 +65,9 @@
                                    Text="Ready" />
                     </StackPanel>
                 </Grid>
+            </Grid>
+            <Grid x:Name="CatalogPageArea" Visibility="Collapsed">
+                <ContentControl x:Name="CatalogPageHost" />
             </Grid>
         </Grid>
     </Grid>

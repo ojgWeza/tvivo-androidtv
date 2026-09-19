@@ -13,6 +13,8 @@ public sealed partial class MainWindow : Window
     private readonly PlaybackService _playback;
     private readonly VlcPlaybackEngine _engine;
     private readonly HomePage _homePage;
+    private readonly ProviderSetupPage _providerSetupPage;
+    private readonly CatalogLandingPage _catalogLandingPage;
     private ShellPage? _currentPage;
 
     public MainWindow()
@@ -21,10 +23,14 @@ public sealed partial class MainWindow : Window
         _playback = App.Services.GetRequiredService<PlaybackService>();
         _engine = App.Services.GetRequiredService<VlcPlaybackEngine>();
         _homePage = new HomePage();
+        _providerSetupPage = new ProviderSetupPage();
+        _catalogLandingPage = new CatalogLandingPage();
         InitializeComponent();
         PathBox.Text = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
-        _homePage.OpenPlayerRequested += (_, _) => ShowPage(ShellPage.Player);
+        _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
+        _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
         PageHost.Content = _homePage;
+        CatalogPageHost.Content = _catalogLandingPage;
         ShowPage(ShellPage.Home);
         LaunchDiagnostics.Write("MainWindow XAML initialized");
         Closed += OnClosed;
@@ -41,6 +47,21 @@ public sealed partial class MainWindow : Window
 
     private void PlayerNavigation_Clicked(object? sender, EventArgs args) => ShowPage(ShellPage.Player);
 
+    private async void CatalogNavigation_Clicked(object? sender, EventArgs args)
+    {
+        ShowPage(ShellPage.Catalog);
+        if (_catalogLandingPage.Account is null)
+            await _catalogLandingPage.LoadSavedAsync();
+        else
+            await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account);
+    }
+
+    private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
+    {
+        ShowPage(ShellPage.Catalog);
+        await _catalogLandingPage.LoadAsync(args.Account);
+    }
+
     private void ShowPage(ShellPage page)
     {
         if (_currentPage == page)
@@ -48,10 +69,16 @@ public sealed partial class MainWindow : Window
 
         _currentPage = page;
         var isPlayer = page == ShellPage.Player;
-        PageHost.Visibility = isPlayer ? Visibility.Collapsed : Visibility.Visible;
+        var isCatalog = page == ShellPage.Catalog;
+        PageHost.Visibility = isPlayer || isCatalog ? Visibility.Collapsed : Visibility.Visible;
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
-        HomeNavigation.IsSelected = !isPlayer;
+        CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
+        HomeNavigation.IsSelected = page is ShellPage.Home or ShellPage.Setup;
         PlayerNavigation.IsSelected = isPlayer;
+        CatalogNavigation.IsSelected = isCatalog;
+
+        if (page == ShellPage.Setup) PageHost.Content = _providerSetupPage;
+        else if (page == ShellPage.Home) PageHost.Content = _homePage;
     }
 
     private async void Play_Click(object sender, RoutedEventArgs args)
@@ -108,6 +135,8 @@ public sealed partial class MainWindow : Window
     private enum ShellPage
     {
         Home,
+        Setup,
+        Catalog,
         Player
     }
 }
