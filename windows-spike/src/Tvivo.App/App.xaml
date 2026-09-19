@@ -5,7 +5,31 @@
     xmlns:controls="using:Microsoft.UI.Xaml.Controls">
     <Application.Resources>
         <ResourceDictionary>
-            <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="#202020" />
+            <Color x:Key="AppCanvasColor">#101216</Color>
+            <Color x:Key="AppSurfaceColor">#1A1E25</Color>
+            <Color x:Key="AppSurfaceRaisedColor">#232A34</Color>
+            <Color x:Key="AppAccentColor">#8FC7FF</Color>
+            <Color x:Key="AppTextColor">#F3F5F7</Color>
+            <Color x:Key="AppMutedTextColor">#A7B0BC</Color>
+            <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
+            <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
+            <SolidColorBrush x:Key="AppRaisedSurfaceBrush" Color="{StaticResource AppSurfaceRaisedColor}" />
+            <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
+            <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
+            <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
+            <Style x:Key="ShellNavigationButtonStyle" TargetType="Button">
+                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                <Setter Property="Padding" Value="16,12" />
+                <Setter Property="MinHeight" Value="48" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+            </Style>
+            <Style x:Key="AppPrimaryButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="{StaticResource AppAccentBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource AppCanvasBrush}" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Padding" Value="18,10" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

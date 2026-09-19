@@ -268,4 +268,25 @@ do not treat it as the current handoff.
   `.txt`/`.csv` transcripts (416,901 bytes) in place; the full 775-file
   `step2-publish-xaml-diagnostics/` tree (268,163,187 bytes) moved unchanged to
   `D:\Tvivo-archives\windows-spike-2026-09-19\step2-publish-xaml-diagnostics\`.
-  All existing conclusions and citations in this file and `.spike-decision-log.md` remain valid.
+All existing conclusions and citations in this file and `.spike-decision-log.md` remain valid.
+
+## 2026-09-19 — WinUI shell foundation
+
+- **OBSERVED —** `Tvivo.App` now starts on a Home page hosted by a window-owned `ContentControl`;
+  the existing Player surface remains in `MainWindow` so the XAML-declared `VideoView` and its
+  `Initialized` handler remain the rendering endpoint. `HomePage` owns only its one-shot navigation
+  intent; `MainWindow` owns the selected page and playback service. `ShellNavigationButton` is the
+  shared, automation-labeled navigation control. App-level static resources define the palette and
+  primary/navigation button styles.
+- **OBSERVED — targeted WinUI evidence:** the app targets `net9.0-windows10.0.19041.0`, Windows
+  App SDK 2.5.1, x64, self-contained unpackaged mode. The complete solution built with zero
+  warnings/errors and all 18 existing tests passed. The app launched, UI Automation traversed Home
+  and Player, and the hash-pinned Gate 9 fixture rendered in the inline `VideoView`; the status
+  reached `FirstFrame`, whose existing engine gate requires `VoutCount > 0`. A screenshot of both
+  Home and Player was visually inspected. This evidence applies only to this tested configuration.
+- **INFERRED —** Keeping shell state in `MainWindow` while `HomePage` emits intent preserves the
+  Constitution's boundary between UI controls and playback core without adding a routing package.
+- **HYPOTHESIZED / unverified —** these controls/resources have not been checked in packaged mode,
+  on another Windows App SDK/runtime revision, or at other display scales. The history of
+  `XamlControlsResources` failures remains relevant; this shell uses the app's existing resource
+  model and adds no `XamlControlsResources` merge.

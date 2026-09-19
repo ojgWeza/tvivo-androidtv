@@ -1,0 +1,24 @@
+<UserControl
+    x:Class="Tvivo.App.Controls.ShellNavigationButton"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Button x:Name="NavigationButton"
+            Style="{StaticResource ShellNavigationButtonStyle}"
+            Click="NavigationButton_Click">
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border x:Name="SelectionMark"
+                    Background="{StaticResource AppAccentBrush}"
+                    CornerRadius="2"
+                    Opacity="0" />
+            <TextBlock x:Name="LabelText"
+                       Grid.Column="1"
+                       VerticalAlignment="Center"
+                       FontSize="15"
+                       FontWeight="SemiBold" />
+        </Grid>
+    </Button>
+</UserControl>
