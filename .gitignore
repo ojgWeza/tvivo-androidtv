@@ -71,3 +71,8 @@ windows-spike/step2-*.txt
 windows-spike/step2-publish-xaml-diagnostics/
 windows-spike/step3b-artifacts/
 winui-hello/
+
+# Obsidian vault local metadata — never commit editor state/trash/attachments
+vault/.obsidian/
+vault/.trash/
+vault/attachments/

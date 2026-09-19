@@ -1,0 +1,684 @@
+> Copied from ../../.spike-decision-log.md on 2026-09-19 — treat the original as source of truth.
+
+# Windows Rewrite Spike — Decision Log
+
+Purpose: WinUI 3 + .NET 10 vertical slice spike to answer whether a provider-neutral core
+with dual playback engines (Windows native + libVLC) is a sound foundation. See full spec
+in conversation (2026-09-17). This log tracks gate decisions and material corrections only —
+not routine Codex back-and-forth.
+
+## Status: Phase F (Windows Native Player) — BLOCKED on this machine
+
+## Gates
+- Gate 1 (Architecture) — PASSED. Phase C plan reviewed; M3U/MPV/EPG additive-without-redesign
+  check satisfied.
+- Gate 2 (Native Player) — BLOCKED. See 2026-09-17 entry below.
+- Gate 3 (VLC) — not reached
+- Gate 4 (Dual Engine) — not reached
+- Gate 5 (Foundation Decision) — not reached
+
+## Log
+
+### 2026-09-17 — Spike kicked off
+- Existing Windows desktop app (Kotlin/Compose) and Android app are evidence, not
+  architectural constraints for the new WinUI 3 spike.
+- Sent Codex (pane codex-review, w5:p9) Phase A instructions: inspect repo, produce
+  migration map (REUSE/PORT/REFERENCE/DISCARD/UNKNOWN) for Xtream, credentials, SQLite,
+  playback (mpv), tests/fixtures. No new solution created yet.
+
+### 2026-09-17 — Phases A-E completed, Phase F blocked
+- Phases A (archaeology), B (API research), C (architecture plan), D (skeleton), E
+  (Xtream vertical path) all completed and reviewed. Codex's auth contract sentinel
+  workaround was rejected and corrected to a proper structured `AuthenticationResult`
+  (see reports `.codex-spike-phaseA/B/C-report.md`). 17/17 unit tests passing after
+  Phase E. Skeleton at `windows-spike/`.
+- Phase F (WindowsPlaybackEngine): implemented, 22/22 tests passing, clean build. But
+  `Tvivo.App` (WinUI 3 shell) could not be launched to visually verify.
+- **BLOCKER — reproducible native crash on this development machine**: any WinUI 3 app
+  that loads default `XamlControlsResources` crashes with `0xC000027B` (stowed/fast-fail
+  exception) in `Microsoft.UI.Xaml.dll`, at a consistent internal fault offset. Confirmed
+  independent of every variable tested:
+  - .NET 10 vs .NET 9 (both crash identically)
+  - Windows App SDK 2.4.0 vs 2.5.1 (both crash, with matching runtime installed for each)
+  - CLI (`dotnet build`/direct exe launch) vs Visual Studio F5 with debugger attached
+  - Unpackaged build platform/RID configuration (x64 explicit, WindowsPackageType=None)
+  - VC++ Runtime confirmed present and current (v14.50.35719) — not a missing-dependency issue
+  - Reproduces with zero Tvivo-specific code — only default WinUI controls (Grid, Border,
+    StackPanel, TextBox, Button, TextBlock) trigger it via `XamlControlsResources`
+  - Matches known, Microsoft-unresolved GitHub issues: `microsoft-ui-xaml#7606` (XAML
+    ControlsResources crash in unpackaged win32 apps) and `#9793` (identical exception on
+    unmodified WinUI3 template) — both closed "not planned" by Microsoft.
+  - Along the way, fixed and kept: `WindowsPackageType=None` (was missing), explicit
+    per-platform `RuntimeIdentifier` in csproj (was missing, caused a separate earlier
+    crash), durable `LaunchDiagnostics` exception logging in App.xaml.cs (kept — this is a
+    permanent diagnostic improvement, not a one-off), `.sln` solution-platform mapping
+    fixed to include Debug/Release|x64 (was Any CPU-only, incompatible with the Windows-
+    targeted App/Playback projects).
+- Conclusion: this is a machine/environment-level defect, not a Tvivo architecture or code
+  problem. Gate 2 cannot be evidenced on this machine as currently configured. Options on
+  the table: test the same build on a different machine, try packaged/MSIX mode (the known
+  GitHub issues are specific to *unpackaged* apps), or continue investigating locally
+  (e.g. a completely fresh out-of-the-box WinUI3 template outside this repo).
+
+### 2026-09-17 — Precise root cause isolated; MSIX packaging inconclusive
+- Built a throwaway, code-only WinUI3 app (`D:\HCode\Tvivo\winui-hello\`, outside
+  windows-spike/) with zero .xaml files, to bypass the XAML markup compiler entirely.
+  - A bare `Window` with a code-created `TextBlock` (no `XamlControlsResources`)
+    **launched and displayed successfully** — confirmed visible on screen. WinUI 3
+    itself works on this machine for basic content.
+  - Adding `Resources.MergedDictionaries.Add(new XamlControlsResources())` inside
+    `OnLaunched` (correct lifecycle position) throws a **managed, catchable** exception
+    instead of a native crash: `COMException 0x80004005 — Cannot find a resource with
+    the given key: AcrylicBackgroundFillColorDefaultBrush`, at
+    `XamlControlsResources..ctor()`. This is the precise root cause: this unpackaged
+    app cannot resolve Fluent theme/system resources. The original hard native crash
+    is very likely the same missing-resource problem, hit through a different,
+    less-protected code path deeper in Fluent control initialization that fast-fails
+    instead of throwing cleanly.
+  - Sent Codex to research + implement single-project MSIX packaging for the same
+    throwaway app (current Microsoft-recommended approach per
+    https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/single-project-msix).
+    Codex generated a valid manifest, self-signed test certificate, and produced a
+    working `.msix` build.
+  - Installed the MSIX package successfully (`Add-AppxPackage`, cert imported to
+    `LocalMachine\TrustedPeople`). Launching it via its AUMID (`shell:AppsFolder\...`):
+    process starts, stays alive, does NOT crash — but no window appears on screen and
+    (unlike every unpackaged attempt) the app's own diagnostic log file is never
+    written at all, not even the first "Main entered" line. This is a different failure
+    signature than the unpackaged crash, not yet root-caused.
+- **Current status: Gate 2 still BLOCKED.** Packaging changed the failure mode
+  (no crash, but also no visible window and no logging — possibly a packaged-activation
+  issue, e.g. a needed capability, or output redirection differing under MSIX
+  activation) but did not yet produce a working native player UI. Not pursued further
+  this session given the very large amount of time already invested in this single
+  blocker across many independent diagnostic angles.
+- **Recommendation:** test the identical `windows-spike/` build on a different Windows
+  machine before spending more time on this one. If it works elsewhere, this machine
+  (not the Tvivo architecture) is conclusively the constraint, and Gate 2 evidence
+  should be gathered on a working machine. Native playback architecture (contracts,
+  fallback policy, generation/session-token protection) remains sound per Phase C/D/E/F
+  code review; only the ability to *visually verify* it on this machine is blocked.
+- Paused native-engine track per owner decision; proceeding to Phase G (VLC engine)
+  in parallel, with the caveat that VLC's `VideoView` will likely need to render inside
+  the same WinUI 3 shell and may hit an identical or related blocker.
+
+## Status: Gate 2 (Native Player) — CLOSED, root-caused. Gate 3 (VLC) — CLOSED, dead end. New track: playback backend replacement — IN PROGRESS
+
+## Log (continued)
+
+### 2026-09-17/18 — LibVLCSharp.WinUI root-caused and closed as unfixable at app-code level
+- The VLC engine track (Phase G) hit the identical blocker predicted above:
+  `MainWindow.InitializeComponent()` intermittently threw `XamlParseException 0x802B000A`.
+  Full evidence chain (native dumps, cdb/WinDbgX stack captures, 20-run determinism test,
+  4 independent code-level workarounds) is preserved in
+  `windows-spike/WINUI3-PLAYBACK-HANDOFF-REPORT.md` and raw artifacts originally under
+  `windows-spike/step2-*` and `windows-spike/step3b-artifacts/`. **Archived externally on
+  2026-09-19** (verified byte-for-byte via SHA-256 before/after the move; conclusions and
+  citations below are unaffected — nothing was deleted): the three `.dmp` memory dumps
+  (`cdb-crash-run-7.dmp`, `cdb-hang-or-crash-run-1.dmp`, `hang-pid-289592-full.dmp`, ~1.38 GB
+  combined) moved from `windows-spike/step3b-artifacts/` to
+  `D:\Tvivo-archives\windows-spike-2026-09-19\step3b-artifacts\`; the narrative `.txt`/`.csv`
+  transcripts (20 files, 416,901 bytes) remain in place at `windows-spike/step3b-artifacts/`.
+  The entire `windows-spike/step2-publish-xaml-diagnostics/` tree (775 files, 268,163,187 bytes)
+  moved unchanged to `D:\Tvivo-archives\windows-spike-2026-09-19\step2-publish-xaml-diagnostics\`.
+  Summary:
+  - 20-run test on one frozen `dotnet publish` output (byte-identical binaries, SHA256-verified)
+    showed genuine runtime nondeterminism: ~18/20 fail-fast with native exception `0xC000027B`,
+    ~2/20 hang. All 124 loaded modules identical between hang/crash runs — ruled out a
+    missing/extra-DLL explanation.
+  - Real native fault stack captured via `cdb.exe`/WinDbgX (`sxe -c2` second-chance handler is
+    required — first-chance `-c` never fires the payload for a non-continuable stowed exception):
+    `KERNELBASE!RaiseFailFastException` → `combase!RoFailFastWithErrorContextInternal2` →
+    `Microsoft_UI_Xaml!XamlCheckProcessRequirements+0xa2d`. Matches WER's independently-reported
+    offset exactly.
+  - `XamlCheckProcessRequirements` is a red herring name — a WindowsAppSDK maintainer confirmed
+    (GitHub Discussion #2872) it's legacy dead code (used to gate elevated-process support, now a
+    no-op kept for binary compatibility only). It is NOT a package-identity/AppContainer check.
+  - Real root cause: WinUI 3's Fluent/XAML theme-resource initialization (`XamlControlsResources`)
+    failing in this unpackaged environment — confirmed via an independent throwaway-app test where
+    `Resources.MergedDictionaries.Add(new XamlControlsResources())` alone throws
+    `COMException 0x80004005 — Cannot find a resource with the given key:
+    AcrylicBackgroundFillColorDefaultBrush`. The fail-fast is a downstream symptom of this, not a
+    separate bug.
+  - Matches Microsoft's own tracker: `microsoft-ui-xaml` issues **#7606** and **#9793**, both
+    closed **"not planned."** No first-party fix exists.
+  - Four independent code-level workarounds were tried and **all failed** — do not retry:
+    standard `XamlControlsResources` merge (10/10 fail); explicit
+    `AcrylicBackgroundFillColorDefaultBrush` override (still fails); deferring construction to
+    `OnLaunched` (still fails); removing `XamlControlsResources` entirely with hand-rolled local
+    `Button`/`TextBox`/`ContentControl` templates (avoids the native fail-fast, but
+    `MainWindow.InitializeComponent()` then throws a *managed* `XamlParseException 0x802B000A`
+    instead — the framework-theme-resource dependency goes deeper than those three controls).
+  - A separate, earlier MSIX packaging experiment changed the failure mode (process stays alive,
+    no crash) but produced no visible window and no diagnostic log at all — a different,
+    still-unexplained dead end, not proof MSIX fixes the resource issue.
+  - **Conclusion: `LibVLCSharp.WinUI` is closed. Do not revisit XAML resource workarounds,
+    bootstrap/self-contained flag changes, or `OnLaunched`-ordering tricks for this crash.**
+    The fix is architectural (replace the playback backend so it never instantiates a XAML
+    control dependent on `XamlControlsResources`), not a patch.
+
+### 2026-09-18 — Playback architecture decision: replace LibVLC/LibVLCSharp.WinUI entirely
+- Full research/decision process (multiple rounds, self-critiqued) recorded in
+  `windows-spike/WINUI3-PLAYBACK-HANDOFF-REPORT.md`. Key finding used to re-derive the decision
+  from first principles: Tvivo's own `windows-spike/src/Tvivo.Playback/WindowsPlaybackEngine.cs`
+  already instantiates `MediaPlayerElement` (a built-in WinUI3 framework control, not a
+  third-party XAML resource dictionary) in this exact unpackaged project, and it has never hit
+  the `XamlControlsResources` crash class — direct proof that native WinUI media controls are a
+  fundamentally different (safe) category from `LibVLCSharp.WinUI`.
+- Evaluated: FFmpegInteropX + native `MediaPlayerElement`, Flyleaf (FFmpeg+DirectX,
+  `SuRGeoNix/Flyleaf`), plain `MediaPlayerElement`, libmpv via P/Invoke (native child-HWND or
+  render-API/SwapChainPanel bridge, cf. `Richasy/mpv-winui` — downgraded to "reference only," too
+  thin a project (6 commits, no unpackaged evidence) to be a real candidate), and direct LibVLC
+  P/Invoke (dropped — no advantage over mpv, no institutional VLC-on-Windows knowledge).
+- **Decision: FFmpegInteropX + native `MediaPlayerElement` is the lead candidate** — simplest
+  architecture that keeps XAML overlays/fullscreen/DPI/resize as ordinary, already-proven WinUI
+  behavior, adding only a codec/demux bridge underneath. libmpv native-HWND retained as the
+  proven fallback (full reuse of `desktop/src/main/kotlin/com/dev/tvivo/desktop/MpvPlayer.kt`'s
+  design) if FFmpegInteropX's unpackaged compatibility doesn't pan out; Flyleaf as second fallback
+  (strong DirectX/overlay story per its `FlyleafHost` `ContentControl`+`SwapChainPanel` design,
+  but its WinUI control is documented as only "Partially" supported and no unpackaged deployment
+  evidence was found).
+- Spike gated in two stages to avoid wasting effort: **Gate 0** = does FFmpegInteropX +
+  `MediaPlayerElement` render first frame from a real stream, unpackaged, with no crash. **Gate 1**
+  (only if Gate 0 passes) = full validation (tracks, subtitles, reconnect, resize/fullscreen/DPI,
+  CPU/GPU zero-copy check) against real Xtream streams.
+
+### 2026-09-18 — Gate 0 attempt: blocked on toolchain, not on the closed XAML crash
+- `FFmpegInteropX 2.0.0` added to `windows-spike/src/Tvivo.Playback/Tvivo.Playback.csproj`: build
+  failed immediately — it's an empty meta-package whose real desktop implementation
+  (`FFmpegInteropX.Desktop.Lib`) requires Windows SDK build 22000; the spike targets 19041.
+- Retried with `FFmpegInteropX 2.1.0.81200` (its desktop dependency targets SDK 17763, compatible
+  with 19041): build failed differently, with **`NETSDK1148`** — the referenced assembly was
+  compiled against a newer `Microsoft.Windows.SDK.NET.dll` than the one currently resolved.
+  Dependency chain: `FFmpegInteropX 2.1.0.81200` → `FFmpegInteropX.Desktop.Lib 2.1.0` → requires
+  `Microsoft.Windows.CsWinRT >= 2.2.0` → needs a specific Windows SDK **projection** revision
+  (e.g. `10.0.19041.57`). This is a projection/version-alignment conflict, not a blanket
+  "upgrade your .NET SDK" requirement — no single published minimum .NET SDK number was found for
+  FFmpegInteropX 2.1.0.81200, so do not assume a specific SDK bump fixes it without re-testing.
+  **This failure is unrelated to the closed XamlControlsResources investigation** — different
+  component, different error class, confirmed via a full read-only toolchain audit (see below).
+- Code left in this state as of this session close: `App.xaml.cs`'s XAML diagnostics
+  instrumentation (`IsXamlResourceReferenceTracingEnabled`, `XamlResourceReferenceFailed`/
+  `BindingFailed` handlers, `XamlDiagnostics` build configuration) is durable/working and kept.
+  The Gate 0 FFmpegInteropX wiring itself (`Tvivo.Playback.csproj` package reference,
+  `WindowsPlaybackEngine.cs`'s `FFmpegMediaSource.CreateFromUriAsync`/`CreateMediaPlaybackItem`
+  swap, `MainWindow.xaml.cs`'s test-stream URL) is committed as-is but **does not currently
+  build** — do not expect `dotnet build` to succeed on this branch until the toolchain issue
+  below is resolved or a different FFmpegInteropX/.NET SDK combination is found.
+- Read-only toolchain audit performed while Visual Studio was mid-update on this machine
+  (VS installer reported `isComplete=false, isLaunchable=false` — treat all findings as a
+  pre-update snapshot, not stable ground truth): confirmed the NETSDK1148 mechanism as above;
+  confirmed Flyleaf documents `.NET 8 SDK`/`net8.0-windows` and `WinAppSDK >= 1.7.250401001`,
+  both already satisfied by installed tooling (no known blocker, just never tried); confirmed no
+  `global.json` pins an SDK version anywhere in the repo (so active SDK selection is
+  machine-dependent — a source of exactly this kind of drift).
+- **Next step (post VS-update):** re-run the toolchain audit (dotnet SDK/runtime list, `vswhere`
+  workload/completeness state, physical Windows SDK folders, resolved `Microsoft.Windows.CsWinRT`/
+  `Microsoft.Windows.SDK.NET.Ref` versions in `project.assets.json`) to get a real baseline, then
+  retry the Gate 0 build — the update may resolve the projection mismatch on its own by bringing a
+  newer bundled MSBuild/SDK. If it still fails, fall back to Gate 0 on libmpv native-HWND instead
+  of continuing to chase FFmpegInteropX toolchain alignment.
+
+### 2026-09-18 — Isolated (outside-Tvivo) re-investigation of the closed XamlControlsResources crash
+All work in this section happened entirely in `D:\Scratch\winui3-repro` and
+`D:\Scratch\winui3-libvlc-gate` via a Codex herdr pane. **No file under this repo was read, built,
+published, or modified during this investigation** — this section exists purely to keep the
+playback-architecture decision record current, since the findings bear directly on Gate 0 planning.
+
+- **Trigger:** discovered the WinUI 3 Visual Studio workload had been unchecked/incomplete in VS
+  Installer. Re-ran the isolated progressive repro (bare window → Button XAML → `XamlControlsResources`
+  merge → Acrylic brush lookup) both before and after fixing the VS install.
+- **VS-workload hypothesis ruled out:** results were byte-for-byte identical before and after the
+  fix — 24/24 clean under framework-dependent, 24/24 failing under self-contained with
+  `COMException 0x80004005` ("Cannot locate resource from `ms-appx:///Microsoft.UI.Xaml/Themes/
+  themeresources.xaml`"), stage2 (plain `Button`, no explicit theme resource) failing 100% under
+  framework-dependent with `XamlParseException 0x802B000A`. The incomplete VS install was not the
+  cause of any of this.
+- **Self-contained failure matched to a real upstream defect:** verified (not just cited)
+  `WindowsAppSDK#6720` — `dotnet publish` of an unpackaged WinUI app silently omits the app's own
+  `<app>.pri`, producing this exact `0xC000027B`/`0x80004005` class. Confirmed on disk: our
+  self-contained repro's build output contains `WinUi3UnpackagedRepro.pri` (1.35 MB) but the
+  self-contained *publish* folder omits it, while runtime PRIs (`Microsoft.WindowsAppRuntime.pri`
+  etc.) are present. A real, moderator-confirmed Microsoft Q&A fix
+  (`EnableMsixTooling=true` alongside `WindowsAppSDKSelfContained=true`/`SelfContained=true`) exists
+  but was **not yet tested** — our repro currently has `EnableMsixTooling=false`.
+- **Important scoping catch:** the missing-app-PRI theory explains the *self-contained* failure
+  only. Directly verified the confirmed-clean framework-dependent build ships **zero `.pri` files at
+  all** — so framework-dependent apps don't depend on the app PRI, and this theory cannot explain
+  any framework-dependent crash.
+- **LibVLCSharp.WinUI Gate (`D:\Scratch\winui3-libvlc-gate`, framework-dependent, matching the
+  component actually blamed in this report's root-cause section):** built a minimal app with
+  `LibVLCSharp.WinUI`'s `VideoView`, normal `XamlControlsResources`, and an XAML overlay. **Failed
+  10/10 launches** with a native fail-fast, WER-reported as `Microsoft.UI.Xaml.dll` `0xC000027B`
+  (matching the exception code — but not yet a confirmed stack match — from this report's original
+  root-cause section). A one-shot isolation check (VideoView/LibVLC code commented out, same
+  project/config) survived 5 seconds with no crash — but **this did not reproduce on a later
+  attempt in the same session**: rebuilding the identical LibVLC-free configuration crashed 10/10
+  with the same signature. No valid WinDbg native stack was ever captured (attempts were blocked on
+  re-establishing a working baseline, not on tooling).
+- **Current status — PAUSED, unresolved:** it is not yet known whether the LibVLC-free crash
+  recurrence is genuine environment nondeterminism (consistent with this report's originally
+  documented ~18/20 crash rate) or a config/cache difference specific to the `winui3-libvlc-gate`
+  project versus the confirmed-stable `winui3-repro` project (their `app.manifest`/`csproj` were
+  never diffed against each other). **A full OS reboot was pending at session close** (Visual Studio
+  and the WinUI workload were updated mid-session; previously-clean behavior changed after that
+  update, so a clean reboot is needed before trusting any further repro result). Post-reboot plan,
+  not yet executed: re-run the confirmed-golden `winui3-repro` 20x and the LibVLC-free `A` baseline
+  20x, unmodified, before any further cleaning/rebuilding/config changes, to separate environment/
+  session-state drift from project-state causes.
+- **Net effect on this report's architecture decision:** no change yet. The original
+  `XamlControlsResources`/Acrylic root-cause finding is neither fully confirmed nor overturned —
+  today's evidence narrows it (self-contained-specific PRI defect, real and fixable) but also
+  surfaces a second, still-unexplained failure mode (LibVLCSharp.WinUI crashing under
+  framework-dependent, and framework-dependent itself intermittently failing without any LibVLC
+  code present). Do not treat LibVLCSharp.WinUI as cleared for framework-dependent use, and do not
+  treat the self-contained PRI fix as validated, until the post-reboot baseline check and a real
+  WinDbg native stack are obtained.
+
+### 2026-09-18 — Post-reboot baseline gate + isolated mutation ladder (Rungs 1–4), still outside Tvivo
+
+All work below happened entirely in `D:\Scratch\winui3-repro*` and `D:\Scratch\winui3-libvlc-gate`,
+coordinated between Claude and a Codex herdr pane with independent cross-verification at every gate.
+**No file under this repo was built, published, or run** — only this decision log was touched.
+
+- **Post-reboot baseline gate, executed:** golden `winui3-repro` (stage4, framework-dependent, no
+  LibVLC) ran 20/20 clean. The `winui3-libvlc-gate` "A" isolation baseline ran 20/20
+  `crash-or-failfast`, exit `-1073741189` (`0xC000027B`) — the same signature as the LibVLC-active
+  build, not the "survived 5s" one-off from before. However, string-scanning `publish-isolation`'s
+  own DLL showed it still contains compiled `LibVLCSharp`/`MediaPlayer`/`VideoView` wiring — the "A"
+  artifact was never actually LibVLC-free, so this gate could not isolate LibVLC as a variable.
+- **Root cause of the "A" artifact confusion, found and fixed:** `LibVLCSharp` (plain, package ID
+  `LibVLCSharp`) and `LibVLCSharp.WinUI` both ship an assembly at the **same destination filename**
+  `LibVLCSharp.dll` with different content (plain: 229,888 bytes, `SHA256 c8307618...`; WinUI:
+  294,912 bytes, `SHA256 9961a355...`, contains the actual `VideoView` type in namespace
+  `LibVLCSharp.Platforms.Windows`). Any project referencing both packages together — which is
+  exactly what `winui3-libvlc-gate`'s csproj did, and what a naive "add LibVLCSharp.WinUI" mutation
+  did on the first attempt — silently deploys the wrong (plain) DLL, dropping the WinUI-specific
+  assembly. Confirmed on the historical crashing artifacts themselves: both
+  `winui3-libvlc-gate\publish-framework-dependent\LibVLCSharp.dll` and `...\publish-isolation\...`
+  are the plain 229,888-byte assembly, not the WinUI one.
+- **Corroborating (not conclusive) evidence this collision was live during the historical crash:**
+  `winui3-libvlc-gate`'s `MainWindow.xaml` declares `xmlns:vlc="using:LibVLCSharp.Platforms.Windows"`
+  and `<vlc:VideoView x:Name="VideoView" .../>`, but the retained generated `MainWindow.g.i.cs`
+  has **no field generated for `VideoView` at all** — only `Overlay`/`StatusText` — meaning the type
+  could not be resolved at compile time either, consistent with the wrong DLL being present even
+  during the original build. This is a real, mechanistically plausible contributor, but **not
+  proven causal**: no native crash stack (WinDbg or otherwise) was ever captured for any historical
+  run, so the exact link between the missing type resolution and the `0xC000027B` native fail-fast
+  remains inferred, not demonstrated.
+- **Isolated mutation ladder, executed on a fresh copy of golden `winui3-repro` (zero Tvivo files
+  touched), each rung independently cross-verified by Claude and Codex from actual build/publish
+  artifacts before running, 20 launches per rung:**
+  - **Rung 1** — add `LibVLCSharp` package only, unused: **20/20 clean.**
+  - **Rung 2 (first attempt)** — add `LibVLCSharp.WinUI` alongside the existing `LibVLCSharp`
+    reference: build succeeded, but the collision above silently deployed the wrong DLL. **Blocked
+    before execution** once the collision was found; not run.
+  - **Rung 2 (corrected)** — package *substitution*: remove `LibVLCSharp`, keep only
+    `LibVLCSharp.WinUI` (per its own nuspec, it supersedes and should be consumed alone). Correct
+    294,912-byte DLL confirmed deployed by both Claude and Codex independently. **20/20 clean.**
+  - **Rung 3** — declare `<vlc:VideoView x:Name="Rung3VideoView" Visibility="Collapsed" />` in XAML
+    on top of Rung 2, zero code-behind. Generated `MainWindow.g.i.cs` now **does** produce
+    `private global::LibVLCSharp.Platforms.Windows.VideoView Rung3VideoView;` — a direct, controlled
+    contrast with the historical gate's missing field, using the same XAML pattern. **20/20 clean.**
+  - **Rung 4** — add `VideoLAN.LibVLC.Windows` 3.0.23.1 (native runtime, same version the historical
+    gate used) on top of Rung 3, zero API calls (no `Core.Initialize`, no `LibVLC`/`MediaPlayer`
+    construction, no binding). Deploys ~293 MB of native binaries/plugins across win-x64/x86/arm64
+    (an `AnyCPU`-triggered over-deployment from the package's own `.targets` file, confirmed
+    functionally inert for a win-x64 process by reading the target's logic — plain
+    `CopyToOutputDirectory` `Content` items, no `Exec`/build-time code). **20/20 clean.**
+- **Cumulative boundary after Rung 4:** every purely passive/declarative step — managed package
+  presence, correct WinUI assembly + type resolution, and native binary presence without
+  invocation — is individually ruled out as sufficient to reproduce the crash. The next gate
+  (**Rung 5, not yet authorized**) is the first to actually execute native code: `Core.Initialize()`
+  + `LibVLC` construction, still with no `MediaPlayer`/`VideoView` binding.
+- **Net effect on this report's architecture decision:** still no change to the Gate 0 pivot
+  decision, but the evidentiary picture is much sharper. The DLL-collision defect is real,
+  confirmed, and independently reproducible — worth fixing regardless of whether it explains the
+  original crash. Whether it *is* the original crash's cause is not yet established; Rung 5+ (native
+  init) is the next gate that can move that question, pending explicit authorization.
+
+### 2026-09-18 — Rungs 5a–5c executed (native init + LibVLC + MediaPlayer, all isolated), Rung 5d
+blocked on a harness topology defect found mid-investigation. All work in `D:\Scratch\winui3-repro-
+rung5a/5b/5c`, each rung a hash-verified fresh copy of the prior clean state, cross-verified by
+Claude and Codex independently at every gate (one real Codex-vs-Claude disagreement found and
+resolved from direct IL re-verification; see below).
+
+- **Rung 5a** — `Core.Initialize()` alone, added as the sole mutation on top of Rung 4. IL-confirmed
+  (ildasm on the exact resolved `net10.0-windows10.0.19041` `LibVLCSharp.WinUI` asset, cross-checked
+  by Codex) to synchronously execute `SetErrorMode` + `LoadLibraryW(libvlccore.dll)` +
+  `LoadLibraryW(libvlc.dll)` + one live `libvlc_get_version()` call — the first gate in the whole
+  ladder to touch native code at all. **20/20 clean.** Correction folded in: these four operations
+  were tested only as `Core.Initialize()`'s combined behavior, never independently isolated from
+  each other.
+- **Rung 5b** — `new LibVLC()` added on top of Rung 5a. IL-traced eager/synchronous
+  `libvlc_new(argc, argv)` call via the base `Internal..ctor`'s inline `Func<IntPtr>.Invoke()`.
+  **Real Codex-vs-Claude disagreement found and resolved:** Codex's first pass claimed
+  `PatchOptions` appends `"--verbose=2"` (making argc=1); direct re-disassembly of `PatchOptions`
+  showed the append is gated on `enableDebugLogs` (false for the bare ctor), not
+  `useDefaultLibVLCOptions` as Codex claimed — confirmed **argc=0, empty argv**. Also established:
+  `LibVLC` self-roots via a strong (`GCHandleType.Normal`) `GCHandle.Alloc(this)`, freed only in
+  `Dispose()` — a bare `new LibVLC();` statement with no held variable does **not** become
+  GC-eligible while the process runs. **20/20 clean.**
+- **Rung 5c** — `new MediaPlayer(libVLC)` added on top of Rung 5b (LibVLC now held in a variable
+  to pass in — a structural, not semantic, change per the GCHandle finding above). IL-traced eager
+  `libvlc_media_player_new(libVLC.NativeReference)` call, same self-rooting `GCHandle` pattern,
+  zero native video/audio callback registration in ctor or static `.cctor` (confirmed by both
+  Claude and Codex independently, full agreement, no disagreement this round). **20/20 clean.**
+- **Cumulative boundary after Rung 5c:** native library loading, `libvlc_get_version()`,
+  `libvlc_new()` context creation, and `libvlc_media_player_new()` player creation are each
+  individually ruled out as sufficient to reproduce the crash, with a live `LibVLC` + `MediaPlayer`
+  pair held for the full app lifetime and zero `VideoView` involvement.
+- **`VideoView.MediaPlayer` setter fully traced (read-only, no execution) — result: essentially
+  inert in this library version.** `set_MediaPlayer` routes through `DependencyObject.SetValue` to
+  a `PropertyChangedCallback` (`OnMediaPlayerChanged`) which calls `Detach()` then `Attach()` if
+  non-null — **both methods are exactly one IL instruction (`ret`), i.e. no-ops** in LibVLCSharp
+  3.10.1. All real SwapChainPanel/D3D11/DXGI/native-callback work lives in `OnApplyTemplate()`, a
+  separate WinUI-framework-driven lifecycle callback with **no call path from the setter**.
+  Confirmed independently by Claude (ildasm) and Codex (reflection-based IL decoding after working
+  around a WinUI-assembly-resolution obstacle), full agreement after one transcription-level
+  discrepancy (template part name is `"SwapChainPanel"`, not `"PART_SwapChainPanel"` as Codex's
+  first summary stated) was resolved by direct re-check.
+- **Harness topology defect found during the Rung 5d design audit — blocks straightforward
+  execution:** every verified-clean run in this entire ladder (Rung 4 through 5c) used
+  `REPRO_STAGE=4`, and the harness's window-selection logic
+  (`_stage <= 2 ? (...) : new BareWindow()`) instantiates **`BareWindow`, not `MainWindow`**, for
+  any stage ≥ 3. `Rung3VideoView` is a `MainWindow` field. **No `VideoView` instance has ever been
+  runtime-constructed, parented, activated, or had `OnApplyTemplate` invoked in any verified-clean
+  run in this investigation** — only its compile-time field declaration in generated code was ever
+  confirmed. (Earlier session language calling it "instantiated while collapsed" was wrong on the
+  word "instantiated" and is corrected here.) A naive fix (flip the ternary to build `MainWindow`
+  at stage 4) is **not** a single-variable change: `MainWindow`'s ctor also runs an unrelated
+  Acrylic-resource-probe code path (`AcrylicProbe.Background = ...`) left over from the original,
+  separate Acrylic-crash investigation this harness was first built for.
+- **Smallest clean next gate identified (not yet authorized/executed):** bare
+  `new LibVLCSharp.Platforms.Windows.VideoView()` — no XAML, no parent, no `Window.Content`, no
+  `Activate()`, no `MediaPlayer` assignment. IL-traced (Claude ildasm + Codex independent reflection
+  decoding, full agreement) to: trigger `VideoViewBase`'s one-time static `.cctor`
+  (`DependencyProperty.Register("MediaPlayer", ...)`, pure managed WinUI DP bookkeeping) plus three
+  chained, LibVLC-native-free instance constructors (`VideoView` → `VideoView<T>` → `VideoViewBase`,
+  the latter building two `Guid` structs, calling base `Control.ctor()`, setting
+  `DefaultStyleKey`, wiring only an `Unloaded` handler — no `Loaded`). Zero `libvlc_*` P/Invoke,
+  zero SwapChainPanel/D3D11/DXGI access (those fields stay null until `OnApplyTemplate`, unreached
+  here), zero managed thread creation. **Correction folded in:** "zero native code" must be scoped
+  to "zero LibVLC-specific/D3D-specific work" — `Control.ctor()` itself is opaque WinRT-projected
+  (COM-adjacent) machinery living in `Microsoft.WinUI.dll`, outside this assembly's IL, and must not
+  be characterized as native-work-free.
+- **Standing position at end of session:** every gate through Rung 5c is verified 20/20 clean, and
+  the crash boundary is now known to require *something* involving `VideoView` — construction,
+  parenting, `OnApplyTemplate`, or later. The next authorized gate should be bare `VideoView()`
+  construction alone (smaller and cleaner than any window-based or MediaPlayer-binding gate
+  proposed earlier), followed only afterward by parenting/activation and then the (already-confirmed
+  near-inert) `MediaPlayer` assignment, each as its own single-variable gate. Nothing beyond Rung 5c
+  has been executed. Rung 5d and all its precursor candidates remain unauthorized.
+
+### 2026-09-18 (session 2) — Rungs 5d-A/5d-B, MediaPlayer assignment, shutdown-delay, and first
+real-playback gates (Gates 6-9), all in `D:\Scratch\winui3-repro-rung5c` / follow-on
+`publish-rung6`/`publish-rung7`/`publish-rung8`/`publish-rung8b` output dirs. Same isolation
+discipline as before: no file under this repo touched, Codex delegated in a herdr pane
+(`codex-review`), every claim independently re-verified from disk (hashes, raw result files) before
+being trusted, one gate at a time with explicit authorization between each.
+
+- **Rung 5d-A** - bare, unparented `new LibVLCSharp.Platforms.Windows.VideoView()` construction on
+  top of the Rung 5c baseline. **20/20 clean.** First attempt hit a real environment obstacle, not
+  an app finding: Codex's own exec-command classifier rejected a composite chained PowerShell
+  script (`Remove-Item; dotnet publish; Get-Content; exit $code` chained with `;`/`*>`) with
+  "blocked by policy" and no child exit code - diagnosed via a plain-pwsh/plain-cmd/plain-dotnet
+  probe as Codex's own command-shape classifier, not any OS/AppLocker/PyGuard block (all three
+  launched fine standalone). Fix: split composite scripts into separate simple single-purpose exec
+  calls - this worked and is now standing practice for this investigation.
+- **Rung 5d-B** - `VideoView` parented into a detached `Grid` (`Grid.Children.Add`), then that Grid
+  assigned live to `BareWindow.Content` immediately after the existing `Activate()`. Codex's design
+  correctly distinguished parent-pointer assignment (separable, no forced lifecycle event) from
+  live `Window.Content` attachment (cannot be proven separate from `OnApplyTemplate`/layout once the
+  window is live) - recommended testing the live-attachment case directly since a detached-only
+  intermediate step would only rule out the less interesting variable. First execution attempt hit
+  `CS0236` (an instance field initializer illegally referencing another instance field via implicit
+  `this`) - a pure C# syntax issue, fixed by moving the Grid's construction into the existing `App()`
+  constructor body after normal field initialization, not a semantic change. **20/20 clean**, with a
+  harness-level hiccup along the way: the plain PowerShell `&` call operator does not reliably block
+  until a WinAppSDK app's full process teardown completes, producing an implausible ~2-second batch
+  span for 20 runs; switching to `Start-Process -PassThru` + explicit `Id`/`StartTime` capture +
+  `WaitForExit()` + `ExitTime`/`ExitCode` produced a trustworthy ~48s span with all 19
+  `StartTime(N+1) >= ExitTime(N)` boundaries verified non-overlapping. This `Start-Process
+  -PassThru` + immediate-PID-capture + bounded-`WaitForExit` pattern is now the standing harness for
+  every run in this investigation going forward.
+- **Gate 6** - `MediaPlayer` (already proven inert-setter in Rung 5c/earlier IL trace) assigned to
+  the now-live, parented `VideoView`, same synchronous ordering. **20/20 clean**, full PID/timing
+  evidence after one harness bug was found and fixed: the exec-tool's own initial polling window
+  (originally too short) lost run 1's process-metadata output on two separate occasions (Gate 6 and
+  Gate 7) even though the underlying process ran fine - fixed by extending the initial wait and
+  polling the same returned session to completion instead of giving up early.
+- **Gate 7** - same Gate 6 topology, only mutation: `CloseSoon`'s `Task.Delay(750)` ->
+  `Task.Delay(5000)`, to give the WinUI dispatcher's already-confirmed-real message pump (verified
+  from the actual SDK-generated `Main`/`Application.Start` entry point, not assumed) materially more
+  time to run layout/`OnApplyTemplate`/render before shutdown. **20/20 clean**, per-run durations
+  correctly grew by the expected ~4.25s, confirming the delay took effect rather than being
+  silently ignored. A first-launch cold-start anomaly was noted here and recurred in Gate 8/8b (run
+  1 taking ~13-31s vs. ~1-6s for runs 2-20) - most likely something like Defender/AV scanning a
+  freshly-published, previously-unseen executable's native DLLs on first launch; never confirmed,
+  flagged as expected background noise for any future first-launch-in-a-fresh-publish-dir gate, not
+  a finding about the app.
+- **Gate 8** - first gate in the entire investigation to call real `Play()` on real (locally
+  generated via `ffmpeg`, offline, no network) media: a tiny 1-second synthetic H.264 MP4, hash-
+  pinned. Same topology, `Playing`/`Vout`/`EncounteredError`/`EndReached` events subscribed before
+  `Play()`, race-safe verdict via `TaskCompletionSource.TrySetResult` + a single-disposal-guarded
+  cleanup. First attempt stopped cleanly at a compile-time API mismatch (the real
+  `LibVLCSharp.Shared.Media` constructor is `(LibVLC, string, FromType, string[])`, not the 3-arg
+  form initially assumed) - corrected and re-run. **20/20 clean, all `outcome=playing`** (verified
+  independently from raw result files), but `Vout` was never the recorded outcome in any run -
+  initially ambiguous because `TrySetResult` only records the first-firing event, so `Vout` could
+  simply have lost every race against `Playing`.
+- **Gate 8b** - harness-only observability upgrade to close that ambiguity: log every event
+  independently with its own timestamp (not just the race-winner), same topology/fixture/Play()
+  call unchanged. **Result: `vout_fired=false` in all 20 runs, independently confirmed from raw
+  result files** - not a race artifact. This is the most interesting open finding of the session:
+  with this exact proven-clean topology and a real (if tiny/synthetic) local H.264 file, LibVLC
+  reaches `Playing` reliably but the `Vout` event never fires within a 10-second window in any of 20
+  runs. Explicitly not proof that no video-output surface was ever created (only that the .NET
+  event was never raised) - flagged as the standing open question at session close.
+- **Gate 9 - executed, CLOSED.** Corrected from the original design to change only duration versus
+  Gate 8b's fixture (320x240/25fps/H.264/yuv420p unchanged; duration 1s -> 35s; the originally-
+  designed 1280x720 change was dropped as a confound), same stage-4 topology, observation window
+  extended 10s -> 35s with continuous 1s-interval polling and no early-exit-on-event, and
+  compile-time-verified (stronger than the originally-planned reflection check - `dotnet build`
+  succeeding is direct proof the members exist on the resolved assembly) additional observables:
+  `MediaPlayer.State`/`Length`/`Position`/`VoutCount` and `Media.Tracks` filtered to
+  `TrackType.Video`. Fixture hash-pinned and verified immediately before publish/run
+  (`0f34f35c...`). Ran 15 of a planned 20 serialized processes before being deliberately stopped
+  under a new adaptive-repetition policy (unanimous results at n=15 made the remaining 5 redundant
+  by that policy's own criteria) - run 16 was mid-flight when stopped, correctly discarded as
+  incomplete, not a failure. **Result: `vout_fired=true` and `VoutCount=1` in 15/15 completed runs**,
+  `state=Playing` continuously, `Position` advancing monotonically for the full window,
+  `video_tracks=1` throughout. This resolves Gate 8b's open question: `Vout` reliably fires and a
+  video-output surface is reliably created on this topology for real media of adequate duration -
+  Gate 8b's null result was a fixture-duration/observation-window artifact, not a defect in
+  video-output/surface creation. Scope note: this is OBSERVED evidence of the .NET `Vout` event and
+  the `VoutCount` counter incrementing; it is NOT evidence of correct on-screen visual rendering
+  (no screenshot/pixel check was performed) and does not extend to real-world (non-synthetic)
+  media - both remain untested. A follow-on one-run real-media confirmation gate was designed
+  (via Codex) and reviewed; assessed as not worth running (no plausible mechanism by which
+  testsrc-vs-real frame content would change demux/decode/vout behavior, and its own "not-testsrc"
+  fallback (`smptebars`) would still be synthetic) - not executed, investigation closed without it.
+- **Process notes for future sessions:** (1) a Codex herdr pane's context can silently drift from an
+  out-of-repo scratch experiment path back to its default cwd (`D:\HCode\Tvivo`, the real repo)
+  across turns - happened twice this session, once nearly leading to reasoning about the real
+  `windows-spike\src\Tvivo.App\App.xaml.cs`; always re-supply the absolute scratch path and an
+  explicit "do not touch D:\HCode\Tvivo" guardrail in any prompt after several intervening turns,
+  never assume path context persists. (2) `/clear`-ing the Codex pane's context between rounds (a
+  pre-existing standing rule) was skipped entirely for this whole session (~15+ round trips, context
+  reached 41% before being caught) - root-caused to a mistaken feeling that cross-gate continuity
+  required it; that continuity is actually carried by this decision log and by re-verifying state
+  from disk each round, not by Codex's own conversation memory. Fixed mid-session; apply the clear-
+  before-and-after rule with no exceptions going forward, and surface any perceived tension to the
+  user rather than silently skipping the rule again.
+- **Net effect on this report's architecture decision:** repro investigation CLOSED as of Gate 9.
+  The investigation has cleanly cleared every gate from bare construction through real media
+  reaching `Playing` state with a confirmed video-output surface (`VoutCount=1`) on the proven
+  WinUI3-unpackaged + `LibVLCSharp.WinUI` stage-4 topology. `LibVLCSharp.WinUI` is no longer treated
+  as unproven or dead for this topology at the mechanism level tested (event firing + vout-surface
+  creation on synthetic media). Remaining untested and explicitly out of scope for this investigation:
+  visual rendering correctness on screen, and behavior on real-world (non-synthetic) media/containers/
+  codecs - these are deferred to the upcoming architecture work rather than further repro gates.
+
+### 2026-09-18 — Section-15 first vertical slice: code-body implemented and accepted, build/run not
+yet authorized. Four rounds of Claude/Codex delegation per Constitution section 13, each round
+`/clear`-ed on the Codex herdr pane after capture, each Codex claim independently re-verified by
+Claude from disk (file reads, `git diff`/`git status`/`git log`, direct hash recomputation, direct
+grep of the resolved LibVLCSharp.WinUI package XML) rather than relayed uncritically.
+
+- **Round 1 (read-only proposal)** - Codex inspected the repository and proposed the smallest
+  section-15 slice. Claude independently re-verified the Gate 9 fixture hash
+  (`0f34f35cd32b05285818792c8a3ae5218e2f8f7acf77320893f0c6bb374f30fb`, recomputed via `certutil`,
+  matches this log exactly), the `Tvivo.Playback.csproj` package references, the `Contracts.cs`
+  state-model gap, and the exact LibVLCSharp.WinUI members cited. Found two gaps in the proposal:
+  it didn't justify choosing LibVLC over the already-integrated (but Gate-0-blocked) FFmpegInteropX
+  engine in `WindowsPlaybackEngine.cs`, and it proposed a new `LibVlcPlaybackEngine.cs` file instead
+  of filling in the existing `VlcPlaybackEngine` stub, leaving dead code.
+- **Round 2 (revision)** - Codex revised: explicit OBSERVED/INFERRED/HYPOTHESIZED justification for
+  LibVLC over FFmpegInteropX (Gate 9 evidence is LibVLC-specific; FFmpegInteropX's own Gate 0 was
+  blocked on `NETSDK1148` per this log's 2026-09-18 Gate-0 entry, so it has zero equivalent gate
+  evidence and cannot support an Engine Acceptance claim per Constitution section 9); chose to
+  implement inside the existing `VlcPlaybackEngine` stub (no new file); showed the exact `App.xaml.cs`
+  DI-swap and the previously-unnoticed second `MainWindow.xaml.cs` host-wiring line that also needed
+  to change (VideoHost.Content bypassed IPlaybackEngine, reading the concrete engine directly).
+  Claude independently re-read both files and confirmed both quoted diffs were verbatim-accurate.
+- **Round 3 (verification-only)** - Codex confirmed `PlaybackSmokeTests.cs`'s only VLC-related
+  assertion is an interface-assignability check on a parameterless constructor (no behavior test),
+  and searched all `*.log` files on disk for `NETSDK1148`/`FFmpegInteropX.Desktop.Lib` corroboration
+  of this log's own Gate-0 claim - found none; the string exists only in this decision log and the
+  handoff report, not in any retained build-log artifact. Claude independently re-ran both searches
+  (file read + repo-wide grep) and got identical results. Flagged as a pre-existing artifact-identity
+  gap in the investigation's own history (a decision-relevant result not preserved as a retained
+  log), not a reason to doubt the Gate-0 finding itself.
+- **Round 4 (implementation)** - Codex implemented the approved 3-file scope
+  (`windows-spike/src/Tvivo.Playback/WindowsPlaybackEngine.cs`,
+  `windows-spike/src/Tvivo.App/App.xaml.cs`, `windows-spike/src/Tvivo.App/MainWindow.xaml.cs`):
+  filled in `VlcPlaybackEngine` with a real LibVLC implementation (parameterless constructor
+  preserved), one-line DI swap, one-line host-wiring swap. No build/test/run/commit/package change
+  occurred; independently confirmed via `git log`/`git status` showing HEAD unchanged and only the
+  three files modified.
+- **Round 5 (correction)** - Claude's independent code review of round 4 found three issues Codex's
+  own report hadn't surfaced: (1) the `_isCurrent()` check read `_currentSession`/`_player` fields
+  directly from LibVLC's native callback threads without synchronization against `StopCore`'s
+  gate-protected mutations - a real unsynchronized read/write race; (2) `MainWindow.OnClosed` didn't
+  call any stop/dispose path at all, leaving Constitution section 15 step 7's "stop by ... window
+  close" requirement unmet; (3) `Dispose()` used a blocking `_gate.Wait()` that could stall the UI
+  thread. Codex fixed all three within the same three files: replaced the shared-field race with a
+  per-attempt `EventHandlers`-owned atomic invalidation flag (`Volatile.Read`/`Interlocked.Exchange`,
+  set once under the gate in `StopCore`); wired `OnClosed` to a bounded (2s) `StopAsync` then
+  `DisposeAsync`; added `IAsyncDisposable`/`DisposeAsync()` and changed synchronous `Dispose()` to
+  fail-fast (`_gate.Wait(0)` + throw) instead of blocking indefinitely. Claude independently
+  re-read the full corrected file, confirmed `PlaybackService.StopAsync(CancellationToken)`'s exact
+  signature and no-op-when-idle behavior, and confirmed scope stayed at exactly the three approved
+  files with no new commit.
+- **Accepted, with one disclosed unresolved risk:** the three-file code body is accepted for the
+  section-15 code scope. **Not fixed, explicitly carried forward as an unresolved runtime risk:** a
+  callback-vs-teardown TOCTOU - a native callback can pass its `IsCurrent` check and then be
+  preempted before finishing its body (e.g. before `Completion.TrySetResult` or reading
+  `player.VoutCount`) while `StopCore` concurrently invalidates the handler and disposes
+  `player`/`media` on another thread. This narrows the round-4 race (now touches only one handler's
+  own state, not shared engine fields) but does not eliminate it. No synchronization primitive drains
+  in-flight callbacks before disposal proceeds. This is deliberately left as HYPOTHESIZED risk, not
+  resolved by code review; resolving it needs either a stronger drain/quiescence design or empirical
+  evidence from an actual run.
+- **Next gate proposed, not yet opened:** a compile-and-manual-run gate - question: does the
+  corrected `VlcPlaybackEngine` compile against the resolved LibVLCSharp.WinUI 3.10.1 surface, and
+  does a manual run against the unchanged Gate 9 fixture reach Engine Acceptance (`Playing` +
+  `VoutCount >= 1` + advancing `Position`) and, separately, Visual Acceptance (settled screenshot)?
+  Unchanged controls: same fixture, same topology, same three-file scope. This gate requires its own
+  explicit authorization before any build/test/run command is executed; none has been run as of this
+  entry.
+- **Net effect on this report's architecture decision:** the section-15 slice's code body is
+  complete and accepted at the source-review level. It has not yet been compiled or run. The
+  backend decision (Constitution section 2) remains unresolved and is not decided by this
+  acceptance - LibVLC was selected for this slice only because it is the only backend with
+  Gate 9-equivalent evidence, not because it has won a final architecture decision.
+
+### 2026-09-19 - Compile-and-manual-run gate CLOSED: build fixed, app launches, Engine Acceptance
+PASS, Visual Acceptance FAIL, root cause found. Full narrative and evidence in
+`windows-spike/CURRENT-PROJECT-STATE.md` (new, this session) - this entry is the persistent-record
+summary. Claude orchestrated, Codex delegated in a herdr pane (`codex-review`, `/clear`-ed between
+every round), every Codex claim independently re-verified by Claude from disk before being trusted.
+
+- **Build fixed (NETSDK1148 resolved).** Root cause: `Tvivo.Playback.csproj` compiled two playback
+  engines side by side - the dead-at-runtime `WindowsPlaybackEngine`/FFmpegInteropX class (compiled
+  but never selected by DI) and the accepted `VlcPlaybackEngine`/LibVLCSharp - whose native
+  projection assemblies required incompatible, non-adjacent Windows SDK generations
+  (`FFmpegInteropX.DotNet.dll` → `Microsoft.Windows.SDK.NET 10.0.26100.38`, Windows 11 24H2-era;
+  `LibVLCSharp.dll` → `10.0.19041.38`, Windows 10 2004-era). Not WindowsAppSDK version (tested,
+  refuted), not .NET SDK toolset version (tested, refuted) - removing the dead `WindowsPlaybackEngine`
+  class and its `FFmpegInteropX` package reference cleared it. Also found and fixed in the same pass:
+  the plain-`LibVLCSharp`-vs-`LibVLCSharp.WinUI` same-named-DLL collision (documented earlier in this
+  log, lines ~279-307) had regressed back into `Tvivo.Playback.csproj` - re-applied the known fix
+  (keep only `LibVLCSharp.WinUI`). Solution now builds clean: `Build succeeded, 0 Warning(s), 0
+  Error(s)`, all 8 projects including the previously-broken `Tvivo.Playback.Tests`.
+- **App launches successfully for the first time in this entire investigation.** `MainWindow
+  activated` reached reliably per `tvivo-launch.log`. `Play` was clicked (automated UI Automation,
+  not manual) against the unchanged Gate 9 fixture (`thirtyfive-second-h264.mp4`, SHA-256
+  `0f34f35c...374f30fb`).
+- **Engine Acceptance: PASS.** Real, moving video content from the actual fixture is visibly
+  decoding and rendering (confirmed via screenshot, SMPTE color-bar test pattern visible and
+  changing across two independent trials).
+- **Visual Acceptance: FAIL.** Video renders in a separate, unrelated, native top-level window
+  titled `"VLC (Direct3D11 output)"` (`Parent=0x0`, `Owner=0x0`, confirmed via raw Win32
+  `EnumWindows`/`GetWindowThreadProcessId` strictly filtered to the freshly-launched PID, two
+  independent fully-automated trials, ~1-3s after Play) - not inline inside `MainWindow`'s
+  `VideoHost` as the architecture requires. A false-positive/false-negative cycle preceded this
+  finding within the same session (a single uncorroborated window-enumeration run wrongly reported
+  the window pre-Play; a hasty retraction after only post-activation-no-Play checks wrongly said no
+  such window existed at all; the two-trial pre-Play-then-Play-then-observe protocol resolved both
+  errors) - kept here as a caution for future window/UI-behavior claims: always test both
+  construction-time and action-triggered states before concluding either way.
+- **Root cause of the Visual Acceptance failure found, read-only, source-level, independently
+  confirmed twice:** `LibVLCSharp.WinUI` 3.10.1's own XML docs
+  (`VideoViewBase.SwapChainOptions`) state verbatim: "If you don't pass \[the swapchain parameters\]
+  to the `LibVLC` constructor, the video won't be displayed in your application." A documented
+  `VideoView<T>.Initialized` event exists specifically to signal when `SwapChainOptions` becomes
+  available (after the view is fully loaded). `WindowsPlaybackEngine.cs:33` constructs `LibVLC`
+  eagerly, in a field initializer, with `Array.Empty<string>()` - no swapchain options, no
+  `Initialized` subscription anywhere in the file. This is a documented API-contract violation in
+  the app's own code, not a WinUI3/unpackaged-deployment defect, not a package collision, not a
+  toolchain issue - the simplest class of problem found in this entire investigation. Not yet fixed
+  or tested as a fix; diagnosis only.
+- **Also ruled out in this pass:** a missing LibVLCSharp resource-dictionary merge in `App.xaml`
+  (the package ships no XAML/`Generic.xaml` at all, so no merge is required); `VideoHost`'s default
+  `ContentControl` template not presenting its `Content` (standard WinUI behavior, no evidence of
+  failure); `FFmpegInteropX`/`CsWinRT` as a source of any SDK-generation conflict (its own nuspec
+  declares zero further package dependencies).
+- **Process note for future sessions:** a corrected discipline was adopted mid-session after a
+  process failure was flagged (the plain-`LibVLCSharp` collision was briefly re-investigated as if
+  new, when it was already settled here) - check this decision log and `CURRENT-PROJECT-STATE.md`
+  for an existing finding before treating any build/runtime symptom as new. See
+  `CURRENT-PROJECT-STATE.md`'s "Known prior traps" section for the full, structured list going
+  forward - prefer reading that file over this one for current-state questions; this log remains the
+  detailed narrative/evidence trail.
+- **Next step, not yet authorized:** a scoped fix experiment wiring `VideoView.Initialized` →
+  read `SwapChainOptions` → construct `LibVLC` with them in `VlcPlaybackEngine`, then re-run the
+  manual acceptance gate to confirm inline rendering.
+
+### 2026-09-19 — Option A closes the VideoView inline-rendering defect (verified, uncommitted)
+
+- The defect was that a `VideoView` constructed inside `VlcPlaybackEngine` and assigned through
+  `ContentControl.Content` never entered LibVLCSharp.WinUI's template → swap-chain → `Initialized`
+  lifecycle. Option A declares `VideoView` directly in `MainWindow.xaml` with
+  `Initialized="VideoView_Initialized"`; the new handler calls `VlcPlaybackEngine.InitializeView(view, args)`.
+  The engine no longer constructs the view (`View` throws until registered). The existing
+  `IPlaybackEngine` / `PlaybackService` / DI contract is otherwise unchanged. LibVLC construction
+  remains deferred until `Initialized`; the bounded 10-second readiness timeout and diagnostic
+  logging are preserved.
+- Production scope is exactly `MainWindow.xaml`, `MainWindow.xaml.cs`, and
+  `WindowsPlaybackEngine.cs`; no package, project, test, fixture, or other implementation file was
+  touched. Current `git diff --numstat` is respectively `6/4`, `7/1`, and `87/12` insertions/deletions.
+  On the unchanged Gate 9 `thirtyfive-second-h264.mp4` fixture, startup logs recorded `Initialized`,
+  two swap-chain options (`--winrt-d3dcontext`, `--winrt-swapchain`), and successful LibVLC
+  construction before Play. Play reached `FirstFrame`, whose handler requires `VoutCount > 0`.
+  PID-filtered and `IsWindowVisible`-filtered `EnumWindows` found only the main `WinUI Desktop`
+  window before and after Play. Two screenshots three seconds apart had different SHA-256 hashes and
+  visibly different decoder frame-number overlays, with the SMPTE pattern rendered inside the app's
+  `VideoView` and playback advancing.
+- Caveats: playback advancement is visual/hash-based, without a direct `MediaPlayer.Position` sample;
+  the window check excludes hidden, off-screen, or zero-size windows; and only one run, fixture, and
+  session was exercised. A second Play, fresh-launch repeat, and different fixture remain untested.
+- **Gate status: VERIFIED, CLOSED for Visual Acceptance; uncommitted, ready for commit decision.**
+  This supersedes the previous “Next step, not yet authorized” entry above; earlier history remains
+  unchanged.
