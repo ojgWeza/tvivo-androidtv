@@ -27,6 +27,7 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage = new CatalogLandingPage();
         InitializeComponent();
         PathBox.Text = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+        _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
         PageHost.Content = _homePage;
@@ -79,6 +80,19 @@ public sealed partial class MainWindow : Window
 
         if (page == ShellPage.Setup) PageHost.Content = _providerSetupPage;
         else if (page == ShellPage.Home) PageHost.Content = _homePage;
+    }
+
+    private void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
+    {
+        if (args.Source.DirectUri is not { } uri)
+        {
+            StatusText.Text = "The selected channel has no direct stream URI.";
+            return;
+        }
+
+        PathBox.Text = uri.IsFile ? uri.LocalPath : uri.AbsoluteUri;
+        ShowPage(ShellPage.Player);
+        Play_Click(this, new RoutedEventArgs());
     }
 
     private async void Play_Click(object sender, RoutedEventArgs args)
