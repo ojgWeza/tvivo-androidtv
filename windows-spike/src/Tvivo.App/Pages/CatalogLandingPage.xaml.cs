@@ -10,6 +10,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly ICatalogProvider _provider = App.Services.GetRequiredService<ICatalogProvider>();
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private ProviderAccount? _account;
+    private IReadOnlyList<ChannelGroup> _groups = Array.Empty<ChannelGroup>();
+    private bool _bindingGroups;
     public ProviderAccount? Account => _account;
 
     public CatalogLandingPage() => InitializeComponent();
@@ -52,19 +54,40 @@ public sealed partial class CatalogLandingPage : UserControl
         try
         {
             var groups = await _provider.GetChannelGroupsAsync(account);
+            _groups = groups;
             var channels = await _provider.GetChannelsAsync(account);
             if (groups.Count == 0 && channels.Count == 0)
             {
                 SetState(empty: true);
                 return;
             }
-            GroupsList.ItemsSource = groups.Select(group => group.DisplayName).ToArray();
-            ChannelsList.ItemsSource = channels.Select(channel => channel.DisplayName).ToArray();
+            _bindingGroups = true;
+            GroupsList.ItemsSource = new[] { "All channels" }.Concat(groups.Select(group => group.DisplayName)).ToArray();
+            GroupsList.SelectedIndex = 0;
+            _bindingGroups = false;
+            ChannelsList.ItemsSource = channels;
             SetState(content: true);
         }
         catch (Exception exception)
         {
             ShowError($"Could not load channel groups or channels: {exception.Message}");
+        }
+    }
+
+    private async void GroupsList_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_bindingGroups || _account is null || GroupsList.SelectedIndex < 0) return;
+        var groupId = GroupsList.SelectedIndex == 0 ? null : _groups[GroupsList.SelectedIndex - 1].Id;
+        try
+        {
+            SetState(loading: true);
+            var channels = await _provider.GetChannelsAsync(_account, groupId);
+            ChannelsList.ItemsSource = channels;
+            SetState(content: true);
+        }
+        catch (Exception exception)
+        {
+            ShowError($"Could not load channels: {exception.Message}");
         }
     }
 

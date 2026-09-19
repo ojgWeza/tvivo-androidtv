@@ -95,24 +95,20 @@ public sealed class XtreamCatalogProvider : ICatalogProvider
         Func<JsonElement, string, T?> map, CancellationToken cancellationToken) where T : class
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
-            return Array.Empty<T>();
-        try
+            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+        using var response = await _http.GetAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            throw new JsonException("The catalog response was not a JSON array.");
+        var result = new List<T>();
+        foreach (var item in document.RootElement.EnumerateArray())
         {
-            using var response = await _http.GetAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
-            if (!response.IsSuccessStatusCode) return Array.Empty<T>();
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-            if (document.RootElement.ValueKind != JsonValueKind.Array) return Array.Empty<T>();
-            var result = new List<T>();
-            foreach (var item in document.RootElement.EnumerateArray())
-            {
-                var mapped = item.ValueKind == JsonValueKind.Object ? map(item, account.AccountId) : null;
-                if (mapped is not null) result.Add(mapped);
-            }
-            return result;
+            var mapped = item.ValueKind == JsonValueKind.Object ? map(item, account.AccountId) : null;
+            if (mapped is not null) result.Add(mapped);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch { return Array.Empty<T>(); }
+        return result;
     }
 
     private static ChannelGroup? MapGroup(JsonElement value, string accountId)

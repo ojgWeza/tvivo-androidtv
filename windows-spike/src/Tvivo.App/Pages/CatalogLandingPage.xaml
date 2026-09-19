@@ -24,11 +24,11 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="320" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                 <StackPanel Spacing="8">
                     <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" Text="CHANNEL GROUPS" />
-                    <ListView x:Name="GroupsList" />
+                    <ListView x:Name="GroupsList" SelectionChanged="GroupsList_SelectionChanged" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Spacing="8">
                     <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" Text="CHANNELS" />
-                    <ListView x:Name="ChannelsList" />
+                    <ListView x:Name="ChannelsList" DisplayMemberPath="DisplayName" />
                 </StackPanel>
             </Grid>
         </StackPanel>

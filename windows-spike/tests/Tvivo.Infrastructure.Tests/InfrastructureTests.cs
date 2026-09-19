@@ -112,22 +112,77 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
-    public async Task Provider_returns_empty_for_malformed_empty_and_object_catalog_responses()
+    public async Task Provider_returns_empty_for_successful_empty_catalog_responses()
     {
-        foreach (var fixture in new[] { "malformed.json", "empty.json", "object.json" })
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) => request.RequestUri!.Query switch
+        {
+            var query when !query.Contains("action=", StringComparison.Ordinal) => JsonResponse("auth_success.json"),
+            _ => JsonResponse("empty.json")
+        })));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        Assert.True(authentication.Success);
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+        Assert.Empty(await provider.GetChannelGroupsAsync(account));
+        Assert.Empty(await provider.GetChannelsAsync(account));
+    }
+
+    [Fact]
+    public async Task Provider_propagates_malformed_or_non_array_catalog_responses()
+    {
+        foreach (var fixture in new[] { "malformed.json", "object.json" })
         {
             var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) => request.RequestUri!.Query switch
             {
                 var query when !query.Contains("action=", StringComparison.Ordinal) => JsonResponse("auth_success.json"),
-                var query when query.Contains("action=", StringComparison.Ordinal) => JsonResponse(fixture),
-                _ => JsonResponse("auth_success.json")
+                _ => JsonResponse(fixture)
             })));
             var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
-            Assert.True(authentication.Success);
             var account = Assert.IsType<ProviderAccount>(authentication.Account);
-            Assert.Empty(await provider.GetChannelGroupsAsync(account));
-            Assert.Empty(await provider.GetChannelsAsync(account));
+            await Assert.ThrowsAnyAsync<System.Text.Json.JsonException>(() => provider.GetChannelGroupsAsync(account));
         }
+    }
+
+    [Fact]
+    public async Task Provider_propagates_catalog_http_and_transport_failures()
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+            request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : JsonResponse("auth_success.json"))));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetChannelsAsync(account));
+
+        var transportProvider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+            request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
+                ? throw new HttpRequestException("fixture transport failure")
+                : JsonResponse("auth_success.json"))));
+        var transportAuthentication = await transportProvider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var transportAccount = Assert.IsType<ProviderAccount>(transportAuthentication.Account);
+        await Assert.ThrowsAsync<HttpRequestException>(() => transportProvider.GetChannelGroupsAsync(transportAccount));
+    }
+
+    [Fact]
+    public async Task Provider_requests_selected_group_channels()
+    {
+        string? catalogQuery = null;
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            catalogQuery = query;
+            return query.Contains("category_id=10", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[{\"stream_id\":\"opaque-42\",\"name\":\"Channel 42\",\"category_id\":10,\"ext\":\"mkv\"}]", Encoding.UTF8, "application/json") }
+                : JsonResponse("live_streams.json");
+        })));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+        var allChannels = await provider.GetChannelsAsync(account);
+        var channels = await provider.GetChannelsAsync(account, "10");
+        Assert.Equal(2, allChannels.Count);
+        Assert.Single(channels);
+        Assert.Equal("10", channels[0].GroupId);
+        Assert.Contains("category_id=10", catalogQuery, StringComparison.Ordinal);
     }
 
     [Fact]
