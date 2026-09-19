@@ -9,18 +9,7 @@ public sealed class PlaybackSmokeTests
     [Fact]
     public void PlaybackEnginesImplementEngineContract()
     {
-        Assert.IsAssignableFrom<IPlaybackEngine>(new WindowsPlaybackEngine());
         Assert.IsAssignableFrom<IPlaybackEngine>(new VlcPlaybackEngine());
-    }
-
-    [Theory]
-    [InlineData(Windows.Media.Playback.MediaPlayerError.NetworkError, PlaybackAttemptResult.NetworkFailure)]
-    [InlineData(Windows.Media.Playback.MediaPlayerError.DecodingError, PlaybackAttemptResult.DecodeFailure)]
-    [InlineData(Windows.Media.Playback.MediaPlayerError.SourceNotSupported, PlaybackAttemptResult.UnsupportedMedia)]
-    [InlineData(Windows.Media.Playback.MediaPlayerError.Unknown, PlaybackAttemptResult.UnknownFailure)]
-    public void MediaFailureMappingRemainsCoarse(Windows.Media.Playback.MediaPlayerError error, PlaybackAttemptResult expected)
-    {
-        Assert.Equal(expected, WindowsPlaybackEngine.MapMediaFailure(error, "diagnostic", new object()));
     }
 
     [Fact]

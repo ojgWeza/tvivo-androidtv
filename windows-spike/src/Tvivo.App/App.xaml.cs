@@ -75,7 +75,6 @@ public partial class App : Application
         var services = new ServiceCollection();
         services.AddSingleton<ICatalogProvider, XtreamCatalogProvider>();
         services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
-        services.AddSingleton<WindowsPlaybackEngine>();
         services.AddSingleton<VlcPlaybackEngine>();
         services.AddSingleton<IPlaybackEngine>(sp => sp.GetRequiredService<VlcPlaybackEngine>());
         services.AddSingleton<PlaybackService>();
