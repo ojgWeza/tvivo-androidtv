@@ -227,3 +227,29 @@ do not treat it as the current handoff.
   package/API assumptions, compared against known LibVLCSharp.WinUI integration patterns. Do NOT
   choose a replacement engine or propose an HWND-based architecture without further explicit
   authorization — this is diagnosis only. Not yet authorized as of this document's writing.
+
+## 2026-09-19 correction — VideoView inline rendering VERIFIED; visual acceptance gap CLOSED
+
+- **OBSERVED — The programmatically constructed `VideoView` defect is resolved.** `VideoView.Initialized`
+  did not fire when `VlcPlaybackEngine` constructed the view and assigned it through
+  `ContentControl.Content`; the internal template/swap-chain/initialized lifecycle was not entered.
+  Option A now declares `VideoView` directly in `MainWindow.xaml` with `Initialized="VideoView_Initialized"`.
+  The new code-behind handler calls `VlcPlaybackEngine.InitializeView(view, args)`. The engine no longer
+  constructs the view; its `View` property throws until registration. `IPlaybackEngine`,
+  `PlaybackService`, and DI wiring remain otherwise unchanged. LibVLC construction remains deferred
+  until `Initialized`, preserving the bounded 10-second readiness timeout and diagnostic logging.
+- **OBSERVED — Scope and runtime evidence:** the production change is exactly the three requested
+  files; no packages, project files, tests, fixtures, or other files were touched by that implementation.
+  The current worktree `git diff --numstat` reports XAML `6/4`, code-behind `7/1`, and playback engine
+  `87/12` insertions/deletions. On the unchanged Gate 9 `thirtyfive-second-h264.mp4` fixture, startup
+  logs show `Initialized`, two swap-chain options (`--winrt-d3dcontext` and `--winrt-swapchain`), then
+  successful LibVLC construction before Play. After Play, status reached `FirstFrame`, gated by
+  `VoutCount > 0`; PID-filtered, `IsWindowVisible`-filtered `EnumWindows` found only the main
+  `WinUI Desktop` window before and after playback. Two screenshots three seconds apart had distinct
+  SHA-256 hashes and visibly different decoder frame-number overlays, showing the SMPTE pattern
+  rendering inside the app's `VideoView` with advancing playback.
+- **Caveats —** advancing playback was established visually and by screenshot hashes, not by a direct
+  `MediaPlayer.Position` sample; window enumeration excludes hidden/off-screen/zero-size windows; and
+  this was one run, fixture, and session (no second Play, fresh-launch repeat, or alternate fixture).
+- **Status — VERIFIED, uncommitted, ready for commit decision.** This closes the previously open
+  Visual Acceptance gap and supersedes the stale next-gate text above; historical entries are retained.

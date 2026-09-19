@@ -1,16 +1,18 @@
 <Window
     x:Class="Tvivo.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:lvs="using:LibVLCSharp.Platforms.Windows">
     <Grid Padding="24" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ContentControl x:Name="VideoHost"
-                        Grid.Row="0"
-                        Background="{StaticResource AppPanelSurfaceBrush}" />
+        <lvs:VideoView x:Name="VideoView"
+                       Grid.Row="0"
+                       Background="{StaticResource AppPanelSurfaceBrush}"
+                       Initialized="VideoView_Initialized" />
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12">
             <TextBox x:Name="PathBox"

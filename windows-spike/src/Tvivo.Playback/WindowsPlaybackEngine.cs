@@ -30,15 +30,18 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(10);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly LibVLC _libVlc = new(Array.Empty<string>());
-    private readonly VideoView _view = new();
+    private readonly object _lifecycleLock = new();
+    private readonly TaskCompletionSource<LibVLC> _libVlcReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private VideoView? _view;
+    private LibVLC? _libVlc;
     private Media? _media;
     private MediaPlayer? _player;
     private PlaybackSessionToken? _currentSession;
     private EventHandlers? _handlers;
     private bool _disposed;
 
-    public VideoView View => _view;
+    public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
 
     public event EventHandler<VlcPlaybackStateChangedEventArgs>? StateChanged;
 
@@ -54,11 +57,29 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             StopCore(_currentSession);
             cancellationToken.ThrowIfCancellationRequested();
 
+            LibVLC libVlc;
+            try
+            {
+                libVlc = await _libVlcReady.Task
+                    .WaitAsync(StartupDeadline, cancellationToken)
+                    .ConfigureAwait(true);
+            }
+            catch (TimeoutException exception)
+            {
+                Log($"Timed out waiting for LibVLC readiness after {StartupDeadline.TotalSeconds:0.###} seconds. {exception}");
+                return PlaybackAttemptResult.Timeout;
+            }
+            catch (Exception exception)
+            {
+                Log($"LibVLC readiness failed before playback could start. {exception}");
+                return PlaybackAttemptResult.HostFailure;
+            }
+
             if (source.DirectUri is null)
                 return PlaybackAttemptResult.HostFailure;
 
-            var media = new Media(_libVlc, source.DirectUri, Array.Empty<string>());
-            var player = new MediaPlayer(_libVlc)
+            var media = new Media(libVlc, source.DirectUri, Array.Empty<string>());
+            var player = new MediaPlayer(libVlc)
             {
                 Media = media,
             };
@@ -70,7 +91,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             _player = player;
             _handlers = handlers;
             _currentSession = session;
-            _view.MediaPlayer = player;
+            View.MediaPlayer = player;
 
             player.Playing += handlers.Playing;
             player.Vout += handlers.Vout;
@@ -151,8 +172,12 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 return;
 
             StopCore(_currentSession);
-            _libVlc.Dispose();
-            _disposed = true;
+            lock (_lifecycleLock)
+            {
+                _libVlc?.Dispose();
+                _libVlc = null;
+                _disposed = true;
+            }
         }
         finally
         {
@@ -170,13 +195,62 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 return;
 
             StopCore(_currentSession);
-            _libVlc.Dispose();
-            _disposed = true;
+            lock (_lifecycleLock)
+            {
+                _libVlc?.Dispose();
+                _libVlc = null;
+                _disposed = true;
+            }
         }
         finally
         {
             _gate.Release();
             _gate.Dispose();
+        }
+    }
+
+    public void InitializeView(VideoView view, InitializedEventArgs e)
+    {
+        Log("Entered OnViewInitialized.");
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+                return;
+
+            _view = view;
+
+            try
+            {
+                var swapChainOptions = e.SwapChainOptions;
+                Log($"Read VideoView swap-chain options: length={swapChainOptions.Length}, values=[{string.Join(", ", swapChainOptions)}].");
+                Log("Constructing LibVLC.");
+                _libVlc = new LibVLC(swapChainOptions);
+                Log("LibVLC construction succeeded.");
+                _libVlcReady.TrySetResult(_libVlc);
+            }
+            catch (Exception exception)
+            {
+                Log($"LibVLC construction prevented readiness completion. {exception}");
+                _libVlcReady.TrySetException(exception);
+            }
+        }
+    }
+
+    private static readonly string LogPath = Path.Combine(
+        Path.GetTempPath(),
+        "tvivo-playback-engine.log");
+
+    private static void Log(string message)
+    {
+        var line = $"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] {message}{Environment.NewLine}";
+        Console.WriteLine(line.TrimEnd());
+        try
+        {
+            File.AppendAllText(LogPath, line);
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] Unable to append diagnostic log: {exception}");
         }
     }
 
@@ -209,7 +283,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             player.EndReached -= handlers.EndReached;
         }
 
-        _view.MediaPlayer = null;
+        if (_view is { } view)
+            view.MediaPlayer = null;
         player.Stop();
         player.Dispose();
         media?.Dispose();
@@ -217,7 +292,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
     private void PublishState(PlaybackSessionToken session, VlcPlaybackState state)
     {
-        _view.DispatcherQueue?.TryEnqueue(() =>
+        _view?.DispatcherQueue?.TryEnqueue(() =>
         {
             if (_currentSession == session || state is VlcPlaybackState.Stopping or VlcPlaybackState.Completed or VlcPlaybackState.Failed)
                 StateChanged?.Invoke(this, new VlcPlaybackStateChangedEventArgs(session, state));

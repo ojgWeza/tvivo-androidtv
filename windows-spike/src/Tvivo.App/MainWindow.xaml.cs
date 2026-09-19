@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
+using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using Tvivo.Playback;
 
@@ -19,9 +20,14 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         PathBox.Text = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
         LaunchDiagnostics.Write("MainWindow XAML initialized");
-        VideoHost.Content = _engine.View;
         Closed += OnClosed;
         LaunchDiagnostics.Write("MainWindow constructor completed");
+    }
+
+    private void VideoView_Initialized(object? sender, InitializedEventArgs args)
+    {
+        if (sender is VideoView view)
+            _engine.InitializeView(view, args);
     }
 
     private async void Play_Click(object sender, RoutedEventArgs args)
