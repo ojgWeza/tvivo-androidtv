@@ -28,8 +28,14 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" Spacing="8">
                     <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" Text="CHANNELS" />
+                    <TextBox x:Name="SearchBox" PlaceholderText="Filter channels" TextChanged="SearchBox_TextChanged" />
                     <ListView x:Name="ChannelsList" DisplayMemberPath="DisplayName"
                               DoubleTapped="ChannelsList_DoubleTapped" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="PreviousPageButton" Content="Previous" Click="PreviousPage_Click" IsEnabled="False" />
+                        <TextBlock x:Name="PageStatus" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" />
+                        <Button x:Name="NextPageButton" Content="Next" Click="NextPage_Click" IsEnabled="False" />
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </StackPanel>

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Tvivo.Core;
+using Tvivo.Infrastructure;
 
 namespace Tvivo.App.Pages;
 
@@ -11,10 +12,15 @@ public sealed partial class CatalogLandingPage : UserControl
     private static readonly string? LocalFixturePath = FindFixturePath();
 #endif
     private readonly ICatalogProvider _provider = App.Services.GetRequiredService<ICatalogProvider>();
+    private readonly SqliteCatalogRepository _repository = App.Services.GetRequiredService<SqliteCatalogRepository>();
+    private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private ProviderAccount? _account;
     private IReadOnlyList<ChannelGroup> _groups = Array.Empty<ChannelGroup>();
     private bool _bindingGroups;
+    private string? _selectedGroupId;
+    private int _offset;
+    private const int PageSize = 100;
     public ProviderAccount? Account => _account;
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
 
@@ -72,22 +78,22 @@ public sealed partial class CatalogLandingPage : UserControl
         SetState(loading: true);
         try
         {
-            var groups = await _provider.GetChannelGroupsAsync(account);
-            _groups = groups;
-            var channels = await _provider.GetChannelsAsync(account);
-#if DEBUG
-            channels = WithLocalFixtureChannel(channels);
-#endif
-            if (groups.Count == 0 && channels.Count == 0)
+            await _refresh.RefreshAsync(account);
+            _groups = _repository.GetGroups(account);
+            var firstPage = _repository.GetChannels(account, limit: PageSize);
+            if (_groups.Count == 0 && firstPage.TotalCount == 0)
             {
                 SetState(empty: true);
                 return;
             }
             _bindingGroups = true;
-            GroupsList.ItemsSource = new[] { "All channels" }.Concat(groups.Select(group => group.DisplayName)).ToArray();
+            GroupsList.ItemsSource = new[] { "All channels" }.Concat(_groups.Select(group => group.DisplayName)).ToArray();
             GroupsList.SelectedIndex = 0;
             _bindingGroups = false;
-            ChannelsList.ItemsSource = channels;
+            _selectedGroupId = null;
+            _offset = 0;
+            ChannelsList.ItemsSource = firstPage.Items;
+            UpdatePaging(firstPage.TotalCount);
             SetState(content: true);
         }
         catch (Exception exception)
@@ -99,18 +105,36 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void GroupsList_SelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         if (_bindingGroups || _account is null || GroupsList.SelectedIndex < 0) return;
-        var groupId = GroupsList.SelectedIndex == 0 ? null : _groups[GroupsList.SelectedIndex - 1].Id;
+        _selectedGroupId = GroupsList.SelectedIndex == 0 ? null : _groups[GroupsList.SelectedIndex - 1].Id;
         try
         {
-            SetState(loading: true);
-            var channels = await _provider.GetChannelsAsync(_account, groupId);
-            ChannelsList.ItemsSource = channels;
-            SetState(content: true);
+            _offset = 0;
+            ShowCachedPage();
         }
         catch (Exception exception)
         {
             ShowError($"Could not load channels: {exception.Message}");
         }
+    }
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs args) { _offset = 0; ShowCachedPage(); }
+    private void PreviousPage_Click(object sender, RoutedEventArgs args) { _offset = Math.Max(0, _offset - PageSize); ShowCachedPage(); }
+    private void NextPage_Click(object sender, RoutedEventArgs args) { _offset += PageSize; ShowCachedPage(); }
+
+    private void ShowCachedPage()
+    {
+        if (_account is null) return;
+        var page = _repository.GetChannels(_account, _selectedGroupId, SearchBox.Text, _offset, PageSize);
+        ChannelsList.ItemsSource = page.Items;
+        UpdatePaging(page.TotalCount);
+        SetState(content: true);
+    }
+
+    private void UpdatePaging(int total)
+    {
+        PageStatus.Text = total == 0 ? "0 channels" : $"{_offset + 1}–{Math.Min(_offset + PageSize, total)} of {total}";
+        PreviousPageButton.IsEnabled = _offset > 0;
+        NextPageButton.IsEnabled = _offset + PageSize < total;
     }
 
     private void ChannelsList_DoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs args)
@@ -128,12 +152,6 @@ public sealed partial class CatalogLandingPage : UserControl
         null, null, int.MaxValue,
         new StreamSource("gate-9-local-fixture", StreamKind.Movie, DirectUri: new Uri(LocalFixturePath!)),
         new Dictionary<string, string>());
-
-    private static IReadOnlyList<Channel> WithLocalFixtureChannel(IReadOnlyList<Channel> channels)
-    {
-        if (LocalFixturePath is null) return channels;
-        return channels.Append(CreateLocalFixtureChannel()).ToArray();
-    }
 
     private static string? FindFixturePath()
     {
