@@ -253,3 +253,19 @@ do not treat it as the current handoff.
   this was one run, fixture, and session (no second Play, fresh-launch repeat, or alternate fixture).
 - **Status — VERIFIED, uncommitted, ready for commit decision.** This closes the previously open
   Visual Acceptance gap and supersedes the stale next-gate text above; historical entries are retained.
+
+## 2026-09-19 — Raw evidence from the earlier (separate, closed) engine-replacement investigation archived externally
+
+- The `windows-spike/step2-publish-xaml-diagnostics/` and `windows-spike/step3b-artifacts/`
+  directories hold raw evidence for the *earlier, already-closed* investigation that determined
+  the original pre-LibVLC playback engine was unfixable (`WinUI3`'s `XamlControlsResources`
+  initialization failure; see `.spike-decision-log.md` and `WINUI3-PLAYBACK-HANDOFF-REPORT.md`)
+  — not the later inline-video-hosting defect resolved above. Neither directory was ever
+  git-tracked, and neither is needed to reproduce or support the verified Option A result.
+- Archived on 2026-09-19, verified byte-for-byte via SHA-256 before and after the move (nothing
+  deleted): the three `.dmp` memory dumps from `step3b-artifacts/` (~1.38 GB) moved to
+  `D:\Tvivo-archives\windows-spike-2026-09-19\step3b-artifacts\`, leaving the 20 narrative
+  `.txt`/`.csv` transcripts (416,901 bytes) in place; the full 775-file
+  `step2-publish-xaml-diagnostics/` tree (268,163,187 bytes) moved unchanged to
+  `D:\Tvivo-archives\windows-spike-2026-09-19\step2-publish-xaml-diagnostics\`.
+  All existing conclusions and citations in this file and `.spike-decision-log.md` remain valid.
