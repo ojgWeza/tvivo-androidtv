@@ -8,7 +8,7 @@ Tvivo should open into the user's media world, not an empty dashboard and not a 
 
 ## My Tvivo arrival screen
 
-After sign-in or normal launch, open My Tvivo. The primary feature is Pick up where you left off: the most recent resumable or reopenable item, regardless of content type. It may be a movie, series episode, channel, folder, or browse destination. The card's action must match its type: Resume, View episode, Tune in, or Open.
+After sign-in or normal launch, open My Tvivo. The primary feature is Pick up where you left off: the most recent resumable or reopenable item, regardless of content type. It may be a movie, series episode, channel, folder, or browse destination. The card's action must match its type: Resume, Play episode, Tune in, or Open.
 
 Under it, show Recent activity as a mixed-content horizontal shelf ordered by last meaningful interaction, newest on the left in LTR layouts and newest on the right in RTL layouts. It may contain movies, episodes, channels, folders, and library destinations. Each item displays its content type and action; it must not pretend that every item is resumable.
 
@@ -23,7 +23,7 @@ The panel selects a session-stable pool of up to 20 eligible movies or series fr
 - large poster or backdrop with a designed missing-art fallback;
 - title and content-type label;
 - only metadata verified by the provider;
-- one clear action, such as Open details, Play, or View episodes;
+- one clear action: play the movie, or for a series open the current episode directly in Player;
 - progress dots or a compact position indicator;
 - previous/next controls for keyboard and pointer input.
 
@@ -50,7 +50,7 @@ The persistent top navigation owns My Tvivo, Movies, Series, Live TV, Search, an
 | Series | Recently added/indexed; Suggestions; Continue watching; Next episode; Favorites; high-use series folders |
 | Live TV | Recently watched channels; Suggestions; Favorites; high-use channel groups; newly indexed channels when trustworthy |
 
-TV must not show Continue Watching unless the provider and player support a meaningful resume concept. Use Recently watched for ordinary live channels. Series cannot be represented as directly playable; they open the episode picker.
+TV must not show Continue Watching unless the provider and player support a meaningful resume concept. Use Recently watched for ordinary live channels. When Spotlight shows a series, its primary action opens the due episode directly in Player. The Player view keeps the series context visible below the video through a season selector and a scrollable episode list, so the user can continue with another episode without losing playback context.
 
 ## High-use folders
 
@@ -73,7 +73,7 @@ The screen must not become a wall of shelves. Apply a visible-shelf limit, rank 
 - Recently added requires a reliable provider timestamp. Otherwise use Recently indexed.
 - Suggestions in the first implementation are session-stable and labelled Suggestions, not Recommended for you, because true personalization is not yet established.
 - Suggestions must not duplicate visible Recent activity, Continue watching, or Favorites unless the candidate pool is too small.
-- Every card states its destination: Movies and Live TV are playable; Series says View episodes; folders say Open folder.
+- Every card states its destination: Movies and Live TV are playable; a Series resume/Spotlight action opens the due episode in Player; other Series cards open the episode context; folders say Open folder.
 - Cached rows remain visible during refresh and after refresh failure.
 - Preserve tab, scroll position, and focused/selected card when returning from browse, details, episode selection, or Player.
 
@@ -96,7 +96,7 @@ Do not silently infer or upload preference data. v0 can use local recency, expli
 ## Implementation TODO
 
 1. Define the cross-type RecentActivityItem contract and stable identity rules.
-2. Define the resumable/reopenable state contract for movies, episodes, channels, folders, and browse destinations.
+2. Define the resumable/reopenable state contract for movies, episodes, channels, folders, and browse destinations; for Series, persist the due episode and restore Player plus season/episode context.
 3. Add account-scoped local history persistence with explicit retention and clear-history behaviour.
 4. Define the candidate-pool query for Spotlight and its session seed/stability rules.
 5. Define the high-use-folder scoring thresholds and visible-shelf cap.
@@ -106,7 +106,7 @@ Do not silently infer or upload preference data. v0 can use local recency, expli
 9. Add telemetry only after the Account opt-in decision; no silent personalisation instrumentation.
 10. Add controlled acceptance fixtures for mixed recent history, 20 Spotlight candidates, repeated folders, empty cache, partial refresh, and refresh failure.
 11. Design and validate the My Tvivo, Movies, Series, and Live TV states in Figma before changing WinUI XAML.
-12. After visual approval, implement one vertical slice in WinUI: My Tvivo shell, Spotlight, Recent activity, and one folder shelf, while preserving existing catalog behaviour.
+12. After visual approval, implement one vertical slice in WinUI: My Tvivo shell, Spotlight, Recent activity, and one folder shelf, while preserving existing catalog behaviour. Include the Series Spotlight-to-Player route with seasons and episodes below the video.
 
 ## Scope boundary
 
