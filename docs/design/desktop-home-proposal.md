@@ -1,111 +1,113 @@
 # Desktop Home proposal
 
-This is a product handoff for D-Desktop-16. It defines the intended Home and
-library-tab behaviour; it does not authorise playback, catalog, schema, or
-tracking changes by itself.
+This is a product handoff for D-Desktop-16 and the cross-platform Tvivo Home direction. It defines Home, personal activity, library tabs, and discovery behaviour; it does not authorise playback, catalog, schema, sync, or tracking changes by itself.
 
 ## Product intent
 
-Tvivo should open like an enjoyable media library, not an empty dashboard.
-Discovery is immediate, while Movies, Series, and Live TV remain distinct
-libraries with honest, useful shelves. The UI must work entirely from cached
-catalog data when the network is unavailable.
+Tvivo should open into the user's media world, not an empty dashboard and not a destination-choice screen. The first screen is My Tvivo: it remembers the user's last meaningful activity, exposes recent history, and helps discover something new. Movies, Series, and Live TV remain distinct libraries with honest, useful shelves. The UI must work from cached catalog data when the network is unavailable.
 
-## Arrival and idle screen
+## My Tvivo arrival screen
 
-After a successful sign-in or a normal app launch, first show an immersive
-discovery screen populated from the ten most recently added eligible items
-across Movies and Series. Each frame shows one poster/backdrop, title, and a
-clear content-type label. Selecting an item follows its ordinary route:
-movies open their pre-run/play route; series open the episode picker.
+After sign-in or normal launch, open My Tvivo. The primary feature is Pick up where you left off: the most recent resumable or reopenable item, regardless of content type. It may be a movie, series episode, channel, folder, or browse destination. The card's action must match its type: Resume, View episode, Tune in, or Open.
 
-The screen is an entry/discovery layer, not a blocking splash. Mouse movement,
-keyboard input, click, or an explicit browse action immediately reveals the
-last selected library tab. If cached eligible items do not exist, skip the
-layer and enter Movies with an actionable cached/loading/empty state.
+Under it, show Recent activity as a mixed-content horizontal shelf ordered by last meaningful interaction, newest on the left in LTR layouts and newest on the right in RTL layouts. It may contain movies, episodes, channels, folders, and library destinations. Each item displays its content type and action; it must not pretend that every item is resumable.
 
-After five minutes without user input, show a dimmed version of this layer as
-the in-app idle treatment. It must slowly rotate content and dim rather than
-hold one static poster, to avoid OLED burn-in. Any user input returns to the
-same tab, scroll position, and selected card. Never call it a system
-screensaver or prevent the operating system's own lock/screen-saver policy.
+Recent activity is history, not recommendation. It is deterministic, account-scoped, bounded for display, and supports See all for the complete history. Opening an item updates its recency without duplicating it.
 
-"Recently added" requires a reliable provider timestamp. If it is absent or
-untrustworthy, label the shelf and discovery source "Recently indexed" rather
-than claiming it is new.
+## Tvivo Spotlight
+
+My Tvivo may include a large cinematic Tvivo Spotlight panel. This is an interactive discovery surface, not a static list and not a system screensaver.
+
+The panel selects a session-stable pool of up to 20 eligible movies or series from cached data. It displays one title at a time:
+
+- large poster or backdrop with a designed missing-art fallback;
+- title and content-type label;
+- only metadata verified by the provider;
+- one clear action, such as Open details, Play, or View episodes;
+- progress dots or a compact position indicator;
+- previous/next controls for keyboard and pointer input.
+
+Automatic rotation is deliberately restrained:
+
+- hold the first frame for about 9 seconds;
+- hold subsequent frames for about 7–8 seconds;
+- use a 500–700 ms crossfade or equivalent non-distracting transition;
+- pause immediately on pointer hover, keyboard focus, text entry, or explicit interaction;
+- resume only after the user leaves the panel and no control has focus;
+- support reduced motion by replacing the transition with an immediate or short fade;
+- never autoplay a trailer or provider stream in the Spotlight.
+
+The 20-item pool is not necessarily 20 visible slides in a fixed order. It is a candidate pool ranked from available evidence, with already-completed or repeatedly dismissed items down-ranked. A session must remain stable so the panel does not change while the user is deciding.
 
 ## Library tabs
 
-The persistent top navigation owns Home, Movies, Series, Live TV, and Account.
-The three content tabs are the main browsing surfaces. Each tab begins with
-unfolded shelves, then retains the existing category rail/search browse path
-behind a visible `See all` action.
+The persistent top navigation owns My Tvivo, Movies, Series, Live TV, Search, and Account/Settings. The three content tabs are the main browsing surfaces. Each tab begins with its own content-aware shelves and retains the category/folder browse path behind visible See all actions.
 
-| Tab | Ordered shelves |
+| Tab | Default shelves |
 | --- | --- |
-| Movies | Recently added/indexed; Suggestions; Continue watching; favourite folders |
-| Series | Recently added/indexed; Suggestions; Continue watching; favourite folders |
-| Live TV | Recently watched channels; Suggestions; favourite folders; newly indexed channels when trustworthy |
+| My Tvivo | Pick up where you left off; Recent activity; Tvivo Spotlight; Favorites; high-use folder shelves |
+| Movies | Recently added/indexed; Suggestions; Continue watching; Favorites; high-use movie folders |
+| Series | Recently added/indexed; Suggestions; Continue watching; Next episode; Favorites; high-use series folders |
+| Live TV | Recently watched channels; Suggestions; Favorites; high-use channel groups; newly indexed channels when trustworthy |
 
-Rules for every tab:
+TV must not show Continue Watching unless the provider and player support a meaningful resume concept. Use Recently watched for ordinary live channels. Series cannot be represented as directly playable; they open the episode picker.
 
-- Render a shelf only when it has content. Empty continuation or favourite
-  panes must not occupy space or explain their absence.
-- `See all` opens Browse with the matching virtual folder or filter selected.
-- Preserve tab, scroll position, and focused/selected card when returning from
-  Browse, details, an episode picker, or the player.
-- Cards must state their destination: Movies and Live TV are playable; Series
-  says `View episodes`. Do not make a series appear directly playable.
-- Continue-watching cards show progress and remaining time where known. Series
-  cards also show season and episode. Live TV has no resume progress.
-- Loading, offline, partial-refresh, and failed-refresh states preserve cached
-  shelves and surface a concise, actionable status near Refresh.
+## High-use folders
 
-## Suggestions v0
+A folder or provider group can become a personalized shelf when the user repeatedly opens it or watches items from it. Do not create a permanent shelf after one accidental visit. The ranking signal should combine open count, recency, actual item interaction, and explicit favorites.
 
-Suggestions are a session-stable random sample from the current tab's cached
-catalog. Generate it once at app open and keep it stable until the next app
-open or an explicit refresh; avoid duplicates with visible shelves and exclude
-unplayable/broken records. The label is deliberately `Suggestions`, not
-`Recommended for you`: v0 has no personalisation data.
+A high-use folder shelf:
 
-Suggested initial selection rules:
+- is labelled From [folder name];
+- contains the folder's real items in a horizontally scrollable virtualized collection;
+- shows as many whole cards as fit, with See all for the complete folder;
+- preserves the provider's folder name and account scope;
+- can be hidden, reordered, or removed from My Tvivo;
+- does not claim that a folder is a genre or curated recommendation unless provider data proves it.
 
-1. Select only from the active content type.
-2. Prefer items with usable artwork, but do not hide valid items merely because
-   artwork is missing.
-3. Exclude completed items from continuation, not from ordinary Suggestions.
-4. Cap each shelf to the number of whole cards that fits the current viewport;
-   `See all` handles the remainder.
+The screen must not become a wall of shelves. Apply a visible-shelf limit, rank candidates, and place the remainder behind Customize My Tvivo or See all.
 
-## Favourite folders
+## Shelf rules
 
-Show each non-empty favourite folder as its own pane. On first use, the app may
-offer a small editable starter set, but must not silently create a cluttered
-taxonomy. The user can rename, reorder, remove, and add folders; an empty
-folder stays hidden from Home until it contains an item. Favourites and folders
-remain local to the device and account-scoped.
+- Render a shelf only when it has content; empty continuation and favorite sections do not occupy unexplained space.
+- Recently added requires a reliable provider timestamp. Otherwise use Recently indexed.
+- Suggestions in the first implementation are session-stable and labelled Suggestions, not Recommended for you, because true personalization is not yet established.
+- Suggestions must not duplicate visible Recent activity, Continue watching, or Favorites unless the candidate pool is too small.
+- Every card states its destination: Movies and Live TV are playable; Series says View episodes; folders say Open folder.
+- Cached rows remain visible during refresh and after refresh failure.
+- Preserve tab, scroll position, and focused/selected card when returning from browse, details, episode selection, or Player.
 
-## Future personalisation
+## Personalization boundary
 
-Do not collect or infer preference data before an explicit Account opt-in:
-`Use watch history on this device to improve Suggestions.` Explain the benefit,
-keep the calculation local by default, and provide a one-step disable/delete
-path. Favourite actions, completed/abandoned playback, and browsed categories
-are sufficient first signals. Genre-based ranking is future work and is gated
-on verified, consistently available provider genre metadata.
+Do not silently infer or upload preference data. v0 can use local recency, explicit favorites, folder opens, and playback completion to shape My Tvivo. Future recommendation personalization requires an explicit Account opt-in, a clear explanation, and a disable/delete path. Cross-device sync is a separate Tvivo-account capability and must not be implied by local history.
 
-## Acceptance evidence for the implementation pass
+## Acceptance evidence
 
-- A first-run library with no history contains no empty continuation/favourite
-  shelves and presents a clear next action.
-- A cached library with qualifying movies/series shows the entry layer, and one
-  input returns to the expected saved tab without losing selection.
-- Five minutes of idle time enters the dimmed rotating treatment; input restores
-  the previous UI state.
-- Each content tab shows only its eligible shelves; `See all` opens the correct
-  browse destination.
-- Suggestions stay unchanged during an app session and change only on the next
-  app open or explicit refresh.
-- Offline and partial-refresh states keep cached content reachable and describe
-  the recovery action without exposing provider details.
+- A first-run user with no history sees an honest next action and no empty fake shelves.
+- A returning user sees the last meaningful item in Pick up where you left off, regardless of content type.
+- Recent activity is mixed-content, deterministic, newest-first, and updates without duplicates.
+- Spotlight holds long enough to understand, pauses on interaction, supports manual controls, and respects reduced motion.
+- Spotlight content remains stable during a session and does not autoplay a stream or trailer.
+- Movies, Series, and Live TV expose different eligible shelves; TV does not fake resume.
+- Repeated folder usage creates a ranked, removable shelf; one-off folder visits do not.
+- See all opens the correct browse context and preserves return state.
+- Offline, empty, and failed-refresh states keep cached content reachable and expose the correct next action.
+
+## Implementation TODO
+
+1. Define the cross-type RecentActivityItem contract and stable identity rules.
+2. Define the resumable/reopenable state contract for movies, episodes, channels, folders, and browse destinations.
+3. Add account-scoped local history persistence with explicit retention and clear-history behaviour.
+4. Define the candidate-pool query for Spotlight and its session seed/stability rules.
+5. Define the high-use-folder scoring thresholds and visible-shelf cap.
+6. Confirm provider timestamp trust rules for Recently added versus Recently indexed.
+7. Define missing-art fallback for poster/backdrop and fitted channel-logo artwork separately.
+8. Define Windows keyboard/pointer focus, hover pause, manual navigation, and reduced-motion behaviour.
+9. Add telemetry only after the Account opt-in decision; no silent personalisation instrumentation.
+10. Add controlled acceptance fixtures for mixed recent history, 20 Spotlight candidates, repeated folders, empty cache, partial refresh, and refresh failure.
+11. Design and validate the My Tvivo, Movies, Series, and Live TV states in Figma before changing WinUI XAML.
+12. After visual approval, implement one vertical slice in WinUI: My Tvivo shell, Spotlight, Recent activity, and one folder shelf, while preserving existing catalog behaviour.
+
+## Scope boundary
+
+This proposal intentionally does not approve Movies/Series ingestion, Tvivo account sync, provider metadata enrichment, EPG, trailer autoplay, or production recommendation ranking. Those require separate contracts and acceptance gates.
