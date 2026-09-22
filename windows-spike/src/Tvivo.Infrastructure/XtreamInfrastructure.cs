@@ -85,11 +85,11 @@ public sealed class XtreamCatalogProvider : ICatalogProvider
     public int? GetHttpsPort(ProviderAccount account) =>
         _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
 
-    public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CancellationToken cancellationToken = default) =>
-        GetArrayAsync(account, "get_live_categories", null, MapGroup, cancellationToken);
+    public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default) =>
+        GetArrayAsync(account, CategoryAction(type), null, MapGroup, cancellationToken);
 
-    public Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, string? groupId = null, CancellationToken cancellationToken = default) =>
-        GetArrayAsync(account, "get_live_streams", groupId, MapChannel, cancellationToken);
+    public Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default) =>
+        GetArrayAsync(account, ItemAction(type), groupId, (value, accountId) => MapChannel(value, accountId, type), cancellationToken);
 
     private async Task<IReadOnlyList<T>> GetArrayAsync<T>(ProviderAccount account, string action, string? groupId,
         Func<JsonElement, string, T?> map, CancellationToken cancellationToken) where T : class
@@ -119,20 +119,43 @@ public sealed class XtreamCatalogProvider : ICatalogProvider
         return new ChannelGroup(accountId, id, name, name.Trim());
     }
 
-    private static Channel? MapChannel(JsonElement value, string accountId)
+    private static Channel? MapChannel(JsonElement value, string accountId, CatalogItemType type)
     {
-        var id = JsonValue.String(value, "stream_id");
+        var id = JsonValue.String(value, type == CatalogItemType.Series ? "series_id" : "stream_id");
         if (string.IsNullOrWhiteSpace(id)) return null;
         var name = JsonValue.String(value, "name") ?? id;
-        var icon = JsonValue.Uri(value, "stream_icon");
+        var icon = JsonValue.Uri(value, type == CatalogItemType.Series ? "cover" : "stream_icon");
         var added = JsonValue.UnixTime(value, "added");
         var order = JsonValue.Int(value, "num");
         var groupId = JsonValue.String(value, "category_id");
-        var extension = JsonValue.String(value, "ext")?.Trim().TrimStart('.');
+        var extension = type == CatalogItemType.Live
+            ? JsonValue.String(value, "ext")?.Trim().TrimStart('.')
+            : JsonValue.String(value, "container_extension")?.Trim().TrimStart('.');
         return new Channel(accountId, id, groupId, name, name.Trim(), icon, added, order,
-            new StreamSource(id, StreamKind.Live, string.IsNullOrEmpty(extension) ? null : extension),
+            new StreamSource(id, StreamKindFor(type), string.IsNullOrEmpty(extension) ? null : extension),
             new Dictionary<string, string>());
     }
+
+    private static string CategoryAction(CatalogItemType type) => type switch
+    {
+        CatalogItemType.Movie => "get_vod_categories",
+        CatalogItemType.Series => "get_series_categories",
+        _ => "get_live_categories",
+    };
+
+    private static string ItemAction(CatalogItemType type) => type switch
+    {
+        CatalogItemType.Movie => "get_vod_streams",
+        CatalogItemType.Series => "get_series",
+        _ => "get_live_streams",
+    };
+
+    private static StreamKind StreamKindFor(CatalogItemType type) => type switch
+    {
+        CatalogItemType.Movie => StreamKind.Movie,
+        CatalogItemType.Series => StreamKind.Episode,
+        _ => StreamKind.Live,
+    };
 
 }
 

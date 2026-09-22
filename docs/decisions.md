@@ -952,6 +952,8 @@ titles that render as literal `"()"`, `"() ()"`, or `"HD ()"`.
   `shared-core`, not the `app` module `NameNormalizer` lives in; noted in a comment as a
   candidate to consolidate into `shared-core` if a third place ever needs the same rule.
 
+**WinUI3 parity (2026-09-22):** WinUI has no shared C# title cleaner to reuse: Android's `NameNormalizer` is app-local Kotlin and desktop's `cleanTitle()` is repository-local. `SqliteCatalogRepository` mirrors the same empty-bracket/whitespace rule during snapshot writes and reads; schema v9 transactionally cleans schema-v8 cached titles. Future platform catalog paths should clean on ingestion/read and migrate stale persisted values rather than fixing presentation alone. The infrastructure tests cover Live, Movies, Series, and a pre-populated v8 cache.
+
 **Verification:** desktop compiled clean (Claude). Android-side handed to Codex (first
 full use of the heavier-delegation posture, see session memory `codex-heavier-usage`):
 `:app:testDebugUnitTest` — 20 tests, 0 failures (3 new + no regressions);

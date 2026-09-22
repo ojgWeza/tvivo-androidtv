@@ -71,11 +71,13 @@ public sealed record StreamSource(
 
 public enum StreamKind { Live, Movie, Episode }
 
+public enum CatalogItemType { Live, Movie, Series }
+
 public interface ICatalogProvider
 {
     Task<AuthenticationResult> AuthenticateAsync(ProviderConnection connection, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, string? groupId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default);
 }
 
 public enum PlaybackAttemptResult

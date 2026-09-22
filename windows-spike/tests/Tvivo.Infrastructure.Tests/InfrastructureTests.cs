@@ -91,7 +91,7 @@ public sealed class InfrastructureTests
 
         var groups = await provider.GetChannelGroupsAsync(account);
         Assert.Equal(new[] { "10", "11" }, groups.Select(x => x.Id));
-        var channels = await provider.GetChannelsAsync(account, "10");
+        var channels = await provider.GetChannelsAsync(account, groupId: "10");
         Assert.Equal("opaque-42", channels[0].Id);
         Assert.Equal("mkv", channels[0].Source.ContainerExtension);
         Assert.Equal("https://cdn.example/logo.png", channels[0].LogoUri!.ToString());
@@ -178,7 +178,7 @@ public sealed class InfrastructureTests
         var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
         var account = Assert.IsType<ProviderAccount>(authentication.Account);
         var allChannels = await provider.GetChannelsAsync(account);
-        var channels = await provider.GetChannelsAsync(account, "10");
+        var channels = await provider.GetChannelsAsync(account, groupId: "10");
         Assert.Equal(2, allChannels.Count);
         Assert.Single(channels);
         Assert.Equal("10", channels[0].GroupId);

@@ -2,44 +2,94 @@
     x:Class="Tvivo.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:Tvivo.App.Controls"
     xmlns:lvs="using:LibVLCSharp.Platforms.Windows">
     <Grid Background="{StaticResource AppCanvasBrush}">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="224" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="72" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <Border Background="{StaticResource AppPanelSurfaceBrush}" Padding="18,24">
-            <Grid RowSpacing="28">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <TextBlock Foreground="{StaticResource AppTextBrush}"
-                           FontSize="22"
-                           FontWeight="Bold"
-                           Text="tvivo" />
-                <StackPanel Grid.Row="1" Spacing="8">
-                    <controls:ShellNavigationButton x:Name="HomeNavigation"
-                                                    Label="Home"
-                                                    Clicked="HomeNavigation_Clicked" />
-                    <controls:ShellNavigationButton x:Name="PlayerNavigation"
-                                                    Label="Player"
-                                                    Clicked="PlayerNavigation_Clicked" />
-                    <controls:ShellNavigationButton x:Name="CatalogNavigation"
-                                                    Label="Catalog"
-                                                    Clicked="CatalogNavigation_Clicked" />
+        <Border Background="{StaticResource AppDeepBrush}" Padding="42,0">
+            <Grid ColumnSpacing="42">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="BrandNavigation"
+                        Content="TVIVO"
+                        Style="{StaticResource AppTopNavButtonStyle}"
+                        FontSize="22"
+                        FontWeight="Bold"
+                        CharacterSpacing="80"
+                        Foreground="{StaticResource AppTextBrush}"
+                        Click="MyTvivoNavigation_Click" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="26">
+                    <Button x:Name="MyTvivoNavigation"
+                            Content="My Tvivo"
+                            Style="{StaticResource AppTopNavButtonStyle}"
+                            Click="MyTvivoNavigation_Click" />
+                    <Button x:Name="MoviesNavigation"
+                            Content="Movies"
+                            Style="{StaticResource AppTopNavButtonStyle}"
+                            Click="MoviesNavigation_Click" />
+                    <Button x:Name="SeriesNavigation"
+                            Content="Series"
+                            Style="{StaticResource AppTopNavButtonStyle}"
+                            Click="SeriesNavigation_Click" />
+                    <Button x:Name="LiveTvNavigation"
+                            Content="Live TV"
+                            Style="{StaticResource AppTopNavButtonStyle}"
+                            Click="LiveTvNavigation_Click" />
                 </StackPanel>
-                <TextBlock Grid.Row="2"
-                           Foreground="{StaticResource AppMutedTextBrush}"
-                           FontSize="12"
-                           Text="TVIVO · PREVIEW" />
+
+                <Border Grid.Column="2"
+                        MinWidth="230"
+                        MaxWidth="320"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        BorderBrush="{StaticResource AppLineBrush}"
+                        BorderThickness="1"
+                        Background="{StaticResource AppPanelSurfaceBrush}"
+                        CornerRadius="22"
+                        Padding="12,8">
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="⌕"
+                                   Foreground="{StaticResource AppMutedTextBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBox x:Name="TopSearchBox"
+                                 Grid.Column="1"
+                                 PlaceholderText="Search current catalog"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Foreground="{StaticResource AppTextBrush}"
+                                 TextChanged="TopSearchBox_TextChanged" />
+                        <Button x:Name="TopClearSearchButton"
+                                Grid.Column="2"
+                                Content="×"
+                                Padding="4,0"
+                                Visibility="Collapsed"
+                                Click="TopClearSearchButton_Click" />
+                    </Grid>
+                </Border>
+
+                <Button x:Name="AccountNavigation"
+                        Grid.Column="3"
+                        Content="Account"
+                        Style="{StaticResource AppTopNavButtonStyle}"
+                        Click="AccountNavigation_Click" />
             </Grid>
         </Border>
 
-        <Grid Grid.Column="1">
+        <Grid Grid.Row="1">
             <ContentControl x:Name="PageHost" />
             <Grid x:Name="PlayerPage" Visibility="Collapsed" Padding="24">
                 <Grid RowSpacing="12">

@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.Extensions.DependencyInjection;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
@@ -16,6 +17,7 @@ public sealed partial class MainWindow : Window
     private readonly ProviderSetupPage _providerSetupPage;
     private readonly CatalogLandingPage _catalogLandingPage;
     private ShellPage? _currentPage;
+    private long _catalogRequestGeneration;
 
     public MainWindow()
     {
@@ -44,26 +46,43 @@ public sealed partial class MainWindow : Window
             _engine.InitializeView(view, args);
     }
 
-    private void HomeNavigation_Clicked(object? sender, EventArgs args) => ShowPage(ShellPage.Home);
+    private void MyTvivoNavigation_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
-    private void PlayerNavigation_Clicked(object? sender, EventArgs args) => ShowPage(ShellPage.Player);
+    private void MoviesNavigation_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.Movies);
 
-    private async void CatalogNavigation_Clicked(object? sender, EventArgs args)
+    private void SeriesNavigation_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.Series);
+
+    private void LiveTvNavigation_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.LiveTv);
+
+    private void AccountNavigation_Click(object sender, RoutedEventArgs args) => ShowPage(ShellPage.Setup);
+
+    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
     {
-        ShowPage(ShellPage.Catalog);
+        var generation = Interlocked.Increment(ref _catalogRequestGeneration);
+        ShowPage(ShellPage.Catalog, updateTopNavigation: false);
+        _catalogLandingPage.PrepareMode(mode);
+        UpdateTopNavigationState();
         if (_catalogLandingPage.Account is null)
             await _catalogLandingPage.LoadSavedAsync();
         else
             await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account);
+        if (generation == Volatile.Read(ref _catalogRequestGeneration))
+            UpdateTopNavigationState();
     }
 
     private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
     {
-        ShowPage(ShellPage.Catalog);
+        Interlocked.Increment(ref _catalogRequestGeneration);
+        ShowPage(ShellPage.Catalog, updateTopNavigation: false);
         await _catalogLandingPage.LoadAsync(args.Account);
+        UpdateTopNavigationState();
     }
 
-    private void ShowPage(ShellPage page)
+    private void ShowPage(ShellPage page, bool updateTopNavigation = true)
     {
         if (_currentPage == page)
             return;
@@ -74,12 +93,44 @@ public sealed partial class MainWindow : Window
         PageHost.Visibility = isPlayer || isCatalog ? Visibility.Collapsed : Visibility.Visible;
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
-        HomeNavigation.IsSelected = page is ShellPage.Home or ShellPage.Setup;
-        PlayerNavigation.IsSelected = isPlayer;
-        CatalogNavigation.IsSelected = isCatalog;
+        TopSearchBox.IsEnabled = isCatalog;
+        if (updateTopNavigation)
+            UpdateTopNavigationState();
 
         if (page == ShellPage.Setup) PageHost.Content = _providerSetupPage;
         else if (page == ShellPage.Home) PageHost.Content = _homePage;
+    }
+
+    private void UpdateTopNavigationState()
+    {
+        var isCatalog = _currentPage == ShellPage.Catalog;
+        SetTopNavState(MyTvivoNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.MyTvivo);
+        SetTopNavState(MoviesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Movies);
+        SetTopNavState(SeriesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Series);
+        SetTopNavState(LiveTvNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.LiveTv);
+        SetTopNavState(AccountNavigation, _currentPage == ShellPage.Setup);
+    }
+
+    private void SetTopNavState(Button button, bool selected)
+    {
+        button.Foreground = selected
+            ? (Brush)Application.Current.Resources["AppTextBrush"]
+            : (Brush)Application.Current.Resources["AppMutedTextBrush"];
+        button.BorderBrush = selected
+            ? (Brush)Application.Current.Resources["AppAccentBrush"]
+            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
+    private void TopSearchBox_TextChanged(object sender, TextChangedEventArgs args)
+    {
+        TopClearSearchButton.Visibility = string.IsNullOrWhiteSpace(TopSearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
+        _catalogLandingPage.SetSearchText(TopSearchBox.Text);
+    }
+
+    private void TopClearSearchButton_Click(object sender, RoutedEventArgs args)
+    {
+        TopSearchBox.Text = string.Empty;
+        TopSearchBox.Focus(FocusState.Programmatic);
     }
 
     private void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)

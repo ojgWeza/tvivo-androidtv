@@ -5,18 +5,31 @@
     xmlns:controls="using:Microsoft.UI.Xaml.Controls">
     <Application.Resources>
         <ResourceDictionary>
-            <Color x:Key="AppCanvasColor">#101216</Color>
-            <Color x:Key="AppSurfaceColor">#1A1E25</Color>
-            <Color x:Key="AppSurfaceRaisedColor">#232A34</Color>
-            <Color x:Key="AppAccentColor">#8FC7FF</Color>
-            <Color x:Key="AppTextColor">#F3F5F7</Color>
-            <Color x:Key="AppMutedTextColor">#A7B0BC</Color>
+            <ResourceDictionary.MergedDictionaries>
+                <controls:XamlControlsResources />
+            </ResourceDictionary.MergedDictionaries>
+            <Color x:Key="AppCanvasColor">#0A1619</Color>
+            <Color x:Key="AppDeepColor">#071114</Color>
+            <Color x:Key="AppSurfaceColor">#0F2126</Color>
+            <Color x:Key="AppSurfaceRaisedColor">#163036</Color>
+            <Color x:Key="AppAccentColor">#D97757</Color>
+            <Color x:Key="AppAccentSoftColor">#E7A084</Color>
+            <Color x:Key="AppTextColor">#E8F1F2</Color>
+            <Color x:Key="AppMutedTextColor">#93ACB1</Color>
+            <Color x:Key="AppGoodColor">#8BC8A0</Color>
+            <Color x:Key="AppFocusTintColor">#33E7A084</Color>
+            <Color x:Key="AppLineColor">#1FE8F1F2</Color>
             <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
+            <SolidColorBrush x:Key="AppDeepBrush" Color="{StaticResource AppDeepColor}" />
             <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
             <SolidColorBrush x:Key="AppRaisedSurfaceBrush" Color="{StaticResource AppSurfaceRaisedColor}" />
             <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
+            <SolidColorBrush x:Key="AppAccentSoftBrush" Color="{StaticResource AppAccentSoftColor}" />
             <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
             <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
+            <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
+            <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
+            <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
             <Style x:Key="ShellNavigationButtonStyle" TargetType="Button">
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
                 <Setter Property="Padding" Value="16,12" />
@@ -26,9 +39,55 @@
             </Style>
             <Style x:Key="AppPrimaryButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="{StaticResource AppAccentBrush}" />
-                <Setter Property="Foreground" Value="{StaticResource AppCanvasBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource AppDeepBrush}" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Padding" Value="18,10" />
+                <Setter Property="CornerRadius" Value="22" />
+            </Style>
+            <Style x:Key="AppQuietButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="{StaticResource AppLineBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{StaticResource AppTextBrush}" />
+                <Setter Property="Padding" Value="16,10" />
+                <Setter Property="CornerRadius" Value="22" />
+            </Style>
+            <Style x:Key="AppShelfTitleButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource AppTextBrush}" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                <Setter Property="FontSize" Value="20" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="AppTopNavButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0,0,0,3" />
+                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="Padding" Value="0,25,0,22" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="UseSystemFocusVisuals" Value="True" />
+            </Style>
+            <Style x:Key="AppCardButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="190" />
+                <Setter Property="Height" Value="205" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
+            <Style x:Key="AppShelfGridViewStyle" TargetType="GridView">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="0,4,0,10" />
+                <Setter Property="SelectionMode" Value="None" />
+                <Setter Property="IsItemClickEnabled" Value="True" />
+            </Style>
+            <Style x:Key="AppEyebrowTextStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                <Setter Property="FontSize" Value="11" />
+                <Setter Property="FontWeight" Value="Bold" />
+                <Setter Property="CharacterSpacing" Value="130" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

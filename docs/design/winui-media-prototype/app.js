@@ -34,6 +34,7 @@ const seriesCategories = [
 const seriesShelves = [
   { title: 'Continue watching', items: ['Signal House', 'Quiet Sea', 'The Crossing'] },
   { title: 'Recently added', items: series.slice(0, 8) },
+  { title: 'Favorites', items: ['Signal House', 'Quiet Sea', 'Cairo Files', 'The Last Line'] },
   ...seriesCategories,
 ];
 const channelsByGroup = {
@@ -167,13 +168,20 @@ function startSpotlight() {
   }, 7000);
 }
 
+function topFolders(categories, screen, count) {
+  const stats = categoryStats[screen];
+  return [...categories].sort((left, right) => stats[right.title].visits - stats[left.title].visits).slice(0, count);
+}
+
 function home() {
   clearInterval(timer);
+  const topMovieFolders = topFolders(movieCategories, 'movies', 3);
+  const topSeriesFolders = topFolders(seriesCategories, 'series', 3);
   app.innerHTML = `<div class="page-intro"><div><small class="eyebrow">YOUR LIBRARY</small><h1>My Tvivo</h1></div></div>
     ${spotlightView()}
     ${shelf('Continue watching', ['The Last Signal', 'Northline', 'Signal House'], 'Movie / Episode')}
-    ${shelf('Movie folder 1', movies.slice(0, 7), 'Movie')}
-    ${shelf('Series folder 1', series.slice(0, 7), 'Series')}`;
+    ${topMovieFolders.map((folder) => shelf(folder.title, folder.items, 'Movie')).join('')}
+    ${topSeriesFolders.map((folder) => shelf(folder.title, folder.items, 'Series')).join('')}`;
   bindSpotlight();
   startSpotlight();
 }
@@ -185,7 +193,7 @@ function browseMovies() {
 
 function seriesBrowse() {
   app.innerHTML = `<div class="page-intro"><div><small class="eyebrow">CATALOG · SERIES</small><h1>Series</h1></div></div>
-    ${filterShelves(seriesShelves.slice(0, 2), seriesCategories, 'series', 'poster', 'Series')}`;
+    ${filterShelves(seriesShelves.slice(0, 3), seriesCategories, 'series', 'poster', 'Series')}`;
 }
 
 function seriesDetail(title = selectedSeries) {

@@ -6,8 +6,11 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
 {
     public async Task RefreshAsync(ProviderAccount account, CancellationToken cancellationToken = default)
     {
-        var groups = await provider.GetChannelGroupsAsync(account, cancellationToken);
-        var channels = await provider.GetChannelsAsync(account, cancellationToken: cancellationToken);
-        repository.ReplaceLiveSnapshot(account, groups, channels);
+        foreach (var type in new[] { CatalogItemType.Live, CatalogItemType.Movie, CatalogItemType.Series })
+        {
+            var groups = await provider.GetChannelGroupsAsync(account, type, cancellationToken);
+            var channels = await provider.GetChannelsAsync(account, type, cancellationToken: cancellationToken);
+            repository.ReplaceSnapshot(account, type, groups, channels);
+        }
     }
 }
