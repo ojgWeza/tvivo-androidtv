@@ -1,1 +1,24 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tvivo Media Prototype</title><link rel="stylesheet" href="styles.css"></head><body><header><strong>TVIVO</strong><nav><button data-target="my">My Tvivo</button><button data-target="movies">Movies</button><button data-target="series">Series</button><button data-target="live">Live TV</button><button data-target="search">Search</button></nav><span>Account</span></header><main id="app"></main><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tvivo Media Prototype</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <button class="brand" data-target="my" aria-label="Go to My Tvivo">TVIVO</button>
+      <nav aria-label="Primary navigation">
+        <button data-target="my">My Tvivo</button>
+        <button data-target="movies">Movies</button>
+        <button data-target="series">Series</button>
+        <button data-target="live">Live TV</button>
+      </nav>
+      <label class="top-search" aria-label="Search the current catalog"><span>⌕</span><input id="catalog-search" type="search" placeholder="Search current catalog" autocomplete="off"><button id="clear-search" type="button" aria-label="Clear search" hidden>×</button></label>
+      <button class="account-link" data-target="account">Account</button>
+    </header>
+    <main id="app" tabindex="-1"></main>
+    <script src="app.js"></script>
+  </body>
+</html>
