@@ -100,6 +100,15 @@ public static class SeriesEpisodeResolver
     }
 }
 
+public static class PlayerSideTitleResolver
+{
+    public static string ForEpisodes(string? seriesTitle) =>
+        string.IsNullOrWhiteSpace(seriesTitle) ? "Episodes" : seriesTitle.Trim();
+
+    public static string ForMovie(string? genre) =>
+        string.IsNullOrWhiteSpace(genre) ? "More like this" : genre.Trim();
+}
+
 public enum CatalogItemType { Live, Movie, Series }
 
 public interface ICatalogProvider

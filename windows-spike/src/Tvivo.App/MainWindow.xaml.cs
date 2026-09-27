@@ -39,6 +39,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private string? _currentSeriesId;
+    private string? _currentSeriesTitle;
     private ProviderAccount? _currentSeriesAccount;
     private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
@@ -358,6 +359,7 @@ public sealed partial class MainWindow : Window
         }
 
         _currentSeriesId = null;
+        _currentSeriesTitle = null;
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
@@ -367,7 +369,10 @@ public sealed partial class MainWindow : Window
             _playerReturnPage = _currentPage ?? ShellPage.Catalog;
         var type = args.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live;
         if (_catalogLandingPage.Account is { } account)
+        {
             _catalogRepository.RecordVisit(account, type, args.Channel.Id);
+            _catalogLandingPage.NotifyVisitRecorded();
+        }
         _playerSiblings = args.Source.Kind == StreamKind.Movie
             ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Movie)
                 .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
@@ -375,7 +380,9 @@ public sealed partial class MainWindow : Window
         _currentSource = args.Source;
         _nowPlayingChannel = args.Channel;
         PlayerTitleText.Text = args.Channel.DisplayName;
-        PlayerSideTitle.Text = args.Source.Kind == StreamKind.Movie ? "More movies" : "Now playing";
+        PlayerSideTitle.Text = args.Source.Kind == StreamKind.Movie
+            ? PlayerSideTitleResolver.ForMovie(args.Channel.Metadata.GetValueOrDefault("genre"))
+            : "Now playing";
         PlayerSideSubtitle.Text = args.Source.Kind == StreamKind.Movie
             ? _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category"
             : string.Empty;
@@ -423,6 +430,7 @@ public sealed partial class MainWindow : Window
         _playerReturnPage = _currentPage ?? ShellPage.Catalog;
         Interlocked.Increment(ref _metadataGeneration);
         _currentSeriesId = series.Id;
+        _currentSeriesTitle = string.IsNullOrWhiteSpace(details.Title) ? series.DisplayName : details.Title;
         _currentSeriesAccount = account;
         _currentSeriesMetadata = details.Metadata;
         _playerSeriesSeasons = details.Seasons;
@@ -432,6 +440,7 @@ public sealed partial class MainWindow : Window
             .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
         ConfigureSeasonSelector(details.Seasons);
         _catalogRepository.RecordVisit(account, CatalogItemType.Series, series.Id);
+        _catalogLandingPage.NotifyVisitRecorded();
         OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected));
     }
 
@@ -457,7 +466,7 @@ public sealed partial class MainWindow : Window
         _seriesCompletionRecorded = false;
         _playbackCompletionShown = false;
         PlayerTitleText.Text = episode.DisplayName;
-        PlayerSideTitle.Text = "Season and episodes";
+        PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
         PlayerSideSubtitle.Text = "Select an episode to play";
         PlayerNowPlayingText.Text = string.Empty;
         SetPlayerMetadata(_currentSeriesMetadata, CatalogItemType.Series);
@@ -591,6 +600,7 @@ public sealed partial class MainWindow : Window
         _currentSource = null;
         _nowPlayingChannel = null;
         _currentSeriesId = null;
+        _currentSeriesTitle = null;
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();

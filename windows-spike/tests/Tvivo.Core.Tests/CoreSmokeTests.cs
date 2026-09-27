@@ -35,4 +35,13 @@ public sealed class CoreSmokeTests
         Assert.Equal(third, SeriesEpisodeResolver.Resolve(details, "third", true));
         Assert.Equal(first, SeriesEpisodeResolver.Resolve(details, "missing", false));
     }
+
+    [Fact]
+    public void Player_side_titles_name_the_list_contents()
+    {
+        Assert.Equal("The Expanse", PlayerSideTitleResolver.ForEpisodes(" The Expanse "));
+        Assert.Equal("Episodes", PlayerSideTitleResolver.ForEpisodes(null));
+        Assert.Equal("Science Fiction", PlayerSideTitleResolver.ForMovie(" Science Fiction "));
+        Assert.Equal("More like this", PlayerSideTitleResolver.ForMovie(null));
+    }
 }
