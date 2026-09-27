@@ -25,6 +25,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyList<ChannelGroup> _groups = Array.Empty<ChannelGroup>();
     private string? _selectedGroupId;
     private string? _openShelfId;
+    private CatalogItemType? _openShelfType;
     private CatalogMode _activeMode = CatalogMode.MyTvivo;
     private CategorySort _categorySort = CategorySort.Visited;
     private int _offset;
@@ -48,6 +49,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
     private static readonly HttpClient ArtworkClient = new();
+    private static int _firstArtworkFailureLogged;
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
 #if DEBUG
@@ -131,9 +133,11 @@ public sealed partial class CatalogLandingPage : UserControl
         _activeMode = mode;
         _showModeLoadingFrame = true;
         _spotlightCard = null;
+        _openShelfType = null;
         if (_modeStates.TryGetValue(mode, out var state))
         {
             _openShelfId = state.OpenShelfId;
+            _openShelfType = state.OpenShelfType;
             _selectedGroupId = state.SelectedGroupId;
             _offset = state.Offset;
             SetSearchTextWithoutReload(state.Filter);
@@ -142,6 +146,7 @@ public sealed partial class CatalogLandingPage : UserControl
         else
         {
             _openShelfId = null;
+            _openShelfType = null;
             _selectedGroupId = null;
             _offset = 0;
             SetSearchTextWithoutReload(string.Empty);
@@ -202,6 +207,7 @@ public sealed partial class CatalogLandingPage : UserControl
             _spotlightByMode.Clear();
             _selectedGroupId = null;
             _openShelfId = null;
+            _openShelfType = null;
             _offset = 0;
             RefreshInfoBar.IsOpen = false;
             SetState(loading: true);
@@ -221,6 +227,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _connection = null;
         _selectedGroupId = null;
         _openShelfId = null;
+        _openShelfType = null;
         _offset = 0;
         RefreshInfoBar.IsOpen = false;
         SetState(loading: true);
@@ -310,13 +317,14 @@ public sealed partial class CatalogLandingPage : UserControl
             DismissFirstLoadTakeover();
             RefreshInfoBar.IsOpen = false;
         }
-        catch
+        catch (Exception exception)
         {
             if (!IsCurrentLoad(generation)) return;
+            LaunchDiagnostics.Write($"Catalog load failed: {FormatRefreshError(exception)}");
             if (ContentState.Visibility == Visibility.Visible)
-                ShowRefreshFailure();
+                ShowRefreshFailure(exception);
             else
-                ShowError(GenericLoadError);
+                ShowError($"{GenericLoadError} {FormatRefreshError(exception)}");
         }
     }
 
@@ -328,11 +336,21 @@ public sealed partial class CatalogLandingPage : UserControl
         CatalogMode mode,
         CategorySort sort)
     {
+        var openShelfId = _openShelfId;
+        var openShelfType = _openShelfType;
         return await Task.Run(() =>
         {
             if (mode == CatalogMode.MyTvivo)
             {
                 var myShelves = BuildShelves(account, Array.Empty<ChannelGroup>(), filter, mode, sort);
+                if (openShelfId is not null && openShelfType is { } shelfType)
+                {
+                    var first = _repository.GetChannels(account, _connection, shelfType, filter: filter, offset: 0, limit: PageSize, mostVisited: true);
+                    var lastOffset = first.TotalCount == 0 ? 0 : ((first.TotalCount - 1) / PageSize) * PageSize;
+                    var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
+                    var shelfPage = shelfOffset == 0 ? first : _repository.GetChannels(account, _connection, shelfType, filter: filter, offset: shelfOffset, limit: PageSize, mostVisited: true);
+                    return new CatalogSnapshot(mode, Array.Empty<ChannelGroup>(), null, shelfOffset, shelfPage, myShelves);
+                }
                 return new CatalogSnapshot(mode, Array.Empty<ChannelGroup>(), null, 0, new CatalogPage(Array.Empty<Channel>(), 0), myShelves);
             }
 
@@ -416,6 +434,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 "Recently added",
                 CountLabel(allChannels.TotalCount, noun),
                 allChannels.Items.Select(channel => ToCard(channel, type)).ToArray(),
+                type,
                 null,
                 false));
         }
@@ -429,6 +448,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 group.DisplayName,
                 CountLabel(page.TotalCount, noun),
                 page.Items.Select(channel => ToCard(channel, type)).ToArray(),
+                type,
                 group.Id,
                 true));
         }
@@ -462,6 +482,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 title,
                 CountLabel(page.TotalCount, NounFor(type)),
                 page.Items.Select(channel => ToCard(channel, type)).ToArray(),
+                type,
                 null,
                 false));
         }
@@ -601,12 +622,13 @@ public sealed partial class CatalogLandingPage : UserControl
         DateTimeOffset.UtcNow - refreshedAt >= SnapshotFreshness;
 
     private CatalogSnapshotKey CurrentSnapshotKey(ProviderAccount account) =>
-        new(account.AccountId, _activeMode, _selectedGroupId ?? string.Empty, SearchBox.Text ?? string.Empty,
-            _categorySort, _offset);
+        new(account.AccountId, _activeMode, _openShelfId ?? string.Empty, _openShelfType?.ToString() ?? string.Empty,
+            _selectedGroupId ?? string.Empty, SearchBox.Text ?? string.Empty, _categorySort, _offset);
 
     private void CacheSnapshot(ProviderAccount account, CatalogSnapshot snapshot)
     {
-        var key = new CatalogSnapshotKey(account.AccountId, snapshot.Mode, snapshot.SelectedGroupId ?? string.Empty,
+        var key = new CatalogSnapshotKey(account.AccountId, snapshot.Mode, _openShelfId ?? string.Empty,
+            _openShelfType?.ToString() ?? string.Empty, snapshot.SelectedGroupId ?? string.Empty,
             SearchBox.Text ?? string.Empty, _categorySort, snapshot.Offset);
         if (!_snapshotCache.ContainsKey(key)) _snapshotCacheOrder.Enqueue(key);
         _snapshotCache[key] = new CachedCatalogSnapshot(snapshot);
@@ -625,7 +647,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private void SaveModeState(CatalogMode mode) =>
-        _modeStates[mode] = new ModeInteractionState(_openShelfId, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset, _categorySort);
+        _modeStates[mode] = new ModeInteractionState(_openShelfId, _openShelfType, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset, _categorySort);
 
     private void SetSearchTextWithoutReload(string value)
     {
@@ -656,6 +678,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
             !ReferenceEquals(image.Source, load.Bitmap)) return;
+        LogFirstArtworkFailure("ImageFailed", args.ErrorMessage ?? "No image error details were supplied.");
         ReleaseArtworkSlot(image, load);
         load.Cancellation.Cancel();
         image.Opacity = 0;
@@ -760,8 +783,13 @@ public sealed partial class CatalogLandingPage : UserControl
             _ = ExpireArtworkAsync(image, load);
         }
         catch (OperationCanceledException) { }
-        catch
+        catch (Exception exception)
         {
+            var status = exception is HttpRequestException requestException
+                ? requestException.StatusCode?.ToString() ?? "none"
+                : "not-http";
+            LogFirstArtworkFailure(exception.GetType().Name,
+                $"HTTP status={status}; HRESULT=0x{exception.HResult:X8}");
             ReleaseArtworkSlot(image, load);
             load.Cancellation.Cancel();
             if (_artworkLoads.TryGetValue(image, out var activeLoad) && ReferenceEquals(activeLoad, load))
@@ -776,13 +804,26 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
+    private static void LogFirstArtworkFailure(string category, string details)
+    {
+        if (Interlocked.CompareExchange(ref _firstArtworkFailureLogged, 1, 0) != 0) return;
+        var safeDetails = System.Text.RegularExpressions.Regex.Replace(details, @"https?://\S+", "[image URL]");
+        LaunchDiagnostics.Write($"Artwork load first failure: {category}; {safeDetails}");
+    }
+
     private async Task ExpireArtworkAsync(Image image, ArtworkLoad load)
     {
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(10), load.Cancellation.Token);
             if (_artworkLoads.TryGetValue(image, out var current) && ReferenceEquals(current, load))
-                StopArtwork(image);
+            {
+                // The timeout is only a request-slot safeguard. Clearing Source here made
+                // every successfully decoded poster disappear after ten seconds.
+                _artworkLoads.Remove(image);
+                ReleaseArtworkSlot(image, load);
+                load.Cancellation.Dispose();
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -831,7 +872,7 @@ public sealed partial class CatalogLandingPage : UserControl
             StopArtwork(SpotlightArtwork);
         else if (_spotlightCard is not null && SpotlightArtwork.Source is null)
             StartArtwork(SpotlightArtwork, _spotlightCard.ArtworkUrl);
-        PagerPanel.Visibility = isOpen && openShelf!.GroupId is not null ? Visibility.Visible : Visibility.Collapsed;
+        PagerPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
         SortPanel.Opacity = isOpen ? 0 : 1;
         SortPanel.IsHitTestVisible = !isOpen;
         PageSearchPanel.Visibility = Visibility.Collapsed;
@@ -839,7 +880,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (isOpen)
         {
             OpenShelfTitle.Text = openShelf!.Title;
-            var type = TypeForMode(_activeMode);
+            var type = openShelf!.Type;
             OpenShelfCount.Text = CountLabel(snapshot.Page.TotalCount, NounFor(type));
             if (!ReferenceEquals(_renderedSnapshot, snapshot) || _renderedOpenShelfId != _openShelfId)
                 OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel => ToCard(channel, type)).ToArray();
@@ -861,7 +902,19 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void ShelfTitle_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { Tag: CatalogShelf shelf }) return;
+        await OpenShelfAsync(shelf);
+    }
+
+    private async void ShelfCount_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: CatalogShelf shelf }) return;
+        await OpenShelfAsync(shelf);
+    }
+
+    private async Task OpenShelfAsync(CatalogShelf shelf)
+    {
         _openShelfId = shelf.Id;
+        _openShelfType = shelf.Type;
         _selectedGroupId = shelf.GroupId;
         _offset = 0;
         await ShowCachedPageAsync();
@@ -870,6 +923,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void BackToShelves_Click(object sender, RoutedEventArgs args)
     {
         _openShelfId = null;
+        _openShelfType = null;
         _selectedGroupId = null;
         _offset = 0;
         await ShowCachedPageAsync();
@@ -1093,7 +1147,8 @@ public sealed partial class CatalogLandingPage : UserControl
         var sort = _categorySort;
         try
         {
-            var key = new CatalogSnapshotKey(account.AccountId, mode, groupId ?? string.Empty,
+            var key = new CatalogSnapshotKey(account.AccountId, mode, _openShelfId ?? string.Empty,
+                _openShelfType?.ToString() ?? string.Empty, groupId ?? string.Empty,
                 filter ?? string.Empty, sort, requestedOffset);
             if (!_snapshotCache.TryGetValue(key, out var cached))
             {
@@ -1105,10 +1160,10 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!IsCurrentPageRequest(requestGeneration, account)) return;
             ApplySnapshot(cached.Snapshot);
         }
-        catch
+        catch (Exception exception)
         {
             if (!IsCurrentPageRequest(requestGeneration, account)) return;
-            RefreshInfoBar.Message = "Couldn't update this page. Showing previously loaded channels.";
+            RefreshInfoBar.Message = $"Couldn't update this page. Showing previously loaded channels. {FormatRefreshError(exception)}";
             RefreshInfoBar.Severity = InfoBarSeverity.Warning;
             RefreshRetryButton.Visibility = Visibility.Visible;
             RefreshInfoBar.IsOpen = true;
@@ -1127,13 +1182,21 @@ public sealed partial class CatalogLandingPage : UserControl
         RefreshInfoBar.IsOpen = true;
     }
 
-    private void ShowRefreshFailure()
+    private void ShowRefreshFailure(Exception exception)
     {
-        RefreshInfoBar.Message = "Couldn't refresh. Showing saved channels.";
+        RefreshInfoBar.Message = $"Couldn't refresh. Showing saved channels. {FormatRefreshError(exception)}";
         RefreshInfoBar.Severity = InfoBarSeverity.Warning;
         RefreshRetryButton.Visibility = Visibility.Visible;
         RefreshInfoBar.IsOpen = true;
         SetState(content: true);
+    }
+
+    private static string FormatRefreshError(Exception exception)
+    {
+        var message = exception.Message;
+        // Provider request URLs can contain credentials. Keep actionable error text without logging URLs.
+        message = System.Text.RegularExpressions.Regex.Replace(message, @"https?://\S+", "[provider URL]");
+        return $"{exception.GetType().Name}: {message}";
     }
 
     private bool IsCurrentLoad(long generation) =>
@@ -1369,7 +1432,7 @@ public sealed partial class CatalogLandingPage : UserControl
         CatalogPage Page,
         IReadOnlyList<CatalogShelf> Shelves);
 
-    private sealed record CatalogSnapshotKey(string AccountId, CatalogMode Mode, string GroupId, string Filter, CategorySort Sort, int Offset);
+    private sealed record CatalogSnapshotKey(string AccountId, CatalogMode Mode, string OpenShelfId, string OpenShelfType, string GroupId, string Filter, CategorySort Sort, int Offset);
     private sealed record CachedCatalogSnapshot(CatalogSnapshot Snapshot);
     private sealed class ArtworkLoad
     {
@@ -1378,13 +1441,14 @@ public sealed partial class CatalogLandingPage : UserControl
         public bool SlotAcquired { get; set; }
         public bool SlotReleased { get; set; }
     }
-    private sealed record ModeInteractionState(string? OpenShelfId, string? SelectedGroupId, string Filter, int Offset, CategorySort Sort);
+    private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset, CategorySort Sort);
 
     private sealed record CatalogShelf(
         string Id,
         string Title,
         string CountLabel,
         IReadOnlyList<CatalogCard> Cards,
+        CatalogItemType Type,
         string? GroupId,
         bool OpensPagedGrid);
 

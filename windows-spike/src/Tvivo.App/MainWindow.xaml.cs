@@ -6,6 +6,9 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Windowing;
 using Microsoft.UI;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
@@ -29,6 +32,7 @@ public sealed partial class MainWindow : Window
     private ShellPage? _currentPage;
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
+    private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private string? _currentSeriesId;
     private ProviderAccount? _currentSeriesAccount;
@@ -65,6 +69,7 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage = new CatalogLandingPage();
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        PlayerRelatedList.ItemsSource = _playerEntries;
         Title = "Tvivo";
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Tvivo.ico");
         if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
@@ -350,7 +355,7 @@ public sealed partial class MainWindow : Window
         PlayerSideSubtitle.Text = args.Source.Kind == StreamKind.Movie
             ? _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category"
             : string.Empty;
-        PlayerNowPlayingText.Text = $"NOW PLAYING · {args.Channel.DisplayName}";
+        PlayerNowPlayingText.Text = string.Empty;
         _playbackCompletionShown = false;
         SetPlayerList(_playerSiblings, args.Channel);
         ShowPage(ShellPage.Player);
@@ -391,8 +396,7 @@ public sealed partial class MainWindow : Window
         _playerSeriesSeasons = details.Seasons;
         _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
             .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
-        PlayerSeasonComboBox.ItemsSource = details.Seasons;
-        PlayerSeasonComboBox.Visibility = Visibility.Visible;
+        ConfigureSeasonSelector(details.Seasons);
         _catalogRepository.RecordVisit(account, CatalogItemType.Series, series.Id);
         OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected));
     }
@@ -421,8 +425,8 @@ public sealed partial class MainWindow : Window
         PlayerTitleText.Text = episode.DisplayName;
         PlayerSideTitle.Text = "Season and episodes";
         PlayerSideSubtitle.Text = "Select an episode to play";
-        PlayerNowPlayingText.Text = $"NOW PLAYING · {episode.DisplayName}";
-        PlayerSeasonComboBox.Visibility = Visibility.Visible;
+        PlayerNowPlayingText.Text = string.Empty;
+        ConfigureSeasonSelector(_playerSeriesSeasons);
         var seasonId = episode.Metadata.TryGetValue("seasonId", out var id) ? id : null;
         var selectedSeason = _playerSeriesSeasons.FirstOrDefault(season => season.Id == seasonId);
         PlayerSeasonComboBox.SelectedItem = selectedSeason;
@@ -437,18 +441,31 @@ public sealed partial class MainWindow : Window
 
     private void SetPlayerList(IReadOnlyList<Channel> channels, Channel current)
     {
-        PlayerRelatedList.ItemsSource = channels.Select(channel => new PlayerListEntry(
-            channel.DisplayName,
-            channel.Id == current.Id ? (_playbackCompletionShown ? "FINISHED" : "NOW PLAYING") : "Play",
-            channel)).ToArray();
+        var sameRows = _playerEntries.Count == channels.Count &&
+            _playerEntries.Select((entry, index) => entry.Channel.Source.Kind == channels[index].Source.Kind && entry.Channel.Id == channels[index].Id).All(matches => matches);
+        if (!sameRows)
+        {
+            _playerEntries.Clear();
+            foreach (var channel in channels)
+                _playerEntries.Add(new PlayerListEntry(channel));
+        }
+
+        SetCurrentPlayerEntry(current);
     }
 
-    private IReadOnlyList<Channel> CurrentPlayerChannels()
+    private void SetCurrentPlayerEntry(Channel current)
     {
-        if (_currentSeriesId is not null && _currentSeriesAccount is not null &&
-            PlayerSeasonComboBox.SelectedItem is SeriesSeason season)
-            return season.Episodes.Select(episode => ToEpisodeChannel(_currentSeriesAccount, _currentSeriesId, episode)).ToArray();
-        return _playerSiblings;
+        foreach (var entry in _playerEntries)
+            entry.IsCurrent = entry.Channel.Source.Kind == current.Source.Kind && entry.Channel.Id == current.Id;
+    }
+
+    private void ConfigureSeasonSelector(IReadOnlyList<SeriesSeason> seasons)
+    {
+        PlayerSeasonComboBox.ItemsSource = seasons;
+        var hasMultipleSeasons = seasons.Count > 1;
+        PlayerSeasonComboBox.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
+        PlayerSeasonLabel.Text = seasons.Count == 1 ? seasons[0].Name : string.Empty;
+        PlayerSeasonLabel.Visibility = seasons.Count == 1 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -515,6 +532,11 @@ public sealed partial class MainWindow : Window
         sessionCts?.Dispose();
 
         _currentSource = null;
+        _nowPlayingChannel = null;
+        _currentSeriesId = null;
+        _currentSeriesAccount = null;
+        _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+        _playerSiblings = Array.Empty<Channel>();
         _playbackUiTimer.Stop();
         _isDraggingProgress = false;
         _isUpdatingProgress = false;
@@ -528,6 +550,17 @@ public sealed partial class MainWindow : Window
         RewindButton.IsEnabled = false;
         ForwardButton.IsEnabled = false;
         PauseButton.Content = "Play";
+        PlayerTitleText.Text = string.Empty;
+        PlayerSideTitle.Text = string.Empty;
+        PlayerSideSubtitle.Text = string.Empty;
+        PlayerNowPlayingText.Text = string.Empty;
+        PlayerNowPlayingText.Visibility = Visibility.Collapsed;
+        PlayerSeasonComboBox.SelectedItem = null;
+        PlayerSeasonComboBox.ItemsSource = null;
+        PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        PlayerSeasonLabel.Text = string.Empty;
+        PlayerSeasonLabel.Visibility = Visibility.Collapsed;
+        _playerEntries.Clear();
         SetCinemaMode(false);
 
         _playbackStopTask = StopBothPlaybackEnginesAsync();
@@ -561,8 +594,7 @@ public sealed partial class MainWindow : Window
         }
         if (!_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
         {
-            PlayerNowPlayingText.Text = $"FINISHED · {finishedChannel.DisplayName}";
-            SetPlayerList(CurrentPlayerChannels(), finishedChannel);
+            SetCurrentPlayerEntry(finishedChannel);
             _playbackCompletionShown = true;
         }
         var timeline = _engine.Timeline;
@@ -813,5 +845,32 @@ public sealed partial class MainWindow : Window
         Player
     }
 
-    public sealed record PlayerListEntry(string Title, string Status, Channel Channel);
+    public sealed class PlayerListEntry(Channel channel) : INotifyPropertyChanged
+    {
+        private bool _isCurrent;
+        private static Brush AccentBrush => (Brush)Application.Current.Resources["AppAccentBrush"];
+        private static Brush NormalBrush => (Brush)Application.Current.Resources["AppTextBrush"];
+        private static Brush SelectedTextBrush => (Brush)Application.Current.Resources["AppDeepBrush"];
+
+        public Channel Channel { get; } = channel;
+        public string Title => Channel.DisplayName;
+        public Brush BackgroundBrush => _isCurrent ? AccentBrush : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        public Brush ForegroundBrush => _isCurrent ? SelectedTextBrush : NormalBrush;
+        public bool IsCurrent
+        {
+            get => _isCurrent;
+            set
+            {
+                if (_isCurrent == value) return;
+                _isCurrent = value;
+                OnPropertyChanged(nameof(IsCurrent));
+                OnPropertyChanged(nameof(BackgroundBrush));
+                OnPropertyChanged(nameof(ForegroundBrush));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
 }

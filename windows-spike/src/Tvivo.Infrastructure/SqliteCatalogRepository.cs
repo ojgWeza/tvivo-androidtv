@@ -8,10 +8,9 @@ public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount);
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 12;
+    private const int SchemaVersion = 13;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
-    private static readonly Regex LeadingPunctuation = new(@"^[^\p{L}\p{N}]+", RegexOptions.Compiled);
     private readonly string _connectionString;
 
     public SqliteCatalogRepository(string? databasePath = null)
@@ -23,7 +22,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -32,7 +31,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                 CREATE INDEX items_browse ON items(account_id,type,category_id);
                 CREATE INDEX items_recent_added ON items(account_id,type,added_at DESC);
                 CREATE INDEX items_favourites_added ON items(account_id,type,favourite,favourite_added_at DESC);
-                CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort,id);
+                CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id);
                 CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id));
                 PRAGMA user_version=12;
                 """;
@@ -60,6 +59,12 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 11)
                 MigrateSeriesPlayback(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 12)
+                MigrateTitleOrdering(connection);
+        }
     }
 
     private static void MigrateSeriesPlayback(SqliteConnection connection)
@@ -67,6 +72,24 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id)); PRAGMA user_version=12;";
         command.ExecuteNonQuery();
+    }
+
+    private static void MigrateTitleOrdering(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        var rows = new List<(string Account, string Type, string Id, string Title)>();
+        using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT account_id,type,id,title FROM items";
+            using var reader = select.ExecuteReader();
+            while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        }
+        foreach (var row in rows)
+            Execute(connection, transaction, "UPDATE items SET title_sort=$sort WHERE account_id=$a AND type=$type AND id=$id",
+                ("$sort", SortTitle(row.Title)), ("$a", row.Account), ("$type", row.Type), ("$id", row.Id));
+        Execute(connection, transaction, "DROP INDEX IF EXISTS items_most_visited; CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id); PRAGMA user_version=13;");
+        transaction.Commit();
     }
 
     private static void MigrateVisitOrdering(SqliteConnection connection)
@@ -163,7 +186,15 @@ public sealed class SqliteCatalogRepository : IDisposable
         return string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned;
     }
 
-    private static string SortTitle(string? title) => LeadingPunctuation.Replace(CleanTitle(title), string.Empty).Trim();
+    // Tie-break keys group Unicode letters first, digits second, and punctuation/symbols last.
+    // Preserve the whole title so punctuation does not turn a leading number into a letter.
+    private static string SortTitle(string? title)
+    {
+        var cleaned = CleanTitle(title);
+        var first = cleaned[0];
+        var bucket = char.IsLetter(first) ? '0' : char.IsDigit(first) ? '1' : '2';
+        return $"{bucket}{cleaned}";
+    }
 
     public void ReplaceSnapshot(ProviderAccount account, CatalogItemType type, IReadOnlyList<ChannelGroup> groups, IReadOnlyList<Channel> channels)
     {
@@ -203,7 +234,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var count = sqliteConnection.CreateCommand(); count.CommandText = $"SELECT COUNT(*) FROM items WHERE {where}";
         AddBrowseParameters(count, account, type, groupId, filter);
         var total = Convert.ToInt32(count.ExecuteScalar());
-        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title_sort COLLATE NOCASE,title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
+        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
         AddBrowseParameters(command, account, type, groupId, filter); command.Parameters.AddWithValue("$limit", Math.Max(1, limit)); command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader(); var rows = new List<Channel>();
         while (reader.Read())
@@ -233,7 +264,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                        ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY title, id) AS row_number
                 FROM items
                 WHERE account_id=$a AND type=$type
-                  AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\')
+                  AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\')
             )
             SELECT id, category_id, title, artwork, extension, added_at, total_count
             FROM ranked

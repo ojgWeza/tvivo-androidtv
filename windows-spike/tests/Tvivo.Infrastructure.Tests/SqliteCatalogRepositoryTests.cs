@@ -33,6 +33,25 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Grouped_shelf_query_filters_rows_with_literal_escape_character()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[]
+            {
+                ChannelFor(account, "match", "g", "Ramadan Nights"),
+                ChannelFor(account, "miss", "g", "Winter Story"),
+            });
+
+            var shelves = repo.GetChannelsGroupedByCategory(account, null, CatalogItemType.Movie, "Ramadan", limit: 12);
+            Assert.Equal("match", Assert.Single(shelves["g"].Items).Id);
+            Assert.Equal(1, shelves["g"].TotalCount);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Catalog_queries_are_isolated_by_item_type()
     {
         using var repo = Create(out var dir); var account = Account();
@@ -77,33 +96,35 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
-    public void My_Tvivo_order_uses_visit_count_then_clean_name_fallback()
+    public void My_Tvivo_order_uses_visit_count_then_letters_digits_symbols_fallback()
     {
         using var repo = Create(out var dir); var account = Account();
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
             {
-                ChannelFor(account, "alpha", "", ", # Alpha"),
-                ChannelFor(account, "beta", "", "! Beta"),
-                ChannelFor(account, "zulu", "", "Zulu"),
+                ChannelFor(account, "symbol", "", "! Symbol"),
+                ChannelFor(account, "number", "", "42 Number"),
+                ChannelFor(account, "latin", "", "Zulu"),
+                ChannelFor(account, "arabic", "", "العربية"),
             });
 
-            Assert.Equal(new[] { "alpha", "beta", "zulu" },
-                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
-            repo.RecordVisit(account, CatalogItemType.Movie, "alpha");
-            repo.RecordVisit(account, CatalogItemType.Movie, "zulu");
-            repo.RecordVisit(account, CatalogItemType.Movie, "zulu");
-            Assert.Equal(new[] { "zulu", "alpha", "beta" },
-                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
+            Assert.Equal(new[] { "latin", "arabic", "number", "symbol" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 4, mostVisited: true).Items.Select(item => item.Id));
+            repo.RecordVisit(account, CatalogItemType.Movie, "symbol");
+            repo.RecordVisit(account, CatalogItemType.Movie, "latin");
+            repo.RecordVisit(account, CatalogItemType.Movie, "latin");
+            Assert.Equal(new[] { "latin", "symbol", "arabic", "number" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 4, mostVisited: true).Items.Select(item => item.Id));
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
             {
-                ChannelFor(account, "alpha", "", ", # Alpha"),
-                ChannelFor(account, "beta", "", "! Beta"),
-                ChannelFor(account, "zulu", "", "Zulu"),
+                ChannelFor(account, "symbol", "", "! Symbol"),
+                ChannelFor(account, "number", "", "42 Number"),
+                ChannelFor(account, "latin", "", "Zulu"),
+                ChannelFor(account, "arabic", "", "العربية"),
             });
-            Assert.Equal(new[] { "zulu", "alpha", "beta" },
-                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
+            Assert.Equal(new[] { "latin", "symbol", "arabic", "number" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 4, mostVisited: true).Items.Select(item => item.Id));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -159,7 +180,7 @@ public sealed class SqliteCatalogRepositoryTests
                 Assert.False(reader.Read());
             }
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(12, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(13, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }
@@ -174,6 +195,23 @@ public sealed class SqliteCatalogRepositoryTests
             var service = new CatalogRefreshService(new ThrowingProvider(), repo);
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.RefreshAsync(account));
             Assert.Equal("old", Assert.Single(repo.GetChannels(account, CatalogItemType.Live).Items).Id);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task Refresh_error_identifies_failed_stage_and_a_new_attempt_runs_again()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var provider = new FailFirstRefreshProvider();
+            var service = new CatalogRefreshService(provider, repo);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.RefreshAsync(account));
+            Assert.Contains("Refreshing Live categories failed", error.Message);
+
+            await service.RefreshAsync(account);
+            Assert.Equal(4, provider.GroupCalls);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -269,6 +307,18 @@ public sealed class SqliteCatalogRepositoryTests
     {
         public override Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, CancellationToken t = default) => Task.FromResult<IReadOnlyList<ChannelGroup>>(new[] { Group(a,"new","New") });
         public override Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken t = default) => throw new InvalidOperationException("fixture failure");
+    }
+    private sealed class FailFirstRefreshProvider : ProviderBase
+    {
+        public int GroupCalls { get; private set; }
+        public override Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, CancellationToken t = default)
+        {
+            GroupCalls++;
+            if (GroupCalls == 1) throw new InvalidOperationException("fixture category failure");
+            return Task.FromResult<IReadOnlyList<ChannelGroup>>(Array.Empty<ChannelGroup>());
+        }
+        public override Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken t = default) =>
+            Task.FromResult<IReadOnlyList<Channel>>(Array.Empty<Channel>());
     }
     private sealed class EmptyProvider : ProviderBase
     {

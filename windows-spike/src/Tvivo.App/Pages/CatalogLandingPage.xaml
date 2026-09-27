@@ -338,11 +338,16 @@
                                                         Style="{StaticResource AppShelfTitleButtonStyle}"
                                                         Click="ShelfTitle_Click"
                                                         Tag="{Binding}" />
-                                                <TextBlock Grid.Column="1"
-                                                           Text="{Binding CountLabel}"
-                                                           Foreground="{StaticResource AppMutedTextBrush}"
-                                                           FontSize="12"
-                                                           VerticalAlignment="Center" />
+                                                <Button Grid.Column="1"
+                                                        Content="{Binding CountLabel}"
+                                                        Tag="{Binding}"
+                                                        Style="{StaticResource AppShelfTitleButtonStyle}"
+                                                        FontSize="12"
+                                                        FontWeight="Normal"
+                                                        Foreground="{StaticResource AppMutedTextBrush}"
+                                                        VerticalAlignment="Center"
+                                                        Click="ShelfCount_Click"
+                                                        AutomationProperties.Name="Open full category listing" />
                                             </Grid>
                                             <GridView ItemsSource="{Binding Cards}"
                                                       ItemTemplate="{StaticResource CatalogCardTemplate}"

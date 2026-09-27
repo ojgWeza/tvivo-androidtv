@@ -13,6 +13,14 @@
             <Color x:Key="AppSurfaceColor">#0F2126</Color>
             <Color x:Key="AppSurfaceRaisedColor">#163036</Color>
             <Color x:Key="AppAccentColor">#D97757</Color>
+            <!-- Global accent rule: system chrome and every default control consume this orange palette. -->
+            <Color x:Key="SystemAccentColor">#D97757</Color>
+            <Color x:Key="SystemAccentColorLight1">#E7A084</Color>
+            <Color x:Key="SystemAccentColorLight2">#F0BBA5</Color>
+            <Color x:Key="SystemAccentColorLight3">#F7D9CC</Color>
+            <Color x:Key="SystemAccentColorDark1">#B85B40</Color>
+            <Color x:Key="SystemAccentColorDark2">#98452F</Color>
+            <Color x:Key="SystemAccentColorDark3">#783521</Color>
             <Color x:Key="AppAccentSoftColor">#E7A084</Color>
             <Color x:Key="AppTextColor">#E8F1F2</Color>
             <Color x:Key="AppMutedTextColor">#93ACB1</Color>
@@ -30,6 +38,57 @@
             <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
             <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
             <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
+            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="{StaticResource SystemAccentColorLight1}" />
+            <SolidColorBrush x:Key="SystemControlForegroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="SystemControlBackgroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#33D97757" />
+            <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#66D97757" />
+            <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#B3D97757" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#66D97757" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4DD97757" />
+            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource SystemAccentColorLight1}" />
+            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource SystemAccentColorLight2}" />
+            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#80D97757" />
+            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="{StaticResource SystemAccentColorDark1}" />
+            <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
+            <SolidColorBrush x:Key="ButtonForegroundPressed" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{StaticResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{StaticResource SystemAccentColorDark1}" />
+            <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#4DD97757" />
+            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#66D97757" />
+            <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#4DD97757" />
+            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
+            <SolidColorBrush x:Key="GridViewItemBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="GridViewItemBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="GridViewItemBackgroundSelected" Color="#4DD97757" />
+            <SolidColorBrush x:Key="GridViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
+            <SolidColorBrush x:Key="CheckBoxBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="CheckBoxBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="RadioButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="RadioButtonBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="NavigationViewItemBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="NavigationViewItemBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#4DD97757" />
+            <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="SplitButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="#66D97757" />
+            <SolidColorBrush x:Key="RepeaterButtonBackgroundPointerOver" Color="#33D97757" />
+            <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
             <Style x:Key="ShellNavigationButtonStyle" TargetType="Button">
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
                 <Setter Property="Padding" Value="16,12" />

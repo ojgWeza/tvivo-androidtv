@@ -220,18 +220,17 @@
                             </Grid.RowDefinitions>
                             <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
                             <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Foreground="{StaticResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
-                            <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Foreground="{StaticResource AppAccentBrush}" FontSize="12" FontWeight="SemiBold" Text="NOW PLAYING" />
+                            <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Visibility="Collapsed" />
+                            <TextBlock x:Name="PlayerSeasonLabel" Grid.Row="3" Visibility="Collapsed"
+                                       Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" />
                             <ComboBox x:Name="PlayerSeasonComboBox" Grid.Row="3" Visibility="Collapsed"
                                       DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                       AutomationProperties.Name="Series season" />
                             <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="10,12">
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="{Binding Title}" Foreground="{StaticResource AppTextBrush}" TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding Status}" FontSize="12" Foreground="{StaticResource AppAccentBrush}" />
-                                        </StackPanel>
+                                        <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">
+                                            <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
                                         </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
