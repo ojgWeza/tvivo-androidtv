@@ -88,8 +88,27 @@ public enum PlaybackAttemptResult
 
 public readonly record struct PlaybackSessionToken(long Generation, Guid SessionId);
 
+public readonly record struct PlaybackTimeline(long PositionMilliseconds, long? DurationMilliseconds)
+{
+    public bool CanSeek => DurationMilliseconds is > 0;
+
+    public long? ClampSeekTarget(long targetPositionMilliseconds) => DurationMilliseconds is > 0 and var duration
+        ? Math.Clamp(targetPositionMilliseconds, 0, duration)
+        : null;
+}
+
 public interface IPlaybackEngine
 {
+    bool IsPlaying { get; }
+    bool IsBuffering => false;
+    bool IsPaused => false;
+    bool IsEnded => false;
+    long Time { get; }
+    long Length { get; }
+    PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);
+    int Volume { get; set; }
+    void TogglePause();
+    void Seek(long timeMilliseconds);
     Task<PlaybackAttemptResult> StartAsync(StreamSource source, PlaybackSessionToken session, CancellationToken cancellationToken = default);
     Task StopAsync(PlaybackSessionToken session, CancellationToken cancellationToken = default);
 }

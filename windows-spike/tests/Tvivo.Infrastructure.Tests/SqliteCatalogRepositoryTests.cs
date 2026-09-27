@@ -21,7 +21,7 @@ public sealed class SqliteCatalogRepositoryTests
     [Fact]
     public void Refresh_replaces_snapshot_and_reads_pages_and_filters()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account,"g","News") }, new[] { ChannelFor(account,"1","g","Alpha"), ChannelFor(account,"2","g","Beta"), ChannelFor(account,"3","g","Bravo") });
@@ -29,13 +29,13 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal(new[] { "1", "2" }, repo.GetChannels(account, CatalogItemType.Live, "g", limit: 2).Items.Select(x => x.Id));
             Assert.Equal(new[] { "3" }, repo.GetChannels(account, CatalogItemType.Live, "g", "rav").Items.Select(x => x.Id));
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public void Catalog_queries_are_isolated_by_item_type()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account, "live-group", "Live") }, new[] { ChannelFor(account, "shared-id", "live-group", "Live item") });
@@ -50,13 +50,13 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal(StreamKind.Episode, Assert.Single(repo.GetChannels(account, CatalogItemType.Series).Items).Source.Kind);
             Assert.Equal("Movies", Assert.Single(repo.GetGroups(account, CatalogItemType.Movie)).DisplayName);
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public void Refresh_cleans_empty_bracket_title_artifacts_for_every_catalog_type()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             foreach (var type in new[] { CatalogItemType.Live, CatalogItemType.Movie, CatalogItemType.Series })
@@ -73,7 +73,7 @@ public sealed class SqliteCatalogRepositoryTests
                 Assert.Equal("Show (2024)", titles[type + "-real"]);
             }
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class SqliteCatalogRepositoryTests
                 command.ExecuteNonQuery();
             }
 
-            _ = new SqliteCatalogRepository(path);
+            using (var repository = new SqliteCatalogRepository(path)) { }
 
             using var migrated = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False");
             migrated.Open();
@@ -114,7 +114,7 @@ public sealed class SqliteCatalogRepositoryTests
     [Fact]
     public async Task Failed_provider_refresh_preserves_previous_snapshot()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account,"g","News") }, new[] { ChannelFor(account,"old","g","Old") });
@@ -122,13 +122,13 @@ public sealed class SqliteCatalogRepositoryTests
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.RefreshAsync(account));
             Assert.Equal("old", Assert.Single(repo.GetChannels(account, CatalogItemType.Live).Items).Id);
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public void Failed_snapshot_transaction_rolls_back_deletions_and_inserts()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account,"g","News") }, new[] { ChannelFor(account,"old","g","Old") });
@@ -137,13 +137,13 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal("News", Assert.Single(repo.GetGroups(account, CatalogItemType.Live)).Name);
             Assert.Equal("old", Assert.Single(repo.GetChannels(account, CatalogItemType.Live).Items).Id);
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public void Account_keys_are_isolated()
     {
-        var repo = Create(out var dir); var a = Account(); var b = Account("account-b");
+        using var repo = Create(out var dir); var a = Account(); var b = Account("account-b");
         try
         {
             repo.ReplaceSnapshot(a, CatalogItemType.Live, new[] { Group(a,"g","A") }, new[] { ChannelFor(a,"same","g","A channel") });
@@ -152,13 +152,13 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal("A channel", Assert.Single(repo.GetChannels(a, CatalogItemType.Live).Items).DisplayName);
             Assert.Equal("B", Assert.Single(repo.GetGroups(b, CatalogItemType.Live)).Name);
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public async Task Zero_groups_and_channels_remain_empty_after_cache_backed_refresh()
     {
-        var repo = Create(out var dir); var account = Account();
+        using var repo = Create(out var dir); var account = Account();
         try
         {
             var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
@@ -176,13 +176,13 @@ public sealed class SqliteCatalogRepositoryTests
             // CatalogLandingPage selects EmptyState when both these cache-backed reads are empty.
             Assert.True(repo.GetGroups(account, CatalogItemType.Live).Count == 0 && repo.GetChannels(account, CatalogItemType.Live).TotalCount == 0);
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
     public async Task Authenticated_provider_fixtures_refresh_cache_and_failure_keeps_snapshot()
     {
-        var repo = Create(out var dir);
+        using var repo = Create(out var dir);
         try
         {
             var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
@@ -203,7 +203,7 @@ public sealed class SqliteCatalogRepositoryTests
             await Assert.ThrowsAsync<InvalidOperationException>(() => new CatalogRefreshService(new ThrowingProvider(), repo).RefreshAsync(account));
             Assert.Equal(new[] { "opaque-42", "123" }, repo.GetChannels(account, CatalogItemType.Live).Items.Select(x => x.Id));
         }
-        finally { Directory.Delete(dir, true); }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     private abstract class ProviderBase : ICatalogProvider

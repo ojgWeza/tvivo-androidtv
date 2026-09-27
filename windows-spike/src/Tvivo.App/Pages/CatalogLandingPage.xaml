@@ -11,28 +11,44 @@
         <ItemsPanelTemplate x:Key="CatalogGridPanel">
             <ItemsWrapGrid Orientation="Horizontal" />
         </ItemsPanelTemplate>
+        <DataTemplate x:Key="TvivoArtworkPlaceholderTemplate">
+            <Grid>
+                <Rectangle RadiusX="12" RadiusY="12">
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#12383F" Offset="0" />
+                            <GradientStop Color="#1B5557" Offset="0.58" />
+                            <GradientStop Color="#A66B43" Offset="1" />
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+                <Viewbox Width="108" Height="108" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid Width="64" Height="64">
+                        <Border Margin="5" CornerRadius="11" BorderThickness="3" BorderBrush="#DDF4EDE5" />
+                        <Path Data="M20,23 L27,16 L36,16 L43,23 L43,45 L20,45 Z M26,16 L31,23 M38,16 L33,23"
+                              Stroke="#EAF4EDE5" StrokeThickness="3" StrokeLineJoin="Round" Fill="Transparent" />
+                        <Path Data="M29,29 L38,34 L29,39 Z" Fill="#F0BE86" />
+                    </Grid>
+                </Viewbox>
+                <TextBlock Text="TVIVO" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12"
+                           Foreground="#CFE8E2D8" FontSize="16" FontWeight="Bold" CharacterSpacing="180" />
+            </Grid>
+        </DataTemplate>
         <DataTemplate x:Key="CatalogCardTemplate">
             <Grid Width="{Binding Width}" Height="{Binding Height}">
                 <Border CornerRadius="12" Background="{StaticResource AppRaisedSurfaceBrush}">
                     <Grid>
-                        <Rectangle RadiusX="12" RadiusY="12">
-                            <Rectangle.Fill>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#16454B" Offset="0" />
-                                    <GradientStop Color="{StaticResource AppAccentColor}" Offset="1" />
-                                </LinearGradientBrush>
-                            </Rectangle.Fill>
-                        </Rectangle>
-                        <TextBlock Text="{Binding Initials}"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Foreground="{StaticResource AppTextBrush}"
-                                   FontSize="24"
-                                   FontWeight="Bold"
-                                   CharacterSpacing="90"
-                                   TextAlignment="Center" />
-                        <Image Source="{Binding ArtworkUrl}"
-                               Stretch="UniformToFill" />
+                        <Grid>
+                            <ContentControl x:Name="ArtworkFallback" Content="Tvivo"
+                                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                            ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
+                            <Image Stretch="UniformToFill" Opacity="0"
+                                   Loaded="ArtworkImage_Loaded"
+                                   Unloaded="ArtworkImage_Unloaded"
+                                   DataContextChanged="ArtworkImage_DataContextChanged"
+                                   ImageOpened="ArtworkImage_Opened"
+                                   ImageFailed="ArtworkImage_Failed" />
+                        </Grid>
                         <Border VerticalAlignment="Bottom" Padding="10,36,10,10">
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
@@ -57,7 +73,7 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <Grid Padding="48,38,48,64" Background="{StaticResource AppCanvasBrush}" RowSpacing="24">
+    <Grid x:Name="CatalogPageRoot" Padding="48,38,48,64" Background="{StaticResource AppCanvasBrush}" RowSpacing="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -79,26 +95,31 @@
                            FontWeight="SemiBold"
                            Text="My Tvivo" />
             </StackPanel>
-            <StackPanel x:Name="ModeButtons" Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" Visibility="Collapsed">
-                <Button x:Name="MyTvivoButton"
-                        Content="My Tvivo"
-                        Style="{StaticResource AppQuietButtonStyle}"
-                        Click="ModeButton_Click"
-                        Tag="MyTvivo" />
-                <Button x:Name="MoviesButton"
-                        Content="Movies"
-                        Style="{StaticResource AppQuietButtonStyle}"
-                        Click="ModeButton_Click"
-                        Tag="Movies" />
-                <Button x:Name="SeriesButton"
-                        Content="Series"
-                        Style="{StaticResource AppQuietButtonStyle}"
-                        Click="ModeButton_Click"
-                        Tag="Series" />
-            </StackPanel>
+            <ContentControl x:Name="ModeButtons"
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                <StackPanel x:Name="ModeButtonStackPanel" Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="MyTvivoButton"
+                            Content="My Tvivo"
+                            Style="{StaticResource AppQuietButtonStyle}"
+                            Click="ModeButton_Click"
+                            Tag="MyTvivo" />
+                    <Button x:Name="MoviesButton"
+                            Content="Movies"
+                            Style="{StaticResource AppQuietButtonStyle}"
+                            Click="ModeButton_Click"
+                            Tag="Movies" />
+                    <Button x:Name="SeriesButton"
+                            Content="Series"
+                            Style="{StaticResource AppQuietButtonStyle}"
+                            Click="ModeButton_Click"
+                            Tag="Series" />
+                </StackPanel>
+            </ContentControl>
         </Grid>
 
-        <Grid Grid.Row="1" ColumnSpacing="18">
+        <Grid Grid.Row="1" ColumnSpacing="18" MinHeight="52">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -149,13 +170,20 @@
         </Grid>
 
         <Grid Grid.Row="2">
-            <TextBlock x:Name="LoadingState"
-                       Visibility="Collapsed"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"
-                       Foreground="{StaticResource AppMutedTextBrush}"
-                       FontSize="17"
-                       Text="Loading catalog..." />
+            <StackPanel x:Name="LoadingState"
+                        Visibility="Visible"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="16">
+                <ProgressRing IsActive="True"
+                              Width="48"
+                              Height="48"
+                              HorizontalAlignment="Center"
+                              Foreground="{StaticResource AppAccentBrush}" />
+                <TextBlock Foreground="{StaticResource AppMutedTextBrush}"
+                           FontSize="17"
+                           Text="Loading your catalog..." />
+            </StackPanel>
 
             <StackPanel x:Name="EmptyState"
                         Visibility="Collapsed"
@@ -193,13 +221,46 @@
                   Visibility="Collapsed"
                   RowSpacing="18">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                    <ScrollViewer x:Name="ShelvesScroll"
-                                  Grid.Row="0"
-                                  VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled">
+                    <Grid x:Name="OpenShelfHeader" Grid.Row="0" Visibility="Collapsed" ColumnSpacing="18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button Content="All categories"
+                                Style="{StaticResource AppQuietButtonStyle}"
+                                Click="BackToShelves_Click" />
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBlock Style="{StaticResource AppEyebrowTextStyle}" Text="CATEGORY" />
+                            <TextBlock x:Name="OpenShelfTitle"
+                                       Foreground="{StaticResource AppTextBrush}"
+                                       FontSize="28"
+                                       FontWeight="SemiBold" />
+                        </StackPanel>
+                        <TextBlock x:Name="OpenShelfCount"
+                                   Grid.Column="2"
+                                   Foreground="{StaticResource AppMutedTextBrush}"
+                                   VerticalAlignment="Bottom" />
+                    </Grid>
+                    <ListView x:Name="ShelvesItems"
+                              Grid.Row="1"
+                              SelectionMode="None"
+                              IsItemClickEnabled="False"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0" />
+                                <Setter Property="MinHeight" Value="0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.Header>
                         <StackPanel Spacing="26">
                             <InfoBar x:Name="RefreshInfoBar"
                                      IsOpen="False"
@@ -213,27 +274,6 @@
                                             Click="Retry_Click" />
                                 </InfoBar.ActionButton>
                             </InfoBar>
-                            <Grid x:Name="OpenShelfHeader" Visibility="Collapsed" ColumnSpacing="18">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Button Content="All categories"
-                                        Style="{StaticResource AppQuietButtonStyle}"
-                                        Click="BackToShelves_Click" />
-                                <StackPanel Grid.Column="1" Spacing="4">
-                                    <TextBlock Style="{StaticResource AppEyebrowTextStyle}" Text="CATEGORY" />
-                                    <TextBlock x:Name="OpenShelfTitle"
-                                               Foreground="{StaticResource AppTextBrush}"
-                                               FontSize="28"
-                                               FontWeight="SemiBold" />
-                                </StackPanel>
-                                <TextBlock x:Name="OpenShelfCount"
-                                           Grid.Column="2"
-                                           Foreground="{StaticResource AppMutedTextBrush}"
-                                           VerticalAlignment="Bottom" />
-                            </Grid>
                             <Border x:Name="SpotlightPanel"
                                     Padding="30,22"
                                     CornerRadius="18">
@@ -249,20 +289,14 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <Border Width="300" Height="168" CornerRadius="14">
-                                        <Border.Background>
-                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                <GradientStop Color="#16454B" Offset="0" />
-                                                <GradientStop Color="{StaticResource AppAccentColor}" Offset="1" />
-                                            </LinearGradientBrush>
-                                        </Border.Background>
-                                        <TextBlock x:Name="SpotlightInitials"
-                                                   Foreground="{StaticResource AppTextBrush}"
-                                                   FontSize="28"
-                                                   FontWeight="Bold"
-                                                   CharacterSpacing="90"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   TextAlignment="Center" />
+                                        <Grid>
+                                            <ContentControl x:Name="SpotlightArtworkFallback" Content="Tvivo"
+                                                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                                            ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
+                                            <Image x:Name="SpotlightArtwork" Stretch="UniformToFill" Opacity="0"
+                                                   Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded"
+                                                   ImageOpened="ArtworkImage_Opened" ImageFailed="ArtworkImage_Failed" />
+                                        </Grid>
                                     </Border>
                                     <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
                                         <TextBlock x:Name="SpotlightEyebrow"
@@ -285,10 +319,13 @@
                                     </StackPanel>
                                 </Grid>
                             </Border>
-                            <ItemsControl x:Name="ShelvesItems">
-                                <ItemsControl.ItemTemplate>
+                        </StackPanel>
+                        </ListView.Header>
+                                <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <StackPanel Margin="0,0,0,30">
+                                        <StackPanel Margin="0,0,0,30"
+                                                    Loaded="ShelfContainer_Loaded"
+                                                    Unloaded="ShelfContainer_Unloaded">
                                             <Grid Margin="0,0,0,16" ColumnSpacing="18">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -310,19 +347,19 @@
                                                       Style="{StaticResource AppShelfGridViewStyle}"
                                                       ItemClick="ShelfCards_ItemClick"
                                                       KeyDown="ShelfGrid_KeyDown"
+                                                      Loaded="ShelfGrid_Loaded"
+                                                      Unloaded="ShelfGrid_Unloaded"
                                                       ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                                       ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                                      ScrollViewer.HorizontalScrollMode="Enabled"
+                                                      ScrollViewer.HorizontalScrollMode="Disabled"
                                                       ScrollViewer.VerticalScrollMode="Disabled" />
                                         </StackPanel>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </ScrollViewer>
+                                </ListView.ItemTemplate>
+                    </ListView>
 
                     <GridView x:Name="OpenShelfGrid"
-                              Grid.Row="0"
+                              Grid.Row="1"
                               Visibility="Collapsed"
                               ItemTemplate="{StaticResource CatalogCardTemplate}"
                               ItemsPanel="{StaticResource CatalogGridPanel}"
@@ -333,7 +370,7 @@
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
 
                     <StackPanel x:Name="PagerPanel"
-                                Grid.Row="1"
+                                Grid.Row="2"
                                 Orientation="Horizontal"
                                 Spacing="12"
                                 HorizontalAlignment="Right"
@@ -356,6 +393,28 @@
                                 IsEnabled="False" />
                     </StackPanel>
             </Grid>
+        </Grid>
+
+        <Grid x:Name="FirstLoadTakeover"
+              Grid.Row="0"
+              Grid.RowSpan="3"
+              Visibility="Collapsed"
+              Opacity="1"
+              Background="{StaticResource AppCanvasBrush}"
+              IsHitTestVisible="True">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="28">
+                <TextBlock Text="TVIVO"
+                           HorizontalAlignment="Center"
+                           Foreground="{StaticResource AppTextBrush}"
+                           FontSize="42"
+                           FontWeight="Bold"
+                           CharacterSpacing="80" />
+                <ProgressRing IsActive="True"
+                              Width="36"
+                              Height="36"
+                              HorizontalAlignment="Center"
+                              Foreground="{StaticResource AppAccentBrush}" />
+            </StackPanel>
         </Grid>
     </Grid>
 </UserControl>

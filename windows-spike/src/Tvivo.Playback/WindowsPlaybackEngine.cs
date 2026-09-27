@@ -43,6 +43,36 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
 
+    public bool HasPlayer => _player is not null;
+    public bool IsPlaying => _player?.IsPlaying == true;
+    public bool IsBuffering => _player?.State == VLCState.Buffering;
+    public bool IsPaused => _player?.State == VLCState.Paused;
+    public bool IsEnded => _player?.State == VLCState.Ended;
+    public long Time => _player?.Time ?? 0;
+    public long Length => _player?.Length ?? 0;
+    public PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);
+    public int Volume
+    {
+        get => _player?.Volume ?? 100;
+        set
+        {
+            if (_player is { } player)
+                player.Volume = Math.Clamp(value, 0, 100);
+        }
+    }
+
+    public void TogglePause()
+    {
+        if (IsPlaying || IsBuffering || IsPaused)
+            _player?.Pause();
+    }
+
+    public void Seek(long timeMilliseconds)
+    {
+        if (_player is { } player && Timeline.ClampSeekTarget(timeMilliseconds) is { } target)
+            player.Time = target;
+    }
+
     public event EventHandler<VlcPlaybackStateChangedEventArgs>? StateChanged;
 
     public async Task<PlaybackAttemptResult> StartAsync(
@@ -101,26 +131,52 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
             try
             {
-                if (!player.Play())
+                // Start the watchdog before invoking native playback. Play can block
+                // inside LibVLC, so it must never run on the UI thread.
+                using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var cancellationRegistration = linkedCancellation.Token.Register(
+                    () => handlers.Completion.TrySetResult(PlaybackAttemptResult.Cancelled));
+                var timeoutTask = Task.Delay(StartupDeadline, linkedCancellation.Token);
+                var playTask = Task.Run(() => player.Play());
+                var completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask, playTask)
+                    .ConfigureAwait(false);
+
+                if (completed == playTask && !await playTask.ConfigureAwait(false))
                 {
                     PublishState(session, VlcPlaybackState.Failed);
                     handlers.Completion.TrySetResult(PlaybackAttemptResult.HostFailure);
                 }
 
-                using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                using var cancellationRegistration = linkedCancellation.Token.Register(
-                    () => handlers.Completion.TrySetResult(PlaybackAttemptResult.Cancelled));
-                var timeoutTask = Task.Delay(StartupDeadline, linkedCancellation.Token);
-                var completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask).ConfigureAwait(true);
-                var result = completed == handlers.Completion.Task
-                    ? await handlers.Completion.Task.ConfigureAwait(true)
-                    : PlaybackAttemptResult.Timeout;
+                if (completed == playTask && !handlers.Completion.Task.IsCompleted)
+                    completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask).ConfigureAwait(false);
+
+                if (completed == timeoutTask && !handlers.Completion.Task.IsCompleted && player.VoutCount > 0)
+                    handlers.Completion.TrySetResult(PlaybackAttemptResult.FirstFrame);
+
+                // The Vout/Playing callback may have completed as the deadline
+                // continuation was queued. Its session result takes precedence.
+                var result = handlers.Completion.Task.IsCompleted
+                    ? await handlers.Completion.Task.ConfigureAwait(false)
+                    : completed == timeoutTask
+                    ? cancellationToken.IsCancellationRequested
+                        ? PlaybackAttemptResult.Cancelled
+                        : PlaybackAttemptResult.Timeout
+                    : await handlers.Completion.Task.ConfigureAwait(false);
 
                 if (result != PlaybackAttemptResult.FirstFrame)
                 {
                     if (result == PlaybackAttemptResult.Timeout)
                         PublishState(session, VlcPlaybackState.Failed);
-                    StopCore(session);
+                    if (result == PlaybackAttemptResult.Timeout && !playTask.IsCompleted)
+                    {
+                        // Do not let a second potentially blocking native call prevent
+                        // timeout recovery. Detach XAML now; finish native cleanup if Play returns.
+                        AbandonTimedOutStart(session, player, media, handlers, playTask);
+                    }
+                    else
+                    {
+                        StopCore(session);
+                    }
                 }
                 return result;
             }
@@ -212,28 +268,85 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     public void InitializeView(VideoView view, InitializedEventArgs e)
     {
         Log("Entered OnViewInitialized.");
+        string[] swapChainOptions;
         lock (_lifecycleLock)
         {
             if (_disposed)
                 return;
 
             _view = view;
+            swapChainOptions = e.SwapChainOptions;
+        }
 
-            try
+        Log($"Read VideoView swap-chain options: length={swapChainOptions.Length}, values=[{string.Join(", ", swapChainOptions)}].");
+        Log("Constructing LibVLC on a worker thread.");
+        _ = Task.Run(() => new LibVLC(swapChainOptions)).ContinueWith(task =>
+        {
+            if (task.IsFaulted)
             {
-                var swapChainOptions = e.SwapChainOptions;
-                Log($"Read VideoView swap-chain options: length={swapChainOptions.Length}, values=[{string.Join(", ", swapChainOptions)}].");
-                Log("Constructing LibVLC.");
-                _libVlc = new LibVLC(swapChainOptions);
-                Log("LibVLC construction succeeded.");
-                _libVlcReady.TrySetResult(_libVlc);
-            }
-            catch (Exception exception)
-            {
+                var exception = task.Exception?.GetBaseException() ?? new InvalidOperationException("LibVLC construction failed.");
                 Log($"LibVLC construction prevented readiness completion. {exception}");
                 _libVlcReady.TrySetException(exception);
+                return;
             }
-        }
+
+            var libVlc = task.Result;
+            lock (_lifecycleLock)
+            {
+                if (_disposed)
+                {
+                    libVlc.Dispose();
+                    _libVlcReady.TrySetException(new ObjectDisposedException(nameof(VlcPlaybackEngine)));
+                    return;
+                }
+
+                _libVlc = libVlc;
+            }
+
+            Log("LibVLC construction succeeded.");
+            _libVlcReady.TrySetResult(libVlc);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private void AbandonTimedOutStart(
+        PlaybackSessionToken session,
+        MediaPlayer player,
+        Media media,
+        EventHandlers handlers,
+        Task<bool> playTask)
+    {
+        if (_currentSession != session)
+            return;
+
+        _player = null;
+        _media = null;
+        _handlers = null;
+        _currentSession = null;
+        handlers.Invalidate();
+        player.Playing -= handlers.Playing;
+        player.Vout -= handlers.Vout;
+        player.EncounteredError -= handlers.EncounteredError;
+        player.EndReached -= handlers.EndReached;
+        DetachPlayerFromView();
+
+        _ = playTask.ContinueWith(_ =>
+        {
+            player.Stop();
+            player.Dispose();
+            media.Dispose();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private void DetachPlayerFromView()
+    {
+        var view = _view;
+        if (view is null)
+            return;
+
+        if (view.DispatcherQueue?.HasThreadAccess == true)
+            view.MediaPlayer = null;
+        else
+            view.DispatcherQueue?.TryEnqueue(() => view.MediaPlayer = null);
     }
 
     private static readonly string LogPath = Path.Combine(
@@ -283,8 +396,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             player.EndReached -= handlers.EndReached;
         }
 
-        if (_view is { } view)
-            view.MediaPlayer = null;
+        DetachPlayerFromView();
         player.Stop();
         player.Dispose();
         media?.Dispose();

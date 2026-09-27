@@ -173,6 +173,12 @@ public static class StreamUrlBuilder
     public static string Live(ProviderEndpoint endpoint, string username, string password, string streamId, string? extension) =>
         Build(endpoint, username, password, "live", streamId, extension);
 
+    public static string Vod(ProviderEndpoint endpoint, string username, string password, string streamId, string? extension) =>
+        Build(endpoint, username, password, "movie", streamId, extension);
+
+    public static string Series(ProviderEndpoint endpoint, string username, string password, string streamId, string? extension) =>
+        Build(endpoint, username, password, "series", streamId, extension);
+
     public static string Redact(string value) => System.Text.RegularExpressions.Regex.Replace(
         value, @"/(live|movie|series)/([^/]+)/([^/]+)/", "/$1/***/***/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 

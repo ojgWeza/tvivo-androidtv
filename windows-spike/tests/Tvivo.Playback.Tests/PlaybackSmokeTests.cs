@@ -59,6 +59,12 @@ public sealed class PlaybackSmokeTests
 
     private sealed class RecordingEngine : IPlaybackEngine
     {
+        public bool IsPlaying => false;
+        public long Time => 0;
+        public long Length => 0;
+        public int Volume { get; set; } = 100;
+        public void TogglePause() { }
+        public void Seek(long timeMilliseconds) { }
         public List<PlaybackSessionToken> Started { get; } = new();
         public List<PlaybackSessionToken> Stopped { get; } = new();
 
@@ -77,6 +83,12 @@ public sealed class PlaybackSmokeTests
 
     private sealed class RecordingSourceEngine : IPlaybackEngine
     {
+        public bool IsPlaying => false;
+        public long Time => 0;
+        public long Length => 0;
+        public int Volume { get; set; } = 100;
+        public void TogglePause() { }
+        public void Seek(long timeMilliseconds) { }
         public StreamSource? StartedSource { get; private set; }
 
         public Task<PlaybackAttemptResult> StartAsync(StreamSource source, PlaybackSessionToken session, CancellationToken cancellationToken = default)

@@ -60,7 +60,8 @@ public partial class App : Application
         {
             LaunchDiagnostics.Write("OnLaunched entered");
             _window ??= new MainWindow();
-            LaunchDiagnostics.Write("MainWindow constructed; activating");
+            ((MainWindow)_window).PrepareForActivation();
+            LaunchDiagnostics.Write("MainWindow constructed; startup window state applied; activating");
             _window.Activate();
             LaunchDiagnostics.Write("MainWindow activated");
         }
@@ -78,8 +79,7 @@ public partial class App : Application
         services.AddSingleton<CatalogRefreshService>();
         services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
         services.AddSingleton<VlcPlaybackEngine>();
-        services.AddSingleton<IPlaybackEngine>(sp => sp.GetRequiredService<VlcPlaybackEngine>());
-        services.AddSingleton<PlaybackService>();
+        services.AddSingleton<FFmpegInteropPlaybackEngine>();
         return services.BuildServiceProvider();
     }
 

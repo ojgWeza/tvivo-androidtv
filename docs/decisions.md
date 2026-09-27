@@ -1050,3 +1050,48 @@ desktop chrome supplies a guarded Exit action with `Stay in Tvivo` as the safe c
 **Verification status:** the earlier desktop test suite passed before this follow-up.
 A fresh follow-up Gradle run could not complete because the machine's shell launcher
 was blocked by policy; D-Desktop-16 remains open until a rebuilt app is manually tested.
+
+## WinUI unpackaged engine preference storage
+
+Directly launching `Tvivo.App.exe` as an unpackaged WinUI app has no package identity.
+`Windows.Storage.ApplicationData.Current.LocalSettings` therefore throws `0x80073D54`
+during `MainWindow` construction, before the first window can be shown. Keep this
+non-sensitive playback-engine preference in the app's per-user LocalAppData folder
+instead; do not make startup depend on package-scoped storage APIs.
+
+## WinUI fullscreen window transition
+
+`AppWindow.SetPresenter(FullScreen)` was the fatal detection boundary for startup heap
+corruption (`0xC0000374`) in six of six launches, including three calls queued after
+activation. Three launches that skipped it stayed responsive for at least 18 seconds.
+Use the existing HWND's popup style and current monitor's physical bounds for fullscreen,
+then restore its saved style, placement, and bounds on exit. Do not switch presenters
+for fullscreen or infer that the presenter caused the earlier invalid heap write.
+The Win32 replacement builds; runtime acceptance remains open. See
+`windows-spike/.codex-handoff-crash.md` and `.codex-handoff-fullscreen.md`.
+
+## WinUI catalog shelf realization budget
+
+The catalog hang capture showed a UI thread saturated in native XAML work with
+110 live shelf grids. A `ScrollViewer` around an `ItemsControl` creates every
+shelf, even though each shelf preview is limited to 12 cards. Keep the outer
+shelf surface in a viewport-bounded, recycling list, and keep artwork requests
+bounded and decoded near display size. Reapplying an identical snapshot should
+leave the current item source in place. The Batch 5 build passes; runtime
+realization counts and responsiveness still require a separately approved run.
+
+## WinUI catalog and player handoff
+
+The catalog card handler can open the Player before its previously collapsed video
+surface has completed layout. Side-list selection runs after that surface is visible.
+Give the Player a layout pass before the first playback start, and report startup
+exceptions instead of losing them in a fire-and-forget task. Keep the selected
+shelf's channel set when selecting another item in the Player side list; passing
+an empty set erased that list. Returning from Player should reuse the existing
+catalog control so its shelf, filter, page, and scroll state remain intact.
+
+An artwork `ContentControl` needs content to instantiate its `ContentTemplate`.
+Recycled images also need a new load when their data context changes, with the
+fallback and image opacity reset before each request. A Spotlight chosen once
+per snapshot will not rotate without an active-page timer. These source fixes
+compile; their visual and playback results still need an approved app run.
