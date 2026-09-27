@@ -89,6 +89,11 @@
             <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="#66D97757" />
             <SolidColorBrush x:Key="RepeaterButtonBackgroundPointerOver" Color="#33D97757" />
             <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
+            <Style TargetType="Button">
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="14,8" />
+                <Setter Property="MinHeight" Value="40" />
+            </Style>
             <Style x:Key="ShellNavigationButtonStyle" TargetType="Button">
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
                 <Setter Property="Padding" Value="16,12" />
@@ -100,8 +105,8 @@
                 <Setter Property="Background" Value="{StaticResource AppAccentBrush}" />
                 <Setter Property="Foreground" Value="{StaticResource AppDeepBrush}" />
                 <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Padding" Value="18,10" />
-                <Setter Property="CornerRadius" Value="22" />
+                <Setter Property="Padding" Value="16,10" />
+                <Setter Property="CornerRadius" Value="12" />
             </Style>
             <Style x:Key="AppQuietButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
@@ -109,7 +114,7 @@
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Foreground" Value="{StaticResource AppTextBrush}" />
                 <Setter Property="Padding" Value="16,10" />
-                <Setter Property="CornerRadius" Value="22" />
+                <Setter Property="CornerRadius" Value="12" />
             </Style>
             <Style x:Key="AppShelfTitleButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />

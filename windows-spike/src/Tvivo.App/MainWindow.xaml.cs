@@ -528,16 +528,18 @@ public sealed partial class MainWindow : Window
             // native/network state independently, so stopping only the selected
             // PlaybackService can leave the previous provider connection alive.
             result = await _playbackHandoff.RunAsync(
-                async _ =>
+                _ => OnUiAsync(async () =>
                 {
                     await _playbackStopTask;
                     await StopBothPlaybackEnginesAsync();
                     await Task.Yield();
+                    // PlaybackHandoff's delay resumes on a pool thread. Keep UI
+                    // layout and both engine lifecycle calls on the window's STA.
                     PlayerPage.UpdateLayout();
-                },
-                token => generation == Volatile.Read(ref _playbackSessionGeneration) && !sessionCts.IsCancellationRequested
+                }),
+                token => OnUiAsync(() => generation == Volatile.Read(ref _playbackSessionGeneration) && !sessionCts.IsCancellationRequested
                     ? _playback.PlayAsync(source, token)
-                    : Task.FromResult(PlaybackAttemptResult.Cancelled),
+                    : Task.FromResult(PlaybackAttemptResult.Cancelled)),
                 sessionCts.Token);
         }
         catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
@@ -619,6 +621,36 @@ public sealed partial class MainWindow : Window
         await Task.WhenAll(_vlcPlayback.StopAsync(), _nativePlayback.StopAsync());
     }
 
+    private Task<T> OnUiAsync<T>(Func<Task<T>> action)
+    {
+        var dispatcher = WindowRoot.DispatcherQueue;
+        if (dispatcher.HasThreadAccess)
+            return action();
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!dispatcher.TryEnqueue(async () =>
+            {
+                try
+                {
+                    completion.TrySetResult(await action());
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetException(exception);
+                }
+            }))
+        {
+            completion.TrySetException(new InvalidOperationException("The window dispatcher is no longer available."));
+        }
+        return completion.Task;
+    }
+
+    private Task OnUiAsync(Func<Task> action) => OnUiAsync(async () =>
+    {
+        await action();
+        return true;
+    });
+
     private static string PlaybackStatusMessage(PlaybackAttemptResult result, StreamKind kind) => result switch
     {
         PlaybackAttemptResult.FirstFrame => "Playing",
@@ -698,25 +730,27 @@ public sealed partial class MainWindow : Window
 
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
     {
-        PlayerAboutExpander.Visibility = type is CatalogItemType.Movie or CatalogItemType.Series
+        var hasAbout = type is CatalogItemType.Movie or CatalogItemType.Series;
+        PlayerAboutButton.Visibility = hasAbout
             ? Visibility.Visible
             : Visibility.Collapsed;
+        PlayerMetadataLine.Visibility = hasAbout ? Visibility.Visible : Visibility.Collapsed;
         if (metadata is null)
         {
+            PlayerMetadataLine.Text = string.Empty;
             PlayerAboutText.Text = "Loading details…";
             return;
         }
-        var attributeLine = string.Join(" · ", new[]
+        PlayerMetadataLine.Text = string.Join(" · ", new[]
         {
             metadata.Year,
             metadata.Rating is null ? null : $"★ {metadata.Rating}",
             metadata.Genre,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        var lines = new List<string>();
-        if (attributeLine.Length > 0) lines.Add(attributeLine);
-        if (!string.IsNullOrWhiteSpace(metadata.Plot)) lines.Add(metadata.Plot);
-        if (!string.IsNullOrWhiteSpace(metadata.Cast)) lines.Add($"Cast: {metadata.Cast}");
-        PlayerAboutText.Text = lines.Count == 0 ? "No provider details are available for this title." : string.Join(Environment.NewLine + Environment.NewLine, lines);
+        var about = new List<string>();
+        if (!string.IsNullOrWhiteSpace(metadata.Plot)) about.Add(metadata.Plot);
+        if (!string.IsNullOrWhiteSpace(metadata.Cast)) about.Add($"Cast: {metadata.Cast}");
+        PlayerAboutText.Text = about.Count == 0 ? "No description is available for this title." : string.Join(Environment.NewLine + Environment.NewLine, about);
     }
 
     private async void PauseButton_Click(object sender, RoutedEventArgs args)

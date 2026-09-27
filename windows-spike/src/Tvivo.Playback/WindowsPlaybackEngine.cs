@@ -134,24 +134,25 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
             try
             {
-                // Start the watchdog before invoking native playback. Play can block
-                // inside LibVLC, so it must never run on the UI thread.
+                // StartAsync is entered and resumed on the window dispatcher. LibVLC's
+                // MediaPlayer is apartment-bound here, so invoke Play on that same
+                // dispatcher instead of moving the call to a pool thread.
                 using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 using var cancellationRegistration = linkedCancellation.Token.Register(
                     () => handlers.Completion.TrySetResult(PlaybackAttemptResult.Cancelled));
                 var timeoutTask = Task.Delay(StartupDeadline, linkedCancellation.Token);
-                var playTask = Task.Run(() => player.Play());
+                var playTask = Task.FromResult(player.Play());
                 var completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask, playTask)
-                    .ConfigureAwait(false);
+                    .ConfigureAwait(true);
 
-                if (completed == playTask && !await playTask.ConfigureAwait(false))
+                if (completed == playTask && !await playTask.ConfigureAwait(true))
                 {
                     PublishState(session, VlcPlaybackState.Failed);
                     handlers.Completion.TrySetResult(PlaybackAttemptResult.HostFailure);
                 }
 
                 if (completed == playTask && !handlers.Completion.Task.IsCompleted)
-                    completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask).ConfigureAwait(false);
+                    completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask).ConfigureAwait(true);
 
                 if (completed == timeoutTask && !handlers.Completion.Task.IsCompleted && player.VoutCount > 0)
                     handlers.Completion.TrySetResult(PlaybackAttemptResult.FirstFrame);
@@ -159,12 +160,12 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 // The Vout/Playing callback may have completed as the deadline
                 // continuation was queued. Its session result takes precedence.
                 var result = handlers.Completion.Task.IsCompleted
-                    ? await handlers.Completion.Task.ConfigureAwait(false)
+                    ? await handlers.Completion.Task.ConfigureAwait(true)
                     : completed == timeoutTask
                     ? cancellationToken.IsCancellationRequested
                         ? PlaybackAttemptResult.Cancelled
                         : PlaybackAttemptResult.Timeout
-                    : await handlers.Completion.Task.ConfigureAwait(false);
+                    : await handlers.Completion.Task.ConfigureAwait(true);
 
                 if (result != PlaybackAttemptResult.FirstFrame)
                 {

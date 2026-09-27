@@ -106,6 +106,31 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task Provider_maps_movie_stream_icon_and_series_cover_to_channel_artwork()
+    {
+        var handler = new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("action=get_vod_categories", StringComparison.Ordinal) ||
+                query.Contains("action=get_series_categories", StringComparison.Ordinal))
+                return JsonBody("[]");
+            if (query.Contains("action=get_vod_streams", StringComparison.Ordinal))
+                return JsonBody("[{\"stream_id\":\"movie-42\",\"name\":\"Movie\",\"stream_icon\":\"https://cdn.example/movie.jpg\"}]");
+            return JsonBody("[{\"series_id\":\"series-7\",\"name\":\"Series\",\"cover\":\"https://cdn.example/series.jpg\"}]");
+        });
+        var provider = new XtreamCatalogProvider(new HttpClient(handler));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+
+        var movie = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Movie));
+        var series = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Series));
+
+        Assert.Equal("https://cdn.example/movie.jpg", movie.LogoUri!.ToString());
+        Assert.Equal("https://cdn.example/series.jpg", series.LogoUri!.ToString());
+    }
+
+    [Fact]
     public async Task Provider_maps_movie_and_series_metadata_from_info_objects()
     {
         string? movieQuery = null;

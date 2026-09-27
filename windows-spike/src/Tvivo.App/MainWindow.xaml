@@ -167,7 +167,41 @@
                             Visibility="Collapsed" IsHitTestVisible="False" />
 
                     <StackPanel x:Name="PlayerDetailsPanel" Grid.Row="1" Spacing="3">
-                        <TextBlock x:Name="PlayerTitleText" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="Now playing" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="PlayerTitleText" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="Now playing" VerticalAlignment="Center" />
+                            <Button x:Name="PlayerAboutButton" Content="ⓘ" Visibility="Collapsed"
+                                    Width="36" Height="36" MinWidth="36" Padding="0"
+                                    AutomationProperties.Name="Show title description">
+                                <Button.Flyout>
+                                    <Flyout Placement="Right">
+                                        <Flyout.FlyoutPresenterStyle>
+                                            <Style TargetType="FlyoutPresenter">
+                                                <Setter Property="Width" Value="680" />
+                                                <Setter Property="MaxWidth" Value="760" />
+                                                <Setter Property="MaxHeight" Value="620" />
+                                            </Style>
+                                        </Flyout.FlyoutPresenterStyle>
+                                        <Border Width="640" Height="520" MaxWidth="720" MaxHeight="600" Padding="20"
+                                                Background="{StaticResource AppPanelSurfaceBrush}"
+                                                CornerRadius="12">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled"
+                                                          HorizontalScrollMode="Disabled">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="ABOUT THIS TITLE" FontSize="12" FontWeight="Bold"
+                                                               Foreground="{StaticResource AppAccentSoftBrush}" />
+                                                    <TextBlock x:Name="PlayerAboutText" TextWrapping="Wrap"
+                                                               Foreground="{StaticResource AppTextBrush}" />
+                                                </StackPanel>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </StackPanel>
+                        <TextBlock x:Name="PlayerMetadataLine" Visibility="Collapsed"
+                                   Foreground="{StaticResource AppMutedTextBrush}" FontSize="13"
+                                   TextTrimming="CharacterEllipsis" />
                         <TextBlock x:Name="StatusText" Foreground="{StaticResource AppMutedTextBrush}" Text="Ready" />
                     </StackPanel>
                     <Button x:Name="NativeCinemaButton"
@@ -218,7 +252,6 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
@@ -229,10 +262,7 @@
                             <ComboBox x:Name="PlayerSeasonComboBox" Grid.Row="3" Visibility="Collapsed"
                                       DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                       AutomationProperties.Name="Series season" />
-                            <Expander x:Name="PlayerAboutExpander" Grid.Row="4" Header="About" Visibility="Collapsed">
-                                <TextBlock x:Name="PlayerAboutText" TextWrapping="Wrap" Foreground="{StaticResource AppMutedTextBrush}" />
-                            </Expander>
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">

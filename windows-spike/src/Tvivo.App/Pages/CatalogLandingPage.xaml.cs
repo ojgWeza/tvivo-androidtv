@@ -5,6 +5,8 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
 using Windows.Storage.Streams;
 using System.ComponentModel;
 using Tvivo.Core;
@@ -34,8 +36,11 @@ public sealed partial class CatalogLandingPage : UserControl
     private long _pageQueryGeneration;
     private bool _suppressSearchChanged;
     private bool _isReadyForInteraction;
+    private bool _isActive;
     private bool _firstCatalogLoadCompleted;
     private bool _showModeLoadingFrame;
+    private long _modeTransitionGeneration;
+    private readonly SemaphoreSlim _modeTransitionGate = new(1, 1);
     private CatalogCard? _spotlightCard;
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
@@ -50,8 +55,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
     private static readonly HttpClient ArtworkClient = new();
-    private static int _firstArtworkFailureLogged;
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
+    private readonly HashSet<string> _artworkDiagnosticsLogged = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _artworkFailuresLogged = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
 #if DEBUG
     private readonly HashSet<FrameworkElement> _realizedShelves = new();
@@ -96,6 +102,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public void SetActive(bool active)
     {
+        _isActive = active;
         if (active) _spotlightTimer.Start();
         else _spotlightTimer.Stop();
     }
@@ -130,10 +137,12 @@ public sealed partial class CatalogLandingPage : UserControl
         // Invalidate any load tied to the previous mode before replacing its UI.
         Interlocked.Increment(ref _loadGeneration);
         Interlocked.Increment(ref _pageQueryGeneration);
+        Interlocked.Increment(ref _modeTransitionGeneration);
         SaveModeState(_activeMode);
         _activeMode = mode;
-        _showModeLoadingFrame = true;
-        _spotlightCard = null;
+        var keepVisibleSnapshot = _renderedSnapshot is not null && ContentState.Visibility == Visibility.Visible;
+        _showModeLoadingFrame = !keepVisibleSnapshot;
+        _spotlightTimer.Stop();
         _openShelfType = null;
         if (_modeStates.TryGetValue(mode, out var state))
         {
@@ -152,15 +161,25 @@ public sealed partial class CatalogLandingPage : UserControl
             _offset = 0;
             SetSearchTextWithoutReload(string.Empty);
         }
-        ShelvesItems.ItemsSource = null;
-        _renderedSnapshot = null;
-        CancelArtworkLoads();
-        OpenShelfGrid.ItemsSource = null;
-        SpotlightPanel.Visibility = Visibility.Collapsed;
         RefreshInfoBar.IsOpen = false;
         UpdateModeChrome();
         UpdateEmptyCopy();
-        SetState(loading: true);
+        if (keepVisibleSnapshot)
+        {
+            // Keep the old category attached until the incoming snapshot is ready.
+            // The snapshot swap itself is performed while the content is faded out.
+            ContentState.IsHitTestVisible = false;
+            SetInteractionReadiness(false);
+        }
+        else
+        {
+            ShelvesItems.ItemsSource = null;
+            _renderedSnapshot = null;
+            CancelArtworkLoads();
+            OpenShelfGrid.ItemsSource = null;
+            SpotlightPanel.Visibility = Visibility.Collapsed;
+            SetState(loading: true);
+        }
     }
 
     public async Task SetModeAsync(CatalogMode mode)
@@ -169,7 +188,6 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
 
         PrepareMode(mode);
-        await Task.Delay(32);
         await ShowCachedPageAsync();
     }
 
@@ -282,7 +300,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
             if (HasCatalogData(cached))
             {
-                ApplySnapshot(cached);
+                await ApplySnapshotAsync(cached);
                 _firstCatalogLoadCompleted = true;
                 ShowRefreshingStatus();
             }
@@ -313,7 +331,7 @@ public sealed partial class CatalogLandingPage : UserControl
             if (refreshed is null) return;
 
             CacheSnapshot(account, refreshed);
-            ApplySnapshot(refreshed);
+            await ApplySnapshotAsync(refreshed);
             _firstCatalogLoadCompleted = true;
             DismissFirstLoadTakeover();
             RefreshInfoBar.IsOpen = false;
@@ -550,31 +568,79 @@ public sealed partial class CatalogLandingPage : UserControl
     private static bool HasCatalogData(CatalogSnapshot snapshot) =>
         snapshot.Groups.Count > 0 || snapshot.Page.TotalCount > 0 || snapshot.Shelves.Count > 0;
 
-    private void ApplySnapshot(CatalogSnapshot snapshot)
+    private async Task ApplySnapshotAsync(CatalogSnapshot snapshot)
     {
-        Interlocked.Increment(ref _pageQueryGeneration);
-        _activeMode = snapshot.Mode;
-        _groups = snapshot.Groups;
-        _selectedGroupId = snapshot.SelectedGroupId;
-        _offset = snapshot.Offset;
-        SaveModeState(snapshot.Mode);
-
-        UpdateModeChrome();
-        UpdateEmptyCopy();
-        var snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
-        if (snapshotChanged || _renderedOpenShelfId != _openShelfId)
+        var previousMode = _renderedSnapshot?.Mode;
+        var modeChanged = previousMode is not null && previousMode != snapshot.Mode &&
+            ContentState.Visibility == Visibility.Visible;
+        var transitionGeneration = Volatile.Read(ref _modeTransitionGeneration);
+        var ownsTransitionGate = false;
+        var fadedOut = false;
+        if (modeChanged)
         {
-            if (snapshotChanged) RenderSpotlight(snapshot.Shelves);
-            RenderShelfSurface(snapshot);
-            _renderedSnapshot = snapshot;
-            _renderedOpenShelfId = _openShelfId;
+            await _modeTransitionGate.WaitAsync();
+            ownsTransitionGate = true;
         }
-        UpdatePaging(snapshot.Page.TotalCount);
 
-        if (snapshot.Shelves.Count == 0)
-            SetState(empty: true);
-        else
-            SetState(content: true);
+        try
+        {
+            if (snapshot.Mode != _activeMode || transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
+                return;
+            if (modeChanged)
+            {
+                await FadeCatalogContentAsync(fadeOut: true);
+                fadedOut = true;
+            }
+            if (snapshot.Mode != _activeMode || transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
+                return;
+
+            Interlocked.Increment(ref _pageQueryGeneration);
+            _activeMode = snapshot.Mode;
+            _groups = snapshot.Groups;
+            _selectedGroupId = snapshot.SelectedGroupId;
+            _offset = snapshot.Offset;
+            SaveModeState(snapshot.Mode);
+
+            UpdateModeChrome();
+            UpdateEmptyCopy();
+            var snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
+            if (snapshotChanged || _renderedOpenShelfId != _openShelfId)
+            {
+                if (snapshotChanged) RenderSpotlight(snapshot.Shelves);
+                RenderShelfSurface(snapshot);
+                _renderedSnapshot = snapshot;
+                _renderedOpenShelfId = _openShelfId;
+            }
+            UpdatePaging(snapshot.Page.TotalCount);
+
+            if (snapshot.Shelves.Count == 0)
+                SetState(empty: true);
+            else
+                SetState(content: true);
+            ContentState.IsHitTestVisible = true;
+            if (_isActive) _spotlightTimer.Start();
+        }
+        finally
+        {
+            if (fadedOut) await FadeCatalogContentAsync(fadeOut: false);
+            if (ownsTransitionGate) _modeTransitionGate.Release();
+        }
+    }
+
+    private async Task FadeCatalogContentAsync(bool fadeOut)
+    {
+        var visual = ElementCompositionPreview.GetElementVisual(ContentState);
+        visual.StopAnimation(nameof(Visual.Opacity));
+        var start = fadeOut ? 1f : 0f;
+        var end = fadeOut ? 0f : 1f;
+        visual.Opacity = start;
+        var animation = visual.Compositor.CreateScalarKeyFrameAnimation();
+        animation.InsertKeyFrame(1f, end);
+        animation.Duration = TimeSpan.FromMilliseconds(110);
+        visual.StartAnimation(nameof(Visual.Opacity), animation);
+        await Task.Delay(110);
+        visual.StopAnimation(nameof(Visual.Opacity));
+        visual.Opacity = end;
     }
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
@@ -693,13 +759,14 @@ public sealed partial class CatalogLandingPage : UserControl
         load.Cancellation.Cancel();
         image.Opacity = 1;
         if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Collapsed;
+        LaunchDiagnostics.Write($"Artwork rendered: item={ArtworkItemKey(image)}");
     }
 
     private void ArtworkImage_Failed(object sender, ExceptionRoutedEventArgs args)
     {
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
             !ReferenceEquals(image.Source, load.Bitmap)) return;
-        LogFirstArtworkFailure("ImageFailed", args.ErrorMessage ?? "No image error details were supplied.");
+        LogArtworkFailure(ArtworkItemKey(image), "ImageFailed", args.ErrorMessage ?? "No image error details were supplied.");
         ReleaseArtworkSlot(image, load);
         load.Cancellation.Cancel();
         image.Opacity = 0;
@@ -759,8 +826,19 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         StopArtwork(image);
         if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Visible;
+        var card = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
+        var itemKey = card?.Id ?? (ReferenceEquals(image, SpotlightArtwork) ? "spotlight:unresolved" : "card:unresolved");
+        var safeUrl = Uri.TryCreate(url, UriKind.Absolute, out var diagnosticUri)
+            ? SanitizeArtworkUri(diagnosticUri)
+            : "<missing-or-invalid>";
+        if (_artworkDiagnosticsLogged.Add($"{itemKey}|{safeUrl}"))
+            LaunchDiagnostics.Write($"Artwork source: item={itemKey}; model=Channel.LogoUri; projection=CatalogCard.ArtworkUrl; target=Image.Source (code-behind, no XAML Source binding); url={safeUrl}");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-            uri.Scheme is not ("http" or "https")) return;
+            uri.Scheme is not ("http" or "https"))
+        {
+            LogArtworkFailure(itemKey, "InvalidArtworkUri", "The item has no absolute HTTP or HTTPS artwork URL.");
+            return;
+        }
         var load = new ArtworkLoad();
         _artworkLoads[image] = load;
         try
@@ -771,11 +849,12 @@ public sealed partial class CatalogLandingPage : UserControl
                 !ReferenceEquals(current, load)) return;
 
             var spotlight = ReferenceEquals(image, SpotlightArtwork);
-            var card = image.DataContext as CatalogCard;
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Tvivo/1.0");
             request.Headers.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
             using var response = await ArtworkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, load.Cancellation.Token);
+            var responseStatus = $"{(int)response.StatusCode} {response.StatusCode}";
+            var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
             response.EnsureSuccessStatusCode();
             var bytes = await response.Content.ReadAsByteArrayAsync(load.Cancellation.Token);
             if (bytes.Length == 0 || bytes.Length > 20 * 1024 * 1024)
@@ -801,6 +880,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 !ReferenceEquals(currentLoad, load)) return;
             load.Bitmap = bitmap;
             image.Source = bitmap;
+            LaunchDiagnostics.Write($"Artwork downloaded and decoded: item={itemKey}; status={responseStatus}; type={contentType}; bytes={bytes.Length}; source=BitmapImage");
             _ = ExpireArtworkAsync(image, load);
         }
         catch (OperationCanceledException) { }
@@ -809,8 +889,8 @@ public sealed partial class CatalogLandingPage : UserControl
             var status = exception is HttpRequestException requestException
                 ? requestException.StatusCode?.ToString() ?? "none"
                 : "not-http";
-            LogFirstArtworkFailure(exception.GetType().Name,
-                $"HTTP status={status}; HRESULT=0x{exception.HResult:X8}");
+            LogArtworkFailure(itemKey, exception.GetType().Name,
+                $"url={SanitizeArtworkUri(uri)}; HTTP status={status}; HRESULT=0x{exception.HResult:X8}; message={exception.Message}");
             ReleaseArtworkSlot(image, load);
             load.Cancellation.Cancel();
             if (_artworkLoads.TryGetValue(image, out var activeLoad) && ReferenceEquals(activeLoad, load))
@@ -825,11 +905,25 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private static void LogFirstArtworkFailure(string category, string details)
+    private string ArtworkItemKey(Image image) =>
+        (ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard)?.Id ?? "unresolved";
+
+    private string SanitizeArtworkUri(Uri uri)
     {
-        if (Interlocked.CompareExchange(ref _firstArtworkFailureLogged, 1, 0) != 0) return;
+        var safeUri = new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty, Query = string.Empty, Fragment = string.Empty }.Uri.ToString();
+        if (_connection is { } connection)
+        {
+            foreach (var secret in new[] { connection.Username, connection.Password }.Where(value => !string.IsNullOrEmpty(value)))
+                safeUri = safeUri.Replace(Uri.EscapeDataString(secret), "***", StringComparison.OrdinalIgnoreCase);
+        }
+        return safeUri;
+    }
+
+    private void LogArtworkFailure(string itemKey, string category, string details)
+    {
+        if (!_artworkFailuresLogged.Add($"{itemKey}|{category}")) return;
         var safeDetails = System.Text.RegularExpressions.Regex.Replace(details, @"https?://\S+", "[image URL]");
-        LaunchDiagnostics.Write($"Artwork load first failure: {category}; {safeDetails}");
+        LaunchDiagnostics.Write($"Artwork load failed: item={itemKey}; {category}; {safeDetails}");
     }
 
     private async Task ExpireArtworkAsync(Image image, ArtworkLoad load)
@@ -1179,7 +1273,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 cached = new CachedCatalogSnapshot(read);
             }
             if (!IsCurrentPageRequest(requestGeneration, account)) return;
-            ApplySnapshot(cached.Snapshot);
+            await ApplySnapshotAsync(cached.Snapshot);
         }
         catch (Exception exception)
         {

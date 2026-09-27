@@ -34,15 +34,17 @@ public sealed class PlaybackService
 
     public async Task<PlaybackAttemptResult> PlayAsync(StreamSource source, CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Playback engines own apartment-bound WinUI/WinRT objects. Keep the
+        // caller's dispatcher context across the service gate and engine call.
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
         try
         {
             if (_currentSession is { } previous)
-                await _engine.StopAsync(previous, CancellationToken.None).ConfigureAwait(false);
+                await _engine.StopAsync(previous, CancellationToken.None).ConfigureAwait(true);
 
             var session = new PlaybackSessionToken(++_generation, Guid.NewGuid());
             _currentSession = session;
-            var result = await _engine.StartAsync(source, session, cancellationToken).ConfigureAwait(false);
+            var result = await _engine.StartAsync(source, session, cancellationToken).ConfigureAwait(true);
             if (_currentSession == session && result != PlaybackAttemptResult.FirstFrame)
                 _currentSession = null;
             return result;
@@ -55,12 +57,12 @@ public sealed class PlaybackService
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
         try
         {
             var session = _currentSession ?? new PlaybackSessionToken(++_generation, Guid.NewGuid());
             _currentSession = null;
-            await _engine.StopAsync(session, cancellationToken).ConfigureAwait(false);
+            await _engine.StopAsync(session, cancellationToken).ConfigureAwait(true);
         }
         finally
         {

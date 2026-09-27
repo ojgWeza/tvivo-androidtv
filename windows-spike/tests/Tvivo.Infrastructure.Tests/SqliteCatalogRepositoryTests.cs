@@ -96,6 +96,27 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Artwork_uri_survives_catalog_snapshot_write_and_browse_projection()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        var artworkUri = new Uri("https://cdn.example.test/posters/movie-42.jpg");
+        var movie = new Channel(account.AccountId, "movie-42", "movies", "A Movie", "A Movie", artworkUri,
+            null, null, new("movie-42", StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "movies", "Movies") }, new[] { movie });
+
+            var page = Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items);
+            Assert.Equal(artworkUri, page.LogoUri);
+
+            var shelfPage = Assert.Single(repo.GetChannelsGroupedByCategory(account, null, CatalogItemType.Movie)["movies"].Items);
+            Assert.Equal(artworkUri, shelfPage.LogoUri);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Catalog_metadata_round_trips_and_survives_snapshot_refresh()
     {
         using var repo = Create(out var dir); var account = Account();
