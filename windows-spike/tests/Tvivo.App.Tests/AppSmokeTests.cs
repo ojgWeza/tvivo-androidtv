@@ -56,6 +56,17 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public void Catalog_snapshot_transition_reveals_first_content_and_fades_mode_changes()
+    {
+        Assert.True(CatalogTransitionPolicy.ShouldAnimateIncomingContent(
+            hasRenderedSnapshot: false, modeChanged: false));
+        Assert.True(CatalogTransitionPolicy.ShouldAnimateIncomingContent(
+            hasRenderedSnapshot: true, modeChanged: true));
+        Assert.False(CatalogTransitionPolicy.ShouldAnimateIncomingContent(
+            hasRenderedSnapshot: true, modeChanged: false));
+    }
+
+    [Fact]
     public void Series_episode_favorite_routes_to_the_parent_and_has_no_per_episode_star()
     {
         var episode = new Channel("account", "episode-1", "series-1", "Episode", "Episode", null, null, null,

@@ -653,6 +653,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var transitionGeneration = Volatile.Read(ref _modeTransitionGeneration);
         var fadedOut = false;
+        var animateIncomingContent = false;
+        var contentApplied = false;
         await _modeTransitionGate.WaitAsync();
 
         try
@@ -660,12 +662,24 @@ public sealed partial class CatalogLandingPage : UserControl
             if (isCurrent is not null && !isCurrent()) return;
             if (snapshot.Mode != _activeMode || transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
-            var previousMode = _renderedSnapshot?.Mode;
+            var previousSnapshot = _renderedSnapshot;
+            var previousMode = previousSnapshot?.Mode;
             var modeChanged = previousMode is not null && previousMode != snapshot.Mode;
+            animateIncomingContent = CatalogTransitionPolicy.ShouldAnimateIncomingContent(
+                previousSnapshot is not null, modeChanged);
             if (modeChanged)
             {
                 await FadeCatalogContentAsync(fadeOut: true, transitionGeneration: transitionGeneration);
                 fadedOut = true;
+            }
+            else if (animateIncomingContent)
+            {
+                // The first snapshot has no outgoing surface to fade. Hide the
+                // content before binding it so its first realized shelf/grid
+                // layout is revealed by the same fade used after later swaps.
+                var visual = ElementCompositionPreview.GetElementVisual(ContentState);
+                visual.StopAnimation(nameof(Visual.Opacity));
+                visual.Opacity = 0;
             }
             if ((isCurrent is not null && !isCurrent()) || snapshot.Mode != _activeMode ||
                 transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
@@ -694,16 +708,17 @@ public sealed partial class CatalogLandingPage : UserControl
                 SetState(empty: true);
             else
                 SetState(content: true);
-            // ItemsWrapGrid realizes and measures its columns on first attachment.
-            // Complete that pass while the outgoing mode is still faded out so
-            // the first Movies/Series transition cannot resize as it appears.
+            // Finish the layout pass before revealing newly attached content.
+            // On first use the surface was hidden before binding; on later mode
+            // changes the outgoing surface has already faded away.
             ContentState.UpdateLayout();
             ContentState.IsHitTestVisible = true;
+            contentApplied = true;
             if (_isActive) _spotlightTimer.Start();
         }
         finally
         {
-            if (fadedOut && snapshot.Mode == _activeMode &&
+            if ((fadedOut || (animateIncomingContent && contentApplied)) && snapshot.Mode == _activeMode &&
                 transitionGeneration == Volatile.Read(ref _modeTransitionGeneration))
                 await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: transitionGeneration);
             _modeTransitionGate.Release();
