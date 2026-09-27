@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Button x:Name="NavigationButton"
             Style="{StaticResource ShellNavigationButtonStyle}"
+            ToolTipService.ToolTip="{x:Null}"
             Click="NavigationButton_Click">
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>

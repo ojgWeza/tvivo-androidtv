@@ -46,6 +46,8 @@ internal sealed class WindowStateController
         if (Mode == mode)
             return;
 
+        LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} apply-begin from={Mode} to={mode}");
+
         if (mode == WindowMode.Fullscreen)
         {
             var placement = NewWindowPlacement();
@@ -80,16 +82,24 @@ internal sealed class WindowStateController
 
             SetStyle(style);
             var placement = savedPlacement;
+            LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPlacement-begin showCmd={placement.ShowCmd}");
             if (!SetWindowPlacement(_hwnd, ref placement))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
+            LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPlacement-complete showCmd={placement.ShowCmd}");
             if (placement.ShowCmd != SwShowMaximized)
                 SetBounds(savedBounds, SwpFrameChanged | SwpNoActivate | SwpNoZOrder);
-            else if (!SetWindowPos(_hwnd, HwndTop, 0, 0, 0, 0,
-                         SwpFrameChanged | SwpNoActivate | SwpNoZOrder | SwpNoSize | SwpNoMove))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+            else
+            {
+                var flags = SwpFrameChanged | SwpNoActivate | SwpNoZOrder | SwpNoSize | SwpNoMove;
+                LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-maximized-frame-begin flags=0x{flags:X}");
+                if (!SetWindowPos(_hwnd, HwndTop, 0, 0, 0, 0, flags))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-maximized-frame-complete");
+            }
         }
 
         Mode = mode;
+        LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} apply-complete mode={Mode}");
     }
 
     internal void Minimize() => ShowWindow(_hwnd, SwMinimize);
@@ -147,9 +157,11 @@ internal sealed class WindowStateController
 
     private void SetBounds(Rect bounds, uint flags)
     {
+        LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-begin rect=({bounds.Left},{bounds.Top},{bounds.Right},{bounds.Bottom}) flags=0x{flags:X}");
         if (!SetWindowPos(_hwnd, HwndTop, bounds.Left, bounds.Top,
                 bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, flags))
             throw new Win32Exception(Marshal.GetLastWin32Error());
+        LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-complete");
     }
 
     private static WindowPlacement NewWindowPlacement() => new() { Length = (uint)Marshal.SizeOf<WindowPlacement>() };

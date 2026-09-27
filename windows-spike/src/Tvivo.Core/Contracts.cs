@@ -79,6 +79,21 @@ public sealed record SeriesSeason(string Id, string Name, int Number, IReadOnlyL
 public sealed record CatalogMetadata(string? Year = null, string? Rating = null, string? Genre = null,
     string? Plot = null, string? Cast = null);
 
+public static class RatingDisplayFormatter
+{
+    public static string? Format(string? rating)
+    {
+        if (string.IsNullOrWhiteSpace(rating)) return null;
+        if (!double.TryParse(rating, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var value) ||
+            !double.IsFinite(value))
+            return rating.Trim();
+
+        var rounded = Math.Round(value * 2, MidpointRounding.AwayFromZero) / 2;
+        return rounded.ToString(rounded % 1 == 0 ? "0" : "0.0", System.Globalization.CultureInfo.InvariantCulture);
+    }
+}
+
 public sealed record MovieDetails(string Id, CatalogMetadata Metadata);
 
 public sealed record SeriesDetails(string Id, string Title, IReadOnlyList<SeriesSeason> Seasons,

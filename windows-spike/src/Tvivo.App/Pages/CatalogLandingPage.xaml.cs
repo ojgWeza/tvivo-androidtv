@@ -85,6 +85,29 @@ public sealed partial class CatalogLandingPage : UserControl
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
     public event EventHandler? InteractionReadinessChanged;
 
+    public Task<string?> GetCategoryNameForAsync(Channel channel)
+    {
+        if (_account is not { } account || string.IsNullOrWhiteSpace(channel.GroupId))
+            return Task.FromResult<string?>(null);
+
+        var type = TypeForSource(channel.Source.Kind);
+        var groupId = channel.GroupId;
+        return Task.Run(() => _repository.GetGroups(account, type)
+            .FirstOrDefault(group => group.Id == groupId)?.DisplayName);
+    }
+
+    public Task<IReadOnlyList<Channel>> GetFullCategoryChannelsForAsync(Channel channel)
+    {
+        if (_account is not { } account || string.IsNullOrWhiteSpace(channel.GroupId))
+            return Task.FromResult<IReadOnlyList<Channel>>(Array.Empty<Channel>());
+
+        var type = TypeForSource(channel.Source.Kind);
+        var groupId = channel.GroupId;
+        var connection = _connection;
+        return Task.Run<IReadOnlyList<Channel>>(() =>
+            _repository.GetAllChannels(account, connection, type, groupId, PageSize));
+    }
+
     public CatalogLandingPage()
     {
         InitializeComponent();
@@ -744,12 +767,9 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
-        var candidates = shelves.SelectMany(shelf => shelf.Cards)
-            .Where(card => card.Channel is not null)
-            .GroupBy(card => card.Id, StringComparer.Ordinal)
-            .Select(group => group.First())
-            .OrderBy(card => card.Id, StringComparer.Ordinal)
-            .ToArray();
+        var candidates = GetSpotlightCandidates(shelves);
+        SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         var card = candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id);
         if (card is null && candidates.Length > 0)
         {
@@ -764,6 +784,9 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         _spotlightCard = card;
         SpotlightPanel.Visibility = card is null ? Visibility.Collapsed : Visibility.Visible;
+        RenderSpotlightIndicators(candidates, card is null
+            ? -1
+            : Array.FindIndex(candidates, candidate => candidate.Id == card.Id));
         if (card is null) return;
 
         StopArtwork(SpotlightArtwork);
@@ -783,21 +806,74 @@ public sealed partial class CatalogLandingPage : UserControl
         StartArtwork(SpotlightArtwork, card.ArtworkUrl);
     }
 
+    private static CatalogCard[] GetSpotlightCandidates(IReadOnlyList<CatalogShelf> shelves) => shelves.SelectMany(shelf => shelf.Cards)
+        .Where(card => card.Channel is not null)
+        .GroupBy(card => card.Id, StringComparer.Ordinal)
+        .Select(group => group.First())
+        .OrderBy(card => card.Id, StringComparer.Ordinal)
+        .ToArray();
+
     private void SpotlightTimer_Tick(object? sender, object args)
     {
         if (_openShelfId is not null || _renderedSnapshot is not { } snapshot ||
             ContentState.Visibility != Visibility.Visible) return;
-        var candidates = snapshot.Shelves.SelectMany(shelf => shelf.Cards)
-            .Where(card => card.Channel is not null)
-            .GroupBy(card => card.Id, StringComparer.Ordinal)
-            .Select(group => group.First())
-            .OrderBy(card => card.Id, StringComparer.Ordinal)
-            .ToArray();
+        AdvanceSpotlight(1, snapshot);
+    }
+
+    private void SpotlightPrevious_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(-1);
+
+    private void SpotlightNext_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(1);
+
+    private void AdvanceSpotlight(int delta, CatalogSnapshot? snapshot = null)
+    {
+        snapshot ??= _renderedSnapshot;
+        if (snapshot is null) return;
+        var candidates = GetSpotlightCandidates(snapshot.Shelves);
         if (candidates.Length < 2) return;
         var index = Array.FindIndex(candidates, card => card.Id == _spotlightCard?.Id);
-        _spotlightByMode[_activeMode] = candidates[(index + 1 + candidates.Length) % candidates.Length];
+        if (index < 0) index = delta > 0 ? -1 : 0;
+        var nextIndex = ((index + delta) % candidates.Length + candidates.Length) % candidates.Length;
+        _spotlightByMode[_activeMode] = candidates[nextIndex];
         RenderSpotlight(snapshot.Shelves);
-        StartArtwork(SpotlightArtwork, _spotlightCard?.ArtworkUrl);
+    }
+
+    private void RenderSpotlightIndicators(IReadOnlyList<CatalogCard> candidates, int selectedIndex)
+    {
+        SpotlightIndicatorRow.Children.Clear();
+        if (selectedIndex < 0 || candidates.Count == 0) return;
+        var (firstIndex, visibleCount) = SpotlightIndicatorPolicy.GetVisibleWindow(candidates.Count, selectedIndex);
+        var lastIndex = firstIndex + visibleCount;
+        for (var index = firstIndex; index < lastIndex; index++)
+        {
+            var button = new Button
+            {
+                Content = index == selectedIndex ? "●" : "○",
+                Tag = index,
+                Width = 20,
+                Height = 30,
+                MinWidth = 20,
+                MinHeight = 30,
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                Foreground = (Brush)Application.Current.Resources[
+                    index == selectedIndex ? "AppAccentBrush" : "AppMutedTextBrush"],
+                FontSize = 10,
+            };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,
+                $"Spotlight item {index + 1} of {candidates.Count}");
+            ToolTipService.SetToolTip(button, null);
+            button.Click += SpotlightIndicator_Click;
+            SpotlightIndicatorRow.Children.Add(button);
+        }
+    }
+
+    private void SpotlightIndicator_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: int index } || _renderedSnapshot is not { } snapshot) return;
+        var candidates = GetSpotlightCandidates(snapshot.Shelves);
+        if (index < 0 || index >= candidates.Length) return;
+        _spotlightByMode[_activeMode] = candidates[index];
+        RenderSpotlight(snapshot.Shelves);
     }
 
     private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
@@ -1783,7 +1859,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public string DetailsLine => Channel is null ? string.Empty : string.Join(" · ", new[]
         {
             Channel.Metadata.GetValueOrDefault("year"),
-            Channel.Metadata.TryGetValue("rating", out var rating) ? $"★ {rating}" : null,
+            Channel.Metadata.TryGetValue("rating", out var rating) && RatingDisplayFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
             Channel.Metadata.GetValueOrDefault("genre"),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
 

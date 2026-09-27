@@ -314,6 +314,25 @@ public sealed class SqliteCatalogRepository : IDisposable
         return new(rows, total);
     }
 
+    public IReadOnlyList<Channel> GetAllChannels(
+        ProviderAccount account,
+        ProviderConnection? providerConnection,
+        CatalogItemType type,
+        string groupId,
+        int pageSize = 100)
+    {
+        var batchSize = Math.Max(1, pageSize);
+        var firstPage = GetChannels(account, providerConnection, type, groupId, offset: 0, limit: batchSize);
+        if (firstPage.TotalCount <= firstPage.Items.Count)
+            return firstPage.Items;
+
+        var channels = new List<Channel>(firstPage.TotalCount);
+        channels.AddRange(firstPage.Items);
+        for (var offset = firstPage.Items.Count; offset < firstPage.TotalCount; offset += batchSize)
+            channels.AddRange(GetChannels(account, providerConnection, type, groupId, offset: offset, limit: batchSize).Items);
+        return channels;
+    }
+
     public IReadOnlyDictionary<string, CatalogPage> GetChannelsGroupedByCategory(
         ProviderAccount account,
         ProviderConnection? connection,

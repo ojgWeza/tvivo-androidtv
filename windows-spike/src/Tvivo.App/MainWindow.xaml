@@ -24,13 +24,16 @@
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <Button x:Name="WindowStateButton" Content="□" Click="WindowStateButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
-                        AutomationProperties.Name="Switch to windowed mode" />
+                        AutomationProperties.Name="Switch to windowed mode"
+                        ToolTipService.ToolTip="{x:Null}" />
                 <Button x:Name="MinimizeWindowButton" Content="—" Click="MinimizeWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
-                        AutomationProperties.Name="Minimize window" />
+                        AutomationProperties.Name="Minimize window"
+                        ToolTipService.ToolTip="{x:Null}" />
                 <Button x:Name="CloseWindowButton" Content="×" Click="CloseWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
-                        AutomationProperties.Name="Close Tvivo" />
+                        AutomationProperties.Name="Close Tvivo"
+                        ToolTipService.ToolTip="{x:Null}" />
             </StackPanel>
         </Grid>
 
@@ -51,25 +54,30 @@
                         FontWeight="Bold"
                         CharacterSpacing="80"
                         Foreground="{StaticResource AppTextBrush}"
-                        Click="MyTvivoNavigation_Click" />
+                        Click="MyTvivoNavigation_Click"
+                        ToolTipService.ToolTip="{x:Null}" />
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="26">
                     <Button x:Name="MyTvivoNavigation"
                             Content="My Tvivo"
                             Style="{StaticResource AppTopNavButtonStyle}"
-                            Click="MyTvivoNavigation_Click" />
+                            Click="MyTvivoNavigation_Click"
+                            ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="MoviesNavigation"
                             Content="Movies"
                             Style="{StaticResource AppTopNavButtonStyle}"
-                            Click="MoviesNavigation_Click" />
+                            Click="MoviesNavigation_Click"
+                            ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="SeriesNavigation"
                             Content="Series"
                             Style="{StaticResource AppTopNavButtonStyle}"
-                            Click="SeriesNavigation_Click" />
+                            Click="SeriesNavigation_Click"
+                            ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="LiveTvNavigation"
                             Content="Live TV"
                             Style="{StaticResource AppTopNavButtonStyle}"
-                            Click="LiveTvNavigation_Click" />
+                            Click="LiveTvNavigation_Click"
+                            ToolTipService.ToolTip="{x:Null}" />
                 </StackPanel>
 
                 <Border Grid.Column="2"
@@ -97,13 +105,15 @@
                                  Background="Transparent"
                                  BorderThickness="0"
                                  Foreground="{StaticResource AppTextBrush}"
-                                 TextChanged="TopSearchBox_TextChanged" />
+                                 TextChanged="TopSearchBox_TextChanged"
+                                 ToolTipService.ToolTip="{x:Null}" />
                         <Button x:Name="TopClearSearchButton"
                                 Grid.Column="2"
                                 Content="×"
                                 Padding="4,0"
                                 Visibility="Collapsed"
-                                Click="TopClearSearchButton_Click" />
+                                Click="TopClearSearchButton_Click"
+                                ToolTipService.ToolTip="{x:Null}" />
                     </Grid>
                 </Border>
 
@@ -111,13 +121,15 @@
                         Grid.Column="3"
                         Content="Account"
                         Style="{StaticResource AppTopNavButtonStyle}"
-                        Click="AccountNavigation_Click" />
+                        Click="AccountNavigation_Click"
+                        ToolTipService.ToolTip="{x:Null}" />
                 <ComboBox x:Name="PlaybackEngineSelector"
                           Grid.Column="4"
                           MinWidth="150"
                           VerticalAlignment="Center"
                           SelectionChanged="PlaybackEngineSelector_SelectionChanged"
-                          AutomationProperties.Name="Playback engine">
+                          AutomationProperties.Name="Playback engine"
+                          ToolTipService.ToolTip="{x:Null}">
                     <ComboBoxItem Content="Native player" Tag="Native" />
                     <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
                 </ComboBox>

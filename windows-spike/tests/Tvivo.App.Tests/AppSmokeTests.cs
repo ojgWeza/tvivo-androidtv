@@ -67,6 +67,17 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public void Spotlight_indicator_window_stays_small_and_keeps_the_selected_item_visible()
+    {
+        var (start, count) = SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 40, selectedIndex: 23);
+
+        Assert.Equal(7, count);
+        Assert.InRange(23, start, start + count - 1);
+        Assert.Equal((0, 0), SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 0, selectedIndex: 0));
+        Assert.Equal((33, 7), SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 40, selectedIndex: 39));
+    }
+
+    [Fact]
     public void Series_episode_favorite_routes_to_the_parent_and_has_no_per_episode_star()
     {
         var episode = new Channel("account", "episode-1", "series-1", "Episode", "Episode", null, null, null,

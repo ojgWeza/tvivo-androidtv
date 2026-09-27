@@ -10,6 +10,7 @@ using Microsoft.UI;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using LibVLCSharp.Platforms.Windows;
@@ -63,6 +64,10 @@ public sealed partial class MainWindow : Window
     private bool _isUpdatingProgress;
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private bool _backTransitionTraceActive;
+    private int _backTransitionRenderSamples;
+    private long _backTransitionTraceId;
+    private long _backTransitionStartedAt;
 
     [DllImport("user32.dll")]
     private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
@@ -88,6 +93,9 @@ public sealed partial class MainWindow : Window
         if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         TitleBarDragRegion.PointerPressed += TitleBarDragRegion_PointerPressed;
         WindowRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(WindowRoot_KeyDown), true);
+        WindowRoot.SizeChanged += WindowRoot_SizeChanged;
+        VideoView.Unloaded += (_, _) => TraceBackTransition("video-view-unloaded");
+        NativePlayerElement.Unloaded += (_, _) => TraceBackTransition("native-player-unloaded");
         _windowState = new WindowStateController(this);
         ApplyWindowChromeState();
         _catalogLandingPage.InteractionReadinessChanged += CatalogLandingPage_InteractionReadinessChanged;
@@ -150,8 +158,7 @@ public sealed partial class MainWindow : Window
         }
         else if (args.Key == Windows.System.VirtualKey.Escape && _currentPage == ShellPage.Player)
         {
-            if (_isCinemaMode) SetCinemaMode(false);
-            else ReturnFromPlayer();
+            ReturnFromPlayer();
             args.Handled = true;
         }
     }
@@ -196,8 +203,7 @@ public sealed partial class MainWindow : Window
     private void ApplyPlaybackEngineVisuals()
     {
         var native = ReferenceEquals(_engine, _nativeEngine);
-        VideoView.Visibility = native ? Visibility.Collapsed : Visibility.Visible;
-        NativePlayerElement.Visibility = native ? Visibility.Visible : Visibility.Collapsed;
+        SetPlaybackSurfaceVisibility(_currentPage == ShellPage.Player);
         VlcTransportBar.Visibility = Visibility.Visible;
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         if (native)
@@ -206,6 +212,17 @@ public sealed partial class MainWindow : Window
             NativePlayerElement.AreTransportControlsEnabled = false;
         }
         ApplyPlayerLayout();
+        TraceBackTransition($"playback-surface-visibility engine={(native ? "native" : "vlc")} {VideoSurfaceState()}");
+    }
+
+    private void SetPlaybackSurfaceVisibility(bool visible)
+    {
+        var showVlc = visible && ReferenceEquals(_engine, _vlcEngine);
+        VideoView.Visibility = showVlc ? Visibility.Visible : Visibility.Collapsed;
+        NativePlayerElement.Visibility = visible && ReferenceEquals(_engine, _nativeEngine)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        TraceBackTransition($"playback-surface-state requestedVisible={visible} {VideoSurfaceState()}");
     }
 
     private static string? ReadPlaybackEnginePreference()
@@ -243,18 +260,22 @@ public sealed partial class MainWindow : Window
     private void CatalogLandingPage_InteractionReadinessChanged(object? sender, EventArgs args) =>
         SetCatalogSearchEnabled(_currentPage == ShellPage.Catalog && _catalogLandingPage.IsReadyForInteraction);
 
-    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
+    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode, bool returningFromPlayer = false)
     {
         var generation = Interlocked.Increment(ref _catalogRequestGeneration);
+        TraceBackTransition($"show-catalog-start mode={mode} fromPlayer={returningFromPlayer} generation={generation}");
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
+        TraceBackTransition($"show-catalog-after-showpage catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility}");
         _catalogLandingPage.PrepareMode(mode);
         UpdateTopNavigationState();
+
         if (_catalogLandingPage.Account is null)
             await _catalogLandingPage.LoadSavedAsync();
         else
             await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account);
         if (generation == Volatile.Read(ref _catalogRequestGeneration))
             UpdateTopNavigationState();
+        TraceBackTransition($"show-catalog-complete generation={generation}");
     }
 
     private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
@@ -270,8 +291,16 @@ public sealed partial class MainWindow : Window
         if (_currentPage == page)
             return;
 
+        if (_currentPage == ShellPage.Player && page != ShellPage.Player && !_backTransitionTraceActive)
+            BeginBackTransitionTrace($"player-leave-navigation destination={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
+
+        TraceBackTransition($"show-page-enter from={_currentPage} to={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_currentPage == ShellPage.Player && page != ShellPage.Player)
+        {
+            TraceBackTransition("show-page-before-player-stop");
             StopPlaybackForNavigation();
+            TraceBackTransition("show-page-after-player-stop");
+        }
 
         _currentPage = page;
         var isPlayer = page == ShellPage.Player;
@@ -279,15 +308,20 @@ public sealed partial class MainWindow : Window
             _playbackUiTimer.Start();
         var isCatalog = page == ShellPage.Catalog;
         var isStaticPage = page is ShellPage.Home or ShellPage.Setup;
+        TraceBackTransition($"show-page-visibility-begin page={page}");
         PageHost.Visibility = isStaticPage ? Visibility.Visible : Visibility.Collapsed;
         _homePage.Visibility = page == ShellPage.Home ? Visibility.Visible : Visibility.Collapsed;
         _providerSetupPage.Visibility = page == ShellPage.Setup ? Visibility.Visible : Visibility.Collapsed;
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
+        TraceBackTransition($"show-page-player-visibility-set page={page} player={PlayerPage.Visibility}");
+        SetPlaybackSurfaceVisibility(isPlayer);
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
+        TraceBackTransition($"show-page-catalog-visibility-set page={page} catalog={CatalogPageArea.Visibility}");
         if (isStaticPage) FadeIn(PageHost);
         else if (isPlayer) FadeIn(PlayerPage);
         else if (isCatalog) FadeIn(CatalogPageArea);
         _catalogLandingPage.SetActive(isCatalog);
+        TraceBackTransition($"show-page-visibility page={page} host={PageHost.Visibility} catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility} cinema={_isCinemaMode}");
         SetCatalogSearchEnabled(isCatalog && _catalogLandingPage.IsReadyForInteraction);
         if (updateTopNavigation)
             UpdateTopNavigationState();
@@ -298,6 +332,41 @@ public sealed partial class MainWindow : Window
     {
         TopSearchBox.IsEnabled = enabled;
         TopClearSearchButton.IsEnabled = enabled;
+    }
+
+    private void BeginBackTransitionTrace(string message)
+    {
+        _backTransitionTraceId++;
+        _backTransitionStartedAt = Stopwatch.GetTimestamp();
+        _backTransitionRenderSamples = 0;
+        _backTransitionTraceActive = true;
+        CompositionTarget.Rendering -= BackTransition_Rendering;
+        CompositionTarget.Rendering += BackTransition_Rendering;
+        TraceBackTransition(message);
+    }
+
+    private void BackTransition_Rendering(object? sender, object args)
+    {
+        var catalogOpacity = ElementCompositionPreview.GetElementVisual(CatalogPageArea).Opacity;
+        var playerOpacity = ElementCompositionPreview.GetElementVisual(PlayerPage).Opacity;
+        TraceBackTransition($"compositor-frame sample={++_backTransitionRenderSamples} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0} catalog={CatalogPageArea.Visibility}/opacity:{catalogOpacity:0.000} player={PlayerPage.Visibility}/opacity:{playerOpacity:0.000} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility} cinema={_isCinemaMode}");
+        if (_backTransitionRenderSamples < 12) return;
+        CompositionTarget.Rendering -= BackTransition_Rendering;
+        _backTransitionTraceActive = false;
+    }
+
+    private void WindowRoot_SizeChanged(object sender, SizeChangedEventArgs args) =>
+        TraceBackTransition($"xaml-size-changed old={args.PreviousSize.Width:0.0}x{args.PreviousSize.Height:0.0} new={args.NewSize.Width:0.0}x{args.NewSize.Height:0.0}");
+
+    private string VideoSurfaceState() =>
+        $"vlc={VideoView.Visibility}/loaded:{VideoView.IsLoaded}/size:{VideoView.ActualWidth:0.0}x{VideoView.ActualHeight:0.0}/host:WinUI-D3D11-swapchain/nativeHwnd:not-applicable,native={NativePlayerElement.Visibility}";
+
+    private void TraceBackTransition(string message)
+    {
+        if (!_backTransitionTraceActive) return;
+        var elapsed = Stopwatch.GetTimestamp() - _backTransitionStartedAt;
+        var elapsedMilliseconds = elapsed * 1000d / Stopwatch.Frequency;
+        LaunchDiagnostics.Write($"BACK-TRACE id={_backTransitionTraceId} utc={DateTimeOffset.UtcNow:O} elapsedMs={elapsedMilliseconds:0.000} {message}");
     }
 
     private void UpdateTopNavigationState()
@@ -375,8 +444,7 @@ public sealed partial class MainWindow : Window
             _catalogLandingPage.NotifyVisitRecorded();
         }
         _playerSiblings = args.Source.Kind == StreamKind.Movie
-            ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Movie)
-                .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
+            ? new[] { args.Channel }
             : args.Source.Kind == StreamKind.Live
                 ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Live)
                     .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
@@ -384,9 +452,9 @@ public sealed partial class MainWindow : Window
         _currentSource = args.Source;
         _nowPlayingChannel = args.Channel;
         PlayerTitleText.Text = args.Channel.DisplayName;
-        PlayerSideTitle.Text = args.Source.Kind == StreamKind.Movie
-            ? PlayerSideTitleResolver.ForMovie(args.Channel.Metadata.GetValueOrDefault("genre"))
-            : args.Source.Kind == StreamKind.Live ? "Live TV" : "Now playing";
+        PlayerSideTitle.Text = args.Source.Kind is StreamKind.Movie or StreamKind.Live
+            ? "Loading category…"
+            : "Now playing";
         PlayerSideSubtitle.Text = args.Source.Kind switch
         {
             StreamKind.Movie => _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category",
@@ -399,8 +467,45 @@ public sealed partial class MainWindow : Window
         _playbackCompletionShown = false;
         SetPlayerList(_playerSiblings, args.Channel);
         ShowPage(ShellPage.Player);
+        if (args.Source.Kind == StreamKind.Movie)
+            _ = LoadMovieCategorySiblingsAsync(args.Channel, selectionGeneration);
+        else if (args.Source.Kind == StreamKind.Live)
+            _ = LoadPlayerCategoryTitleAsync(args.Channel, selectionGeneration, "Live TV");
         _ = LoadPlayerMetadataAsync(args.Channel, type);
         _ = StartPlaybackAsync(args.Source);
+    }
+
+    private async Task LoadMovieCategorySiblingsAsync(Channel selected, long selectionGeneration)
+    {
+        var fallbackTitle = PlayerSideTitleResolver.ForMovie(selected.Metadata.GetValueOrDefault("genre"));
+        await LoadPlayerCategoryTitleAsync(selected, selectionGeneration, fallbackTitle);
+        if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
+            _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
+            return;
+
+        var channels = await _catalogLandingPage.GetFullCategoryChannelsForAsync(selected);
+        if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
+            _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
+            return;
+
+        _playerSiblings = channels
+            .Where(channel => channel.Source.Kind == StreamKind.Movie)
+            .Append(selected)
+            .DistinctBy(channel => channel.Id)
+            .ToArray();
+        PlayerSideSubtitle.Text = _playerSiblings.Count <= 1
+            ? "No other movies are available."
+            : "Other movies in this category";
+        SetPlayerList(_playerSiblings, selected);
+    }
+
+    private async Task LoadPlayerCategoryTitleAsync(Channel selected, long selectionGeneration, string fallbackTitle)
+    {
+        var categoryName = await _catalogLandingPage.GetCategoryNameForAsync(selected);
+        if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
+            _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
+            return;
+        PlayerSideTitle.Text = !string.IsNullOrWhiteSpace(categoryName) ? categoryName : fallbackTitle;
     }
 
     private async Task OpenSeriesAsync(Channel series, long selectionGeneration)
@@ -634,6 +739,12 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        // Hide the video host before touching playback or starting the catalog fade.
+        // The WinUI LibVLC host is swap-chain-backed, so there is no child HWND whose
+        // visibility or z-order can be controlled independently from this XAML element.
+        SetPlaybackSurfaceVisibility(false);
+        TraceBackTransition($"playback-surface-hidden-before-navigation {VideoSurfaceState()}");
+        TraceBackTransition($"player-stop-begin source={_currentSource?.Kind.ToString() ?? "none"} playing={_engine.IsPlaying} buffering={_engine.IsBuffering} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
         Interlocked.Increment(ref _itemSelectionGeneration);
         Interlocked.Increment(ref _metadataGeneration);
         Interlocked.Increment(ref _playbackSessionGeneration);
@@ -678,11 +789,14 @@ public sealed partial class MainWindow : Window
         SetCinemaMode(false);
 
         _playbackStopTask = StopBothPlaybackEnginesAsync();
+        TraceBackTransition($"player-stop-return asyncStopStarted={!_playbackStopTask.IsCompleted} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
     }
 
     private async Task StopBothPlaybackEnginesAsync()
     {
+        TraceBackTransition($"engine-stop-both-begin vlcPlaying={_vlcEngine.IsPlaying} nativePlaying={_nativeEngine.IsPlaying}");
         await Task.WhenAll(_vlcPlayback.StopAsync(), _nativePlayback.StopAsync());
+        TraceBackTransition($"engine-stop-both-complete vlcPlaying={_vlcEngine.IsPlaying} nativePlaying={_nativeEngine.IsPlaying}");
     }
 
     private Task<T> OnUiAsync<T>(Func<Task<T>> action)
@@ -727,15 +841,17 @@ public sealed partial class MainWindow : Window
         _ => $"Playback failed ({result}). Check the provider connection and stream details, then retry.",
     };
 
-    private static void FadeIn(UIElement element)
+    private void FadeIn(UIElement element)
     {
         var visual = ElementCompositionPreview.GetElementVisual(element);
+        TraceBackTransition($"showpage-fade-start element={(element as FrameworkElement)?.Name ?? element.GetType().Name} priorOpacity={visual.Opacity:0.000}");
         visual.StopAnimation(nameof(Visual.Opacity));
         visual.Opacity = 0;
         var animation = visual.Compositor.CreateScalarKeyFrameAnimation();
         animation.InsertKeyFrame(1f, 1f);
         animation.Duration = TimeSpan.FromMilliseconds(150);
         visual.StartAnimation(nameof(Visual.Opacity), animation);
+        TraceBackTransition($"showpage-fade-animated element={(element as FrameworkElement)?.Name ?? element.GetType().Name} durationMs=150");
     }
 
     private async Task LoadPlayerMetadataAsync(Channel channel, CatalogItemType type)
@@ -809,7 +925,7 @@ public sealed partial class MainWindow : Window
         PlayerMetadataLine.Text = string.Join(" · ", new[]
         {
             metadata.Year,
-            metadata.Rating is null ? null : $"★ {metadata.Rating}",
+            RatingDisplayFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
             metadata.Genre,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
@@ -926,9 +1042,54 @@ public sealed partial class MainWindow : Window
     {
         if (args.ClickedItem is not PlayerListEntry entry || entry.Channel.Source.DirectUri is null) return;
         if (entry.Channel.Source.Kind == StreamKind.Episode)
+        {
+            Interlocked.Increment(ref _itemSelectionGeneration);
+            Interlocked.Increment(ref _metadataGeneration);
             OpenSeriesEpisode(entry.Channel);
+        }
         else
-            CatalogLandingPage_ChannelSelected(this, new ChannelSelectedEventArgs(entry.Channel, _playerSiblings));
+            PlayRelatedChannel(entry.Channel);
+    }
+
+    private void PlayRelatedChannel(Channel channel)
+    {
+        if (channel.Source.DirectUri is null || channel.Source.Kind is not (StreamKind.Movie or StreamKind.Live)) return;
+
+        // ItemClick supplies the clicked data item directly. Keep the category rows
+        // bound in place and update only the playing marker; rebuilding the list here
+        // used to replace it with a one-item movie list and reset its scroll offset.
+        Interlocked.Increment(ref _itemSelectionGeneration);
+        Interlocked.Increment(ref _metadataGeneration);
+        _currentSeriesId = null;
+        _currentSeriesTitle = null;
+        _currentSeriesAccount = null;
+        _currentSeriesMetadata = null;
+        _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+        PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        PlayerSeasonComboBox.ItemsSource = null;
+        SeriesFavoriteButton.Visibility = Visibility.Collapsed;
+
+        if (_catalogLandingPage.Account is { } account)
+        {
+            _catalogRepository.RecordVisit(account,
+                channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live,
+                channel.Id);
+            _catalogLandingPage.NotifyVisitRecorded();
+        }
+
+        _nowPlayingChannel = channel;
+        _currentSource = channel.Source;
+        PlayerTitleText.Text = channel.DisplayName;
+        PlayerNowPlayingText.Text = string.Empty;
+        SetPlayerMetadata(null);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
+        _playbackCompletionShown = false;
+        SetCurrentPlayerEntry(channel);
+        _ = LoadPlayerMetadataAsync(channel,
+            channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live);
+        _ = StartPlaybackAsync(channel.Source);
+        if (channel.Source.Kind == StreamKind.Movie && _playerSiblings.Count <= 1)
+            _ = LoadMovieCategorySiblingsAsync(channel, Volatile.Read(ref _itemSelectionGeneration));
     }
 
     private void PlayerBackButton_Click(object sender, RoutedEventArgs args) => ReturnFromPlayer();
@@ -938,9 +1099,10 @@ public sealed partial class MainWindow : Window
 
     private void ReturnFromPlayer()
     {
+        BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_playerReturnPage == ShellPage.Catalog)
         {
-            _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode);
+            _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode, returningFromPlayer: true);
         }
         else ShowPage(_playerReturnPage);
     }
@@ -985,6 +1147,8 @@ public sealed partial class MainWindow : Window
         if (_isCinemaMode == enabled)
             return;
 
+        TraceBackTransition($"cinema-layout-enter enabled={enabled} windowMode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
+
         if (enabled)
         {
             _preCinemaWindowMode = _windowState.Mode;
@@ -1008,6 +1172,7 @@ public sealed partial class MainWindow : Window
         if (!enabled)
         {
             _windowState.Apply(_preCinemaWindowMode);
+            TraceBackTransition($"cinema-window-restored mode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
             ApplyWindowChromeState();
             var focusTarget = _preCinemaFocus is { Visibility: Visibility.Visible, IsTabStop: true }
                 ? _preCinemaFocus
@@ -1015,6 +1180,7 @@ public sealed partial class MainWindow : Window
             focusTarget.Focus(FocusState.Programmatic);
             _preCinemaFocus = null;
         }
+        TraceBackTransition($"cinema-layout-exit enabled={enabled} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
     }
 
     private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)

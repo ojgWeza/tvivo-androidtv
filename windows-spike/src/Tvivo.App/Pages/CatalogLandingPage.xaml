@@ -293,18 +293,37 @@
                                         <ColumnDefinition Width="300" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Width="300" Height="168" CornerRadius="14"
-                                            Tapped="SpotlightArtwork_Tapped"
-                                            AutomationProperties.Name="Open spotlight item">
-                                        <Grid>
-                                            <ContentControl x:Name="SpotlightArtworkFallback" Content="Tvivo"
-                                                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                                                            ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
-                                            <Image x:Name="SpotlightArtwork" Stretch="UniformToFill" Opacity="0"
-                                                   Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded"
-                                                   ImageOpened="ArtworkImage_Opened" ImageFailed="ArtworkImage_Failed" />
-                                        </Grid>
-                                    </Border>
+                                    <StackPanel Spacing="8">
+                                        <Border Width="300" Height="168" CornerRadius="14"
+                                                Tapped="SpotlightArtwork_Tapped"
+                                                AutomationProperties.Name="Open spotlight item">
+                                            <Grid>
+                                                <ContentControl x:Name="SpotlightArtworkFallback" Content="Tvivo"
+                                                                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                                                ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
+                                                <Image x:Name="SpotlightArtwork" Stretch="UniformToFill" Opacity="0"
+                                                       Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded"
+                                                       ImageOpened="ArtworkImage_Opened" ImageFailed="ArtworkImage_Failed" />
+                                            </Grid>
+                                        </Border>
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center" Spacing="3">
+                                            <Button x:Name="SpotlightPreviousButton" Content="‹"
+                                                    Width="30" Height="30" MinWidth="30" MinHeight="30" Padding="0"
+                                                    Background="Transparent" Foreground="{StaticResource AppMutedTextBrush}"
+                                                    FontSize="20" Click="SpotlightPrevious_Click"
+                                                    AutomationProperties.Name="Previous spotlight item"
+                                                    ToolTipService.ToolTip="{x:Null}" />
+                                            <StackPanel x:Name="SpotlightIndicatorRow" Orientation="Horizontal"
+                                                        VerticalAlignment="Center" Spacing="2" />
+                                            <Button x:Name="SpotlightNextButton" Content="›"
+                                                    Width="30" Height="30" MinWidth="30" MinHeight="30" Padding="0"
+                                                    Background="Transparent" Foreground="{StaticResource AppMutedTextBrush}"
+                                                    FontSize="20" Click="SpotlightNext_Click"
+                                                    AutomationProperties.Name="Next spotlight item"
+                                                    ToolTipService.ToolTip="{x:Null}" />
+                                        </StackPanel>
+                                    </StackPanel>
                                     <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
                                         <TextBlock x:Name="SpotlightEyebrow"
                                                    Style="{StaticResource AppEyebrowTextStyle}"

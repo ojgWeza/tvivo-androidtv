@@ -44,4 +44,13 @@ public sealed class CoreSmokeTests
         Assert.Equal("Science Fiction", PlayerSideTitleResolver.ForMovie(" Science Fiction "));
         Assert.Equal("More like this", PlayerSideTitleResolver.ForMovie(null));
     }
+
+    [Theory]
+    [InlineData("7.234", "7")]
+    [InlineData("6.74", "6.5")]
+    [InlineData("6.76", "7")]
+    [InlineData("6.5", "6.5")]
+    [InlineData("6", "6")]
+    public void Ratings_round_to_the_nearest_half_star(string raw, string expected) =>
+        Assert.Equal(expected, RatingDisplayFormatter.Format(raw));
 }

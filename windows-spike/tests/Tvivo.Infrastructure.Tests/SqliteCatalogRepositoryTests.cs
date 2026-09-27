@@ -37,6 +37,27 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Full_category_query_pages_past_shelf_preview_size()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var items = Enumerable.Range(1, 37)
+                .Select(index => ChannelFor(account, $"movie-{index:00}", "movie-group", $"Movie {index:00}"))
+                .ToArray();
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "movie-group", "Featured Films") }, items);
+
+            var result = repo.GetAllChannels(account, null, CatalogItemType.Movie, "movie-group", pageSize: 5);
+
+            Assert.Equal(37, result.Count);
+            Assert.Contains(result, channel => channel.Id == "movie-37");
+            Assert.All(result, channel => Assert.Equal(StreamKind.Movie, channel.Source.Kind));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Grouped_shelf_query_filters_rows_with_literal_escape_character()
     {
         using var repo = Create(out var dir); var account = Account();
