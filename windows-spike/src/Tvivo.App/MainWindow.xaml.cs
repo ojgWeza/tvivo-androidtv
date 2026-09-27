@@ -364,6 +364,7 @@ public sealed partial class MainWindow : Window
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        SeriesFavoriteButton.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
         if (_currentPage != ShellPage.Player)
             _playerReturnPage = _currentPage ?? ShellPage.Catalog;
@@ -438,6 +439,7 @@ public sealed partial class MainWindow : Window
         _currentSeriesId = series.Id;
         _currentSeriesTitle = string.IsNullOrWhiteSpace(details.Title) ? series.DisplayName : details.Title;
         _currentSeriesAccount = account;
+        UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));
         _currentSeriesMetadata = details.Metadata;
         _playerSeriesSeasons = details.Seasons;
         ApplyMetadataToChannel(series, CatalogItemType.Series, details.Metadata);
@@ -510,22 +512,34 @@ public sealed partial class MainWindow : Window
     private bool IsChannelFavorite(Channel channel)
     {
         if (_catalogLandingPage.Account is not { } account) return false;
-        var (type, id) = FavoriteKey(channel);
+        var (type, id) = FavoriteTargetResolver.Resolve(channel);
         return _catalogRepository.IsFavorite(account, type, id);
     }
-
-    private static (CatalogItemType Type, string Id) FavoriteKey(Channel channel) =>
-        channel.Source.Kind == StreamKind.Episode && channel.Metadata.TryGetValue("seriesId", out var seriesId)
-            ? (CatalogItemType.Series, seriesId)
-            : (channel.Source.Kind == StreamKind.Live ? CatalogItemType.Live :
-                channel.Source.Kind == StreamKind.Series ? CatalogItemType.Series : CatalogItemType.Movie, channel.Id);
 
     private void PlayerFavorite_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { Tag: PlayerListEntry entry } || _catalogLandingPage.Account is not { } account) return;
-        var (type, id) = FavoriteKey(entry.Channel);
+        var (type, id) = FavoriteTargetResolver.Resolve(entry.Channel);
         entry.IsFavorite = _catalogRepository.ToggleFavorite(account, type, id);
+        if (entry.Channel.Source.Kind == StreamKind.Episode)
+            UpdateSeriesFavoriteButton(entry.IsFavorite);
         _catalogLandingPage.NotifyFavoriteChanged();
+    }
+
+    private void SeriesFavorite_Click(object sender, RoutedEventArgs args)
+    {
+        if (_currentSeriesId is null || _currentSeriesAccount is null) return;
+        var isFavorite = _catalogRepository.ToggleFavorite(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId);
+        UpdateSeriesFavoriteButton(isFavorite);
+        _catalogLandingPage.NotifyFavoriteChanged();
+    }
+
+    private void UpdateSeriesFavoriteButton(bool isFavorite)
+    {
+        SeriesFavoriteButton.Content = isFavorite ? "★" : "☆";
+        SeriesFavoriteButton.Foreground = (Brush)Application.Current.Resources[
+            isFavorite ? "AppFavoriteBrush" : "AppMutedTextBrush"];
+        SeriesFavoriteButton.Visibility = Visibility.Visible;
     }
 
     private void SetCurrentPlayerEntry(Channel current)
@@ -1138,9 +1152,14 @@ public sealed partial class MainWindow : Window
 
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
+        public Visibility FavoriteVisibility => FavoriteTargetResolver.ShowsPerItemFavorite(Channel)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         public Brush BackgroundBrush => _isCurrent ? AccentBrush : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         public Brush ForegroundBrush => _isCurrent ? SelectedTextBrush : NormalBrush;
-        public Brush FavoriteBrush => _isFavorite ? AccentBrush : MutedBrush;
+        public Brush FavoriteBrush => _isFavorite
+            ? (Brush)Application.Current.Resources["AppFavoriteBrush"]
+            : MutedBrush;
         public string FavoriteGlyph => _isFavorite ? "★" : "☆";
         public bool IsFavorite
         {

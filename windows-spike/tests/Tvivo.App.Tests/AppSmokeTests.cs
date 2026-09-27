@@ -1,5 +1,6 @@
 using Tvivo.Core;
 using Tvivo.App.Pages;
+using Tvivo.App;
 using Xunit;
 
 namespace Tvivo.App.Tests;
@@ -43,5 +44,31 @@ public sealed class AppSmokeTests
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
         }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Type));
+    }
+
+    [Fact]
+    public void Empty_shelves_are_hidden_and_folder_pages_end_on_a_complete_nine_column_row()
+    {
+        Assert.False(ShelfVisibilityPolicy.HasItems(0));
+        Assert.True(ShelfVisibilityPolicy.HasItems(1));
+        Assert.Equal(99, CatalogGridPaging.PageSize);
+        Assert.Equal(0, CatalogGridPaging.PageSize % 9);
+    }
+
+    [Fact]
+    public void Series_episode_favorite_routes_to_the_parent_and_has_no_per_episode_star()
+    {
+        var episode = new Channel("account", "episode-1", "series-1", "Episode", "Episode", null, null, null,
+            new StreamSource("episode-1", StreamKind.Episode),
+            new Dictionary<string, string> { ["seriesId"] = "series-1" });
+        var movie = new Channel("account", "movie-1", null, "Movie", "Movie", null, null, null,
+            new StreamSource("movie-1", StreamKind.Movie), new Dictionary<string, string>());
+        var live = new Channel("account", "live-1", null, "Live", "Live", null, null, null,
+            new StreamSource("live-1", StreamKind.Live), new Dictionary<string, string>());
+
+        Assert.Equal((CatalogItemType.Series, "series-1"), FavoriteTargetResolver.Resolve(episode));
+        Assert.False(FavoriteTargetResolver.ShowsPerItemFavorite(episode));
+        Assert.True(FavoriteTargetResolver.ShowsPerItemFavorite(movie));
+        Assert.True(FavoriteTargetResolver.ShowsPerItemFavorite(live));
     }
 }

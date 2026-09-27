@@ -76,7 +76,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private double _shelfPressX;
     private double _shelfPressOffset;
     private bool _shelfDragStarted;
-    private const int PageSize = 100;
+    private const int PageSize = CatalogGridPaging.PageSize;
     private const int ShelfPreviewSize = 12;
     private const string GenericLoadError = "Couldn't load the catalog. Check your connection and provider details, then retry.";
     public ProviderAccount? Account => _account;
@@ -529,6 +529,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         return MyTvivoShelfDefinitions.All
             .Select(definition => CreateMyTvivoShelf(definition, GetMyTvivoShelfItems(account, definition, filter)))
+            .Where(shelf => ShelfVisibilityPolicy.HasItems(shelf.Cards.Count))
             .ToArray();
     }
 
@@ -693,6 +694,10 @@ public sealed partial class CatalogLandingPage : UserControl
                 SetState(empty: true);
             else
                 SetState(content: true);
+            // ItemsWrapGrid realizes and measures its columns on first attachment.
+            // Complete that pass while the outgoing mode is still faded out so
+            // the first Movies/Series transition cannot resize as it appears.
+            ContentState.UpdateLayout();
             ContentState.IsHitTestVisible = true;
             if (_isActive) _spotlightTimer.Start();
         }

@@ -195,6 +195,43 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Recently_added_is_capped_to_the_newest_fifty_independently_per_type()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            foreach (var type in new[] { CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live })
+            {
+                var channels = Enumerable.Range(0, 51)
+                    .Select(index => ChannelAdded(account, type, $"{type}-{index:00}", DateTimeOffset.UnixEpoch.AddDays(index)))
+                    .ToArray();
+                repo.ReplaceSnapshot(account, type, Array.Empty<ChannelGroup>(), channels);
+            }
+
+            foreach (var type in new[] { CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live })
+            {
+                var recentlyAdded = repo.GetRecentlyAdded(account, type, limit: int.MaxValue);
+                Assert.Equal(50, recentlyAdded.Count);
+                Assert.Equal(Enumerable.Range(1, 50).Reverse().Select(index => $"{type}-{index:00}"),
+                    recentlyAdded.Select(item => item.Id));
+                Assert.Equal($"{type}-50", recentlyAdded[0].Id);
+                Assert.Equal($"{type}-01", recentlyAdded[^1].Id);
+                Assert.All(recentlyAdded, item => Assert.Equal(type switch
+                {
+                    CatalogItemType.Movie => StreamKind.Movie,
+                    CatalogItemType.Series => StreamKind.Series,
+                    _ => StreamKind.Live,
+                }, item.Source.Kind));
+            }
+
+            var acrossTypes = repo.GetRecentlyAdded(account, limit: int.MaxValue);
+            Assert.Equal(150, acrossTypes.Count);
+            Assert.All(acrossTypes.GroupBy(item => item.Source.Kind), group => Assert.Equal(50, group.Count()));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Type_filtered_activity_shelves_keep_order_and_apply_the_title_filter()
     {
         using var repo = Create(out var dir); var account = Account();

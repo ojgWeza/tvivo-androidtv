@@ -257,7 +257,18 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
+                                <Button x:Name="SeriesFavoriteButton" Grid.Column="1" Visibility="Collapsed"
+                                        Content="☆" Padding="6,2" MinWidth="36" Background="Transparent"
+                                        Foreground="{StaticResource AppMutedTextBrush}"
+                                        AutomationProperties.Name="Toggle series favorite"
+                                        Click="SeriesFavorite_Click" />
+                            </Grid>
                             <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Foreground="{StaticResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
                             <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Visibility="Collapsed" />
                             <TextBlock x:Name="PlayerSeasonLabel" Grid.Row="3" Visibility="Collapsed"
@@ -277,6 +288,7 @@
                                                 <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
                                                 <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Padding="6,2" MinWidth="32"
                                                         Foreground="{Binding FavoriteBrush}" Background="Transparent"
+                                                        Visibility="{Binding FavoriteVisibility}"
                                                         AutomationProperties.Name="Toggle favorite"
                                                         Click="PlayerFavorite_Click" />
                                             </Grid>

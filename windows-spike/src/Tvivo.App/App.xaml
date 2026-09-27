@@ -25,6 +25,7 @@
             <Color x:Key="AppTextColor">#E8F1F2</Color>
             <Color x:Key="AppMutedTextColor">#93ACB1</Color>
             <Color x:Key="AppGoodColor">#8BC8A0</Color>
+            <Color x:Key="AppFavoriteColor">#F2C94C</Color>
             <Color x:Key="AppFocusTintColor">#33E7A084</Color>
             <Color x:Key="AppLineColor">#1FE8F1F2</Color>
             <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
@@ -36,6 +37,7 @@
             <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
             <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
             <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
+            <SolidColorBrush x:Key="AppFavoriteBrush" Color="{StaticResource AppFavoriteColor}" />
             <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
             <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
             <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource SystemAccentColor}" />

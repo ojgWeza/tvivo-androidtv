@@ -366,11 +366,16 @@ public sealed class SqliteCatalogRepository : IDisposable
         return pages.ToDictionary(pair => pair.Key, pair => new CatalogPage(pair.Value, counts[pair.Key]), StringComparer.Ordinal);
     }
 
-    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItems(account, type, connection, "added_at > 0", "added_at DESC, id ASC", limit, filter);
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 50, string? filter = null)
+        => GetOrderedItems(account, type, connection, "added_at > 0", "added_at DESC, id ASC", Math.Clamp(limit, 0, 50), filter);
 
-    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItemsAcrossTypes(account, connection, "items.added_at > 0", "items.added_at DESC, items.type, items.id", limit, filter);
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 50, string? filter = null)
+        => Enum.GetValues<CatalogItemType>()
+            .SelectMany(type => GetRecentlyAdded(account, type, connection, limit, filter))
+            .OrderByDescending(item => item.AddedAt)
+            .ThenBy(item => item.Source.Kind.ToString(), StringComparer.Ordinal)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .ToArray();
 
     public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
         => GetOrderedItems(account, type, connection, "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)", "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, id ASC", limit, filter);
