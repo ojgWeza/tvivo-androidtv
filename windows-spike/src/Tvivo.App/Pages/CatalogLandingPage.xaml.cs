@@ -54,8 +54,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<string, Task> _activeRefreshTasks = new(StringComparer.Ordinal);
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
-    private static readonly HttpClient ArtworkClient = new();
+    private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly HttpClient ArtworkClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
+    private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
+    private readonly LinkedList<CachedArtworkBitmap> _artworkBitmapLru = new();
+    private const int ArtworkBitmapCacheCapacity = 48;
     private readonly HashSet<string> _artworkDiagnosticsLogged = new(StringComparer.Ordinal);
     private readonly HashSet<string> _artworkFailuresLogged = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
@@ -140,7 +144,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _modeTransitionGeneration);
         SaveModeState(_activeMode);
         _activeMode = mode;
-        var keepVisibleSnapshot = _renderedSnapshot is not null && ContentState.Visibility == Visibility.Visible;
+        var keepVisibleSnapshot = _renderedSnapshot is not null;
         _showModeLoadingFrame = !keepVisibleSnapshot;
         _spotlightTimer.Stop();
         _openShelfType = null;
@@ -571,8 +575,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private async Task ApplySnapshotAsync(CatalogSnapshot snapshot)
     {
         var previousMode = _renderedSnapshot?.Mode;
-        var modeChanged = previousMode is not null && previousMode != snapshot.Mode &&
-            ContentState.Visibility == Visibility.Visible;
+        var modeChanged = previousMode is not null && previousMode != snapshot.Mode;
         var transitionGeneration = Volatile.Read(ref _modeTransitionGeneration);
         var ownsTransitionGate = false;
         var fadedOut = false;
@@ -754,12 +757,14 @@ public sealed partial class CatalogLandingPage : UserControl
     private void ArtworkImage_Opened(object sender, RoutedEventArgs args)
     {
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
-            !ReferenceEquals(image.Source, load.Bitmap)) return;
-        ReleaseArtworkSlot(image, load);
+            !ReferenceEquals(image.Source, load.Bitmap) || !IsCurrentArtworkTarget(image, load)) return;
+        ReleaseArtworkSlot(image, load, "ImageOpened");
         load.Cancellation.Cancel();
         image.Opacity = 1;
         if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Collapsed;
-        LaunchDiagnostics.Write($"Artwork rendered: item={ArtworkItemKey(image)}");
+        LaunchDiagnostics.Write($"Artwork rendered: item={load.ItemKey}; source=ImageOpened; loaded={image.IsLoaded}; attached={image.XamlRoot is not null}");
+        _artworkLoads.Remove(image);
+        load.Cancellation.Dispose();
     }
 
     private void ArtworkImage_Failed(object sender, ExceptionRoutedEventArgs args)
@@ -767,7 +772,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
             !ReferenceEquals(image.Source, load.Bitmap)) return;
         LogArtworkFailure(ArtworkItemKey(image), "ImageFailed", args.ErrorMessage ?? "No image error details were supplied.");
-        ReleaseArtworkSlot(image, load);
+        ReleaseArtworkSlot(image, load, "ImageFailed");
         load.Cancellation.Cancel();
         image.Opacity = 0;
         if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Visible;
@@ -840,33 +845,59 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
         }
         var load = new ArtworkLoad();
+        load.ItemKey = itemKey;
+        load.Url = url!;
         _artworkLoads[image] = load;
+        var spotlight = ReferenceEquals(image, SpotlightArtwork);
+        var decodeWidth = spotlight ? 600 : 380;
+        var decodeHeight = spotlight ? 336 : card?.Height == 138 ? 276 : 500;
+        var cacheKey = $"{uri.AbsoluteUri}|{decodeWidth}x{decodeHeight}";
+        if (TryGetCachedArtworkBitmap(cacheKey, out var cachedBitmap))
+        {
+            load.Stage = "cache-hit";
+            load.Bitmap = cachedBitmap;
+            _ = ExpireArtworkAsync(image, load);
+            ApplyArtworkToLiveImage(image, load, cachedBitmap, "cache-hit");
+            LaunchDiagnostics.Write($"Artwork cache hit: id={load.Id}; item={itemKey}; cacheEntries={_artworkBitmapCache.Count}");
+            return;
+        }
+        LaunchDiagnostics.Write($"Artwork cache miss: item={itemKey}; url={SanitizeArtworkUri(uri)}; decode={decodeWidth}x{decodeHeight}; cacheEntries={_artworkBitmapCache.Count}");
+
+        var stage = "permit-wait";
         try
         {
+            load.Stage = stage;
+            LaunchDiagnostics.Write($"Artwork request queued: id={load.Id}; item={itemKey}; permitsAvailable={_artworkSlots.CurrentCount}");
             await _artworkSlots.WaitAsync(load.Cancellation.Token);
             load.SlotAcquired = true;
-            if (load.Cancellation.IsCancellationRequested || !_artworkLoads.TryGetValue(image, out var current) ||
-                !ReferenceEquals(current, load)) return;
+            stage = "http";
+            load.Stage = stage;
+            LaunchDiagnostics.Write($"Artwork permit acquired: id={load.Id}; item={itemKey}; permitsAvailable={_artworkSlots.CurrentCount}");
+            if (!IsCurrentArtworkLoad(image, load, "permit-acquired")) return;
 
-            var spotlight = ReferenceEquals(image, SpotlightArtwork);
+            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(load.Cancellation.Token);
+            requestCancellation.CancelAfter(ArtworkRequestTimeout);
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Tvivo/1.0");
             request.Headers.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
-            using var response = await ArtworkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, load.Cancellation.Token);
+            using var response = await ArtworkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCancellation.Token);
+            stage = "response-body";
+            load.Stage = stage;
             var responseStatus = $"{(int)response.StatusCode} {response.StatusCode}";
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
             response.EnsureSuccessStatusCode();
-            var bytes = await response.Content.ReadAsByteArrayAsync(load.Cancellation.Token);
+            var bytes = await response.Content.ReadAsByteArrayAsync(requestCancellation.Token);
             if (bytes.Length == 0 || bytes.Length > 20 * 1024 * 1024)
                 throw new InvalidDataException("Artwork image was empty or exceeded the decode limit.");
-            if (load.Cancellation.IsCancellationRequested || !_artworkLoads.TryGetValue(image, out var currentLoad) ||
-                !ReferenceEquals(currentLoad, load)) return;
+            if (!IsCurrentArtworkLoad(image, load, "response-body")) return;
 
             var bitmap = new BitmapImage
             {
-                DecodePixelWidth = spotlight ? 600 : 380,
-                DecodePixelHeight = spotlight ? 336 : card?.Height == 138 ? 276 : 500,
+                DecodePixelWidth = decodeWidth,
+                DecodePixelHeight = decodeHeight,
             };
+            stage = "decode";
+            load.Stage = stage;
             using var imageStream = new InMemoryRandomAccessStream();
             using (var writer = new DataWriter(imageStream))
             {
@@ -876,14 +907,21 @@ public sealed partial class CatalogLandingPage : UserControl
             }
             imageStream.Seek(0);
             await bitmap.SetSourceAsync(imageStream);
-            if (load.Cancellation.IsCancellationRequested || !_artworkLoads.TryGetValue(image, out currentLoad) ||
-                !ReferenceEquals(currentLoad, load)) return;
+            if (!IsCurrentArtworkLoad(image, load, "decode")) return;
             load.Bitmap = bitmap;
-            image.Source = bitmap;
-            LaunchDiagnostics.Write($"Artwork downloaded and decoded: item={itemKey}; status={responseStatus}; type={contentType}; bytes={bytes.Length}; source=BitmapImage");
+            CacheArtworkBitmap(cacheKey, bitmap);
             _ = ExpireArtworkAsync(image, load);
+            ApplyArtworkToLiveImage(image, load, bitmap, "decoded");
+            LaunchDiagnostics.Write($"Artwork downloaded and decoded: id={load.Id}; item={itemKey}; status={responseStatus}; type={contentType}; bytes={bytes.Length}; source=BitmapImage; cacheEntries={_artworkBitmapCache.Count}");
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException exception)
+        {
+            var canceledByView = load.Cancellation.IsCancellationRequested;
+            var category = canceledByView ? "Canceled" : "HttpTimeout";
+            LaunchDiagnostics.Write($"Artwork request ended: id={load.Id}; item={itemKey}; outcome={category}; stage={stage}; permitAcquired={load.SlotAcquired}; HRESULT=0x{exception.HResult:X8}");
+            if (!canceledByView)
+                LogArtworkFailure(itemKey, category, $"stage={stage}; timeout={ArtworkRequestTimeout.TotalSeconds:0}s; HRESULT=0x{exception.HResult:X8}");
+        }
         catch (Exception exception)
         {
             var status = exception is HttpRequestException requestException
@@ -891,7 +929,6 @@ public sealed partial class CatalogLandingPage : UserControl
                 : "not-http";
             LogArtworkFailure(itemKey, exception.GetType().Name,
                 $"url={SanitizeArtworkUri(uri)}; HTTP status={status}; HRESULT=0x{exception.HResult:X8}; message={exception.Message}");
-            ReleaseArtworkSlot(image, load);
             load.Cancellation.Cancel();
             if (_artworkLoads.TryGetValue(image, out var activeLoad) && ReferenceEquals(activeLoad, load))
             {
@@ -901,8 +938,66 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         finally
         {
-            if (load.Cancellation.IsCancellationRequested) ReleaseArtworkSlot(image, load);
+            ReleaseArtworkSlot(image, load, "request-finished");
         }
+    }
+
+    private bool TryGetCachedArtworkBitmap(string cacheKey, out BitmapImage bitmap)
+    {
+        if (_artworkBitmapCache.TryGetValue(cacheKey, out var node))
+        {
+            _artworkBitmapLru.Remove(node);
+            _artworkBitmapLru.AddFirst(node);
+            bitmap = node.Value.Bitmap;
+            return true;
+        }
+        bitmap = null!;
+        return false;
+    }
+
+    private void CacheArtworkBitmap(string cacheKey, BitmapImage bitmap)
+    {
+        if (_artworkBitmapCache.Remove(cacheKey, out var previous)) _artworkBitmapLru.Remove(previous);
+        var node = _artworkBitmapLru.AddFirst(new CachedArtworkBitmap(cacheKey, bitmap));
+        _artworkBitmapCache[cacheKey] = node;
+        while (_artworkBitmapCache.Count > ArtworkBitmapCacheCapacity)
+        {
+            var leastRecentlyUsed = _artworkBitmapLru.Last!;
+            _artworkBitmapLru.RemoveLast();
+            _artworkBitmapCache.Remove(leastRecentlyUsed.Value.CacheKey);
+        }
+    }
+
+    private bool IsCurrentArtworkTarget(Image image, ArtworkLoad load)
+    {
+        if (!image.IsLoaded || image.XamlRoot is null) return false;
+        var currentCard = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
+        return currentCard is not null && currentCard.Id == load.ItemKey && currentCard.ArtworkUrl == load.Url;
+    }
+
+    private bool IsCurrentArtworkLoad(Image image, ArtworkLoad load, string stage)
+    {
+        if (!load.Cancellation.IsCancellationRequested &&
+            _artworkLoads.TryGetValue(image, out var current) && ReferenceEquals(current, load)) return true;
+
+        var reason = load.Cancellation.IsCancellationRequested ? "canceled" : "replaced-or-unloaded";
+        LaunchDiagnostics.Write($"Artwork result discarded: id={load.Id}; item={load.ItemKey}; stage={stage}; reason={reason}; currentItem={ArtworkItemKey(image)}");
+        return false;
+    }
+
+    private void ApplyArtworkToLiveImage(Image image, ArtworkLoad load, BitmapImage bitmap, string source)
+    {
+        if (!_artworkLoads.TryGetValue(image, out var current) || !ReferenceEquals(current, load) ||
+            !ReferenceEquals(load.Bitmap, bitmap) || !IsCurrentArtworkTarget(image, load))
+        {
+            LaunchDiagnostics.Write($"Artwork assignment deferred: id={load.Id}; item={load.ItemKey}; source={source}; loaded={image.IsLoaded}; attached={image.XamlRoot is not null}; currentItem={ArtworkItemKey(image)}");
+            return;
+        }
+
+        image.Source = bitmap;
+        image.Opacity = 1;
+        if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Collapsed;
+        LaunchDiagnostics.Write($"Artwork applied: id={load.Id}; item={load.ItemKey}; source={source}; loaded={image.IsLoaded}; attached={image.XamlRoot is not null}");
     }
 
     private string ArtworkItemKey(Image image) =>
@@ -933,10 +1028,9 @@ public sealed partial class CatalogLandingPage : UserControl
             await Task.Delay(TimeSpan.FromSeconds(10), load.Cancellation.Token);
             if (_artworkLoads.TryGetValue(image, out var current) && ReferenceEquals(current, load))
             {
-                // The timeout is only a request-slot safeguard. Clearing Source here made
-                // every successfully decoded poster disappear after ten seconds.
+                // Retire stale per-element state without clearing the decoded image.
                 _artworkLoads.Remove(image);
-                ReleaseArtworkSlot(image, load);
+                ReleaseArtworkSlot(image, load, "load-expired");
                 load.Cancellation.Dispose();
             }
         }
@@ -947,8 +1041,9 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_artworkLoads.Remove(image, out var load))
         {
+            LaunchDiagnostics.Write($"Artwork request cancelled: id={load.Id}; item={load.ItemKey}; stage={load.Stage}; permitAcquired={load.SlotAcquired}; source=element-unloaded-or-rebound");
             load.Cancellation.Cancel();
-            ReleaseArtworkSlot(image, load);
+            ReleaseArtworkSlot(image, load, "element-stopped");
         }
         image.Source = null;
         image.Opacity = 0;
@@ -958,16 +1053,17 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_artworkLoads.TryGetValue(image, out var load))
         {
-            ReleaseArtworkSlot(image, load);
+            ReleaseArtworkSlot(image, load, "explicit-slot-release");
             load.Cancellation.Cancel();
         }
     }
 
-    private void ReleaseArtworkSlot(Image image, ArtworkLoad load)
+    private void ReleaseArtworkSlot(Image image, ArtworkLoad load, string reason)
     {
         if (!load.SlotAcquired || load.SlotReleased) return;
         load.SlotReleased = true;
         _artworkSlots.Release();
+        LaunchDiagnostics.Write($"Artwork permit released: id={load.Id}; item={load.ItemKey}; reason={reason}; permitsAvailable={_artworkSlots.CurrentCount}");
     }
 
     private void CancelArtworkLoads()
@@ -1551,11 +1647,16 @@ public sealed partial class CatalogLandingPage : UserControl
     private sealed record CachedCatalogSnapshot(CatalogSnapshot Snapshot);
     private sealed class ArtworkLoad
     {
+        public string Id { get; } = Guid.NewGuid().ToString("N")[..8];
+        public string ItemKey { get; set; } = "unresolved";
+        public string Url { get; set; } = string.Empty;
         public CancellationTokenSource Cancellation { get; } = new();
         public BitmapImage? Bitmap { get; set; }
+        public string Stage { get; set; } = "queued";
         public bool SlotAcquired { get; set; }
         public bool SlotReleased { get; set; }
     }
+    private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap);
     private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset, CategorySort Sort);
 
     private sealed record CatalogShelf(

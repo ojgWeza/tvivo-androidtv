@@ -26,10 +26,13 @@
                         ToolTipService.ToolTip="Mini-player is unavailable"
                         AutomationProperties.Name="Mini-player unavailable" />
                 <Button x:Name="WindowStateButton" Content="□" Click="WindowStateButton_Click"
+                        Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Switch to windowed mode" />
                 <Button x:Name="MinimizeWindowButton" Content="—" Click="MinimizeWindowButton_Click"
+                        Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Minimize window" />
                 <Button x:Name="CloseWindowButton" Content="×" Click="CloseWindowButton_Click"
+                        Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Close Tvivo" />
             </StackPanel>
         </Grid>
@@ -176,12 +179,12 @@
                                     <Flyout Placement="Right">
                                         <Flyout.FlyoutPresenterStyle>
                                             <Style TargetType="FlyoutPresenter">
-                                                <Setter Property="Width" Value="680" />
-                                                <Setter Property="MaxWidth" Value="760" />
-                                                <Setter Property="MaxHeight" Value="620" />
+                                                <Setter Property="Width" Value="380" />
+                                                <Setter Property="MaxWidth" Value="380" />
+                                                <Setter Property="MaxHeight" Value="340" />
                                             </Style>
                                         </Flyout.FlyoutPresenterStyle>
-                                        <Border Width="640" Height="520" MaxWidth="720" MaxHeight="600" Padding="20"
+                                        <Border Width="360" Height="300" MaxWidth="380" MaxHeight="340" Padding="18"
                                                 Background="{StaticResource AppPanelSurfaceBrush}"
                                                 CornerRadius="12">
                                             <ScrollViewer VerticalScrollBarVisibility="Auto"

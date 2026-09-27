@@ -10,6 +10,7 @@ using Microsoft.UI;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
@@ -51,6 +52,7 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
     private bool _isCinemaMode;
+    private bool _cinemaCursorHidden;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
@@ -59,6 +61,10 @@ public sealed partial class MainWindow : Window
     private bool _isDraggingProgress;
     private bool _isUpdatingProgress;
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+
+    [DllImport("user32.dll")]
+    private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 
     public MainWindow()
     {
@@ -90,6 +96,8 @@ public sealed partial class MainWindow : Window
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
         _playbackUiTimer.Start();
+        _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
+        PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
@@ -560,6 +568,8 @@ public sealed partial class MainWindow : Window
         if (generation != Volatile.Read(ref _playbackSessionGeneration) || _currentPage != ShellPage.Player)
             return;
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
+        if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
+            RestartCinemaCursorIdleTimer();
         StatusText.Text = PlaybackStatusMessage(result, source.Kind);
         if (result == PlaybackAttemptResult.FirstFrame)
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
@@ -731,7 +741,8 @@ public sealed partial class MainWindow : Window
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
     {
         var hasAbout = type is CatalogItemType.Movie or CatalogItemType.Series;
-        PlayerAboutButton.Visibility = hasAbout
+        var hasDescription = !string.IsNullOrWhiteSpace(metadata?.Plot) || !string.IsNullOrWhiteSpace(metadata?.Cast);
+        PlayerAboutButton.Visibility = hasAbout && hasDescription
             ? Visibility.Visible
             : Visibility.Collapsed;
         PlayerMetadataLine.Visibility = hasAbout ? Visibility.Visible : Visibility.Collapsed;
@@ -768,6 +779,8 @@ public sealed partial class MainWindow : Window
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
         if (_currentPage != ShellPage.Player) return;
+        if (_isCinemaMode && !(_engine.IsPlaying || _engine.IsBuffering))
+            StopCinemaCursorIdleTimer(showCursor: true);
         if (!_seriesCompletionRecorded && _engine.IsEnded && _currentSeriesId is not null &&
             _currentSeriesAccount is not null && _nowPlayingChannel?.Source.Kind == StreamKind.Episode)
         {
@@ -926,6 +939,8 @@ public sealed partial class MainWindow : Window
         }
 
         _isCinemaMode = enabled;
+        if (enabled && (_engine.IsPlaying || _engine.IsBuffering)) RestartCinemaCursorIdleTimer();
+        else StopCinemaCursorIdleTimer(showCursor: true);
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 72);
@@ -945,6 +960,49 @@ public sealed partial class MainWindow : Window
                 : CinemaButton;
             focusTarget.Focus(FocusState.Programmatic);
             _preCinemaFocus = null;
+        }
+    }
+
+    private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
+        SetCinemaCursorVisible(true);
+        RestartCinemaCursorIdleTimer();
+    }
+
+    private void CinemaCursorIdleTimer_Tick(object? sender, object args)
+    {
+        _cinemaCursorIdleTimer.Stop();
+        if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
+            SetCinemaCursorVisible(false);
+    }
+
+    private void RestartCinemaCursorIdleTimer()
+    {
+        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
+        SetCinemaCursorVisible(true);
+        _cinemaCursorIdleTimer.Stop();
+        _cinemaCursorIdleTimer.Start();
+    }
+
+    private void StopCinemaCursorIdleTimer(bool showCursor)
+    {
+        _cinemaCursorIdleTimer.Stop();
+        if (showCursor) SetCinemaCursorVisible(true);
+    }
+
+    private void SetCinemaCursorVisible(bool visible)
+    {
+        if (_cinemaCursorHidden == !visible) return;
+        if (visible)
+        {
+            while (ShowCursor(true) < 0) { }
+            _cinemaCursorHidden = false;
+        }
+        else
+        {
+            while (ShowCursor(false) >= 0) { }
+            _cinemaCursorHidden = true;
         }
     }
 
@@ -971,6 +1029,9 @@ public sealed partial class MainWindow : Window
     {
         _playbackUiTimer.Stop();
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
+        _cinemaCursorIdleTimer.Stop();
+        _cinemaCursorIdleTimer.Tick -= CinemaCursorIdleTimer_Tick;
+        SetCinemaCursorVisible(true);
         _catalogLandingPage.Shutdown();
         Interlocked.Increment(ref _playbackSessionGeneration);
         var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
