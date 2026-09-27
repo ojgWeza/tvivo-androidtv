@@ -47,7 +47,7 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal("Movie item", Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items).DisplayName);
             Assert.Equal(StreamKind.Movie, Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items).Source.Kind);
             Assert.Equal("Series item", Assert.Single(repo.GetChannels(account, CatalogItemType.Series).Items).DisplayName);
-            Assert.Equal(StreamKind.Episode, Assert.Single(repo.GetChannels(account, CatalogItemType.Series).Items).Source.Kind);
+            Assert.Equal(StreamKind.Series, Assert.Single(repo.GetChannels(account, CatalogItemType.Series).Items).Source.Kind);
             Assert.Equal("Movies", Assert.Single(repo.GetGroups(account, CatalogItemType.Movie)).DisplayName);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
@@ -72,6 +72,59 @@ public sealed class SqliteCatalogRepositoryTests
                 Assert.Equal("Untitled", titles[type + "-only"]);
                 Assert.Equal("Show (2024)", titles[type + "-real"]);
             }
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void My_Tvivo_order_uses_visit_count_then_clean_name_fallback()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "alpha", "", ", # Alpha"),
+                ChannelFor(account, "beta", "", "! Beta"),
+                ChannelFor(account, "zulu", "", "Zulu"),
+            });
+
+            Assert.Equal(new[] { "alpha", "beta", "zulu" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
+            repo.RecordVisit(account, CatalogItemType.Movie, "alpha");
+            repo.RecordVisit(account, CatalogItemType.Movie, "zulu");
+            repo.RecordVisit(account, CatalogItemType.Movie, "zulu");
+            Assert.Equal(new[] { "zulu", "alpha", "beta" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "alpha", "", ", # Alpha"),
+                ChannelFor(account, "beta", "", "! Beta"),
+                ChannelFor(account, "zulu", "", "Zulu"),
+            });
+            Assert.Equal(new[] { "zulu", "alpha", "beta" },
+                repo.GetChannels(account, CatalogItemType.Movie, limit: 3, mostVisited: true).Items.Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Series_playback_keeps_the_last_opened_episode_and_finished_state()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var missing = repo.GetSeriesPlayback(account, "show-1");
+            Assert.Null(missing.EpisodeId);
+            Assert.False(missing.Finished);
+            repo.UpdateSeriesPlayback(account, "show-1", "episode-opaque-42", finished: false);
+            var opened = repo.GetSeriesPlayback(account, "show-1");
+            Assert.Equal("episode-opaque-42", opened.EpisodeId);
+            Assert.False(opened.Finished);
+            repo.UpdateSeriesPlayback(account, "show-1", "episode-opaque-42", finished: true);
+            var finished = repo.GetSeriesPlayback(account, "show-1");
+            Assert.Equal("episode-opaque-42", finished.EpisodeId);
+            Assert.True(finished.Finished);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -106,7 +159,7 @@ public sealed class SqliteCatalogRepositoryTests
                 Assert.False(reader.Read());
             }
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(9, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(12, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }

@@ -8,6 +8,7 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Tvivo.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Tvivo.ico</ApplicationIcon>
     <Platforms>x86;x64;ARM64</Platforms>
     <Configurations>Debug;Release;XamlDiagnostics</Configurations>
     <!-- Select exactly one native asset set for each build; Platform alone is not a .NET RID. -->
@@ -30,6 +31,9 @@
   <PropertyGroup Condition="'$(Configuration)' == 'XamlDiagnostics'">
     <DefineConstants>$(DefineConstants);TVIVO_XAML_DIAGNOSTICS</DefineConstants>
   </PropertyGroup>
+  <ItemGroup>
+    <Content Include="Assets\Tvivo.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Tvivo.Core\Tvivo.Core.csproj" />
     <ProjectReference Include="..\Tvivo.Infrastructure\Tvivo.Infrastructure.csproj" />

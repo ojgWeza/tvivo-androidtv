@@ -69,7 +69,30 @@ public sealed record StreamSource(
     string? AudioHint = null,
     string? VideoHint = null);
 
-public enum StreamKind { Live, Movie, Episode }
+public enum StreamKind { Live, Movie, Series, Episode }
+
+public sealed record SeriesEpisode(string Id, string Title, string SeasonId, string SeasonName, int SeasonNumber,
+    int EpisodeNumber, StreamSource Source);
+
+public sealed record SeriesSeason(string Id, string Name, int Number, IReadOnlyList<SeriesEpisode> Episodes);
+
+public sealed record SeriesDetails(string Id, string Title, IReadOnlyList<SeriesSeason> Seasons);
+
+public static class SeriesEpisodeResolver
+{
+    public static SeriesEpisode? Resolve(SeriesDetails details, string? lastOpenedEpisodeId, bool lastEpisodeFinished)
+    {
+        var episodes = details.Seasons
+            .OrderBy(season => season.Number)
+            .SelectMany(season => season.Episodes.OrderBy(episode => episode.EpisodeNumber))
+            .ToArray();
+        if (episodes.Length == 0) return null;
+        if (string.IsNullOrWhiteSpace(lastOpenedEpisodeId)) return episodes[0];
+        var index = Array.FindIndex(episodes, episode => episode.Id == lastOpenedEpisodeId);
+        if (index < 0) return episodes[0];
+        return lastEpisodeFinished ? episodes[Math.Min(index + 1, episodes.Length - 1)] : episodes[index];
+    }
+}
 
 public enum CatalogItemType { Live, Movie, Series }
 
@@ -78,6 +101,11 @@ public interface ICatalogProvider
     Task<AuthenticationResult> AuthenticateAsync(ProviderConnection connection, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default);
+}
+
+public interface ISeriesCatalogProvider
+{
+    Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default);
 }
 
 public enum PlaybackAttemptResult

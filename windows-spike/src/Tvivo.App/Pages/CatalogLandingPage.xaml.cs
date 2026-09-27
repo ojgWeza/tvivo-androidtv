@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Storage.Streams;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 
@@ -46,6 +47,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<string, Task> _activeRefreshTasks = new(StringComparer.Ordinal);
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
+    private static readonly HttpClient ArtworkClient = new();
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
 #if DEBUG
@@ -93,6 +95,14 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (active) _spotlightTimer.Start();
         else _spotlightTimer.Stop();
+    }
+
+    public void InvalidateCatalogSnapshots()
+    {
+        _snapshotCache.Clear();
+        _snapshotCacheOrder.Clear();
+        _renderedSnapshot = null;
+        _renderedOpenShelfId = null;
     }
 
     public void Shutdown()
@@ -444,7 +454,8 @@ public sealed partial class CatalogLandingPage : UserControl
             (CatalogItemType.Live, "Recent live TV"),
         })
         {
-            var page = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize);
+            var page = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize,
+                mostVisited: true);
             if (page.TotalCount == 0) continue;
             shelves.Add(new CatalogShelf(
                 $"__my_{type}",
@@ -556,7 +567,13 @@ public sealed partial class CatalogLandingPage : UserControl
             CatalogMode.Series => "TVIVO SPOTLIGHT - SERIES",
             _ => "TVIVO SPOTLIGHT - LIVE TV",
         };
-        SpotlightAction.Content = card.Channel is null ? "Open shelf" : "Open channel";
+        SpotlightAction.Content = card.Channel is null ? "Open shelf" : card.Channel.Source.Kind switch
+        {
+            StreamKind.Movie => "Play movie",
+            StreamKind.Series => "Open series",
+            _ => "Open channel",
+        };
+        StartArtwork(SpotlightArtwork, card.ArtworkUrl);
     }
 
     private void SpotlightTimer_Tick(object? sender, object args)
@@ -711,17 +728,48 @@ public sealed partial class CatalogLandingPage : UserControl
 
             var spotlight = ReferenceEquals(image, SpotlightArtwork);
             var card = image.DataContext as CatalogCard;
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Tvivo/1.0");
+            request.Headers.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
+            using var response = await ArtworkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, load.Cancellation.Token);
+            response.EnsureSuccessStatusCode();
+            var bytes = await response.Content.ReadAsByteArrayAsync(load.Cancellation.Token);
+            if (bytes.Length == 0 || bytes.Length > 20 * 1024 * 1024)
+                throw new InvalidDataException("Artwork image was empty or exceeded the decode limit.");
+            if (load.Cancellation.IsCancellationRequested || !_artworkLoads.TryGetValue(image, out var currentLoad) ||
+                !ReferenceEquals(currentLoad, load)) return;
+
             var bitmap = new BitmapImage
             {
                 DecodePixelWidth = spotlight ? 600 : 380,
                 DecodePixelHeight = spotlight ? 336 : card?.Height == 138 ? 276 : 500,
-                UriSource = uri,
             };
+            using var imageStream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(imageStream))
+            {
+                writer.WriteBytes(bytes);
+                await writer.StoreAsync();
+                writer.DetachStream();
+            }
+            imageStream.Seek(0);
+            await bitmap.SetSourceAsync(imageStream);
+            if (load.Cancellation.IsCancellationRequested || !_artworkLoads.TryGetValue(image, out currentLoad) ||
+                !ReferenceEquals(currentLoad, load)) return;
             load.Bitmap = bitmap;
             image.Source = bitmap;
             _ = ExpireArtworkAsync(image, load);
         }
         catch (OperationCanceledException) { }
+        catch
+        {
+            ReleaseArtworkSlot(image, load);
+            load.Cancellation.Cancel();
+            if (_artworkLoads.TryGetValue(image, out var activeLoad) && ReferenceEquals(activeLoad, load))
+            {
+                if (FindArtworkFallback(image) is { } errorFallback) errorFallback.Visibility = Visibility.Visible;
+                image.Opacity = 0;
+            }
+        }
         finally
         {
             if (load.Cancellation.IsCancellationRequested) ReleaseArtworkSlot(image, load);
@@ -987,6 +1035,9 @@ public sealed partial class CatalogLandingPage : UserControl
             RaiseChannelSelected(channel, siblings);
         }
     }
+
+    private void SpotlightArtwork_Tapped(object sender, TappedRoutedEventArgs args) =>
+        SpotlightAction_Click(sender, new RoutedEventArgs());
 
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {

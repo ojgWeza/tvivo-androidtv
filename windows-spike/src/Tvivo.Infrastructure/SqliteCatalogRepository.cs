@@ -8,9 +8,10 @@ public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount);
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 10;
+    private const int SchemaVersion = 12;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex LeadingPunctuation = new(@"^[^\p{L}\p{N}]+", RegexOptions.Compiled);
     private readonly string _connectionString;
 
     public SqliteCatalogRepository(string? databasePath = null)
@@ -22,16 +23,18 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
                 CREATE TABLE categories(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(account_id,type,id));
-                CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,category_id TEXT NOT NULL,title TEXT NOT NULL,artwork TEXT,extension TEXT,rating TEXT,plot TEXT,added_at INTEGER NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,favourite_added_at INTEGER,resume_ms INTEGER NOT NULL DEFAULT 0,resume_updated_at INTEGER,first_indexed_at INTEGER,last_tuned_at INTEGER,PRIMARY KEY(account_id,type,id));
+                CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,category_id TEXT NOT NULL,title TEXT NOT NULL,title_sort TEXT NOT NULL,artwork TEXT,extension TEXT,rating TEXT,plot TEXT,added_at INTEGER NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,favourite_added_at INTEGER,resume_ms INTEGER NOT NULL DEFAULT 0,resume_updated_at INTEGER,first_indexed_at INTEGER,last_tuned_at INTEGER,visit_count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id));
                 CREATE INDEX items_browse ON items(account_id,type,category_id);
                 CREATE INDEX items_recent_added ON items(account_id,type,added_at DESC);
                 CREATE INDEX items_favourites_added ON items(account_id,type,favourite,favourite_added_at DESC);
-                PRAGMA user_version=10;
+                CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort,id);
+                CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id));
+                PRAGMA user_version=12;
                 """;
             command.ExecuteNonQuery();
         }
@@ -45,6 +48,57 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 9)
                 MigrateFavouriteAddedAt(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 10)
+                MigrateVisitOrdering(connection);
+        }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 11)
+                MigrateSeriesPlayback(connection);
+        }
+    }
+
+    private static void MigrateSeriesPlayback(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id)); PRAGMA user_version=12;";
+        command.ExecuteNonQuery();
+    }
+
+    private static void MigrateVisitOrdering(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var columns = connection.CreateCommand())
+        {
+            columns.Transaction = transaction;
+            columns.CommandText = "PRAGMA table_info(items)";
+            using var reader = columns.ExecuteReader();
+            while (reader.Read()) existingColumns.Add(reader.GetString(1));
+        }
+        command.CommandText = "ALTER TABLE items ADD COLUMN title_sort TEXT NOT NULL DEFAULT ''; ALTER TABLE items ADD COLUMN visit_count INTEGER NOT NULL DEFAULT 0;" +
+            (existingColumns.Contains("last_tuned_at") ? string.Empty : " ALTER TABLE items ADD COLUMN last_tuned_at INTEGER;");
+        command.ExecuteNonQuery();
+        var rows = new List<(string Account, string Type, string Id, string SortTitle)>();
+        using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT account_id,type,id,title FROM items";
+            using var reader = select.ExecuteReader();
+            while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), SortTitle(reader.GetString(3))));
+        }
+        foreach (var row in rows)
+            Execute(connection, transaction, "UPDATE items SET title_sort=$sort WHERE account_id=$a AND type=$type AND id=$id",
+                ("$sort", row.SortTitle), ("$a", row.Account), ("$type", row.Type), ("$id", row.Id));
+        command.CommandText = "CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort,id); PRAGMA user_version=11;";
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     private static void MigrateTitleCleanup(SqliteConnection connection)
@@ -109,17 +163,24 @@ public sealed class SqliteCatalogRepository : IDisposable
         return string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned;
     }
 
+    private static string SortTitle(string? title) => LeadingPunctuation.Replace(CleanTitle(title), string.Empty).Trim();
+
     public void ReplaceSnapshot(ProviderAccount account, CatalogItemType type, IReadOnlyList<ChannelGroup> groups, IReadOnlyList<Channel> channels)
     {
         var typeName = TypeName(type);
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        Execute(connection, transaction, "DELETE FROM categories WHERE account_id=$account AND type=$type; DELETE FROM items WHERE account_id=$account AND type=$type;", ("$account", account.AccountId), ("$type", typeName));
+        Execute(connection, transaction, "DELETE FROM categories WHERE account_id=$account AND type=$type; DROP TABLE IF EXISTS temp.incoming_item_ids; CREATE TEMP TABLE incoming_item_ids(id TEXT PRIMARY KEY);", ("$account", account.AccountId), ("$type", typeName));
         for (var i = 0; i < groups.Count; i++)
             Execute(connection, transaction, "INSERT INTO categories(account_id,type,id,name,position) VALUES($a,$type,$id,$name,$pos)", ("$a", account.AccountId), ("$type", typeName), ("$id", groups[i].Id), ("$name", groups[i].Name), ("$pos", groups[i].SortOrder ?? i));
         foreach (var channel in channels)
-            Execute(connection, transaction, "INSERT INTO items(account_id,type,id,category_id,title,artwork,extension,added_at,first_indexed_at) VALUES($a,$type,$id,$cat,$title,$art,$ext,$added,$now)",
-                ("$a", account.AccountId), ("$type", typeName), ("$id", channel.Id), ("$cat", channel.GroupId ?? string.Empty), ("$title", CleanTitle(channel.Name)), ("$art", channel.LogoUri?.ToString()), ("$ext", channel.Source.ContainerExtension ?? DefaultExtension(type)), ("$added", channel.AddedAt?.ToUnixTimeMilliseconds() ?? 0), ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        {
+            Execute(connection, transaction, "INSERT INTO items(account_id,type,id,category_id,title,title_sort,artwork,extension,added_at,first_indexed_at) VALUES($a,$type,$id,$cat,$title,$sort,$art,$ext,$added,$now) ON CONFLICT(account_id,type,id) DO UPDATE SET category_id=excluded.category_id,title=excluded.title,title_sort=excluded.title_sort,artwork=excluded.artwork,extension=excluded.extension,added_at=excluded.added_at",
+                ("$a", account.AccountId), ("$type", typeName), ("$id", channel.Id), ("$cat", channel.GroupId ?? string.Empty), ("$title", CleanTitle(channel.Name)), ("$sort", SortTitle(channel.Name)), ("$art", channel.LogoUri?.ToString()), ("$ext", channel.Source.ContainerExtension ?? DefaultExtension(type)), ("$added", channel.AddedAt?.ToUnixTimeMilliseconds() ?? 0), ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+            Execute(connection, transaction, "INSERT INTO incoming_item_ids(id) VALUES($id)", ("$id", channel.Id));
+        }
+        Execute(connection, transaction, "DELETE FROM items WHERE account_id=$a AND type=$type AND id NOT IN (SELECT id FROM incoming_item_ids)",
+            ("$a", account.AccountId), ("$type", typeName));
         transaction.Commit();
     }
 
@@ -132,17 +193,17 @@ public sealed class SqliteCatalogRepository : IDisposable
         return rows;
     }
 
-    public CatalogPage GetChannels(ProviderAccount account, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100)
-        => GetChannels(account, null, type, groupId, filter, offset, limit);
+    public CatalogPage GetChannels(ProviderAccount account, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false)
+        => GetChannels(account, null, type, groupId, filter, offset, limit, mostVisited);
 
-    public CatalogPage GetChannels(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100)
+    public CatalogPage GetChannels(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false)
     {
         using var sqliteConnection = Open();
         var where = "account_id=$a AND type=$type AND ($cat IS NULL OR category_id=$cat) AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\')";
         using var count = sqliteConnection.CreateCommand(); count.CommandText = $"SELECT COUNT(*) FROM items WHERE {where}";
         AddBrowseParameters(count, account, type, groupId, filter);
         var total = Convert.ToInt32(count.ExecuteScalar());
-        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE {where} ORDER BY title,id LIMIT $limit OFFSET $offset";
+        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title_sort COLLATE NOCASE,title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
         AddBrowseParameters(command, account, type, groupId, filter); command.Parameters.AddWithValue("$limit", Math.Max(1, limit)); command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader(); var rows = new List<Channel>();
         while (reader.Read())
@@ -244,6 +305,42 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public void RecordVisit(ProviderAccount account, CatalogItemType type, string id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE items SET visit_count=visit_count+1,last_tuned_at=$now WHERE account_id=$a AND type=$type AND id=$id";
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
+    }
+
+    public (string? EpisodeId, bool Finished) GetSeriesPlayback(ProviderAccount account, string seriesId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT last_episode_id,finished FROM series_playback WHERE account_id=$a AND series_id=$id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$id", seriesId);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? (reader.GetString(0), reader.GetInt32(1) != 0) : (null, false);
+    }
+
+    public void UpdateSeriesPlayback(ProviderAccount account, string seriesId, string episodeId, bool finished)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO series_playback(account_id,series_id,last_episode_id,finished,updated_at) VALUES($a,$series,$episode,$finished,$now) ON CONFLICT(account_id,series_id) DO UPDATE SET last_episode_id=excluded.last_episode_id,finished=excluded.finished,updated_at=excluded.updated_at";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$series", seriesId);
+        command.Parameters.AddWithValue("$episode", episodeId);
+        command.Parameters.AddWithValue("$finished", finished ? 1 : 0);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        command.ExecuteNonQuery();
+    }
+
     private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit)
     {
         using var connection = Open();
@@ -290,7 +387,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     private static StreamKind StreamKindFor(CatalogItemType type) => type switch
     {
         CatalogItemType.Movie => StreamKind.Movie,
-        CatalogItemType.Series => StreamKind.Episode,
+        CatalogItemType.Series => StreamKind.Series,
         _ => StreamKind.Live,
     };
     private static void Execute(SqliteConnection c, SqliteTransaction t, string sql, params (string Name, object? Value)[] values)

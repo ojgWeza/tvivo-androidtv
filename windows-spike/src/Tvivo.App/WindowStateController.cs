@@ -12,6 +12,7 @@ internal sealed class WindowStateController
     private const int GwlStyle = -16;
     private static readonly nint WsPopup = unchecked((nint)0x80000000);
     private static readonly nint WsOverlappedWindow = 0x00CF0000;
+    private static readonly nint WsCaption = 0x00C00000;
     private const uint MonitorDefaultToNearest = 2;
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
@@ -33,6 +34,10 @@ internal sealed class WindowStateController
     internal WindowStateController(Microsoft.UI.Xaml.Window window)
     {
         _hwnd = WindowNative.GetWindowHandle(window);
+        // The XAML chrome row owns the window controls. Keep a normal resizable
+        // overlapped window, but remove the duplicate native caption buttons.
+        SetStyle(GetStyle() & ~WsCaption);
+        SetBounds(default, SwpFrameChanged | SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate);
         CenterInitialWindow();
     }
 

@@ -3,11 +3,12 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Globalization;
 using Tvivo.Core;
 
 namespace Tvivo.Infrastructure;
 
-public sealed class XtreamCatalogProvider : ICatalogProvider
+public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider
 {
     private readonly HttpClient _http;
     private readonly Dictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
@@ -85,6 +86,51 @@ public sealed class XtreamCatalogProvider : ICatalogProvider
     public int? GetHttpsPort(ProviderAccount account) =>
         _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
 
+    public async Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default)
+    {
+        if (!_connections.TryGetValue(account.AccountId, out var connection))
+            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+        var uri = XtreamRequest.SeriesInfoUri(connection, seriesId);
+        using var response = await _http.GetAsync(uri, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var title = root.TryGetProperty("info", out var info) ? JsonValue.String(info, "name") : null;
+        var seasons = new List<SeriesSeason>();
+        if (root.TryGetProperty("episodes", out var episodeGroups) && episodeGroups.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var group in episodeGroups.EnumerateObject())
+            {
+                var seasonId = group.Name;
+                var seasonNumber = int.TryParse(seasonId, out var parsedSeason) ? parsedSeason : seasons.Count + 1;
+                var seasonName = $"Season {seasonNumber}";
+                var episodes = new List<SeriesEpisode>();
+                if (group.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in group.Value.EnumerateArray())
+                    {
+                        var id = JsonValue.String(item, "id");
+                        if (string.IsNullOrWhiteSpace(id)) continue;
+                        var episodeNumber = JsonValue.Int(item, "episode_num") ?? episodes.Count + 1;
+                        var episodeTitle = JsonValue.String(item, "title") ?? $"Episode {episodeNumber}";
+                        var extension = JsonValue.String(item, "container_extension")?.Trim().TrimStart('.');
+                        var durationValue = JsonValue.String(item, "duration");
+                        TimeSpan? duration = long.TryParse(durationValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var durationSeconds)
+                            ? TimeSpan.FromSeconds(durationSeconds)
+                            : TimeSpan.TryParse(durationValue, CultureInfo.InvariantCulture, out var parsedDuration) ? parsedDuration : null;
+                        var directUri = new Uri(StreamUrlBuilder.Series(connection.Endpoint, connection.Username, connection.Password, id, extension));
+                        episodes.Add(new SeriesEpisode(id, episodeTitle, seasonId, seasonName, seasonNumber, episodeNumber,
+                            new StreamSource(id, StreamKind.Episode, extension, directUri, duration)));
+                    }
+                }
+                seasons.Add(new SeriesSeason(seasonId, seasonName, seasonNumber,
+                    episodes.OrderBy(episode => episode.EpisodeNumber).ToArray()));
+            }
+        }
+        return new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray());
+    }
+
     public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default) =>
         GetArrayAsync(account, CategoryAction(type), null, MapGroup, cancellationToken);
 
@@ -153,7 +199,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider
     private static StreamKind StreamKindFor(CatalogItemType type) => type switch
     {
         CatalogItemType.Movie => StreamKind.Movie,
-        CatalogItemType.Series => StreamKind.Episode,
+        CatalogItemType.Series => StreamKind.Series,
         _ => StreamKind.Live,
     };
 
@@ -237,6 +283,13 @@ internal static class XtreamRequest
         if (action is not null) query += $"&action={WebUtility.UrlEncode(action)}";
         if (groupId is not null) query += $"&category_id={WebUtility.UrlEncode(groupId)}";
         builder.Query = query;
+        return builder.Uri;
+    }
+
+    public static Uri SeriesInfoUri(ProviderConnection connection, string seriesId)
+    {
+        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "player_api.php");
+        builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_series_info&series_id={WebUtility.UrlEncode(seriesId)}";
         return builder.Uri;
     }
 }

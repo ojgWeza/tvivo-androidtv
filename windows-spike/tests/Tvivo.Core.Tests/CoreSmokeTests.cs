@@ -14,4 +14,25 @@ public sealed class CoreSmokeTests
         Assert.Equal("https", endpoint.Scheme);
         Assert.Equal("stream-1", source.StreamId);
     }
+
+    [Fact]
+    public void Series_resolution_uses_first_then_last_opened_then_next_after_finish()
+    {
+        static SeriesEpisode Episode(string id, int season, int number) => new(id, id, season.ToString(), $"Season {season}", season,
+            number, new StreamSource(id, StreamKind.Episode));
+        var first = Episode("first", 1, 1);
+        var second = Episode("second", 1, 2);
+        var third = Episode("third", 2, 1);
+        var details = new SeriesDetails("show", "Show", new[]
+        {
+            new SeriesSeason("2", "Season 2", 2, new[] { third }),
+            new SeriesSeason("1", "Season 1", 1, new[] { second, first }),
+        });
+
+        Assert.Equal(first, SeriesEpisodeResolver.Resolve(details, null, false));
+        Assert.Equal(second, SeriesEpisodeResolver.Resolve(details, "second", false));
+        Assert.Equal(third, SeriesEpisodeResolver.Resolve(details, "second", true));
+        Assert.Equal(third, SeriesEpisodeResolver.Resolve(details, "third", true));
+        Assert.Equal(first, SeriesEpisodeResolver.Resolve(details, "missing", false));
+    }
 }

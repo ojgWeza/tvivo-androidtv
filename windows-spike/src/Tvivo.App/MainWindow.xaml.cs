@@ -8,6 +8,7 @@ using Microsoft.UI;
 using Microsoft.Extensions.DependencyInjection;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
+using Tvivo.Infrastructure;
 using Tvivo.Playback;
 using Tvivo.App.Pages;
 
@@ -24,9 +25,16 @@ public sealed partial class MainWindow : Window
     private readonly HomePage _homePage;
     private readonly ProviderSetupPage _providerSetupPage;
     private readonly CatalogLandingPage _catalogLandingPage;
+    private readonly SqliteCatalogRepository _catalogRepository;
     private ShellPage? _currentPage;
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
+    private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+    private string? _currentSeriesId;
+    private ProviderAccount? _currentSeriesAccount;
+    private Channel? _nowPlayingChannel;
+    private bool _seriesCompletionRecorded;
+    private bool _playbackCompletionShown;
     private long _catalogRequestGeneration;
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
@@ -55,8 +63,11 @@ public sealed partial class MainWindow : Window
         _homePage = new HomePage();
         _providerSetupPage = new ProviderSetupPage();
         _catalogLandingPage = new CatalogLandingPage();
+        _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
         Title = "Tvivo";
+        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Tvivo.ico");
+        if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         TitleBarDragRegion.PointerPressed += TitleBarDragRegion_PointerPressed;
         WindowRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(WindowRoot_KeyDown), true);
         _windowState = new WindowStateController(this);
@@ -96,11 +107,6 @@ public sealed partial class MainWindow : Window
 
     private void MinimizeWindowButton_Click(object sender, RoutedEventArgs args)
     {
-        if (_windowState.Mode == WindowStateController.WindowMode.Fullscreen)
-        {
-            _windowState.Apply(WindowStateController.WindowMode.Windowed);
-            ApplyWindowChromeState();
-        }
         _windowState.Minimize();
     }
 
@@ -130,7 +136,7 @@ public sealed partial class MainWindow : Window
     private void ApplyWindowChromeState()
     {
         var fullscreen = _windowState.Mode == WindowStateController.WindowMode.Fullscreen;
-        var showChrome = fullscreen && !_isCinemaMode;
+        var showChrome = !_isCinemaMode;
         WindowChrome.Visibility = showChrome ? Visibility.Visible : Visibility.Collapsed;
         WindowRoot.RowDefinitions[0].Height = new GridLength(showChrome ? 44 : 0);
         WindowStateButton.Content = fullscreen ? "▢" : "□";
@@ -303,32 +309,155 @@ public sealed partial class MainWindow : Window
         TopSearchBox.Focus(FocusState.Programmatic);
     }
 
-    private void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
+    private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
+        if (args.Source.Kind == StreamKind.Series)
+        {
+            await OpenSeriesAsync(args.Channel);
+            return;
+        }
+
         if (args.Source.DirectUri is null)
         {
             StatusText.Text = "This channel does not have a playable stream URL yet.";
             return;
         }
 
-        if (_currentPage != ShellPage.Player)
+        if (args.Source.Kind == StreamKind.Episode)
         {
-            _playerReturnPage = _currentPage ?? ShellPage.Catalog;
-            _playerSiblings = args.RelatedChannels;
+            OpenSeriesEpisode(args.Channel);
+            return;
         }
-        else if (args.RelatedChannels.Count > 0)
-            _playerSiblings = args.RelatedChannels;
+
+        _currentSeriesId = null;
+        _currentSeriesAccount = null;
+        _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+        PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        PlayerSeasonComboBox.ItemsSource = null;
+        if (_currentPage != ShellPage.Player)
+            _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+        var type = args.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live;
+        if (_catalogLandingPage.Account is { } account)
+            _catalogRepository.RecordVisit(account, type, args.Channel.Id);
+        _playerSiblings = args.Source.Kind == StreamKind.Movie
+            ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Movie)
+                .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
+            : Array.Empty<Channel>();
         _currentSource = args.Source;
+        _nowPlayingChannel = args.Channel;
         PlayerTitleText.Text = args.Channel.DisplayName;
-        var related = _playerSiblings.Where(channel => channel.Id != args.Channel.Id).ToArray();
-        var isEpisode = args.Source.Kind == StreamKind.Episode;
-        PlayerSideTitle.Text = isEpisode ? "Season and episodes" : "More from this folder";
-        PlayerSideSubtitle.Text = isEpisode
-            ? "Episode details are not available in the current series catalog."
-            : related.Length == 0 ? "No other items are available in this folder." : "Other titles in this folder";
-        PlayerRelatedList.ItemsSource = isEpisode ? Array.Empty<Channel>() : related;
+        PlayerSideTitle.Text = args.Source.Kind == StreamKind.Movie ? "More movies" : "Now playing";
+        PlayerSideSubtitle.Text = args.Source.Kind == StreamKind.Movie
+            ? _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category"
+            : string.Empty;
+        PlayerNowPlayingText.Text = $"NOW PLAYING · {args.Channel.DisplayName}";
+        _playbackCompletionShown = false;
+        SetPlayerList(_playerSiblings, args.Channel);
         ShowPage(ShellPage.Player);
         _ = StartPlaybackAsync(args.Source);
+    }
+
+    private async Task OpenSeriesAsync(Channel series)
+    {
+        if (_catalogLandingPage.Account is not { } account ||
+            App.Services.GetRequiredService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
+        {
+            StatusText.Text = "Series episodes are unavailable for this provider.";
+            return;
+        }
+
+        SeriesDetails details;
+        try
+        {
+            details = await provider.GetSeriesInfoAsync(account, series.Id);
+        }
+        catch
+        {
+            StatusText.Text = "Couldn't load this series' episodes. Try opening it again.";
+            return;
+        }
+
+        var progress = _catalogRepository.GetSeriesPlayback(account, series.Id);
+        var selected = SeriesEpisodeResolver.Resolve(details, progress.EpisodeId, progress.Finished);
+        if (selected is null)
+        {
+            StatusText.Text = "This series has no episodes available.";
+            return;
+        }
+
+        _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+        _currentSeriesId = series.Id;
+        _currentSeriesAccount = account;
+        _playerSeriesSeasons = details.Seasons;
+        _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
+            .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
+        PlayerSeasonComboBox.ItemsSource = details.Seasons;
+        PlayerSeasonComboBox.Visibility = Visibility.Visible;
+        _catalogRepository.RecordVisit(account, CatalogItemType.Series, series.Id);
+        OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected));
+    }
+
+    private static Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
+    {
+        var displayName = $"S{episode.SeasonNumber:00} E{episode.EpisodeNumber:00} · {episode.Title}";
+        return new Channel(account.AccountId, episode.Id, seriesId, episode.Title, displayName, null, null,
+            episode.EpisodeNumber, episode.Source,
+            new Dictionary<string, string> { ["seriesId"] = seriesId, ["seasonId"] = episode.SeasonId });
+    }
+
+    private void OpenSeriesEpisode(Channel episode)
+    {
+        if (episode.Source.DirectUri is null) return;
+        if (_currentPage != ShellPage.Player)
+            _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+        _currentSeriesId ??= episode.Metadata.TryGetValue("seriesId", out var seriesId) ? seriesId : null;
+        _currentSeriesAccount = _catalogLandingPage.Account;
+        _nowPlayingChannel = episode;
+        _currentSource = episode.Source;
+        if (_currentSeriesId is not null && _currentSeriesAccount is not null)
+            _catalogRepository.UpdateSeriesPlayback(_currentSeriesAccount, _currentSeriesId, episode.Id, finished: false);
+        _seriesCompletionRecorded = false;
+        _playbackCompletionShown = false;
+        PlayerTitleText.Text = episode.DisplayName;
+        PlayerSideTitle.Text = "Season and episodes";
+        PlayerSideSubtitle.Text = "Select an episode to play";
+        PlayerNowPlayingText.Text = $"NOW PLAYING · {episode.DisplayName}";
+        PlayerSeasonComboBox.Visibility = Visibility.Visible;
+        var seasonId = episode.Metadata.TryGetValue("seasonId", out var id) ? id : null;
+        var selectedSeason = _playerSeriesSeasons.FirstOrDefault(season => season.Id == seasonId);
+        PlayerSeasonComboBox.SelectedItem = selectedSeason;
+        var account = _currentSeriesAccount ?? _catalogLandingPage.Account;
+        var visibleEpisodes = selectedSeason is not null && account is not null && _currentSeriesId is not null
+            ? selectedSeason.Episodes.Select(item => ToEpisodeChannel(account, _currentSeriesId, item)).ToArray()
+            : _playerSiblings;
+        SetPlayerList(visibleEpisodes, episode);
+        ShowPage(ShellPage.Player);
+        _ = StartPlaybackAsync(episode.Source);
+    }
+
+    private void SetPlayerList(IReadOnlyList<Channel> channels, Channel current)
+    {
+        PlayerRelatedList.ItemsSource = channels.Select(channel => new PlayerListEntry(
+            channel.DisplayName,
+            channel.Id == current.Id ? (_playbackCompletionShown ? "FINISHED" : "NOW PLAYING") : "Play",
+            channel)).ToArray();
+    }
+
+    private IReadOnlyList<Channel> CurrentPlayerChannels()
+    {
+        if (_currentSeriesId is not null && _currentSeriesAccount is not null &&
+            PlayerSeasonComboBox.SelectedItem is SeriesSeason season)
+            return season.Episodes.Select(episode => ToEpisodeChannel(_currentSeriesAccount, _currentSeriesId, episode)).ToArray();
+        return _playerSiblings;
+    }
+
+    private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (PlayerSeasonComboBox.SelectedItem is not SeriesSeason season || _nowPlayingChannel is null) return;
+        var account = _currentSeriesAccount ?? _catalogLandingPage.Account;
+        if (account is null || _currentSeriesId is null) return;
+        var episodes = season.Episodes.Select(episode => ToEpisodeChannel(account, _currentSeriesId, episode)).ToArray();
+        SetPlayerList(episodes, _nowPlayingChannel);
     }
 
     private async Task StartPlaybackAsync(StreamSource source)
@@ -339,6 +468,7 @@ public sealed partial class MainWindow : Window
         previousCts?.Cancel();
         previousCts?.Dispose();
         _currentSource = source;
+        _playbackCompletionShown = false;
         ShowPage(ShellPage.Player);
         StatusText.Text = "Starting playback…";
         PlaybackAttemptResult result;
@@ -423,6 +553,18 @@ public sealed partial class MainWindow : Window
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
         if (_currentPage != ShellPage.Player) return;
+        if (!_seriesCompletionRecorded && _engine.IsEnded && _currentSeriesId is not null &&
+            _currentSeriesAccount is not null && _nowPlayingChannel?.Source.Kind == StreamKind.Episode)
+        {
+            _catalogRepository.UpdateSeriesPlayback(_currentSeriesAccount, _currentSeriesId, _nowPlayingChannel.Id, finished: true);
+            _seriesCompletionRecorded = true;
+        }
+        if (!_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
+        {
+            PlayerNowPlayingText.Text = $"FINISHED · {finishedChannel.DisplayName}";
+            SetPlayerList(CurrentPlayerChannels(), finishedChannel);
+            _playbackCompletionShown = true;
+        }
         var timeline = _engine.Timeline;
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
@@ -501,15 +643,27 @@ public sealed partial class MainWindow : Window
 
     private void PlayerRelatedList_ItemClick(object sender, ItemClickEventArgs args)
     {
-        if (args.ClickedItem is Channel channel && channel.Source.DirectUri is not null)
-            CatalogLandingPage_ChannelSelected(this, new ChannelSelectedEventArgs(channel, _playerSiblings));
+        if (args.ClickedItem is not PlayerListEntry entry || entry.Channel.Source.DirectUri is null) return;
+        if (entry.Channel.Source.Kind == StreamKind.Episode)
+            OpenSeriesEpisode(entry.Channel);
+        else
+            CatalogLandingPage_ChannelSelected(this, new ChannelSelectedEventArgs(entry.Channel, _playerSiblings));
     }
 
     private void PlayerBackButton_Click(object sender, RoutedEventArgs args) => ReturnFromPlayer();
 
-    private void PlayerHomeButton_Click(object sender, RoutedEventArgs args) => ShowPage(ShellPage.Home);
+    private void PlayerHomeButton_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
-    private void ReturnFromPlayer() => ShowPage(_playerReturnPage);
+    private void ReturnFromPlayer()
+    {
+        if (_playerReturnPage == ShellPage.Catalog)
+        {
+            _catalogLandingPage.InvalidateCatalogSnapshots();
+            _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode);
+        }
+        else ShowPage(_playerReturnPage);
+    }
 
     private void CinemaButton_Click(object sender, RoutedEventArgs args) => SetCinemaMode(!_isCinemaMode);
 
@@ -658,4 +812,6 @@ public sealed partial class MainWindow : Window
         Catalog,
         Player
     }
+
+    public sealed record PlayerListEntry(string Title, string Status, Channel Channel);
 }
