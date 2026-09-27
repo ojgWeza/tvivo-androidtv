@@ -124,11 +124,13 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_account is null) return;
         foreach (var key in _snapshotCache.Keys.Where(key =>
-                     key.AccountId == _account.AccountId && key.Mode == CatalogMode.MyTvivo).ToArray())
+                     key.AccountId == _account.AccountId).ToArray())
             _snapshotCache.Remove(key);
         _snapshotCacheOrder.Clear();
         foreach (var key in _snapshotCache.Keys) _snapshotCacheOrder.Enqueue(key);
     }
+
+    public void NotifyFavoriteChanged() => NotifyVisitRecorded();
 
     public void Shutdown()
     {
@@ -166,7 +168,6 @@ public sealed partial class CatalogLandingPage : UserControl
             _selectedGroupId = state.SelectedGroupId;
             _offset = state.Offset;
             SetSearchTextWithoutReload(state.Filter);
-            SetSort(state.Sort);
         }
         else
         {
@@ -184,7 +185,6 @@ public sealed partial class CatalogLandingPage : UserControl
             // Keep the old category attached until the incoming snapshot is ready.
             // The snapshot swap itself is performed while the content is faded out.
             ContentState.IsHitTestVisible = false;
-            SetInteractionReadiness(false);
         }
         else
         {
@@ -377,19 +377,39 @@ public sealed partial class CatalogLandingPage : UserControl
             if (mode == CatalogMode.MyTvivo)
             {
                 var myShelves = BuildShelves(account, Array.Empty<ChannelGroup>(), filter, mode, sort);
-                if (openShelfId is not null && openShelfType is { } shelfType)
+                if (openShelfId is not null)
                 {
-                    var first = _repository.GetChannels(account, _connection, shelfType, filter: filter, offset: 0, limit: PageSize, mostVisited: true);
-                    var lastOffset = first.TotalCount == 0 ? 0 : ((first.TotalCount - 1) / PageSize) * PageSize;
+                    var definition = MyTvivoShelfDefinitions.All.FirstOrDefault(shelf => shelf.Id == openShelfId);
+                    IReadOnlyList<Channel> allItems = definition is null
+                        ? Array.Empty<Channel>()
+                        : GetMyTvivoShelfItems(account, definition, filter);
+                    var lastOffset = allItems.Count == 0 ? 0 : ((allItems.Count - 1) / PageSize) * PageSize;
                     var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
-                    var shelfPage = shelfOffset == 0 ? first : _repository.GetChannels(account, _connection, shelfType, filter: filter, offset: shelfOffset, limit: PageSize, mostVisited: true);
-                    return new CatalogSnapshot(mode, Array.Empty<ChannelGroup>(), null, shelfOffset, shelfPage, myShelves);
+                    var shelfItems = allItems.Skip(shelfOffset).Take(PageSize).ToArray();
+                    return new CatalogSnapshot(mode, Array.Empty<ChannelGroup>(), null, shelfOffset,
+                        new CatalogPage(shelfItems, allItems.Count), myShelves);
                 }
                 return new CatalogSnapshot(mode, Array.Empty<ChannelGroup>(), null, 0, new CatalogPage(Array.Empty<Channel>(), 0), myShelves);
             }
 
             var type = TypeForMode(mode);
             var groups = _repository.GetGroups(account, type);
+            if (openShelfId is "__recent_added" or "__recent_played" or "__favorites")
+            {
+                var allItems = openShelfId switch
+                {
+                    "__recent_added" => _repository.GetRecentlyAdded(account, type, _connection, int.MaxValue, filter),
+                    "__recent_played" => _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter),
+                    _ => _repository.GetFavorites(account, type, _connection, int.MaxValue, filter),
+                };
+                var lastOffset = allItems.Count == 0 ? 0 : ((allItems.Count - 1) / PageSize) * PageSize;
+                var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
+                var shelfItems = allItems.Skip(shelfOffset).Take(PageSize).ToArray();
+                var shelfList = BuildShelves(account, groups, filter, mode, sort);
+                return new CatalogSnapshot(mode, groups, null, shelfOffset,
+                    new CatalogPage(shelfItems, allItems.Count), shelfList);
+            }
+
             var groupId = requestedGroupId is not null && groups.Any(group => group.Id == requestedGroupId)
                 ? requestedGroupId
                 : null;
@@ -460,12 +480,19 @@ public sealed partial class CatalogLandingPage : UserControl
         var type = TypeForMode(mode);
         var noun = NounFor(type);
         var shelves = new List<CatalogShelf>();
+        AddActivityShelf(shelves, "__recent_added", "Recently added", type,
+            _repository.GetRecentlyAdded(account, type, _connection, int.MaxValue, filter));
+        AddActivityShelf(shelves, "__recent_played", "Recently played", type,
+            _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter));
+        AddActivityShelf(shelves, "__favorites", "Favorites", type,
+            _repository.GetFavorites(account, type, _connection, int.MaxValue, filter));
+
         var allChannels = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize);
         if (allChannels.Items.Count > 0)
         {
             shelves.Add(new CatalogShelf(
                 "__recent",
-                "Recently added",
+                AllItemsShelfTitle(type),
                 CountLabel(allChannels.TotalCount, noun),
                 allChannels.Items.Select(channel => ToCard(channel, type)).ToArray(),
                 type,
@@ -500,29 +527,49 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private IReadOnlyList<CatalogShelf> BuildMyTvivoShelves(ProviderAccount account, string? filter)
     {
-        var shelves = new List<CatalogShelf>();
-        foreach (var (type, title) in new[]
-        {
-            (CatalogItemType.Movie, "Recent movies"),
-            (CatalogItemType.Series, "Recent series"),
-            (CatalogItemType.Live, "Recent live TV"),
-        })
-        {
-            var page = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize,
-                mostVisited: true);
-            if (page.TotalCount == 0) continue;
-            shelves.Add(new CatalogShelf(
-                $"__my_{type}",
-                title,
-                CountLabel(page.TotalCount, NounFor(type)),
-                page.Items.Select(channel => ToCard(channel, type)).ToArray(),
-                type,
-                null,
-                false));
-        }
-
-        return shelves;
+        return MyTvivoShelfDefinitions.All
+            .Select(definition => CreateMyTvivoShelf(definition, GetMyTvivoShelfItems(account, definition, filter)))
+            .ToArray();
     }
+
+    private IReadOnlyList<Channel> GetMyTvivoShelfItems(
+        ProviderAccount account,
+        MyTvivoShelfDefinition definition,
+        string? filter) => definition.Kind switch
+    {
+        MyTvivoShelfKind.RecentlyAdded => _repository.GetRecentlyAdded(account, definition.Type, _connection, int.MaxValue, filter),
+        MyTvivoShelfKind.RecentlyPlayed => _repository.GetRecentlyPlayed(account, definition.Type, _connection, int.MaxValue, filter),
+        MyTvivoShelfKind.Favorites => _repository.GetFavorites(account, definition.Type, _connection, int.MaxValue, filter),
+        _ => Array.Empty<Channel>(),
+    };
+
+    private void AddActivityShelf(
+        ICollection<CatalogShelf> shelves,
+        string id,
+        string title,
+        CatalogItemType type,
+        IReadOnlyList<Channel> channels)
+    {
+        if (channels.Count == 0) return;
+        shelves.Add(new CatalogShelf(id, title, CountLabel(channels.Count, NounFor(type)),
+            channels.Take(ShelfPreviewSize).Select(channel => ToCard(channel, type)).ToArray(), type, null, false));
+    }
+
+    private CatalogShelf CreateMyTvivoShelf(MyTvivoShelfDefinition definition, IReadOnlyList<Channel> channels)
+    {
+        var preview = channels.Take(ShelfPreviewSize)
+            .Select(channel => ToCard(channel, definition.Type))
+            .ToArray();
+        return new CatalogShelf(definition.Id, definition.Title, CountLabel(channels.Count, NounFor(definition.Type)), preview,
+            definition.Type, null, false);
+    }
+
+    private static CatalogItemType TypeForSource(StreamKind kind) => kind switch
+    {
+        StreamKind.Live => CatalogItemType.Live,
+        StreamKind.Series => CatalogItemType.Series,
+        _ => CatalogItemType.Movie,
+    };
 
     private static CatalogCard ToCard(Channel channel, CatalogItemType type) => new(
         $"{channel.ProviderAccountId}:{channel.Source.Kind}:{channel.Id}",
@@ -577,8 +624,26 @@ public sealed partial class CatalogLandingPage : UserControl
         _ => "channels",
     };
 
-    private static string CountLabel(int count, string noun) =>
-        count == 1 ? $"1 {noun.TrimEnd('s')}" : $"{count} {noun}";
+    private static string AllItemsShelfTitle(CatalogItemType type) => type switch
+    {
+        CatalogItemType.Movie => "All movies",
+        CatalogItemType.Series => "All series",
+        _ => "All Live TV",
+    };
+
+    private static string CountLabel(int count, string noun)
+    {
+        if (count != 1) return $"{count} {noun}";
+        var singular = noun switch
+        {
+            "movies" => "movie",
+            "series" => "series",
+            "channels" => "channel",
+            "items" => "item",
+            _ => noun.TrimEnd('s'),
+        };
+        return $"1 {singular}";
+    }
 
     private static bool HasCatalogData(CatalogSnapshot snapshot) =>
         snapshot.Groups.Count > 0 || snapshot.Page.TotalCount > 0 || snapshot.Shelves.Count > 0;
@@ -748,7 +813,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private void SaveModeState(CatalogMode mode) =>
-        _modeStates[mode] = new ModeInteractionState(_openShelfId, _openShelfType, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset, _categorySort);
+        _modeStates[mode] = new ModeInteractionState(_openShelfId, _openShelfType, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset);
 
     private void SetSearchTextWithoutReload(string value)
     {
@@ -756,13 +821,6 @@ public sealed partial class CatalogLandingPage : UserControl
         SearchBox.Text = value;
         _suppressSearchChanged = false;
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    private void SetSort(CategorySort sort)
-    {
-        _categorySort = sort;
-        foreach (var item in CategorySortBox.Items.OfType<ComboBoxItem>())
-            item.IsSelected = string.Equals(item.Tag?.ToString(), sort.ToString(), StringComparison.Ordinal);
     }
 
     private void ArtworkImage_Opened(object sender, RoutedEventArgs args)
@@ -1114,9 +1172,10 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             OpenShelfTitle.Text = openShelf!.Title;
             var type = openShelf!.Type;
-            OpenShelfCount.Text = CountLabel(snapshot.Page.TotalCount, NounFor(type));
+            OpenShelfCount.Text = CountLabel(snapshot.Page.TotalCount, snapshot.Mode == CatalogMode.MyTvivo ? "items" : NounFor(type));
             if (!ReferenceEquals(_renderedSnapshot, snapshot) || _renderedOpenShelfId != _openShelfId)
-                OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel => ToCard(channel, type)).ToArray();
+                OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel => ToCard(channel,
+                    snapshot.Mode == CatalogMode.MyTvivo ? TypeForSource(channel.Source.Kind) : type)).ToArray();
         }
         else
         {
@@ -1680,7 +1739,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public bool SlotReleased { get; set; }
     }
     private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap);
-    private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset, CategorySort Sort);
+    private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset);
 
     private sealed record CatalogShelf(
         string Id,

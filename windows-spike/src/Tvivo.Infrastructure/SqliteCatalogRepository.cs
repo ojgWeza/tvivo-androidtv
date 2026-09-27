@@ -8,7 +8,7 @@ public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount);
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 14;
+    private const int SchemaVersion = 15;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -22,7 +22,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -33,7 +33,9 @@ public sealed class SqliteCatalogRepository : IDisposable
                 CREATE INDEX items_favourites_added ON items(account_id,type,favourite,favourite_added_at DESC);
                 CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id);
                 CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id));
-                PRAGMA user_version=14;
+                CREATE TABLE favorites(account_id TEXT NOT NULL,type TEXT NOT NULL,item_id TEXT NOT NULL,added_at INTEGER NOT NULL,PRIMARY KEY(account_id,type,item_id));
+                CREATE INDEX favorites_added ON favorites(account_id,added_at DESC,type,item_id);
+                PRAGMA user_version=15;
                 """;
             command.ExecuteNonQuery();
         }
@@ -71,6 +73,22 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 13)
                 MigrateCatalogMetadata(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 14)
+                MigrateFavorites(connection);
+        }
+    }
+
+    private static void MigrateFavorites(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "CREATE TABLE favorites(account_id TEXT NOT NULL,type TEXT NOT NULL,item_id TEXT NOT NULL,added_at INTEGER NOT NULL,PRIMARY KEY(account_id,type,item_id)); CREATE INDEX favorites_added ON favorites(account_id,added_at DESC,type,item_id); INSERT INTO favorites(account_id,type,item_id,added_at) SELECT account_id,type,id,COALESCE(favourite_added_at,0) FROM items WHERE favourite=1; PRAGMA user_version=15;";
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     private static void MigrateCatalogMetadata(SqliteConnection connection)
@@ -348,11 +366,25 @@ public sealed class SqliteCatalogRepository : IDisposable
         return pages.ToDictionary(pair => pair.Key, pair => new CatalogPage(pair.Value, counts[pair.Key]), StringComparer.Ordinal);
     }
 
-    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100)
-        => GetOrderedItems(account, type, connection, "added_at > 0", "added_at DESC, id ASC", limit);
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItems(account, type, connection, "added_at > 0", "added_at DESC, id ASC", limit, filter);
 
-    public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100)
-        => GetOrderedItems(account, type, connection, "favourite=1", "favourite_added_at DESC, id ASC", limit);
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItemsAcrossTypes(account, connection, "items.added_at > 0", "items.added_at DESC, items.type, items.id", limit, filter);
+
+    public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItems(account, type, connection, "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)", "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, id ASC", limit, filter);
+
+    public IReadOnlyList<Channel> GetRecentlyPlayed(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItems(account, type, connection, "visit_count > 0", "last_tuned_at DESC, id ASC", limit, filter);
+
+    public IReadOnlyList<Channel> GetRecentlyPlayed(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItemsAcrossTypes(account, connection, "items.visit_count > 0", "items.last_tuned_at DESC, items.type, items.id", limit, filter);
+
+    public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItemsAcrossTypes(account, connection,
+            "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)",
+            "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, items.type, items.id", limit, filter);
 
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100)
         => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit);
@@ -360,15 +392,41 @@ public sealed class SqliteCatalogRepository : IDisposable
     public void SetFavorite(ProviderAccount account, CatalogItemType type, string id, bool isFavorite)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = isFavorite
-            ? "UPDATE items SET favourite=1, favourite_added_at=CASE WHEN favourite=1 THEN favourite_added_at ELSE $now END WHERE account_id=$a AND type=$type AND id=$id"
-            : "UPDATE items SET favourite=0, favourite_added_at=NULL WHERE account_id=$a AND type=$type AND id=$id";
+            ? "INSERT INTO favorites(account_id,type,item_id,added_at) VALUES($a,$type,$id,$now) ON CONFLICT(account_id,type,item_id) DO NOTHING; UPDATE items SET favourite=1, favourite_added_at=COALESCE(favourite_added_at,$now) WHERE account_id=$a AND type=$type AND id=$id"
+            : "DELETE FROM favorites WHERE account_id=$a AND type=$type AND item_id=$id; UPDATE items SET favourite=0, favourite_added_at=NULL WHERE account_id=$a AND type=$type AND id=$id";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$id", id);
         if (isFavorite) command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    public void AddFavorite(ProviderAccount account, CatalogItemType type, string id) => SetFavorite(account, type, id, true);
+
+    public void RemoveFavorite(ProviderAccount account, CatalogItemType type, string id) => SetFavorite(account, type, id, false);
+
+    public bool IsFavorite(ProviderAccount account, CatalogItemType type, string id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM favorites WHERE account_id=$a AND type=$type AND item_id=$id)";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", id);
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
+    public bool ToggleFavorite(ProviderAccount account, CatalogItemType type, string id)
+    {
+        var isFavorite = !IsFavorite(account, type, id);
+        if (isFavorite) AddFavorite(account, type, id);
+        else RemoveFavorite(account, type, id);
+        return isFavorite;
     }
 
     public void UpdateResumePosition(ProviderAccount account, CatalogItemType type, string id, long positionMilliseconds)
@@ -420,14 +478,16 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.ExecuteNonQuery();
     }
 
-    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit)
+    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter = null)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND {predicate} ORDER BY {ordering} LIMIT $limit";
+        command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
+        command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
+        command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
         using var reader = command.ExecuteReader();
         var rows = new List<Channel>();
         while (reader.Read())
@@ -438,6 +498,31 @@ public sealed class SqliteCatalogRepository : IDisposable
             var title = CleanTitle(reader.GetString(2));
             var extension = reader.IsDBNull(4) ? null : reader.GetString(4);
             rows.Add(new(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title, artwork, added, null, StreamSourceFor(providerConnection, type, id, extension), ReadChannelMetadata(reader, 6)));
+        }
+        return rows;
+    }
+
+    private IReadOnlyList<Channel> GetOrderedItemsAcrossTypes(ProviderAccount account, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT items.type,items.id,items.category_id,items.title,items.artwork,items.extension,items.added_at,items.year,items.rating,items.genre,items.plot,items.[cast] FROM items WHERE items.account_id=$a AND items.type IN ('Live','Movie','Series') AND {predicate} AND ($filter IS NULL OR items.title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
+        command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
+        command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+        using var reader = command.ExecuteReader();
+        var rows = new List<Channel>();
+        while (reader.Read())
+        {
+            var type = Enum.Parse<CatalogItemType>(reader.GetString(0));
+            var id = reader.GetString(1);
+            Uri? artwork = Uri.TryCreate(reader.IsDBNull(4) ? null : reader.GetString(4), UriKind.Absolute, out var uri) ? uri : null;
+            DateTimeOffset? added = reader.IsDBNull(6) || reader.GetInt64(6) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(6));
+            var title = CleanTitle(reader.GetString(3));
+            var extension = reader.IsDBNull(5) ? null : reader.GetString(5);
+            rows.Add(new(account.AccountId, id, reader.IsDBNull(2) ? null : reader.GetString(2), title, title, artwork, added, null,
+                StreamSourceFor(providerConnection, type, id, extension), ReadChannelMetadata(reader, 7)));
         }
         return rows;
     }

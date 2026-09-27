@@ -376,16 +376,22 @@ public sealed partial class MainWindow : Window
         _playerSiblings = args.Source.Kind == StreamKind.Movie
             ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Movie)
                 .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
-            : Array.Empty<Channel>();
+            : args.Source.Kind == StreamKind.Live
+                ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Live)
+                    .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
+                : Array.Empty<Channel>();
         _currentSource = args.Source;
         _nowPlayingChannel = args.Channel;
         PlayerTitleText.Text = args.Channel.DisplayName;
         PlayerSideTitle.Text = args.Source.Kind == StreamKind.Movie
             ? PlayerSideTitleResolver.ForMovie(args.Channel.Metadata.GetValueOrDefault("genre"))
-            : "Now playing";
-        PlayerSideSubtitle.Text = args.Source.Kind == StreamKind.Movie
-            ? _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category"
-            : string.Empty;
+            : args.Source.Kind == StreamKind.Live ? "Live TV" : "Now playing";
+        PlayerSideSubtitle.Text = args.Source.Kind switch
+        {
+            StreamKind.Movie => _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category",
+            StreamKind.Live => _playerSiblings.Count <= 1 ? "No other channels are available." : "Other channels in this shelf",
+            _ => string.Empty,
+        };
         PlayerNowPlayingText.Text = string.Empty;
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
@@ -492,10 +498,34 @@ public sealed partial class MainWindow : Window
         {
             _playerEntries.Clear();
             foreach (var channel in channels)
-                _playerEntries.Add(new PlayerListEntry(channel));
+                _playerEntries.Add(new PlayerListEntry(channel, IsChannelFavorite(channel)));
         }
+        else
+            foreach (var entry in _playerEntries)
+                entry.IsFavorite = IsChannelFavorite(entry.Channel);
 
         SetCurrentPlayerEntry(current);
+    }
+
+    private bool IsChannelFavorite(Channel channel)
+    {
+        if (_catalogLandingPage.Account is not { } account) return false;
+        var (type, id) = FavoriteKey(channel);
+        return _catalogRepository.IsFavorite(account, type, id);
+    }
+
+    private static (CatalogItemType Type, string Id) FavoriteKey(Channel channel) =>
+        channel.Source.Kind == StreamKind.Episode && channel.Metadata.TryGetValue("seriesId", out var seriesId)
+            ? (CatalogItemType.Series, seriesId)
+            : (channel.Source.Kind == StreamKind.Live ? CatalogItemType.Live :
+                channel.Source.Kind == StreamKind.Series ? CatalogItemType.Series : CatalogItemType.Movie, channel.Id);
+
+    private void PlayerFavorite_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: PlayerListEntry entry } || _catalogLandingPage.Account is not { } account) return;
+        var (type, id) = FavoriteKey(entry.Channel);
+        entry.IsFavorite = _catalogRepository.ToggleFavorite(account, type, id);
+        _catalogLandingPage.NotifyFavoriteChanged();
     }
 
     private void SetCurrentPlayerEntry(Channel current)
@@ -1097,17 +1127,33 @@ public sealed partial class MainWindow : Window
         Player
     }
 
-    public sealed class PlayerListEntry(Channel channel) : INotifyPropertyChanged
+    public sealed class PlayerListEntry(Channel channel, bool isFavorite = false) : INotifyPropertyChanged
     {
         private bool _isCurrent;
+        private bool _isFavorite = isFavorite;
         private static Brush AccentBrush => (Brush)Application.Current.Resources["AppAccentBrush"];
         private static Brush NormalBrush => (Brush)Application.Current.Resources["AppTextBrush"];
         private static Brush SelectedTextBrush => (Brush)Application.Current.Resources["AppDeepBrush"];
+        private static Brush MutedBrush => (Brush)Application.Current.Resources["AppMutedTextBrush"];
 
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
         public Brush BackgroundBrush => _isCurrent ? AccentBrush : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         public Brush ForegroundBrush => _isCurrent ? SelectedTextBrush : NormalBrush;
+        public Brush FavoriteBrush => _isFavorite ? AccentBrush : MutedBrush;
+        public string FavoriteGlyph => _isFavorite ? "★" : "☆";
+        public bool IsFavorite
+        {
+            get => _isFavorite;
+            set
+            {
+                if (_isFavorite == value) return;
+                _isFavorite = value;
+                OnPropertyChanged(nameof(IsFavorite));
+                OnPropertyChanged(nameof(FavoriteBrush));
+                OnPropertyChanged(nameof(FavoriteGlyph));
+            }
+        }
         public bool IsCurrent
         {
             get => _isCurrent;

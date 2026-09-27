@@ -269,7 +269,17 @@
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">
-                                            <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                                <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Padding="6,2" MinWidth="32"
+                                                        Foreground="{Binding FavoriteBrush}" Background="Transparent"
+                                                        AutomationProperties.Name="Toggle favorite"
+                                                        Click="PlayerFavorite_Click" />
+                                            </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>

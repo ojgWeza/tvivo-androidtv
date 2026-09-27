@@ -11,6 +11,10 @@ public sealed class SqliteCatalogRepositoryTests
     private static ProviderAccount Account(string id = "account-a") => new(id, new("http", "fixture.invalid", 8080), "fixture");
     private static ChannelGroup Group(ProviderAccount a, string id, string name) => new(a.AccountId, id, name, name);
     private static Channel ChannelFor(ProviderAccount a, string id, string group, string title) => new(a.AccountId, id, group, title, title, null, null, null, new(id, StreamKind.Live, "ts"), new Dictionary<string,string>());
+    private static Channel ChannelAdded(ProviderAccount a, CatalogItemType type, string id, DateTimeOffset added) =>
+        new(a.AccountId, id, null, id, id, null, added, null,
+            new(id, type == CatalogItemType.Movie ? StreamKind.Movie : type == CatalogItemType.Series ? StreamKind.Series : StreamKind.Live,
+                type == CatalogItemType.Live ? "ts" : "mkv"), new Dictionary<string, string>());
     private static SqliteCatalogRepository Create(out string directory)
     {
         directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-tests", Guid.NewGuid().ToString("N"));
@@ -173,6 +177,126 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Recently_added_is_provider_timestamp_ordered_across_catalog_types()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var older = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+            var newer = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Movie, "movie-old", older) });
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "series-new", newer) });
+            repo.ReplaceSnapshot(account, CatalogItemType.Live, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Live, "live-mid", older.AddDays(10)) });
+
+            Assert.Equal(new[] { "series-new", "live-mid", "movie-old" },
+                repo.GetRecentlyAdded(account, limit: 10).Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Type_filtered_activity_shelves_keep_order_and_apply_the_title_filter()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var earlier = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+            var later = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelAdded(account, CatalogItemType.Series, "series-added", later.AddDays(2)),
+                ChannelFor(account, "series-played", "", "Series played"),
+                ChannelFor(account, "series-favorite", "", "Series favorite"),
+            });
+            repo.ReplaceSnapshot(account, CatalogItemType.Live, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelAdded(account, CatalogItemType.Live, "live-added", later.AddDays(3)),
+                ChannelFor(account, "live-played", "", "Live played"),
+                ChannelFor(account, "live-favorite", "", "Live favorite"),
+            });
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelAdded(account, CatalogItemType.Movie, "movie-added-old", earlier) with { Name = "Needle old", DisplayName = "Needle old" },
+                ChannelAdded(account, CatalogItemType.Movie, "movie-added-new", later) with { Name = "Needle new", DisplayName = "Needle new" },
+                ChannelAdded(account, CatalogItemType.Movie, "movie-added-filtered", later.AddDays(1)) with { Name = "Other title", DisplayName = "Other title" },
+                ChannelFor(account, "movie-played-old", "", "Movie played old"),
+                ChannelFor(account, "movie-played-new", "", "Movie played new"),
+                ChannelFor(account, "movie-favorite-old", "", "Movie favorite old"),
+                ChannelFor(account, "movie-favorite-new", "", "Movie favorite new"),
+            });
+
+            repo.RecordVisit(account, CatalogItemType.Movie, "movie-played-old");
+            Thread.Sleep(10);
+            repo.RecordVisit(account, CatalogItemType.Movie, "movie-played-new");
+            repo.RecordVisit(account, CatalogItemType.Series, "series-played");
+            repo.RecordVisit(account, CatalogItemType.Live, "live-played");
+            repo.AddFavorite(account, CatalogItemType.Movie, "movie-favorite-old");
+            Thread.Sleep(10);
+            repo.AddFavorite(account, CatalogItemType.Movie, "movie-favorite-new");
+            repo.AddFavorite(account, CatalogItemType.Series, "series-favorite");
+            repo.AddFavorite(account, CatalogItemType.Live, "live-favorite");
+
+            Assert.Equal(new[] { "movie-added-new", "movie-added-old" },
+                repo.GetRecentlyAdded(account, CatalogItemType.Movie, limit: 10, filter: "Needle").Select(item => item.Id));
+            Assert.Equal(new[] { "series-added" },
+                repo.GetRecentlyAdded(account, CatalogItemType.Series).Select(item => item.Id));
+            Assert.Equal(new[] { "live-added" },
+                repo.GetRecentlyAdded(account, CatalogItemType.Live).Select(item => item.Id));
+            Assert.Equal(new[] { "movie-played-new", "movie-played-old" },
+                repo.GetRecentlyPlayed(account, CatalogItemType.Movie).Select(item => item.Id));
+            Assert.Equal(new[] { "series-played" },
+                repo.GetRecentlyPlayed(account, CatalogItemType.Series).Select(item => item.Id));
+            Assert.Equal(new[] { "live-played" },
+                repo.GetRecentlyPlayed(account, CatalogItemType.Live).Select(item => item.Id));
+            Assert.Equal(new[] { "movie-favorite-new", "movie-favorite-old" },
+                repo.GetFavorites(account, CatalogItemType.Movie).Select(item => item.Id));
+            Assert.Equal(new[] { "series-favorite" },
+                repo.GetFavorites(account, CatalogItemType.Series).Select(item => item.Id));
+            Assert.Equal(new[] { "live-favorite" },
+                repo.GetFavorites(account, CatalogItemType.Live).Select(item => item.Id));
+            Assert.All(repo.GetRecentlyAdded(account, CatalogItemType.Series), item => Assert.Equal(StreamKind.Series, item.Source.Kind));
+            Assert.All(repo.GetRecentlyPlayed(account, CatalogItemType.Live), item => Assert.Equal(StreamKind.Live, item.Source.Kind));
+            Assert.All(repo.GetFavorites(account, CatalogItemType.Series), item => Assert.Equal(StreamKind.Series, item.Source.Kind));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Favorite_toggle_persists_and_added_played_favorite_shelves_are_distinct()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "catalog.sqlite");
+        var account = Account();
+        try
+        {
+            using (var repo = new SqliteCatalogRepository(path))
+            {
+                repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+                {
+                    ChannelAdded(account, CatalogItemType.Movie, "added-only", DateTimeOffset.Parse("2026-04-01T00:00:00Z")),
+                    ChannelFor(account, "played-only", "", "played-only"),
+                    ChannelFor(account, "favorite-only", "", "favorite-only"),
+                });
+                repo.RecordVisit(account, CatalogItemType.Movie, "played-only");
+                Assert.True(repo.ToggleFavorite(account, CatalogItemType.Movie, "favorite-only"));
+                Assert.True(repo.IsFavorite(account, CatalogItemType.Movie, "favorite-only"));
+            }
+
+            using (var repo = new SqliteCatalogRepository(path))
+            {
+                Assert.Equal(new[] { "added-only" }, repo.GetRecentlyAdded(account).Select(item => item.Id));
+                Assert.Equal(new[] { "played-only" }, repo.GetRecentlyPlayed(account).Select(item => item.Id));
+                Assert.Equal(new[] { "favorite-only" }, repo.GetFavorites(account).Select(item => item.Id));
+                Assert.False(repo.ToggleFavorite(account, CatalogItemType.Movie, "favorite-only"));
+                Assert.False(repo.IsFavorite(account, CatalogItemType.Movie, "favorite-only"));
+                Assert.Empty(repo.GetFavorites(account));
+            }
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public void Series_playback_keeps_the_last_opened_episode_and_finished_state()
     {
         using var repo = Create(out var dir); var account = Account();
@@ -205,25 +329,59 @@ public sealed class SqliteCatalogRepositoryTests
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,PRIMARY KEY(account_id,type,id)); INSERT INTO items VALUES('a','Movie','1','Film ( ) HD'),('a','Series','2','( )'),('a','Live','3','Show (2024)'); PRAGMA user_version=8;";
+                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id)); INSERT INTO items(account_id,type,id,title) VALUES('a','Movie','1','Film ( ) HD'),('a','Series','2','( )'),('a','Live','3','Show (2024)'); PRAGMA user_version=8;";
                 command.ExecuteNonQuery();
             }
 
             using (var repository = new SqliteCatalogRepository(path)) { }
 
+            using (var migrated = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                migrated.Open();
+                using var verify = migrated.CreateCommand();
+                verify.CommandText = "SELECT title FROM items ORDER BY id;";
+                using (var reader = verify.ExecuteReader())
+                {
+                    Assert.True(reader.Read()); Assert.Equal("Film HD", reader.GetString(0));
+                    Assert.True(reader.Read()); Assert.Equal("Untitled", reader.GetString(0));
+                    Assert.True(reader.Read()); Assert.Equal("Show (2024)", reader.GetString(0));
+                    Assert.False(reader.Read());
+                }
+                verify.CommandText = "PRAGMA user_version;";
+                Assert.Equal(15, Convert.ToInt32(verify.ExecuteScalar()));
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void Opening_schema_v14_migrates_existing_favorites_to_the_persisted_list()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "catalog.sqlite");
+        try
+        {
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,favourite INTEGER NOT NULL,favourite_added_at INTEGER,PRIMARY KEY(account_id,type,id)); INSERT INTO items VALUES('account-a','Movie','old-favorite',1,1234); PRAGMA user_version=14;";
+                command.ExecuteNonQuery();
+            }
+
+            using (var repo = new SqliteCatalogRepository(path))
+                Assert.True(repo.IsFavorite(Account(), CatalogItemType.Movie, "old-favorite"));
+
             using var migrated = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False");
             migrated.Open();
             using var verify = migrated.CreateCommand();
-            verify.CommandText = "SELECT title FROM items ORDER BY id;";
-            using (var reader = verify.ExecuteReader())
-            {
-                Assert.True(reader.Read()); Assert.Equal("Film HD", reader.GetString(0));
-                Assert.True(reader.Read()); Assert.Equal("Untitled", reader.GetString(0));
-                Assert.True(reader.Read()); Assert.Equal("Show (2024)", reader.GetString(0));
-                Assert.False(reader.Read());
-            }
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(14, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(15, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }

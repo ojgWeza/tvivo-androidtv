@@ -21,4 +21,27 @@ public sealed class AppSmokeTests
         Assert.False(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/new", true));
         Assert.False(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/item-1", false));
     }
+
+    [Fact]
+    public void My_Tvivo_shelves_are_type_specific_and_ordered_by_concept_then_type()
+    {
+        Assert.Equal(new[]
+        {
+            "Recently added Movies",
+            "Recently added Series",
+            "Recently added Live TV",
+            "Recently played Movies",
+            "Recently played Series",
+            "Recently played Live TV",
+            "Favorite Movies",
+            "Favorite Series",
+            "Favorite Live TV",
+        }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Title));
+        Assert.Equal(new[]
+        {
+            CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
+            CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
+            CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
+        }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Type));
+    }
 }
