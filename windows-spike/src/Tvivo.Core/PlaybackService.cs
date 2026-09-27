@@ -1,5 +1,28 @@
 namespace Tvivo.Core;
 
+public sealed class PlaybackHandoff(TimeSpan closeDelay)
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public async Task<T> RunAsync<T>(Func<CancellationToken, Task> stopAll,
+        Func<CancellationToken, Task<T>> startNext, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await stopAll(CancellationToken.None).ConfigureAwait(false);
+            if (closeDelay > TimeSpan.Zero)
+                await Task.Delay(closeDelay, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return await startNext(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+}
+
 public sealed class PlaybackService
 {
     private readonly IPlaybackEngine _engine;
@@ -35,11 +58,9 @@ public sealed class PlaybackService
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_currentSession is { } session)
-            {
-                _currentSession = null;
-                await _engine.StopAsync(session, cancellationToken).ConfigureAwait(false);
-            }
+            var session = _currentSession ?? new PlaybackSessionToken(++_generation, Guid.NewGuid());
+            _currentSession = null;
+            await _engine.StopAsync(session, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

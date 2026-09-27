@@ -8,7 +8,7 @@ public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount);
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 13;
+    private const int SchemaVersion = 14;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -22,18 +22,18 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
                 CREATE TABLE categories(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(account_id,type,id));
-                CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,category_id TEXT NOT NULL,title TEXT NOT NULL,title_sort TEXT NOT NULL,artwork TEXT,extension TEXT,rating TEXT,plot TEXT,added_at INTEGER NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,favourite_added_at INTEGER,resume_ms INTEGER NOT NULL DEFAULT 0,resume_updated_at INTEGER,first_indexed_at INTEGER,last_tuned_at INTEGER,visit_count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id));
+                CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,category_id TEXT NOT NULL,title TEXT NOT NULL,title_sort TEXT NOT NULL,artwork TEXT,extension TEXT,rating TEXT,plot TEXT,year TEXT,genre TEXT,cast TEXT,metadata_fetched INTEGER NOT NULL DEFAULT 0,added_at INTEGER NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,favourite_added_at INTEGER,resume_ms INTEGER NOT NULL DEFAULT 0,resume_updated_at INTEGER,first_indexed_at INTEGER,last_tuned_at INTEGER,visit_count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id));
                 CREATE INDEX items_browse ON items(account_id,type,category_id);
                 CREATE INDEX items_recent_added ON items(account_id,type,added_at DESC);
                 CREATE INDEX items_favourites_added ON items(account_id,type,favourite,favourite_added_at DESC);
                 CREATE INDEX items_most_visited ON items(account_id,type,visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id);
                 CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id));
-                PRAGMA user_version=12;
+                PRAGMA user_version=14;
                 """;
             command.ExecuteNonQuery();
         }
@@ -65,7 +65,55 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 12)
                 MigrateTitleOrdering(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 13)
+                MigrateCatalogMetadata(connection);
+        }
     }
+
+    private static void MigrateCatalogMetadata(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "ALTER TABLE items ADD COLUMN year TEXT; ALTER TABLE items ADD COLUMN genre TEXT; ALTER TABLE items ADD COLUMN cast TEXT; ALTER TABLE items ADD COLUMN metadata_fetched INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=14;";
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    public void SaveMetadata(ProviderAccount account, CatalogItemType type, string itemId, CatalogMetadata metadata)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE items SET year=$year,rating=$rating,genre=$genre,plot=$plot,[cast]=$cast,metadata_fetched=1 WHERE account_id=$a AND type=$type AND id=$id";
+        command.Parameters.AddWithValue("$year", (object?)metadata.Year ?? DBNull.Value);
+        command.Parameters.AddWithValue("$rating", (object?)metadata.Rating ?? DBNull.Value);
+        command.Parameters.AddWithValue("$genre", (object?)metadata.Genre ?? DBNull.Value);
+        command.Parameters.AddWithValue("$plot", (object?)metadata.Plot ?? DBNull.Value);
+        command.Parameters.AddWithValue("$cast", (object?)metadata.Cast ?? DBNull.Value);
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", itemId);
+        command.ExecuteNonQuery();
+    }
+
+    public CatalogMetadata? GetMetadata(ProviderAccount account, CatalogItemType type, string itemId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT year,rating,genre,plot,[cast],metadata_fetched FROM items WHERE account_id=$a AND type=$type AND id=$id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", itemId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read() || reader.GetInt32(5) == 0) return null;
+        return new CatalogMetadata(ReadNullable(reader, 0), ReadNullable(reader, 1), ReadNullable(reader, 2),
+            ReadNullable(reader, 3), ReadNullable(reader, 4));
+    }
+
+    private static string? ReadNullable(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
     private static void MigrateSeriesPlayback(SqliteConnection connection)
     {
@@ -234,7 +282,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var count = sqliteConnection.CreateCommand(); count.CommandText = $"SELECT COUNT(*) FROM items WHERE {where}";
         AddBrowseParameters(count, account, type, groupId, filter);
         var total = Convert.ToInt32(count.ExecuteScalar());
-        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
+        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
         AddBrowseParameters(command, account, type, groupId, filter); command.Parameters.AddWithValue("$limit", Math.Max(1, limit)); command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader(); var rows = new List<Channel>();
         while (reader.Read())
@@ -243,7 +291,7 @@ public sealed class SqliteCatalogRepository : IDisposable
             DateTimeOffset? added = reader.IsDBNull(5) || reader.GetInt64(5) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(5));
             var title = CleanTitle(reader.GetString(2));
             var extension = reader.IsDBNull(4) ? null : reader.GetString(4);
-            rows.Add(new(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title, artwork, added, null, StreamSourceFor(providerConnection, type, id, extension), new Dictionary<string,string>()));
+            rows.Add(new(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title, artwork, added, null, StreamSourceFor(providerConnection, type, id, extension), ReadChannelMetadata(reader, 6)));
         }
         return new(rows, total);
     }
@@ -259,14 +307,14 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = sqliteConnection.CreateCommand();
         command.CommandText = """
             WITH ranked AS (
-                SELECT id, category_id, title, artwork, extension, added_at,
+                SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast],
                        COUNT(*) OVER (PARTITION BY category_id) AS total_count,
                        ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY title, id) AS row_number
                 FROM items
                 WHERE account_id=$a AND type=$type
                   AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\')
             )
-            SELECT id, category_id, title, artwork, extension, added_at, total_count
+            SELECT id, category_id, title, artwork, extension, added_at, total_count, year, rating, genre, plot, [cast]
             FROM ranked
             WHERE row_number <= $limit
             ORDER BY category_id, title, id;
@@ -294,7 +342,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                 counts[categoryId] = reader.GetInt32(6);
             }
             var title = CleanTitle(reader.GetString(2));
-            rows.Add(new(account.AccountId, id, categoryId, title, title, artwork, added, null, StreamSourceFor(connection, type, id, extension), new Dictionary<string,string>()));
+            rows.Add(new(account.AccountId, id, categoryId, title, title, artwork, added, null, StreamSourceFor(connection, type, id, extension), ReadChannelMetadata(reader, 7)));
         }
 
         return pages.ToDictionary(pair => pair.Key, pair => new CatalogPage(pair.Value, counts[pair.Key]), StringComparer.Ordinal);
@@ -376,7 +424,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at FROM items WHERE account_id=$a AND type=$type AND {predicate} ORDER BY {ordering} LIMIT $limit";
+        command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND {predicate} ORDER BY {ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
@@ -389,12 +437,19 @@ public sealed class SqliteCatalogRepository : IDisposable
             DateTimeOffset? added = reader.IsDBNull(5) || reader.GetInt64(5) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(5));
             var title = CleanTitle(reader.GetString(2));
             var extension = reader.IsDBNull(4) ? null : reader.GetString(4);
-            rows.Add(new(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title, artwork, added, null, StreamSourceFor(providerConnection, type, id, extension), new Dictionary<string,string>()));
+            rows.Add(new(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title, artwork, added, null, StreamSourceFor(providerConnection, type, id, extension), ReadChannelMetadata(reader, 6)));
         }
         return rows;
     }
 
     private SqliteConnection Open() { var connection = new SqliteConnection(_connectionString); connection.Open(); return connection; }
+    private static IReadOnlyDictionary<string, string> ReadChannelMetadata(SqliteDataReader reader, int start)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (index, key) in new[] { (0, "year"), (1, "rating"), (2, "genre"), (3, "plot"), (4, "cast") })
+            if (!reader.IsDBNull(start + index)) metadata[key] = reader.GetString(start + index);
+        return metadata;
+    }
     private static StreamSource StreamSourceFor(ProviderConnection? connection, CatalogItemType type, string id, string? extension)
     {
         var directUri = connection is null ? null : type switch

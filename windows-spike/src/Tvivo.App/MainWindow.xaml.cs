@@ -3,6 +3,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Windowing;
 using Microsoft.UI;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +31,7 @@ public sealed partial class MainWindow : Window
     private readonly ProviderSetupPage _providerSetupPage;
     private readonly CatalogLandingPage _catalogLandingPage;
     private readonly SqliteCatalogRepository _catalogRepository;
+    private readonly PlaybackHandoff _playbackHandoff = new(TimeSpan.FromMilliseconds(350));
     private ShellPage? _currentPage;
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
@@ -36,12 +39,15 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private string? _currentSeriesId;
     private ProviderAccount? _currentSeriesAccount;
+    private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
     private bool _seriesCompletionRecorded;
     private bool _playbackCompletionShown;
     private long _catalogRequestGeneration;
+    private long _itemSelectionGeneration;
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
+    private long _metadataGeneration;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
     private bool _isCinemaMode;
@@ -87,7 +93,10 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
-        PageHost.Content = _homePage;
+        PageHost.Children.Add(_homePage);
+        PageHost.Children.Add(_providerSetupPage);
+        _homePage.Visibility = Visibility.Visible;
+        _providerSetupPage.Visibility = Visibility.Collapsed;
         CatalogPageHost.Content = _catalogLandingPage;
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
         LaunchDiagnostics.Write("MainWindow XAML initialized");
@@ -260,16 +269,20 @@ public sealed partial class MainWindow : Window
         if (isPlayer)
             _playbackUiTimer.Start();
         var isCatalog = page == ShellPage.Catalog;
-        PageHost.Visibility = isPlayer || isCatalog ? Visibility.Collapsed : Visibility.Visible;
+        var isStaticPage = page is ShellPage.Home or ShellPage.Setup;
+        PageHost.Visibility = isStaticPage ? Visibility.Visible : Visibility.Collapsed;
+        _homePage.Visibility = page == ShellPage.Home ? Visibility.Visible : Visibility.Collapsed;
+        _providerSetupPage.Visibility = page == ShellPage.Setup ? Visibility.Visible : Visibility.Collapsed;
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
+        if (isStaticPage) FadeIn(PageHost);
+        else if (isPlayer) FadeIn(PlayerPage);
+        else if (isCatalog) FadeIn(CatalogPageArea);
         _catalogLandingPage.SetActive(isCatalog);
         SetCatalogSearchEnabled(isCatalog && _catalogLandingPage.IsReadyForInteraction);
         if (updateTopNavigation)
             UpdateTopNavigationState();
 
-        if (page == ShellPage.Setup) PageHost.Content = _providerSetupPage;
-        else if (page == ShellPage.Home) PageHost.Content = _homePage;
     }
 
     private void SetCatalogSearchEnabled(bool enabled)
@@ -316,9 +329,11 @@ public sealed partial class MainWindow : Window
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
+        var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
+        Interlocked.Increment(ref _metadataGeneration);
         if (args.Source.Kind == StreamKind.Series)
         {
-            await OpenSeriesAsync(args.Channel);
+            await OpenSeriesAsync(args.Channel, selectionGeneration);
             return;
         }
 
@@ -336,6 +351,7 @@ public sealed partial class MainWindow : Window
 
         _currentSeriesId = null;
         _currentSeriesAccount = null;
+        _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
@@ -356,13 +372,16 @@ public sealed partial class MainWindow : Window
             ? _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category"
             : string.Empty;
         PlayerNowPlayingText.Text = string.Empty;
+        SetPlayerMetadata(null);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
         _playbackCompletionShown = false;
         SetPlayerList(_playerSiblings, args.Channel);
         ShowPage(ShellPage.Player);
+        _ = LoadPlayerMetadataAsync(args.Channel, type);
         _ = StartPlaybackAsync(args.Source);
     }
 
-    private async Task OpenSeriesAsync(Channel series)
+    private async Task OpenSeriesAsync(Channel series, long selectionGeneration)
     {
         if (_catalogLandingPage.Account is not { } account ||
             App.Services.GetRequiredService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
@@ -375,10 +394,13 @@ public sealed partial class MainWindow : Window
         try
         {
             details = await provider.GetSeriesInfoAsync(account, series.Id);
+            if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
+                return;
         }
         catch
         {
-            StatusText.Text = "Couldn't load this series' episodes. Try opening it again.";
+            if (selectionGeneration == Volatile.Read(ref _itemSelectionGeneration))
+                StatusText.Text = "Couldn't load this series' episodes. Try opening it again.";
             return;
         }
 
@@ -391,9 +413,13 @@ public sealed partial class MainWindow : Window
         }
 
         _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+        Interlocked.Increment(ref _metadataGeneration);
         _currentSeriesId = series.Id;
         _currentSeriesAccount = account;
+        _currentSeriesMetadata = details.Metadata;
         _playerSeriesSeasons = details.Seasons;
+        ApplyMetadataToChannel(series, CatalogItemType.Series, details.Metadata);
+        SetPlayerMetadata(details.Metadata ?? new CatalogMetadata(), CatalogItemType.Series);
         _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
             .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
         ConfigureSeasonSelector(details.Seasons);
@@ -426,6 +452,8 @@ public sealed partial class MainWindow : Window
         PlayerSideTitle.Text = "Season and episodes";
         PlayerSideSubtitle.Text = "Select an episode to play";
         PlayerNowPlayingText.Text = string.Empty;
+        SetPlayerMetadata(_currentSeriesMetadata, CatalogItemType.Series);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
         ConfigureSeasonSelector(_playerSeriesSeasons);
         var seasonId = episode.Metadata.TryGetValue("seasonId", out var id) ? id : null;
         var selectedSeason = _playerSeriesSeasons.FirstOrDefault(season => season.Id == seasonId);
@@ -486,19 +514,31 @@ public sealed partial class MainWindow : Window
         previousCts?.Dispose();
         _currentSource = source;
         _playbackCompletionShown = false;
+        if (_nowPlayingChannel is { } selectedChannel)
+            PlayerTitleText.Text = selectedChannel.DisplayName;
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
         ShowPage(ShellPage.Player);
         StatusText.Text = "Starting playback…";
+        var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        LaunchDiagnostics.Write($"Playback start: engine={engineName}, kind={source.Kind}, extension={source.ContainerExtension ?? "unspecified"}");
         PlaybackAttemptResult result;
         try
         {
-            await _playbackStopTask;
-            // The first catalog activation reveals a collapsed player surface. Give
-            // WinUI a layout pass before opening media, as side-list clicks already do.
-            await Task.Yield();
-            PlayerPage.UpdateLayout();
-            if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
-                return;
-            result = await _playback.PlayAsync(source, sessionCts.Token);
+            // Stop both backends before opening a replacement. Each backend owns
+            // native/network state independently, so stopping only the selected
+            // PlaybackService can leave the previous provider connection alive.
+            result = await _playbackHandoff.RunAsync(
+                async _ =>
+                {
+                    await _playbackStopTask;
+                    await StopBothPlaybackEnginesAsync();
+                    await Task.Yield();
+                    PlayerPage.UpdateLayout();
+                },
+                token => generation == Volatile.Read(ref _playbackSessionGeneration) && !sessionCts.IsCancellationRequested
+                    ? _playback.PlayAsync(source, token)
+                    : Task.FromResult(PlaybackAttemptResult.Cancelled),
+                sessionCts.Token);
         }
         catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
         {
@@ -506,7 +546,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            LaunchDiagnostics.Write($"Playback start failed: {exception.GetType().Name}");
+            LaunchDiagnostics.Write($"Playback start failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
             result = PlaybackAttemptResult.HostFailure;
         }
         finally
@@ -517,7 +557,10 @@ public sealed partial class MainWindow : Window
 
         if (generation != Volatile.Read(ref _playbackSessionGeneration) || _currentPage != ShellPage.Player)
             return;
-        StatusText.Text = result == PlaybackAttemptResult.FirstFrame ? "Playing" : $"Playback: {result}";
+        LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
+        StatusText.Text = PlaybackStatusMessage(result, source.Kind);
+        if (result == PlaybackAttemptResult.FirstFrame)
+            PlayerVideoCurtain.Visibility = Visibility.Collapsed;
         PauseButton.Content = result == PlaybackAttemptResult.FirstFrame
             ? "Pause"
             : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry";
@@ -526,6 +569,8 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        Interlocked.Increment(ref _itemSelectionGeneration);
+        Interlocked.Increment(ref _metadataGeneration);
         Interlocked.Increment(ref _playbackSessionGeneration);
         var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
         sessionCts?.Cancel();
@@ -535,6 +580,7 @@ public sealed partial class MainWindow : Window
         _nowPlayingChannel = null;
         _currentSeriesId = null;
         _currentSeriesAccount = null;
+        _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
         _playerSiblings = Array.Empty<Channel>();
         _playbackUiTimer.Stop();
@@ -551,6 +597,8 @@ public sealed partial class MainWindow : Window
         ForwardButton.IsEnabled = false;
         PauseButton.Content = "Play";
         PlayerTitleText.Text = string.Empty;
+        SetPlayerMetadata(null);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
         PlayerSideTitle.Text = string.Empty;
         PlayerSideSubtitle.Text = string.Empty;
         PlayerNowPlayingText.Text = string.Empty;
@@ -569,6 +617,106 @@ public sealed partial class MainWindow : Window
     private async Task StopBothPlaybackEnginesAsync()
     {
         await Task.WhenAll(_vlcPlayback.StopAsync(), _nativePlayback.StopAsync());
+    }
+
+    private static string PlaybackStatusMessage(PlaybackAttemptResult result, StreamKind kind) => result switch
+    {
+        PlaybackAttemptResult.FirstFrame => "Playing",
+        PlaybackAttemptResult.Cancelled => "Playback cancelled",
+        PlaybackAttemptResult.Timeout => $"The {kind.ToString().ToLowerInvariant()} stream did not start before the timeout. Check the provider connection and stream URL, then retry.",
+        PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
+        PlaybackAttemptResult.DecodeFailure => "The stream opened but could not be decoded. Try another episode or playback engine.",
+        PlaybackAttemptResult.UnsupportedMedia => "This stream format is not supported by the selected playback engine.",
+        PlaybackAttemptResult.NetworkFailure => "The stream could not be reached. Check the provider connection and retry.",
+        _ => $"Playback failed ({result}). Check the provider connection and stream details, then retry.",
+    };
+
+    private static void FadeIn(UIElement element)
+    {
+        var visual = ElementCompositionPreview.GetElementVisual(element);
+        visual.StopAnimation(nameof(Visual.Opacity));
+        visual.Opacity = 0;
+        var animation = visual.Compositor.CreateScalarKeyFrameAnimation();
+        animation.InsertKeyFrame(1f, 1f);
+        animation.Duration = TimeSpan.FromMilliseconds(150);
+        visual.StartAnimation(nameof(Visual.Opacity), animation);
+    }
+
+    private async Task LoadPlayerMetadataAsync(Channel channel, CatalogItemType type)
+    {
+        var generation = Interlocked.Increment(ref _metadataGeneration);
+        var account = _catalogLandingPage.Account;
+        SetPlayerMetadata(null, type);
+        if (account is null)
+        {
+            SetPlayerMetadata(new CatalogMetadata(), type);
+            return;
+        }
+        try
+        {
+            var metadata = _catalogRepository.GetMetadata(account, type, channel.Id);
+            if (metadata is null)
+            {
+                var provider = App.Services.GetRequiredService<ICatalogProvider>();
+                if (type == CatalogItemType.Movie && provider is IMovieInfoProvider movieProvider)
+                    metadata = (await movieProvider.GetMovieInfoAsync(account, channel.Id)).Metadata;
+                if (metadata is not null)
+                    _catalogRepository.SaveMetadata(account, type, channel.Id, metadata);
+            }
+
+            if (generation != Volatile.Read(ref _metadataGeneration) || _nowPlayingChannel?.Id != channel.Id)
+                return;
+            metadata ??= new CatalogMetadata();
+            ApplyMetadataToChannel(channel, type, metadata);
+            SetPlayerMetadata(metadata, type);
+        }
+        catch
+        {
+            if (generation == Volatile.Read(ref _metadataGeneration) && _nowPlayingChannel?.Id == channel.Id)
+                SetPlayerMetadata(new CatalogMetadata(), type);
+        }
+    }
+
+    private void ApplyMetadataToChannel(Channel channel, CatalogItemType type, CatalogMetadata? metadata)
+    {
+        if (metadata is not null && channel.Metadata is IDictionary<string, string> values)
+        {
+            Add("year", metadata.Year);
+            Add("rating", metadata.Rating);
+            Add("genre", metadata.Genre);
+            Add("plot", metadata.Plot);
+            Add("cast", metadata.Cast);
+            void Add(string key, string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) values[key] = value;
+            }
+        }
+        if (metadata is not null && _catalogLandingPage.Account is { } account)
+            _catalogRepository.SaveMetadata(account, type, channel.Id, metadata);
+        _catalogLandingPage.NotifyMetadataChanged(channel.Id);
+    }
+
+    private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
+    {
+        PlayerAboutExpander.Visibility = type is CatalogItemType.Movie or CatalogItemType.Series
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (metadata is null)
+        {
+            PlayerAboutText.Text = "Loading details…";
+            return;
+        }
+        var attributeLine = string.Join(" · ", new[]
+        {
+            metadata.Year,
+            metadata.Rating is null ? null : $"★ {metadata.Rating}",
+            metadata.Genre,
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var lines = new List<string>();
+        if (attributeLine.Length > 0) lines.Add(attributeLine);
+        if (!string.IsNullOrWhiteSpace(metadata.Plot)) lines.Add(metadata.Plot);
+        if (!string.IsNullOrWhiteSpace(metadata.Cast)) lines.Add($"Cast: {metadata.Cast}");
+        PlayerAboutText.Text = lines.Count == 0 ? "No provider details are available for this title." : string.Join(Environment.NewLine + Environment.NewLine, lines);
     }
 
     private async void PauseButton_Click(object sender, RoutedEventArgs args)
@@ -691,7 +839,6 @@ public sealed partial class MainWindow : Window
     {
         if (_playerReturnPage == ShellPage.Catalog)
         {
-            _catalogLandingPage.InvalidateCatalogSnapshots();
             _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode);
         }
         else ShowPage(_playerReturnPage);

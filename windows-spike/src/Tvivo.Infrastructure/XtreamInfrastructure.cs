@@ -8,7 +8,7 @@ using Tvivo.Core;
 
 namespace Tvivo.Infrastructure;
 
-public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider
+public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider, IMovieInfoProvider
 {
     private readonly HttpClient _http;
     private readonly Dictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
@@ -86,6 +86,18 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public int? GetHttpsPort(ProviderAccount account) =>
         _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
 
+    public async Task<MovieDetails> GetMovieInfoAsync(ProviderAccount account, string movieId, CancellationToken cancellationToken = default)
+    {
+        if (!_connections.TryGetValue(account.AccountId, out var connection))
+            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+        using var response = await _http.GetAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var info = GetInfoObject(document.RootElement);
+        return new MovieDetails(movieId, MapMetadata(info));
+    }
+
     public async Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default)
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
@@ -96,7 +108,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = document.RootElement;
-        var title = root.TryGetProperty("info", out var info) ? JsonValue.String(info, "name") : null;
+        var info = GetInfoObject(root);
+        var title = JsonValue.String(info, "name");
         var seasons = new List<SeriesSeason>();
         if (root.TryGetProperty("episodes", out var episodeGroups) && episodeGroups.ValueKind == JsonValueKind.Object)
         {
@@ -128,8 +141,21 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                     episodes.OrderBy(episode => episode.EpisodeNumber).ToArray()));
             }
         }
-        return new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray());
+        return new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info));
     }
+
+    private static JsonElement GetInfoObject(JsonElement root) =>
+        root.ValueKind == JsonValueKind.Object && root.TryGetProperty("info", out var info) && info.ValueKind == JsonValueKind.Object
+            ? info
+            : root;
+
+    private static CatalogMetadata MapMetadata(JsonElement info) => new(
+        JsonValue.String(info, "year"), JsonValue.String(info, "rating"), JsonValue.String(info, "genre"),
+        FirstNonEmpty(JsonValue.String(info, "plot"), JsonValue.String(info, "description")),
+        FirstNonEmpty(JsonValue.String(info, "cast"), JsonValue.String(info, "actors")));
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 
     public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default) =>
         GetArrayAsync(account, CategoryAction(type), null, MapGroup, cancellationToken);
@@ -290,6 +316,15 @@ internal static class XtreamRequest
     {
         var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "player_api.php");
         builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_series_info&series_id={WebUtility.UrlEncode(seriesId)}";
+        return builder.Uri;
+    }
+
+    public static Uri VodInfoUri(ProviderConnection connection, string movieId)
+    {
+        var builder = new UriBuilder($"{connection.Endpoint.Scheme}://{connection.Endpoint.Host}:{connection.Endpoint.Port}/player_api.php")
+        {
+            Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_vod_info&vod_id={WebUtility.UrlEncode(movieId)}"
+        };
         return builder.Uri;
     }
 }

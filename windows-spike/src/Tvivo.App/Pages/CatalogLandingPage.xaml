@@ -66,6 +66,10 @@
                                            Foreground="{StaticResource AppMutedTextBrush}"
                                            FontSize="12"
                                            TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding DetailsLine}"
+                                           Foreground="{StaticResource AppMutedTextBrush}"
+                                           FontSize="11"
+                                           TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -153,7 +157,7 @@
                             Click="ClearSearch_Click" />
                 </Grid>
             </Border>
-            <StackPanel x:Name="SortPanel" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+            <StackPanel x:Name="SortPanel" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" HorizontalAlignment="Right">
                 <TextBlock Foreground="{StaticResource AppMutedTextBrush}"
                            FontSize="12"
                            VerticalAlignment="Center"

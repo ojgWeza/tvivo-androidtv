@@ -96,6 +96,28 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Catalog_metadata_round_trips_and_survives_snapshot_refresh()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var movie = new Channel(account.AccountId, "movie-1", "g", "Movie", "Movie", null, null, null,
+                new("movie-1", StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[] { movie });
+            var metadata = new CatalogMetadata("2024", "8.2", "Drama", "A cached plot.", "Actor One");
+            repo.SaveMetadata(account, CatalogItemType.Movie, movie.Id, metadata);
+
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[] { movie });
+
+            Assert.Equal(metadata, repo.GetMetadata(account, CatalogItemType.Movie, movie.Id));
+            var cachedChannel = Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items);
+            Assert.Equal("A cached plot.", cachedChannel.Metadata["plot"]);
+            Assert.Equal("2024", cachedChannel.Metadata["year"]);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void My_Tvivo_order_uses_visit_count_then_letters_digits_symbols_fallback()
     {
         using var repo = Create(out var dir); var account = Account();
@@ -180,7 +202,7 @@ public sealed class SqliteCatalogRepositoryTests
                 Assert.False(reader.Read());
             }
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(13, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(14, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }

@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Storage.Streams;
+using System.ComponentModel;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 
@@ -499,6 +500,13 @@ public sealed partial class CatalogLandingPage : UserControl
         type == CatalogItemType.Live ? 138 : 250,
         channel);
 
+    public void NotifyMetadataChanged(string channelId)
+    {
+        foreach (var card in _snapshotCache.Values.SelectMany(value => value.Snapshot.Shelves)
+                     .SelectMany(shelf => shelf.Cards).Where(card => card.Channel?.Id == channelId))
+            card.NotifyMetadataChanged();
+    }
+
     private static CatalogItemType TypeForMode(CatalogMode mode) => mode switch
     {
         CatalogMode.Movies => CatalogItemType.Movie,
@@ -511,6 +519,22 @@ public sealed partial class CatalogLandingPage : UserControl
         CatalogItemType.Movie => "Movie",
         CatalogItemType.Series => "Series",
         _ => "Live channel",
+    };
+
+    private static string SubtitleFor(StreamKind kind) => kind switch
+    {
+        StreamKind.Movie => "Movie",
+        StreamKind.Series => "Series",
+        StreamKind.Episode => "Series episode",
+        _ => "Live",
+    };
+
+    private static string TypeLabel(StreamKind? kind) => kind switch
+    {
+        StreamKind.Movie => "MOVIE",
+        StreamKind.Series or StreamKind.Episode => "SERIES",
+        StreamKind.Live => "LIVE",
+        _ => "CATALOG",
     };
 
     private static string NounFor(CatalogItemType type) => type switch
@@ -580,14 +604,11 @@ public sealed partial class CatalogLandingPage : UserControl
         StopArtwork(SpotlightArtwork);
         SpotlightArtworkFallback.Visibility = Visibility.Visible;
         SpotlightArtwork.Visibility = Visibility.Visible;
-        SpotlightTitle.Text = card.Title;
-        SpotlightSubtitle.Text = card.Subtitle;
-        SpotlightEyebrow.Text = _activeMode switch
-        {
-            CatalogMode.Movies => "TVIVO SPOTLIGHT - MOVIE",
-            CatalogMode.Series => "TVIVO SPOTLIGHT - SERIES",
-            _ => "TVIVO SPOTLIGHT - LIVE TV",
-        };
+        SpotlightTitle.Text = card.Channel?.DisplayName ?? card.Title;
+        SpotlightSubtitle.Text = card.Channel is { } spotlightChannel
+            ? SubtitleFor(spotlightChannel.Source.Kind)
+            : card.Subtitle;
+        SpotlightEyebrow.Text = $"TVIVO SPOTLIGHT - {TypeLabel(card.Channel?.Source.Kind)}";
         SpotlightAction.Content = card.Channel is null ? "Open shelf" : card.Channel.Source.Kind switch
         {
             StreamKind.Movie => "Play movie",
@@ -1452,14 +1473,26 @@ public sealed partial class CatalogLandingPage : UserControl
         string? GroupId,
         bool OpensPagedGrid);
 
-    private sealed record CatalogCard(
-        string Id,
-        string Title,
-        string Subtitle,
-        string? ArtworkUrl,
-        double Width,
-        double Height,
-        Channel? Channel);
+    private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
+        double width, double height, Channel? channel) : INotifyPropertyChanged
+    {
+        public string Id { get; } = id;
+        public string Title { get; } = title;
+        public string Subtitle { get; } = subtitle;
+        public string? ArtworkUrl { get; } = artworkUrl;
+        public double Width { get; } = width;
+        public double Height { get; } = height;
+        public Channel? Channel { get; } = channel;
+        public string DetailsLine => Channel is null ? string.Empty : string.Join(" · ", new[]
+        {
+            Channel.Metadata.GetValueOrDefault("year"),
+            Channel.Metadata.TryGetValue("rating", out var rating) ? $"★ {rating}" : null,
+            Channel.Metadata.GetValueOrDefault("genre"),
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        public void NotifyMetadataChanged() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+    }
 
     public enum CatalogMode
     {

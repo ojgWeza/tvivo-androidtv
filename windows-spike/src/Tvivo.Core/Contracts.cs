@@ -76,7 +76,13 @@ public sealed record SeriesEpisode(string Id, string Title, string SeasonId, str
 
 public sealed record SeriesSeason(string Id, string Name, int Number, IReadOnlyList<SeriesEpisode> Episodes);
 
-public sealed record SeriesDetails(string Id, string Title, IReadOnlyList<SeriesSeason> Seasons);
+public sealed record CatalogMetadata(string? Year = null, string? Rating = null, string? Genre = null,
+    string? Plot = null, string? Cast = null);
+
+public sealed record MovieDetails(string Id, CatalogMetadata Metadata);
+
+public sealed record SeriesDetails(string Id, string Title, IReadOnlyList<SeriesSeason> Seasons,
+    CatalogMetadata? Metadata = null);
 
 public static class SeriesEpisodeResolver
 {
@@ -106,6 +112,11 @@ public interface ICatalogProvider
 public interface ISeriesCatalogProvider
 {
     Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default);
+}
+
+public interface IMovieInfoProvider
+{
+    Task<MovieDetails> GetMovieInfoAsync(ProviderAccount account, string movieId, CancellationToken cancellationToken = default);
 }
 
 public enum PlaybackAttemptResult

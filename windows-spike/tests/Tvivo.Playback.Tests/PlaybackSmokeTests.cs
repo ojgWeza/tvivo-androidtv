@@ -1,5 +1,6 @@
 using Tvivo.Core;
 using Tvivo.Playback;
+using System.Collections.Concurrent;
 using Xunit;
 
 namespace Tvivo.Playback.Tests;
@@ -26,6 +27,46 @@ public sealed class PlaybackSmokeTests
         Assert.Single(engine.Stopped);
         Assert.True(engine.Started[1].Generation > engine.Started[0].Generation);
         Assert.Equal(engine.Started[0], engine.Stopped[0]);
+    }
+
+    [Fact]
+    public async Task PlaybackHandoffStopsBeforeOpeningAndSerializesConcurrentStarts()
+    {
+        var handoff = new PlaybackHandoff(TimeSpan.Zero);
+        var activeStreams = 0;
+        var openOrder = new ConcurrentQueue<string>();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = handoff.RunAsync(
+            _ => { activeStreams = 0; openOrder.Enqueue("stop-1"); return Task.CompletedTask; },
+            async _ =>
+            {
+                Assert.Equal(0, activeStreams);
+                activeStreams++;
+                openOrder.Enqueue("start-1");
+                firstStarted.SetResult();
+                await releaseFirstStart.Task;
+                return PlaybackAttemptResult.FirstFrame;
+            });
+        await firstStarted.Task;
+
+        var second = handoff.RunAsync(
+            _ => { activeStreams = 0; openOrder.Enqueue("stop-2"); return Task.CompletedTask; },
+            _ =>
+            {
+                Assert.Equal(0, activeStreams);
+                activeStreams++;
+                openOrder.Enqueue("start-2");
+                return Task.FromResult(PlaybackAttemptResult.FirstFrame);
+            });
+        await Task.Yield();
+        Assert.DoesNotContain("start-2", openOrder);
+        releaseFirstStart.SetResult();
+
+        Assert.Equal(PlaybackAttemptResult.FirstFrame, await first);
+        Assert.Equal(PlaybackAttemptResult.FirstFrame, await second);
+        Assert.Equal(new[] { "stop-1", "start-1", "stop-2", "start-2" }, openOrder.ToArray());
+        Assert.Equal(1, activeStreams);
     }
 
     [Fact]

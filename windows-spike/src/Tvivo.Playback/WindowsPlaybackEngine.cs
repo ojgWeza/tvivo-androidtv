@@ -27,7 +27,7 @@ public sealed class VlcPlaybackStateChangedEventArgs : EventArgs
 
 public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisposable
 {
-    private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _lifecycleLock = new();
@@ -39,6 +39,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     private MediaPlayer? _player;
     private PlaybackSessionToken? _currentSession;
     private EventHandlers? _handlers;
+    private Task _abandonedCleanupTask = Task.CompletedTask;
     private bool _disposed;
 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
@@ -84,6 +85,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            await _abandonedCleanupTask.WaitAsync(cancellationToken).ConfigureAwait(true);
+            _abandonedCleanupTask = Task.CompletedTask;
             StopCore(_currentSession);
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -167,10 +170,11 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 {
                     if (result == PlaybackAttemptResult.Timeout)
                         PublishState(session, VlcPlaybackState.Failed);
-                    if (result == PlaybackAttemptResult.Timeout && !playTask.IsCompleted)
+                    if (!playTask.IsCompleted)
                     {
                         // Do not let a second potentially blocking native call prevent
-                        // timeout recovery. Detach XAML now; finish native cleanup if Play returns.
+                        // timeout/cancellation recovery. Detach now, and gate the next
+                        // open on native Play returning and its media being disposed.
                         AbandonTimedOutStart(session, player, media, handlers, playTask);
                     }
                     else
@@ -185,8 +189,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 StopCore(session);
                 return PlaybackAttemptResult.Cancelled;
             }
-            catch
+            catch (Exception exception)
             {
+                Log($"Playback startup failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8}).");
                 StopCore(session);
                 return PlaybackAttemptResult.HostFailure;
             }
@@ -205,6 +210,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
             StopCore(session);
+            await _abandonedCleanupTask.WaitAsync(cancellationToken).ConfigureAwait(true);
+            _abandonedCleanupTask = Task.CompletedTask;
         }
         finally
         {
@@ -228,6 +235,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 return;
 
             StopCore(_currentSession);
+            _abandonedCleanupTask.GetAwaiter().GetResult();
             lock (_lifecycleLock)
             {
                 _libVlc?.Dispose();
@@ -251,6 +259,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 return;
 
             StopCore(_currentSession);
+            await _abandonedCleanupTask.ConfigureAwait(true);
+            _abandonedCleanupTask = Task.CompletedTask;
             lock (_lifecycleLock)
             {
                 _libVlc?.Dispose();
@@ -329,11 +339,17 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         player.EndReached -= handlers.EndReached;
         DetachPlayerFromView();
 
-        _ = playTask.ContinueWith(_ =>
+        _abandonedCleanupTask = playTask.ContinueWith(_ =>
         {
-            player.Stop();
-            player.Dispose();
-            media.Dispose();
+            try { player.Stop(); }
+            catch (Exception exception) { Log($"Timed-out player stop failed during deferred cleanup. {exception.GetType().Name}"); }
+            finally
+            {
+                try { player.Dispose(); }
+                catch (Exception exception) { Log($"Timed-out player dispose failed during deferred cleanup. {exception.GetType().Name}"); }
+                try { media.Dispose(); }
+                catch (Exception exception) { Log($"Timed-out media dispose failed during deferred cleanup. {exception.GetType().Name}"); }
+            }
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 

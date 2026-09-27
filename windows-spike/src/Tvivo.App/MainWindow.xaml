@@ -125,7 +125,7 @@
         </Border>
 
         <Grid Grid.Row="2">
-            <ContentControl x:Name="PageHost" />
+            <Grid x:Name="PageHost" />
             <Grid x:Name="PlayerPage" Visibility="Collapsed" Padding="24" KeyDown="PlayerPage_KeyDown">
                 <Grid.RowDefinitions>
                     <RowDefinition x:Name="PlayerNavigationRow" Height="Auto" />
@@ -163,6 +163,8 @@
                                         PointerPressed="VideoSurface_PointerPressed"
                                         PointerReleased="VideoSurface_PointerReleased"
                                         Background="{StaticResource AppPanelSurfaceBrush}" />
+                    <Border x:Name="PlayerVideoCurtain" Grid.Row="0" Background="{StaticResource AppPanelSurfaceBrush}"
+                            Visibility="Collapsed" IsHitTestVisible="False" />
 
                     <StackPanel x:Name="PlayerDetailsPanel" Grid.Row="1" Spacing="3">
                         <TextBlock x:Name="PlayerTitleText" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="Now playing" />
@@ -216,6 +218,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
@@ -226,7 +229,10 @@
                             <ComboBox x:Name="PlayerSeasonComboBox" Grid.Row="3" Visibility="Collapsed"
                                       DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                       AutomationProperties.Name="Series season" />
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
+                            <Expander x:Name="PlayerAboutExpander" Grid.Row="4" Header="About" Visibility="Collapsed">
+                                <TextBlock x:Name="PlayerAboutText" TextWrapping="Wrap" Foreground="{StaticResource AppMutedTextBrush}" />
+                            </Expander>
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">

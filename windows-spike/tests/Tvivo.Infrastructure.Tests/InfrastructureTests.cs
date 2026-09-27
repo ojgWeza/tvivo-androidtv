@@ -27,6 +27,13 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public void SeriesUrl_uses_episode_id_and_container_extension()
+    {
+        var uri = StreamUrlBuilder.Series(Endpoint(), "u", "p", "episode-opaque-42", ".mkv");
+        Assert.Equal("http://panel.example.com:8080/series/u/p/episode-opaque-42.mkv", uri.ToString());
+    }
+
+    [Fact]
     public void Redaction_removes_credentials_from_urls_and_messages()
     {
         var text = "failure: http://panel.example.com:8080/live/user/pass/1.ts";
@@ -96,6 +103,42 @@ public sealed class InfrastructureTests
         Assert.Equal("mkv", channels[0].Source.ContainerExtension);
         Assert.Equal("https://cdn.example/logo.png", channels[0].LogoUri!.ToString());
         Assert.Equal("10", channels[0].GroupId);
+    }
+
+    [Fact]
+    public async Task Provider_maps_movie_and_series_metadata_from_info_objects()
+    {
+        string? movieQuery = null;
+        string? seriesQuery = null;
+        var handler = new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("action=get_vod_info", StringComparison.Ordinal))
+            {
+                movieQuery = query;
+                return JsonBody("""{"info":{"plot":"Movie plot","description":"Fallback","rating":"8.1","genre":"Drama","year":2024,"cast":"Actor One"}}""");
+            }
+            seriesQuery = query;
+            return JsonBody("""{"info":{"name":"Series title","plot":"Series plot","rating":"7.4","genre":"Comedy","year":"2022","actors":"Actor Two"},"episodes":{"1":[{"id":"episode-opaque-42","title":"Episode","container_extension":"mkv"}]}}""");
+        });
+        var provider = new XtreamCatalogProvider(new HttpClient(handler));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+
+        var movie = await provider.GetMovieInfoAsync(account, "movie-42");
+        var series = await provider.GetSeriesInfoAsync(account, "series-7");
+
+        Assert.Contains("action=get_vod_info", movieQuery ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("vod_id=movie-42", movieQuery ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("action=get_series_info", seriesQuery ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("series_id=series-7", seriesQuery ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal(new CatalogMetadata("2024", "8.1", "Drama", "Movie plot", "Actor One"), movie.Metadata);
+        Assert.Equal(new CatalogMetadata("2022", "7.4", "Comedy", "Series plot", "Actor Two"), series.Metadata);
+        var episode = Assert.Single(Assert.Single(series.Seasons).Episodes);
+        Assert.Equal("episode-opaque-42", episode.Id);
+        Assert.Equal("mkv", episode.Source.ContainerExtension);
+        Assert.Equal("http://panel.example.com:8080/series/u/p/episode-opaque-42.mkv", episode.Source.DirectUri!.ToString());
     }
 
     [Fact]
@@ -208,6 +251,9 @@ public sealed class InfrastructureTests
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", fixture);
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(File.ReadAllText(path), Encoding.UTF8, "application/json") };
     }
+
+    private static HttpResponseMessage JsonBody(string json) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
     private sealed class FixtureHandler(Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> responder) : HttpMessageHandler
     {
