@@ -1095,3 +1095,36 @@ Recycled images also need a new load when their data context changes, with the
 fallback and image opacity reset before each request. A Spotlight chosen once
 per snapshot will not rotate without an active-page timer. These source fixes
 compile; their visual and playback results still need an approved app run.
+
+## WinUI player-return and catalog transition flicker (closed 2026-09-28)
+
+Nineteen iterative fix-batches (`windows-spike/HANDOFF-fix-batch-{2..19}.md`) chased a
+family of screen-flicker/redraw bugs on catalog navigation. Two root causes recurred
+under different call sites and were each fixed twice before being closed properly:
+
+- **Player-return flicker (Back, Home, top-nav category clicks from Player).**
+  `ShowCatalogAsync`/`ShowPage` gated a mask-then-fade transition behind a
+  caller-supplied `returningFromPlayer` flag (`CatalogReturnTransitionPolicy` in
+  `CatalogUiPolicies.cs`). Each caller that forgot to pass it flickered — first the
+  Back button, then Home, then all four top-nav category buttons, found one at a time
+  by direct code inspection rather than a systemic sweep. Closed for good in batch 19
+  by having `ShowPage` derive the barrier itself from `_currentPage == ShellPage.Player`
+  at the point of leaving, so no caller needs to know or pass the flag; covered by
+  `AppSmokeTests.Player_return_layout_barrier_uses_current_page_for_every_catalog_mode`
+  across every `CatalogMode`. **Rule: any binary UI-transition behavior that depends on
+  "where did we come from" should be derived from current page/state at the transition
+  point, not threaded through as a parameter every call site must remember to pass.**
+- **Open-folder-listing-to-category flicker.** A distinct bug: `PrepareMode` changed
+  mode state and nav chrome while the previously open folder-listing grid was still
+  attached, and the fade-in didn't start until the new snapshot was ready, leaving a
+  naked redraw gap. Fixed by fading the open-folder surface out first, before any
+  mode/state change, then applying the normal snapshot fade-in.
+
+Both fixes user-confirmed live in the same session as closed (build 0/0, 68/68 tests
+passing). See `windows-spike/HANDOFF-fix-batch-19.md` for the grep-audit evidence that
+no remaining `ShowCatalogAsync` call site or Player-exit path is unprotected.
+
+Still open, not part of this closure: the nav-bar tooltip showing an increasing number
+on hover (root cause not found in app source after three investigation attempts across
+batches 15-17; needs a user screenshot to determine if it's OS-level rather than
+Tvivo-drawn).
