@@ -48,6 +48,15 @@ public sealed record ChannelGroup(
     string DisplayName,
     int? SortOrder = null);
 
+public enum CatalogItemSortOrder
+{
+    MostVisited,
+    AlphabeticalAsc,
+    AlphabeticalDesc,
+    RecentlyAdded,
+    RecentlyUpdated,
+}
+
 public sealed record Channel(
     string ProviderAccountId,
     string Id,

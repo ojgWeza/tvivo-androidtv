@@ -162,16 +162,29 @@ public sealed partial class CatalogLandingPage : UserControl
         CancelArtworkLoads();
     }
 
-    public void PrepareMode(CatalogMode mode)
+    public async Task PrepareModeAsync(CatalogMode mode)
     {
+        var transitionGeneration = Interlocked.Increment(ref _modeTransitionGeneration);
         if (_activeMode == mode)
         {
+            var visual = ElementCompositionPreview.GetElementVisual(ContentState);
+            visual.StopAnimation(nameof(Visual.Opacity));
+            visual.Opacity = 1;
+            ContentState.IsHitTestVisible = true;
             // Same-mode navigation still starts a fresh cache-first load. Keep a
             // ready snapshot interactive, but don't leave an empty/error surface
             // looking ready while that load is about to retry.
             if (ContentState.Visibility != Visibility.Visible && LoadingState.Visibility != Visibility.Visible)
                 SetState(loading: true);
             return;
+        }
+
+        var leavingOpenFolder = _renderedSnapshot is not null && _renderedOpenShelfId is not null;
+        if (leavingOpenFolder)
+        {
+            ContentState.IsHitTestVisible = false;
+            await FadeCatalogContentAsync(fadeOut: true, transitionGeneration: transitionGeneration);
+            if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration)) return;
         }
 
         // Invalidate any load tied to the previous mode before replacing its UI.
@@ -223,9 +236,13 @@ public sealed partial class CatalogLandingPage : UserControl
     public async Task SetModeAsync(CatalogMode mode)
     {
         if (_activeMode == mode)
+        {
+            await PrepareModeAsync(mode);
             return;
+        }
 
-        PrepareMode(mode);
+        await PrepareModeAsync(mode);
+        if (_activeMode != mode) return;
         await ShowCachedPageAsync();
     }
 
@@ -379,7 +396,12 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!IsCurrentLoad(generation)) return;
             LaunchDiagnostics.Write($"Catalog load failed: {FormatRefreshError(exception)}");
             if (ContentState.Visibility == Visibility.Visible)
+            {
                 ShowRefreshFailure(exception);
+                var visual = ElementCompositionPreview.GetElementVisual(ContentState);
+                if (visual.Opacity < 1f)
+                    await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: Volatile.Read(ref _modeTransitionGeneration));
+            }
             else
                 ShowError($"{GenericLoadError} {FormatRefreshError(exception)}");
         }
@@ -406,6 +428,7 @@ public sealed partial class CatalogLandingPage : UserControl
                     IReadOnlyList<Channel> allItems = definition is null
                         ? Array.Empty<Channel>()
                         : GetMyTvivoShelfItems(account, definition, filter);
+                    allItems = SortOpenShelfItems(allItems, sort);
                     var lastOffset = allItems.Count == 0 ? 0 : ((allItems.Count - 1) / PageSize) * PageSize;
                     var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
                     var shelfItems = allItems.Skip(shelfOffset).Take(PageSize).ToArray();
@@ -425,6 +448,7 @@ public sealed partial class CatalogLandingPage : UserControl
                     "__recent_played" => _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter),
                     _ => _repository.GetFavorites(account, type, _connection, int.MaxValue, filter),
                 };
+                allItems = SortOpenShelfItems(allItems, sort);
                 var lastOffset = allItems.Count == 0 ? 0 : ((allItems.Count - 1) / PageSize) * PageSize;
                 var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
                 var shelfItems = allItems.Skip(shelfOffset).Take(PageSize).ToArray();
@@ -436,14 +460,15 @@ public sealed partial class CatalogLandingPage : UserControl
             var groupId = requestedGroupId is not null && groups.Any(group => group.Id == requestedGroupId)
                 ? requestedGroupId
                 : null;
-            var firstPage = _repository.GetChannels(account, _connection, type, groupId, filter, 0, PageSize);
+            var itemSort = ToItemSortOrder(sort);
+            var firstPage = _repository.GetChannels(account, _connection, type, groupId, filter, 0, PageSize, sortOrder: itemSort);
             var lastValidOffset = firstPage.TotalCount == 0
                 ? 0
                 : ((firstPage.TotalCount - 1) / PageSize) * PageSize;
             var offset = Math.Clamp(requestedOffset, 0, lastValidOffset);
             var page = offset == 0
                 ? firstPage
-                : _repository.GetChannels(account, _connection, type, groupId, filter, offset, PageSize);
+                : _repository.GetChannels(account, _connection, type, groupId, filter, offset, PageSize, sortOrder: itemSort);
             var shelves = BuildShelves(account, groups, filter, mode, sort);
             return new CatalogSnapshot(mode, groups, groupId, offset, page, shelves);
         });
@@ -547,6 +572,29 @@ public sealed partial class CatalogLandingPage : UserControl
             CategorySort.AlphabeticalDesc => groups.OrderByDescending(group => group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
             _ => groups.OrderBy(group => group.SortOrder ?? int.MaxValue).ThenBy(group => group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
         };
+
+    private static CatalogItemSortOrder ToItemSortOrder(CategorySort sort) => sort switch
+    {
+        CategorySort.AlphabeticalAsc => CatalogItemSortOrder.AlphabeticalAsc,
+        CategorySort.AlphabeticalDesc => CatalogItemSortOrder.AlphabeticalDesc,
+        CategorySort.RecentlyAdded => CatalogItemSortOrder.RecentlyAdded,
+        CategorySort.RecentlyUpdated => CatalogItemSortOrder.RecentlyUpdated,
+        _ => CatalogItemSortOrder.MostVisited,
+    };
+
+    private static IReadOnlyList<Channel> SortOpenShelfItems(IReadOnlyList<Channel> channels, CategorySort sort) => sort switch
+    {
+        CategorySort.AlphabeticalAsc => channels.OrderBy(channel => channel.DisplayName, StringComparer.CurrentCultureIgnoreCase).ThenBy(channel => channel.Id, StringComparer.Ordinal).ToArray(),
+        CategorySort.AlphabeticalDesc => channels.OrderByDescending(channel => channel.DisplayName, StringComparer.CurrentCultureIgnoreCase).ThenBy(channel => channel.Id, StringComparer.Ordinal).ToArray(),
+        CategorySort.RecentlyAdded => channels.OrderByDescending(channel => channel.AddedAt).ThenBy(channel => channel.Id, StringComparer.Ordinal).ToArray(),
+        CategorySort.RecentlyUpdated => channels.OrderByDescending(ItemUpdatedAt).ThenBy(channel => channel.Id, StringComparer.Ordinal).ToArray(),
+        _ => channels,
+    };
+
+    private static DateTimeOffset? ItemUpdatedAt(Channel channel) =>
+        DateTimeOffset.TryParse(channel.Metadata.GetValueOrDefault("updated_at"), out var updatedAt)
+            ? updatedAt
+            : channel.AddedAt;
 
     private IReadOnlyList<CatalogShelf> BuildMyTvivoShelves(ProviderAccount account, string? filter)
     {
@@ -760,9 +808,9 @@ public sealed partial class CatalogLandingPage : UserControl
         animation.Duration = TimeSpan.FromMilliseconds(110);
         visual.StartAnimation(nameof(Visual.Opacity), animation);
         await Task.Delay(110);
+        if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration)) return;
         visual.StopAnimation(nameof(Visual.Opacity));
-        if (transitionGeneration == Volatile.Read(ref _modeTransitionGeneration))
-            visual.Opacity = end;
+        visual.Opacity = end;
     }
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
@@ -855,6 +903,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 MinHeight = 30,
                 Padding = new Thickness(0),
                 Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                Style = (Style)Application.Current.Resources["AppCaptionButtonStyle"],
                 Foreground = (Brush)Application.Current.Resources[
                     index == selectedIndex ? "AppAccentBrush" : "AppMutedTextBrush"],
                 FontSize = 10,
@@ -1260,8 +1309,9 @@ public sealed partial class CatalogLandingPage : UserControl
         else if (_spotlightCard is not null && SpotlightArtwork.Source is null)
             StartArtwork(SpotlightArtwork, _spotlightCard.ArtworkUrl);
         PagerPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
-        SortPanel.Opacity = isOpen ? 0 : 1;
-        SortPanel.IsHitTestVisible = !isOpen;
+        SortPanel.Opacity = 1;
+        SortPanel.IsHitTestVisible = true;
+        SortLabel.Text = isOpen ? "Sort titles" : "Sort categories";
         PageSearchPanel.Visibility = Visibility.Collapsed;
 
         if (isOpen)

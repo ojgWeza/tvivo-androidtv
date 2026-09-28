@@ -290,17 +290,29 @@ public sealed class SqliteCatalogRepository : IDisposable
         return rows;
     }
 
-    public CatalogPage GetChannels(ProviderAccount account, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false)
-        => GetChannels(account, null, type, groupId, filter, offset, limit, mostVisited);
+    public CatalogPage GetChannels(ProviderAccount account, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false,
+        CatalogItemSortOrder? sortOrder = null)
+        => GetChannels(account, null, type, groupId, filter, offset, limit, mostVisited, sortOrder);
 
-    public CatalogPage GetChannels(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false)
+    public CatalogPage GetChannels(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false,
+        CatalogItemSortOrder? sortOrder = null)
     {
         using var sqliteConnection = Open();
         var where = "account_id=$a AND type=$type AND ($cat IS NULL OR category_id=$cat) AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\')";
         using var count = sqliteConnection.CreateCommand(); count.CommandText = $"SELECT COUNT(*) FROM items WHERE {where}";
         AddBrowseParameters(count, account, type, groupId, filter);
         var total = Convert.ToInt32(count.ExecuteScalar());
-        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE {where} ORDER BY {(mostVisited ? "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id" : "title COLLATE NOCASE,id")} LIMIT $limit OFFSET $offset";
+        var ordering = sortOrder switch
+        {
+            CatalogItemSortOrder.MostVisited => "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id",
+            CatalogItemSortOrder.AlphabeticalAsc => "title COLLATE NOCASE,id",
+            CatalogItemSortOrder.AlphabeticalDesc => "title COLLATE NOCASE DESC,id DESC",
+            CatalogItemSortOrder.RecentlyAdded => "added_at DESC,title COLLATE NOCASE,id",
+            CatalogItemSortOrder.RecentlyUpdated => "first_indexed_at DESC,title COLLATE NOCASE,id",
+            _ when mostVisited => "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id",
+            _ => "title COLLATE NOCASE,id",
+        };
+        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE {where} ORDER BY {ordering} LIMIT $limit OFFSET $offset";
         AddBrowseParameters(command, account, type, groupId, filter); command.Parameters.AddWithValue("$limit", Math.Max(1, limit)); command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader(); var rows = new List<Channel>();
         while (reader.Read())

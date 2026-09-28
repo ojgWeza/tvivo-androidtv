@@ -67,6 +67,16 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public void Player_return_layout_barrier_uses_current_page_for_every_catalog_mode()
+    {
+        foreach (var mode in Enum.GetValues<CatalogLandingPage.CatalogMode>())
+        {
+            Assert.True(CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(mode, currentPageIsPlayer: true));
+            Assert.False(CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(mode, currentPageIsPlayer: false));
+        }
+    }
+
+    [Fact]
     public void Spotlight_indicator_window_stays_small_and_keeps_the_selected_item_visible()
     {
         var (start, count) = SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 40, selectedIndex: 23);

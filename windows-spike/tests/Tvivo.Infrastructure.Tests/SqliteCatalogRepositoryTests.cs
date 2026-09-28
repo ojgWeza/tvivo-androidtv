@@ -58,6 +58,34 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Full_category_sort_is_applied_before_paging()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var older = new Channel(account.AccountId, "older", "g", "Alpha", "Alpha", null,
+                DateTimeOffset.FromUnixTimeSeconds(10), null, new("older", StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+            var newer = new Channel(account.AccountId, "newer", "g", "Zulu", "Zulu", null,
+                DateTimeOffset.FromUnixTimeSeconds(20), null, new("newer", StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+            var middle = new Channel(account.AccountId, "middle", "g", "Middle", "Middle", null,
+                DateTimeOffset.FromUnixTimeSeconds(15), null, new("middle", StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[] { older, newer, middle });
+
+            var firstRecentPage = repo.GetChannels(account, CatalogItemType.Movie, "g", offset: 0, limit: 2,
+                sortOrder: CatalogItemSortOrder.RecentlyAdded);
+            var secondRecentPage = repo.GetChannels(account, CatalogItemType.Movie, "g", offset: 2, limit: 2,
+                sortOrder: CatalogItemSortOrder.RecentlyAdded);
+            var alphabeticalDescending = repo.GetChannels(account, CatalogItemType.Movie, "g", limit: 3,
+                sortOrder: CatalogItemSortOrder.AlphabeticalDesc);
+
+            Assert.Equal(new[] { "newer", "middle" }, firstRecentPage.Items.Select(channel => channel.Id));
+            Assert.Equal(new[] { "older" }, secondRecentPage.Items.Select(channel => channel.Id));
+            Assert.Equal(new[] { "newer", "middle", "older" }, alphabeticalDescending.Items.Select(channel => channel.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Grouped_shelf_query_filters_rows_with_literal_escape_character()
     {
         using var repo = Create(out var dir); var account = Account();

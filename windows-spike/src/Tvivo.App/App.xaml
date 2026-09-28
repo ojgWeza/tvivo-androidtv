@@ -220,6 +220,12 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+            <Style x:Key="AppIconButtonStyle" TargetType="Button" BasedOn="{StaticResource AppCaptionButtonStyle}">
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="MinWidth" Value="36" />
+                <Setter Property="MinHeight" Value="36" />
+            </Style>
             <Style x:Key="AppCardButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="190" />
                 <Setter Property="Height" Value="205" />

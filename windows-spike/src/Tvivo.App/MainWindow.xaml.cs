@@ -38,6 +38,7 @@ public sealed partial class MainWindow : Window
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
+    private double? _playerListPointerPressOffset;
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private string? _currentSeriesId;
     private string? _currentSeriesTitle;
@@ -51,6 +52,8 @@ public sealed partial class MainWindow : Window
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
     private long _metadataGeneration;
+    private long _playerEntryTraceId;
+    private long _playerEntryTraceStartedAt;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
     private bool _isCinemaMode;
@@ -260,13 +263,16 @@ public sealed partial class MainWindow : Window
     private void CatalogLandingPage_InteractionReadinessChanged(object? sender, EventArgs args) =>
         SetCatalogSearchEnabled(_currentPage == ShellPage.Catalog && _catalogLandingPage.IsReadyForInteraction);
 
-    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode, bool returningFromPlayer = false)
+    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
     {
+        var returningFromPlayer = CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(
+            mode, _currentPage == ShellPage.Player);
         var generation = Interlocked.Increment(ref _catalogRequestGeneration);
         TraceBackTransition($"show-catalog-start mode={mode} fromPlayer={returningFromPlayer} generation={generation}");
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
         TraceBackTransition($"show-catalog-after-showpage catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility}");
-        _catalogLandingPage.PrepareMode(mode);
+        await _catalogLandingPage.PrepareModeAsync(mode);
+        if (generation != Volatile.Read(ref _catalogRequestGeneration)) return;
         UpdateTopNavigationState();
 
         if (_catalogLandingPage.Account is null)
@@ -290,6 +296,8 @@ public sealed partial class MainWindow : Window
     {
         if (_currentPage == page)
             return;
+
+        var returningFromPlayer = page == ShellPage.Catalog && _currentPage == ShellPage.Player;
 
         if (_currentPage == ShellPage.Player && page != ShellPage.Player && !_backTransitionTraceActive)
             BeginBackTransitionTrace($"player-leave-navigation destination={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
@@ -315,8 +323,19 @@ public sealed partial class MainWindow : Window
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-player-visibility-set page={page} player={PlayerPage.Visibility}");
         SetPlaybackSurfaceVisibility(isPlayer);
+        if (isPlayer && _nowPlayingChannel is { } selectedPlayerChannel)
+            SetCurrentPlayerEntry(selectedPlayerChannel);
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-catalog-visibility-set page={page} catalog={CatalogPageArea.Visibility}");
+        if (isCatalog && returningFromPlayer)
+        {
+            var catalogVisual = ElementCompositionPreview.GetElementVisual(CatalogPageArea);
+            catalogVisual.StopAnimation(nameof(Visual.Opacity));
+            catalogVisual.Opacity = 0;
+            CatalogPageArea.UpdateLayout();
+            WindowRoot.UpdateLayout();
+            TraceBackTransition("show-page-player-return-layout-barrier catalogOpacity=0 forcedLayout=true");
+        }
         if (isStaticPage) FadeIn(PageHost);
         else if (isPlayer) FadeIn(PlayerPage);
         else if (isCatalog) FadeIn(CatalogPageArea);
@@ -408,6 +427,9 @@ public sealed partial class MainWindow : Window
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
+        var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
+        Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
+        LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={playerEntryTraceId} event=content-selected kind={args.Source.Kind}");
         Interlocked.Increment(ref _metadataGeneration);
         if (args.Source.Kind == StreamKind.Series)
         {
@@ -601,6 +623,7 @@ public sealed partial class MainWindow : Window
     {
         var sameRows = _playerEntries.Count == channels.Count &&
             _playerEntries.Select((entry, index) => entry.Channel.Source.Kind == channels[index].Source.Kind && entry.Channel.Id == channels[index].Id).All(matches => matches);
+        var scrollOffset = FindPlayerListScrollViewer()?.VerticalOffset;
         if (!sameRows)
         {
             _playerEntries.Clear();
@@ -612,6 +635,8 @@ public sealed partial class MainWindow : Window
                 entry.IsFavorite = IsChannelFavorite(entry.Channel);
 
         SetCurrentPlayerEntry(current);
+        if (!sameRows && scrollOffset.HasValue)
+            RestorePlayerListScrollOffset(scrollOffset.Value);
     }
 
     private bool IsChannelFavorite(Channel channel)
@@ -649,8 +674,60 @@ public sealed partial class MainWindow : Window
 
     private void SetCurrentPlayerEntry(Channel current)
     {
+        PlayerListEntry? currentEntry = null;
         foreach (var entry in _playerEntries)
+        {
             entry.IsCurrent = entry.Channel.Source.Kind == current.Source.Kind && entry.Channel.Id == current.Id;
+            if (entry.IsCurrent) currentEntry = entry;
+        }
+        PlayerRelatedList.SelectedItem = currentEntry;
+        if (currentEntry is not null && PlayerRelatedList.Visibility == Visibility.Visible)
+            EnsurePlayerEntryVisible(currentEntry);
+    }
+
+    private void PlayerRelatedList_PointerPressed(object sender, PointerRoutedEventArgs args) =>
+        _playerListPointerPressOffset = FindPlayerListScrollViewer()?.VerticalOffset;
+
+    private void RestorePlayerListScrollOffset(double verticalOffset)
+    {
+        // Restore after the ListView has processed selection and any collection/layout changes.
+        PlayerRelatedList.DispatcherQueue.TryEnqueue(() =>
+        {
+            var scrollViewer = FindPlayerListScrollViewer();
+            if (scrollViewer is null) return;
+            var maxOffset = Math.Max(0, scrollViewer.ExtentHeight - scrollViewer.ViewportHeight);
+            scrollViewer.ChangeView(null, Math.Clamp(verticalOffset, 0, maxOffset), null, true);
+            PlayerRelatedList.UpdateLayout();
+            if (PlayerRelatedList.SelectedItem is PlayerListEntry selectedEntry)
+                EnsurePlayerEntryVisible(selectedEntry, scrollViewer);
+        });
+    }
+
+    private void EnsurePlayerEntryVisible(PlayerListEntry entry, ScrollViewer? scrollViewer = null)
+    {
+        scrollViewer ??= FindPlayerListScrollViewer();
+        if (scrollViewer is null) return;
+        if (PlayerRelatedList.ContainerFromItem(entry) is not FrameworkElement container)
+        {
+            PlayerRelatedList.ScrollIntoView(entry);
+            return;
+        }
+
+        var position = container.TransformToVisual(scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
+        if (position.Y < 0 || position.Y + container.ActualHeight > scrollViewer.ViewportHeight)
+            PlayerRelatedList.ScrollIntoView(entry);
+    }
+
+    private ScrollViewer? FindPlayerListScrollViewer(DependencyObject? element = null)
+    {
+        element ??= PlayerRelatedList;
+        if (element is ScrollViewer scrollViewer) return scrollViewer;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
+        {
+            var found = FindPlayerListScrollViewer(VisualTreeHelper.GetChild(element, index));
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     private void ConfigureSeasonSelector(IReadOnlyList<SeriesSeason> seasons)
@@ -674,6 +751,7 @@ public sealed partial class MainWindow : Window
     private async Task StartPlaybackAsync(StreamSource source)
     {
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
+        var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
         var previousCts = Interlocked.Exchange(ref _playbackSessionCts, sessionCts);
         previousCts?.Cancel();
@@ -696,12 +774,16 @@ public sealed partial class MainWindow : Window
             result = await _playbackHandoff.RunAsync(
                 _ => OnUiAsync(async () =>
                 {
+                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                     await _playbackStopTask;
+                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                     await StopBothPlaybackEnginesAsync();
+                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                     await Task.Yield();
                     // PlaybackHandoff's delay resumes on a pool thread. Keep UI
                     // layout and both engine lifecycle calls on the window's STA.
-                    PlayerPage.UpdateLayout();
+                    if (IsCurrentPlaybackStart(generation, sessionCts))
+                        PlayerPage.UpdateLayout();
                 }),
                 token => OnUiAsync(() => generation == Volatile.Read(ref _playbackSessionGeneration) && !sessionCts.IsCancellationRequested
                     ? _playback.PlayAsync(source, token)
@@ -723,8 +805,11 @@ public sealed partial class MainWindow : Window
                 sessionCts.Dispose();
         }
 
-        if (generation != Volatile.Read(ref _playbackSessionGeneration) || _currentPage != ShellPage.Player)
+        if (!IsCurrentPlaybackStart(generation, sessionCts))
+        {
+            TraceClickAway(playerEntryTraceId, $"playback-completion-discarded generation={generation} currentGeneration={Volatile.Read(ref _playbackSessionGeneration)} page={_currentPage}");
             return;
+        }
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
             RestartCinemaCursorIdleTimer();
@@ -737,12 +822,30 @@ public sealed partial class MainWindow : Window
         VolumeSlider.Value = _engine.Volume;
     }
 
+    private bool IsCurrentPlaybackStart(long generation, CancellationTokenSource sessionCts) =>
+        generation == Volatile.Read(ref _playbackSessionGeneration) &&
+        !sessionCts.IsCancellationRequested &&
+        _currentPage == ShellPage.Player;
+
+    private void TraceClickAway(long traceId, string message)
+    {
+        if (traceId == 0) return;
+        var elapsed = Stopwatch.GetTimestamp() - Volatile.Read(ref _playerEntryTraceStartedAt);
+        var elapsedMilliseconds = elapsed * 1000d / Stopwatch.Frequency;
+        LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={traceId} elapsedMs={elapsedMilliseconds:0.000} {message}");
+    }
+
     private void StopPlaybackForNavigation()
     {
         // Hide the video host before touching playback or starting the catalog fade.
         // The WinUI LibVLC host is swap-chain-backed, so there is no child HWND whose
         // visibility or z-order can be controlled independently from this XAML element.
         SetPlaybackSurfaceVisibility(false);
+        var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
+        var playerEntryElapsed = Stopwatch.GetTimestamp() - Volatile.Read(ref _playerEntryTraceStartedAt);
+        var playerEntryElapsedMilliseconds = playerEntryElapsed * 1000d / Stopwatch.Frequency;
+        if (playerEntryTraceId != 0 && playerEntryElapsedMilliseconds <= 5000)
+            TraceClickAway(playerEntryTraceId, $"event=rapid-navigation-away delayMs={playerEntryElapsedMilliseconds:0.000} destination={_currentPage}");
         TraceBackTransition($"playback-surface-hidden-before-navigation {VideoSurfaceState()}");
         TraceBackTransition($"player-stop-begin source={_currentSource?.Kind.ToString() ?? "none"} playing={_engine.IsPlaying} buffering={_engine.IsBuffering} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
         Interlocked.Increment(ref _itemSelectionGeneration);
@@ -857,6 +960,7 @@ public sealed partial class MainWindow : Window
     private async Task LoadPlayerMetadataAsync(Channel channel, CatalogItemType type)
     {
         var generation = Interlocked.Increment(ref _metadataGeneration);
+        var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var account = _catalogLandingPage.Account;
         SetPlayerMetadata(null, type);
         if (account is null)
@@ -876,16 +980,25 @@ public sealed partial class MainWindow : Window
                     _catalogRepository.SaveMetadata(account, type, channel.Id, metadata);
             }
 
-            if (generation != Volatile.Read(ref _metadataGeneration) || _nowPlayingChannel?.Id != channel.Id)
+            if (generation != Volatile.Read(ref _metadataGeneration) ||
+                _currentPage != ShellPage.Player ||
+                _nowPlayingChannel?.Id != channel.Id)
+            {
+                TraceClickAway(playerEntryTraceId, $"metadata-completion-discarded generation={generation} currentGeneration={Volatile.Read(ref _metadataGeneration)} page={_currentPage}");
                 return;
+            }
             metadata ??= new CatalogMetadata();
             ApplyMetadataToChannel(channel, type, metadata);
             SetPlayerMetadata(metadata, type);
         }
         catch
         {
-            if (generation == Volatile.Read(ref _metadataGeneration) && _nowPlayingChannel?.Id == channel.Id)
+            if (generation == Volatile.Read(ref _metadataGeneration) &&
+                _currentPage == ShellPage.Player &&
+                _nowPlayingChannel?.Id == channel.Id)
                 SetPlayerMetadata(new CatalogMetadata(), type);
+            else
+                TraceClickAway(playerEntryTraceId, $"metadata-failure-discarded generation={generation} currentGeneration={Volatile.Read(ref _metadataGeneration)} page={_currentPage}");
         }
     }
 
@@ -1040,7 +1153,13 @@ public sealed partial class MainWindow : Window
 
     private void PlayerRelatedList_ItemClick(object sender, ItemClickEventArgs args)
     {
-        if (args.ClickedItem is not PlayerListEntry entry || entry.Channel.Source.DirectUri is null) return;
+        var pressOffset = _playerListPointerPressOffset;
+        _playerListPointerPressOffset = null;
+        if (args.ClickedItem is not PlayerListEntry entry || entry.Channel.Source.DirectUri is null)
+        {
+            if (pressOffset.HasValue) RestorePlayerListScrollOffset(pressOffset.Value);
+            return;
+        }
         if (entry.Channel.Source.Kind == StreamKind.Episode)
         {
             Interlocked.Increment(ref _itemSelectionGeneration);
@@ -1049,6 +1168,8 @@ public sealed partial class MainWindow : Window
         }
         else
             PlayRelatedChannel(entry.Channel);
+        if (pressOffset.HasValue)
+            RestorePlayerListScrollOffset(pressOffset.Value);
     }
 
     private void PlayRelatedChannel(Channel channel)
@@ -1102,7 +1223,7 @@ public sealed partial class MainWindow : Window
         BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_playerReturnPage == ShellPage.Catalog)
         {
-            _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode, returningFromPlayer: true);
+            _ = ShowCatalogAsync(_catalogLandingPage.ActiveMode);
         }
         else ShowPage(_playerReturnPage);
     }

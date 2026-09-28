@@ -183,6 +183,7 @@
                             <TextBlock x:Name="PlayerTitleText" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="Now playing" VerticalAlignment="Center" />
                             <Button x:Name="PlayerAboutButton" Content="ⓘ" Visibility="Collapsed"
                                     Width="36" Height="36" MinWidth="36" Padding="0"
+                                    Style="{StaticResource AppIconButtonStyle}"
                                     AutomationProperties.Name="Show title description">
                                 <Button.Flyout>
                                     <Flyout Placement="Right">
@@ -287,7 +288,7 @@
                             <ComboBox x:Name="PlayerSeasonComboBox" Grid.Row="3" Visibility="Collapsed"
                                       DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                       AutomationProperties.Name="Series season" />
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerRelatedList_ItemClick">
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">
