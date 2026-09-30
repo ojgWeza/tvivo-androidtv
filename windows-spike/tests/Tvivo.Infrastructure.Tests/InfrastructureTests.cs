@@ -44,13 +44,37 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
-    public void AccountIdentity_ignores_password_and_normalizes_host_and_whitespace()
+    public void AccountIdentity_normalizes_scheme_host_and_username_whitespace_but_separates_http_and_https()
     {
-        var first = AccountIdentity.For(new("http", " PANEL.Example.com ", 8080), "  user ");
+        var first = AccountIdentity.For(new(" HTTP ", " PANEL.Example.com ", 8080), "  user ");
         var second = AccountIdentity.For(new("http", "panel.example.com", 8080), "user");
+        var secure = AccountIdentity.For(new("https", "panel.example.com", 8080), "user");
         Assert.Equal(first, second);
+        Assert.NotEqual(first, secure);
         Assert.Equal(32, first.Length);
-        Assert.Equal("32c7df0c46909a329d615c4f926a7e12", first);
+        Assert.Equal("6cd2d4c5cd3b4ecc8969029ebf4a09e8", first);
+    }
+
+    [Fact]
+    public async Task Provider_keeps_http_and_https_connections_under_separate_account_ids()
+    {
+        var requestedSchemes = new List<string>();
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            if (!request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal))
+                return JsonResponse("auth_success.json");
+            requestedSchemes.Add(request.RequestUri.Scheme);
+            return JsonBody("[]");
+        })));
+        var http = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(scheme: "http"), "user", "first"))).Account);
+        var https = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(scheme: "https"), "user", "second"))).Account);
+
+        Assert.NotEqual(http.AccountId, https.AccountId);
+        await provider.GetChannelGroupsAsync(http);
+        await provider.GetChannelGroupsAsync(https);
+        Assert.Equal(new[] { "http", "https" }, requestedSchemes);
     }
 
     [Theory]

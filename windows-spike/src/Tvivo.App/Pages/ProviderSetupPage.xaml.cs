@@ -9,21 +9,36 @@ public sealed partial class ProviderSetupPage : UserControl
 {
     private readonly ICatalogProvider _provider = App.Services.GetRequiredService<ICatalogProvider>();
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
+    private int _credentialGeneration;
 
     public ProviderSetupPage()
     {
         InitializeComponent();
-        _ = LoadSavedConnectionAsync();
+        _ = LoadSavedConnectionAsync(_credentialGeneration);
     }
 
     public event EventHandler<ProviderConnectedEventArgs>? ConnectionSaved;
 
-    private async Task LoadSavedConnectionAsync()
+    public void ClearCredentials()
+    {
+        // Invalidate any in-flight LoadSavedConnectionAsync from construction time so a slow
+        // credential-store read can't resolve after sign-out and silently repopulate these fields.
+        _credentialGeneration++;
+        HostBox.Text = string.Empty;
+        PortBox.Text = string.Empty;
+        SchemeBox.SelectedIndex = 0;
+        UsernameBox.Text = string.Empty;
+        PasswordBox.Password = string.Empty;
+        ErrorText.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task LoadSavedConnectionAsync(int generation)
     {
         try
         {
             var saved = await _credentialStore.LoadAsync();
             if (saved is null) return;
+            if (generation != _credentialGeneration) return;
             HostBox.Text = saved.Endpoint.Host;
             PortBox.Text = saved.Endpoint.Port.ToString();
             SchemeBox.SelectedIndex = saved.Endpoint.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
@@ -32,7 +47,7 @@ public sealed partial class ProviderSetupPage : UserControl
         }
         catch (Exception exception)
         {
-            ShowError($"Could not load saved credentials: {exception.Message}");
+            ShowError(ConnectionErrorText.SavedConnection(exception));
         }
     }
 
@@ -62,7 +77,7 @@ public sealed partial class ProviderSetupPage : UserControl
             }
             catch (Exception exception)
             {
-                ShowError($"Authentication failed. Check the server address and account details. {exception.Message}");
+                ShowError(ConnectionErrorText.Authentication(exception));
                 return;
             }
 
@@ -78,7 +93,7 @@ public sealed partial class ProviderSetupPage : UserControl
             }
             catch (Exception exception)
             {
-                ShowError($"Could not save credentials. Your previously saved connection has been kept. {exception.Message}");
+                ShowError(ConnectionErrorText.SaveConnection(exception));
                 return;
             }
 
@@ -104,3 +119,30 @@ public sealed partial class ProviderSetupPage : UserControl
 }
 
 public sealed record ProviderConnectedEventArgs(ProviderConnection Connection, ProviderAccount Account);
+
+public static class ConnectionErrorText
+{
+    public static string SavedConnection(Exception exception)
+    {
+        LaunchDiagnostics.WriteException("Could not load saved credentials", exception);
+        return "Could not load your saved connection. Try signing in again.";
+    }
+
+    public static string Authentication(Exception exception)
+    {
+        LaunchDiagnostics.WriteException("Authentication failed", exception);
+        return "Couldn't connect. Check the server address and your account details, then try again.";
+    }
+
+    public static string SaveConnection(Exception exception)
+    {
+        LaunchDiagnostics.WriteException("Could not save credentials", exception);
+        return "Couldn't save your connection. Please try again.";
+    }
+
+    public static string SignOut(Exception exception)
+    {
+        LaunchDiagnostics.WriteException("Could not sign out", exception);
+        return "Couldn't sign out cleanly. Try again, or restart the app.";
+    }
+}

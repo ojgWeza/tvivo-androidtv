@@ -235,7 +235,7 @@ public static class AccountIdentity
 {
     public static string For(ProviderEndpoint endpoint, string username)
     {
-        var canonical = $"{endpoint.Host.Trim().ToLowerInvariant()}|{endpoint.Port}|{username.Trim()}";
+        var canonical = $"{endpoint.Scheme.Trim().ToLowerInvariant()}|{endpoint.Host.Trim().ToLowerInvariant()}|{endpoint.Port}|{username.Trim()}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant()[..32];
     }
 }

@@ -54,7 +54,7 @@
                         FontWeight="Bold"
                         CharacterSpacing="80"
                         Foreground="{StaticResource AppTextBrush}"
-                        Click="MyTvivoNavigation_Click"
+                        Click="HomeNavigation_Click"
                         ToolTipService.ToolTip="{x:Null}" />
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="26">
@@ -319,5 +319,30 @@
                 <ContentControl x:Name="CatalogPageHost" />
             </Grid>
         </Grid>
+        <Button x:Name="IdleOverlay" Grid.RowSpan="3" Visibility="Collapsed"
+                Background="#E6000000" BorderThickness="0"
+                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                PointerPressed="IdleOverlay_PointerPressed"
+                PointerWheelChanged="IdleOverlay_PointerWheelChanged"
+                AutomationProperties.Name="Featured content. Press any key or click to return">
+            <Grid>
+                <Border Width="540" MaxWidth="540" Padding="36" CornerRadius="16"
+                        Background="{StaticResource AppPanelSurfaceBrush}"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel Spacing="18">
+                        <TextBlock Text="FEATURED SERIES" Foreground="{StaticResource AppAccentBrush}"
+                                   FontSize="14" FontWeight="Bold" CharacterSpacing="120" />
+                        <TextBlock x:Name="IdleFeaturedTitle" Text="Explore Tvivo"
+                                   Foreground="{StaticResource AppTextBrush}" FontSize="36"
+                                   FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock x:Name="IdleFeaturedDescription"
+                                   Foreground="{StaticResource AppMutedTextBrush}" FontSize="17"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="Press any key or click to return"
+                                   Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Button>
     </Grid>
 </Window>

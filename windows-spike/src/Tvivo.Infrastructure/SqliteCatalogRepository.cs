@@ -425,6 +425,68 @@ public sealed class SqliteCatalogRepository : IDisposable
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100)
         => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit);
 
+    public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, ProviderConnection? connection = null, int limit = 50)
+        => GetOrderedItemsAcrossTypes(account, connection,
+            "items.resume_ms > 0 AND items.type IN ('Movie','Series')",
+            "items.resume_updated_at DESC, items.type, items.id", limit, null);
+
+    public long GetResumePosition(ProviderAccount account, CatalogItemType type, string id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT resume_ms FROM items WHERE account_id=$a AND type=$type AND id=$id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", id);
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L);
+    }
+
+    public IReadOnlyList<Channel> GetSuggestions(ProviderAccount account, ProviderConnection? connection,
+        IReadOnlySet<(CatalogItemType Type, string Id)> excluded, int limit = 20)
+    {
+        using var database = Open();
+        using var command = database.CreateCommand();
+        command.CommandText = "SELECT type,id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type IN ('Live','Movie','Series') ORDER BY type,id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        using var reader = command.ExecuteReader();
+        var selected = new PriorityQueue<Channel, double>();
+        while (reader.Read())
+        {
+            var type = Enum.Parse<CatalogItemType>(reader.GetString(0));
+            var id = reader.GetString(1);
+            if (excluded.Contains((type, id))) continue;
+            var rating = reader.IsDBNull(8) ? null : reader.GetString(8);
+            var weight = double.TryParse(rating, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var value) && double.IsFinite(value)
+                ? Math.Clamp(value, 0, 10) + 1 : 1;
+            // A weighted reservoir gives every catalog row a chance without keeping the full catalog in memory.
+            var key = Math.Pow(Math.Max(Random.Shared.NextDouble(), double.Epsilon), 1 / weight);
+            if (selected.Count >= limit && selected.TryPeek(out _, out var smallest) && key <= smallest) continue;
+            Uri? artwork = Uri.TryCreate(reader.IsDBNull(4) ? null : reader.GetString(4), UriKind.Absolute, out var uri) ? uri : null;
+            DateTimeOffset? added = reader.IsDBNull(6) || reader.GetInt64(6) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(6));
+            var title = CleanTitle(reader.GetString(3));
+            var extension = reader.IsDBNull(5) ? null : reader.GetString(5);
+            var channel = new Channel(account.AccountId, id, reader.IsDBNull(2) ? null : reader.GetString(2),
+                title, title, artwork, added, null, StreamSourceFor(connection, type, id, extension), ReadChannelMetadata(reader, 7));
+            selected.Enqueue(channel, key);
+            if (selected.Count > limit) selected.Dequeue();
+        }
+        return selected.UnorderedItems.OrderByDescending(item => item.Priority).Select(item => item.Element).ToArray();
+    }
+
+    public IReadOnlyList<string> GetFeaturedSeriesTitles(ProviderAccount account, int limit)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT title FROM items WHERE account_id=$account AND type='Series' ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT $limit";
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$limit", Math.Max(0, limit));
+        using var reader = command.ExecuteReader();
+        var titles = new List<string>();
+        while (reader.Read()) titles.Add(reader.GetString(0));
+        return titles;
+    }
+
     public void SetFavorite(ProviderAccount account, CatalogItemType type, string id, bool isFavorite)
     {
         using var connection = Open();

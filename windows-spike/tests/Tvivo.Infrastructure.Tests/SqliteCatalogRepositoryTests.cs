@@ -192,6 +192,36 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Featured_series_titles_are_account_scoped_numeric_rating_ordered_and_limited()
+    {
+        using var repo = Create(out var dir); var account = Account(); var other = Account("account-b");
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "lower", "", "Lower"),
+                ChannelFor(account, "tie-z", "", "zeta"),
+                ChannelFor(account, "highest", "", "Highest"),
+                ChannelFor(account, "tie-a", "", "Alpha"),
+            });
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
+                new[] { ChannelFor(account, "movie", "", "Movie") });
+            repo.ReplaceSnapshot(other, CatalogItemType.Series, Array.Empty<ChannelGroup>(),
+                new[] { ChannelFor(other, "other", "", "Other account") });
+            repo.SaveMetadata(account, CatalogItemType.Series, "lower", new CatalogMetadata(null, "2", null, null, null));
+            repo.SaveMetadata(account, CatalogItemType.Series, "tie-z", new CatalogMetadata(null, "8", null, null, null));
+            repo.SaveMetadata(account, CatalogItemType.Series, "highest", new CatalogMetadata(null, "10", null, null, null));
+            repo.SaveMetadata(account, CatalogItemType.Series, "tie-a", new CatalogMetadata(null, "8", null, null, null));
+            repo.SaveMetadata(account, CatalogItemType.Movie, "movie", new CatalogMetadata(null, "99", null, null, null));
+            repo.SaveMetadata(other, CatalogItemType.Series, "other", new CatalogMetadata(null, "99", null, null, null));
+
+            Assert.Equal(new[] { "Highest", "Alpha", "zeta" }, repo.GetFeaturedSeriesTitles(account, 3));
+            Assert.Empty(repo.GetFeaturedSeriesTitles(account, 0));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void My_Tvivo_order_uses_visit_count_then_letters_digits_symbols_fallback()
     {
         using var repo = Create(out var dir); var account = Account();
@@ -519,16 +549,22 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
-    public void Account_keys_are_isolated()
+    public void Http_and_https_account_keys_keep_catalog_rows_isolated()
     {
-        using var repo = Create(out var dir); var a = Account(); var b = Account("account-b");
+        using var repo = Create(out var dir);
+        var httpEndpoint = new ProviderEndpoint("http", "panel.example.com", 8080);
+        var httpsEndpoint = httpEndpoint with { Scheme = "https" };
+        var a = new ProviderAccount(AccountIdentity.For(httpEndpoint, "user"), httpEndpoint, "user");
+        var b = new ProviderAccount(AccountIdentity.For(httpsEndpoint, "user"), httpsEndpoint, "user");
         try
         {
+            Assert.NotEqual(a.AccountId, b.AccountId);
             repo.ReplaceSnapshot(a, CatalogItemType.Live, new[] { Group(a,"g","A") }, new[] { ChannelFor(a,"same","g","A channel") });
             repo.ReplaceSnapshot(b, CatalogItemType.Live, new[] { Group(b,"g","B") }, new[] { ChannelFor(b,"same","g","B channel") });
             Assert.Equal("A", Assert.Single(repo.GetGroups(a, CatalogItemType.Live)).Name);
             Assert.Equal("A channel", Assert.Single(repo.GetChannels(a, CatalogItemType.Live).Items).DisplayName);
             Assert.Equal("B", Assert.Single(repo.GetGroups(b, CatalogItemType.Live)).Name);
+            Assert.Equal("B channel", Assert.Single(repo.GetChannels(b, CatalogItemType.Live).Items).DisplayName);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }

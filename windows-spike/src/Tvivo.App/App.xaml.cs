@@ -1,9 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 using Tvivo.Playback;
+
+[assembly: InternalsVisibleTo("Tvivo.App.Tests")]
 
 namespace Tvivo.App;
 
@@ -83,8 +86,13 @@ public partial class App : Application
         return services.BuildServiceProvider();
     }
 
-    private static void OnUnhandledException(object sender, System.UnhandledExceptionEventArgs args) =>
-        LaunchDiagnostics.Write($"Unhandled exception (terminating={args.IsTerminating}): {args.ExceptionObject}");
+    private static void OnUnhandledException(object sender, System.UnhandledExceptionEventArgs args)
+    {
+        if (args.ExceptionObject is Exception exception)
+            LaunchDiagnostics.WriteException($"Unhandled exception (terminating={args.IsTerminating})", exception);
+        else
+            LaunchDiagnostics.Write($"Unhandled exception (terminating={args.IsTerminating})");
+    }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
     {
@@ -96,20 +104,30 @@ public partial class App : Application
 internal static class LaunchDiagnostics
 {
     private static readonly object Sync = new();
-    private static readonly string LogPath = Path.Combine(
+    private static readonly string SessionId = Guid.NewGuid().ToString("N");
+    private const long MaxLogBytes = 1024 * 1024;
+    internal static string LogPath { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Tvivo",
         "tvivo-launch.log");
 
     public static void Write(string message)
     {
-        var line = $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}";
+        // Exception messages can contain a provider URI; never persist its authority or query.
+        var safeMessage = System.Text.RegularExpressions.Regex.Replace(
+            message, @"(?i)\b(?:https?|rtsp)://[^\s\]\)\}""']+", "[redacted-url]");
+        safeMessage = System.Text.RegularExpressions.Regex.Replace(
+            safeMessage, @"(?i)\b(?:username|password|accountid|account_id)\s*[=:]\s*[^\s;,]+", "[redacted-field]");
+        if (safeMessage.Length > 4096) safeMessage = safeMessage[..4096] + "[truncated]";
+        var line = $"{DateTimeOffset.Now:O} session={SessionId} {safeMessage}{Environment.NewLine}";
         Debug.Write(line);
         try
         {
             lock (Sync)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length + System.Text.Encoding.UTF8.GetByteCount(line) > MaxLogBytes)
+                    File.Move(LogPath, LogPath + ".1", overwrite: true);
                 File.AppendAllText(LogPath, line);
             }
         }
@@ -124,13 +142,11 @@ internal static class LaunchDiagnostics
 
     public static void WriteExceptionDetails(string message, Exception exception)
     {
-        Write($"{message}: {exception}");
-        Write($"{message} message: {exception.Message}");
+        WriteException(message, exception);
         Write($"{message} hresult: 0x{exception.HResult:X8}");
         for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
         {
-            Write($"{message} inner: {inner}");
-            Write($"{message} inner message: {inner.Message}");
+            Write($"{message} inner: {inner.GetType().Name}");
             Write($"{message} inner hresult: 0x{inner.HResult:X8}");
         }
     }

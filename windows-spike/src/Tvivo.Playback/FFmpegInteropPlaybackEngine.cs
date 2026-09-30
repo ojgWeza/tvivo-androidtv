@@ -14,6 +14,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
     private TaskCompletionSource<PlaybackAttemptResult>? _startup;
     private bool _disposed;
     private volatile bool _ended;
+    public event Action<string>? LifecycleEvent;
 
     public MediaPlayer Player => _player;
     public bool IsPlaying => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Playing;
@@ -88,7 +89,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
 
                 if (completed == timeout && !_startup.Task.IsCompleted)
                 {
-                    StopCore();
+                    StopCore(cancellationToken.IsCancellationRequested ? "user-cancelled" : "timeout");
                     return cancellationToken.IsCancellationRequested
                         ? PlaybackAttemptResult.Cancelled
                         : PlaybackAttemptResult.Timeout;
@@ -96,17 +97,17 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
 
                 var result = await _startup.Task.ConfigureAwait(true);
                 if (result != PlaybackAttemptResult.FirstFrame)
-                    StopCore();
+                    StopCore(result == PlaybackAttemptResult.Cancelled ? "user-cancelled" : "error");
                 return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                StopCore();
+                StopCore("user-cancelled");
                 return PlaybackAttemptResult.Cancelled;
             }
             catch (Exception)
             {
-                StopCore();
+                StopCore("error");
                 return PlaybackAttemptResult.DecodeFailure;
             }
         }
@@ -139,6 +140,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
         _player.MediaFailed -= OnMediaFailed;
         _player.MediaEnded -= OnMediaEnded;
         _player.Dispose();
+        LifecycleEvent?.Invoke("event=playback.engine.dispose engine=Native callbacks=detached player=released");
         _disposed = true;
         _gate.Dispose();
     }
@@ -151,8 +153,10 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
 
     private void OnMediaEnded(MediaPlayer sender, object args) => _ended = true;
 
-    private void StopCore()
+    private void StopCore(string? reason = null)
     {
+        var hadSource = _source is not null || _player.Source is not null;
+        reason ??= _ended ? "completed" : "user-cancelled";
         _startup?.TrySetResult(PlaybackAttemptResult.Cancelled);
         _startup = null;
         _currentSession = null;
@@ -161,5 +165,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
         _player.Source = null;
         _source?.Dispose();
         _source = null;
+        if (hadSource)
+            LifecycleEvent?.Invoke($"event=playback.engine.release engine=Native reason={reason} source=released playerSource=cleared callbacks=retained-until-dispose");
     }
 }

@@ -75,6 +75,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     }
 
     public event EventHandler<VlcPlaybackStateChangedEventArgs>? StateChanged;
+    public event Action<string>? LifecycleEvent;
 
     public async Task<PlaybackAttemptResult> StartAsync(
         StreamSource source,
@@ -99,12 +100,12 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             }
             catch (TimeoutException exception)
             {
-                Log($"Timed out waiting for LibVLC readiness after {StartupDeadline.TotalSeconds:0.###} seconds. {exception}");
+                Log($"Timed out waiting for LibVLC readiness after {StartupDeadline.TotalSeconds:0.###} seconds. {exception.GetType().Name}");
                 return PlaybackAttemptResult.Timeout;
             }
             catch (Exception exception)
             {
-                Log($"LibVLC readiness failed before playback could start. {exception}");
+                Log($"LibVLC readiness failed before playback could start. {exception.GetType().Name}");
                 return PlaybackAttemptResult.HostFailure;
             }
 
@@ -176,24 +177,25 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                         // Do not let a second potentially blocking native call prevent
                         // timeout/cancellation recovery. Detach now, and gate the next
                         // open on native Play returning and its media being disposed.
-                        AbandonTimedOutStart(session, player, media, handlers, playTask);
+                        AbandonTimedOutStart(session, player, media, handlers, playTask,
+                            result == PlaybackAttemptResult.Cancelled ? "user-cancelled" : result == PlaybackAttemptResult.Timeout ? "timeout" : "error");
                     }
                     else
                     {
-                        StopCore(session);
+                        StopCore(session, result == PlaybackAttemptResult.Cancelled ? "user-cancelled" : result == PlaybackAttemptResult.Timeout ? "timeout" : "error");
                     }
                 }
                 return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                StopCore(session);
+                StopCore(session, "user-cancelled");
                 return PlaybackAttemptResult.Cancelled;
             }
             catch (Exception exception)
             {
                 Log($"Playback startup failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8}).");
-                StopCore(session);
+                StopCore(session, "error");
                 return PlaybackAttemptResult.HostFailure;
             }
         }
@@ -243,6 +245,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 _libVlc = null;
                 _disposed = true;
             }
+            LifecycleEvent?.Invoke("event=playback.engine.dispose engine=LibVLC context=released");
         }
         finally
         {
@@ -268,6 +271,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 _libVlc = null;
                 _disposed = true;
             }
+            LifecycleEvent?.Invoke("event=playback.engine.dispose engine=LibVLC context=released");
         }
         finally
         {
@@ -296,7 +300,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             if (task.IsFaulted)
             {
                 var exception = task.Exception?.GetBaseException() ?? new InvalidOperationException("LibVLC construction failed.");
-                Log($"LibVLC construction prevented readiness completion. {exception}");
+                Log($"LibVLC construction prevented readiness completion. {exception.GetType().Name}");
                 _libVlcReady.TrySetException(exception);
                 return;
             }
@@ -324,7 +328,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         MediaPlayer player,
         Media media,
         EventHandlers handlers,
-        Task<bool> playTask)
+        Task<bool> playTask,
+        string reason)
     {
         if (_currentSession != session)
             return;
@@ -350,6 +355,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                 catch (Exception exception) { Log($"Timed-out player dispose failed during deferred cleanup. {exception.GetType().Name}"); }
                 try { media.Dispose(); }
                 catch (Exception exception) { Log($"Timed-out media dispose failed during deferred cleanup. {exception.GetType().Name}"); }
+                LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=deferred callbacks=detached surface=detach-requested player=dispose-attempted media=dispose-attempted");
             }
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
@@ -361,30 +367,48 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             return;
 
         if (view.DispatcherQueue?.HasThreadAccess == true)
+        {
             view.MediaPlayer = null;
+            LifecycleEvent?.Invoke("event=playback.engine.surface engine=LibVLC surface=detached");
+        }
         else
-            view.DispatcherQueue?.TryEnqueue(() => view.MediaPlayer = null);
+            view.DispatcherQueue?.TryEnqueue(() =>
+            {
+                view.MediaPlayer = null;
+                LifecycleEvent?.Invoke("event=playback.engine.surface engine=LibVLC surface=detached");
+            });
     }
 
     private static readonly string LogPath = Path.Combine(
         Path.GetTempPath(),
         "tvivo-playback-engine.log");
+    private static readonly object LogSync = new();
 
     private static void Log(string message)
     {
-        var line = $"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] {message}{Environment.NewLine}";
+        var safeMessage = System.Text.RegularExpressions.Regex.Replace(
+            message, @"(?i)\b(?:https?|rtsp)://[^\s\]\)\}""']+", "[redacted-url]");
+        safeMessage = System.Text.RegularExpressions.Regex.Replace(
+            safeMessage, @"(?i)\b(?:username|password|accountid|account_id)\s*[=:]\s*[^\s;,]+", "[redacted-field]");
+        if (safeMessage.Length > 4096) safeMessage = safeMessage[..4096] + "[truncated]";
+        var line = $"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] {safeMessage}{Environment.NewLine}";
         Console.WriteLine(line.TrimEnd());
         try
         {
-            File.AppendAllText(LogPath, line);
+            lock (LogSync)
+            {
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length + System.Text.Encoding.UTF8.GetByteCount(line) > 1024 * 1024)
+                    File.Move(LogPath, LogPath + ".1", overwrite: true);
+                File.AppendAllText(LogPath, line);
+            }
         }
         catch (Exception exception)
         {
-            Console.WriteLine($"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] Unable to append diagnostic log: {exception}");
+            Console.WriteLine($"[{DateTimeOffset.Now:O}] [VlcPlaybackEngine] Unable to append diagnostic log: {exception.GetType().Name}");
         }
     }
 
-    private void StopCore(PlaybackSessionToken? session)
+    private void StopCore(PlaybackSessionToken? session, string? reason = null)
     {
         if (session is not null && _currentSession != session)
             return;
@@ -400,6 +424,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
         if (player is null)
             return;
+        reason ??= player.State == VLCState.Ended ? "completed" : "user-cancelled";
 
         if (currentSession is { } token)
             PublishState(token, VlcPlaybackState.Stopping);
@@ -417,6 +442,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         player.Stop();
         player.Dispose();
         media?.Dispose();
+        LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=immediate callbacks=detached surface=detach-requested player=released media=released");
     }
 
     private void PublishState(PlaybackSessionToken session, VlcPlaybackState state)

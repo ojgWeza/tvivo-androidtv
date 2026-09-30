@@ -60,7 +60,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<Image, AppliedArtwork> _appliedArtwork = new();
     private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
     private readonly LinkedList<CachedArtworkBitmap> _artworkBitmapLru = new();
-    private const int ArtworkBitmapCacheCapacity = 48;
+    private long _artworkBitmapCacheBytes;
+    // Decoded BGRA pixels dominate retained memory; 96 MiB holds roughly 120 poster-sized cards.
+    private const long ArtworkBitmapCacheByteLimit = 96L * 1024 * 1024;
+    private const int ArtworkBitmapCacheCountLimit = 128;
     private readonly HashSet<string> _artworkDiagnosticsLogged = new(StringComparer.Ordinal);
     private readonly HashSet<string> _artworkFailuresLogged = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
@@ -80,6 +83,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private const int ShelfPreviewSize = 12;
     private const string GenericLoadError = "Couldn't load the catalog. Check your connection and provider details, then retry.";
     public ProviderAccount? Account => _account;
+    public ProviderConnection? Connection => _connection;
     public CatalogMode ActiveMode => _activeMode;
     public bool IsReadyForInteraction => _isReadyForInteraction;
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
@@ -141,6 +145,28 @@ public sealed partial class CatalogLandingPage : UserControl
         _snapshotCacheOrder.Clear();
         _renderedSnapshot = null;
         _renderedOpenShelfId = null;
+    }
+
+    public void ClearAccountState()
+    {
+        Interlocked.Increment(ref _loadGeneration);
+        Interlocked.Increment(ref _pageQueryGeneration);
+        _account = null;
+        _connection = null;
+        _selectedGroupId = null;
+        _openShelfId = null;
+        _openShelfType = null;
+        _offset = 0;
+        _firstCatalogLoadCompleted = false;
+        _modeStates.Clear();
+        _spotlightByMode.Clear();
+        _lastRefreshAt.Clear();
+        _recentSpotlightIds.Clear();
+        InvalidateCatalogSnapshots();
+        ShelvesItems.ItemsSource = null;
+        CancelArtworkLoads();
+        RefreshInfoBar.IsOpen = false;
+        ShowError("No saved provider connection. Choose Account in the top navigation to connect a provider.");
     }
 
     public void NotifyVisitRecorded()
@@ -340,6 +366,9 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task LoadCatalogAsync(ProviderAccount account, long generation, bool forceRefresh = false)
     {
+        var cacheStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var cacheCompleted = false;
+        LaunchDiagnostics.Write($"event=catalog.cache.load.start mode={_activeMode}");
         try
         {
             if (_showModeLoadingFrame)
@@ -350,6 +379,8 @@ public sealed partial class CatalogLandingPage : UserControl
             }
             var cached = TryGetCachedSnapshot(account);
             cached ??= await ReadCurrentCatalogSnapshotAsync(account, generation);
+            cacheCompleted = true;
+            LaunchDiagnostics.Write($"event=catalog.cache.load.complete outcome={(cached is null ? "failure" : "success")} durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(cacheStarted).TotalMilliseconds:0} mode={_activeMode}");
             if (!IsCurrentLoad(generation)) return;
             if (cached is null) return;
 
@@ -374,7 +405,18 @@ public sealed partial class CatalogLandingPage : UserControl
                 return;
             }
 
-            await RefreshAccountAsync(account);
+            var refreshStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            LaunchDiagnostics.Write($"event=catalog.cache.refresh.start mode={_activeMode}");
+            try
+            {
+                await RefreshAccountAsync(account);
+                LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome=success durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
+            }
+            catch
+            {
+                LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome=failure durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
+                throw;
+            }
             if (!IsCurrentLoad(generation)) return;
             InvalidateAccountSnapshots(account.AccountId);
             var refreshedAt = DateTimeOffset.UtcNow;
@@ -393,8 +435,10 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         catch (Exception exception)
         {
+            if (!cacheCompleted)
+                LaunchDiagnostics.Write($"event=catalog.cache.load.complete outcome=failure durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(cacheStarted).TotalMilliseconds:0} mode={_activeMode}");
             if (!IsCurrentLoad(generation)) return;
-            LaunchDiagnostics.Write($"Catalog load failed: {FormatRefreshError(exception)}");
+            LaunchDiagnostics.Write($"Catalog load failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
             if (ContentState.Visibility == Visibility.Visible)
             {
                 ShowRefreshFailure(exception);
@@ -1041,11 +1085,16 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is Image image) StopArtwork(image);
     }
 
+    public void LoadHomeArtwork(Image image) => StartArtwork(image, (image.DataContext as HomePage.HomeShelfCard)?.ArtworkUrl);
+
+    public void UnloadHomeArtwork(Image image) => StopArtwork(image);
+
     private async void StartArtwork(Image image, string? url)
     {
         var card = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
-        var itemKey = card?.Id ?? (ReferenceEquals(image, SpotlightArtwork) ? "spotlight:unresolved" : "card:unresolved");
-        if (card is not null && _appliedArtwork.TryGetValue(image, out var applied) &&
+        var homeCard = image.DataContext as HomePage.HomeShelfCard;
+        var itemKey = card?.Id ?? (homeCard is null ? "card:unresolved" : $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}");
+        if ((card is not null || homeCard is not null) && _appliedArtwork.TryGetValue(image, out var applied) &&
             ArtworkReusePolicy.ShouldReuse(applied.ItemKey, applied.Url, itemKey, url,
                 ReferenceEquals(image.Source, applied.Bitmap)))
         {
@@ -1072,8 +1121,8 @@ public sealed partial class CatalogLandingPage : UserControl
         load.Url = url!;
         _artworkLoads[image] = load;
         var spotlight = ReferenceEquals(image, SpotlightArtwork);
-        var decodeWidth = spotlight ? 600 : 380;
-        var decodeHeight = spotlight ? 336 : card?.Height == 138 ? 276 : 500;
+        var decodeWidth = spotlight ? 600 : homeCard is not null ? 320 : 380;
+        var decodeHeight = spotlight ? 336 : homeCard is not null ? 450 : card?.Height == 138 ? 276 : 500;
         var cacheKey = $"{uri.AbsoluteUri}|{decodeWidth}x{decodeHeight}";
         if (TryGetCachedArtworkBitmap(cacheKey, out var cachedBitmap))
         {
@@ -1180,14 +1229,22 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CacheArtworkBitmap(string cacheKey, BitmapImage bitmap)
     {
-        if (_artworkBitmapCache.Remove(cacheKey, out var previous)) _artworkBitmapLru.Remove(previous);
-        var node = _artworkBitmapLru.AddFirst(new CachedArtworkBitmap(cacheKey, bitmap));
+        if (_artworkBitmapCache.Remove(cacheKey, out var previous))
+        {
+            _artworkBitmapLru.Remove(previous);
+            _artworkBitmapCacheBytes -= previous.Value.DecodedBytes;
+        }
+        var decodedBytes = ArtworkMemoryBudget.EstimateDecodedBytes(bitmap.PixelWidth, bitmap.PixelHeight);
+        var node = _artworkBitmapLru.AddFirst(new CachedArtworkBitmap(cacheKey, bitmap, decodedBytes));
         _artworkBitmapCache[cacheKey] = node;
-        while (_artworkBitmapCache.Count > ArtworkBitmapCacheCapacity)
+        _artworkBitmapCacheBytes += decodedBytes;
+        while (ArtworkMemoryBudget.ShouldEvict(_artworkBitmapCacheBytes, ArtworkBitmapCacheByteLimit,
+                   _artworkBitmapCache.Count, ArtworkBitmapCacheCountLimit))
         {
             var leastRecentlyUsed = _artworkBitmapLru.Last!;
             _artworkBitmapLru.RemoveLast();
             _artworkBitmapCache.Remove(leastRecentlyUsed.Value.CacheKey);
+            _artworkBitmapCacheBytes -= leastRecentlyUsed.Value.DecodedBytes;
         }
     }
 
@@ -1195,6 +1252,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (!image.IsLoaded || image.XamlRoot is null) return false;
         var currentCard = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
+        if (image.DataContext is HomePage.HomeShelfCard homeCard)
+            return $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}" == load.ItemKey && homeCard.ArtworkUrl == load.Url;
         return currentCard is not null && currentCard.Id == load.ItemKey && currentCard.ArtworkUrl == load.Url;
     }
 
@@ -1225,7 +1284,9 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private string ArtworkItemKey(Image image) =>
-        (ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard)?.Id ?? "unresolved";
+        image.DataContext is HomePage.HomeShelfCard homeCard
+            ? $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}"
+            : (ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard)?.Id ?? "unresolved";
 
     private string SanitizeArtworkUri(Uri uri)
     {
@@ -1351,6 +1412,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task OpenShelfAsync(CatalogShelf shelf)
     {
+        LaunchDiagnostics.Write($"event=catalog.browse.open mode={_activeMode} type={shelf.Type} scope={(shelf.GroupId is null ? "shelf" : "category")}");
         _openShelfId = shelf.Id;
         _openShelfType = shelf.Type;
         _selectedGroupId = shelf.GroupId;
@@ -1884,7 +1946,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public bool SlotAcquired { get; set; }
         public bool SlotReleased { get; set; }
     }
-    private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap);
+    private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap, long DecodedBytes);
     private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset);
 
     private sealed record CatalogShelf(
@@ -1947,4 +2009,13 @@ public static class ArtworkReusePolicy
     public static bool ShouldReuse(string? appliedItemKey, string? appliedUrl,
         string requestedItemKey, string? requestedUrl, bool sourceIsApplied) =>
         sourceIsApplied && appliedItemKey == requestedItemKey && appliedUrl == requestedUrl;
+}
+
+public static class ArtworkMemoryBudget
+{
+    public static long EstimateDecodedBytes(int width, int height) =>
+        checked((long)Math.Max(0, width) * Math.Max(0, height) * 4);
+
+    public static bool ShouldEvict(long retainedBytes, long limitBytes, int entryCount, int countLimit) =>
+        entryCount > 1 && (retainedBytes > limitBytes || entryCount > countLimit);
 }

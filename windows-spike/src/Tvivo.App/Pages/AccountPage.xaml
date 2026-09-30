@@ -1,0 +1,47 @@
+<UserControl
+    x:Class="Tvivo.App.Pages.AccountPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="52,40" Background="{StaticResource AppCanvasBrush}">
+        <StackPanel MaxWidth="640" Spacing="14">
+            <TextBlock Foreground="{StaticResource AppAccentBrush}" FontSize="13" FontWeight="Bold"
+                       CharacterSpacing="180" Text="ACCOUNT" />
+            <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="38" FontWeight="SemiBold"
+                       Text="Account &amp; settings" />
+            <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24" Margin="0,10,0,0">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="2">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Signed in as" />
+                        <TextBlock x:Name="DisplayNameText" Foreground="{StaticResource AppTextBrush}" FontSize="20" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <StackPanel Spacing="2">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Username" />
+                        <TextBlock x:Name="UsernameText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                    </StackPanel>
+                    <StackPanel Spacing="2">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Server" />
+                        <TextBlock x:Name="ServerText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                    </StackPanel>
+                    <StackPanel Spacing="2">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Max connections" />
+                        <TextBlock x:Name="MaxConnectionsText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                    </StackPanel>
+                    <StackPanel Spacing="2">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Subscription expiry" />
+                        <TextBlock x:Name="ExpiryText" FontSize="16" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,10,0,0">
+                <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}"
+                        Content="Sign out" Click="SignOutButton_Click" />
+                <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
+                        Content="Change user" Click="ChangeUserButton_Click" />
+                <Button x:Name="ExitButton" Style="{StaticResource AppQuietButtonStyle}"
+                        Content="Exit Tvivo" Click="ExitButton_Click" />
+            </StackPanel>
+            <TextBlock x:Name="ErrorText" Foreground="#FFFF8A80" FontSize="15" TextWrapping="Wrap"
+                       Visibility="Collapsed" />
+        </StackPanel>
+    </Grid>
+</UserControl>

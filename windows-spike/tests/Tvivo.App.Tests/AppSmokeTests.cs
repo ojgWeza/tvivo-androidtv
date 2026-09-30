@@ -8,6 +8,33 @@ namespace Tvivo.App.Tests;
 public sealed class AppSmokeTests
 {
     [Fact]
+    public void Connection_error_copy_does_not_display_exception_details()
+    {
+        var sensitive = "https://private.example/account C:\\Users\\Someone\\secret.txt";
+        var exception = new InvalidOperationException(sensitive);
+        var messages = new[]
+        {
+            ConnectionErrorText.SavedConnection(exception),
+            ConnectionErrorText.Authentication(exception),
+            ConnectionErrorText.SaveConnection(exception),
+            ConnectionErrorText.SignOut(exception),
+        };
+
+        Assert.Equal(new[]
+        {
+            "Could not load your saved connection. Try signing in again.",
+            "Couldn't connect. Check the server address and your account details, then try again.",
+            "Couldn't save your connection. Please try again.",
+            "Couldn't sign out cleanly. Try again, or restart the app.",
+        }, messages);
+        Assert.All(messages, message =>
+        {
+            Assert.DoesNotContain("private.example", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret.txt", message, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void AppTestProjectCanUseCoreContracts()
     {
         var token = new PlaybackSessionToken(1, Guid.NewGuid());
@@ -21,6 +48,17 @@ public sealed class AppSmokeTests
         Assert.False(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-2", "https://art/item-1", true));
         Assert.False(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/new", true));
         Assert.False(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/item-1", false));
+    }
+
+    [Fact]
+    public void Artwork_budget_counts_decoded_pixels_and_evicts_only_when_over_limit()
+    {
+        const long limit = 96L * 1024 * 1024;
+        Assert.Equal(760_000, ArtworkMemoryBudget.EstimateDecodedBytes(380, 500));
+        Assert.False(ArtworkMemoryBudget.ShouldEvict(limit, limit, 2, 128));
+        Assert.True(ArtworkMemoryBudget.ShouldEvict(limit + 1, limit, 2, 128));
+        Assert.True(ArtworkMemoryBudget.ShouldEvict(limit, limit, 129, 128));
+        Assert.False(ArtworkMemoryBudget.ShouldEvict(limit + 1, limit, 1, 128));
     }
 
     [Fact]

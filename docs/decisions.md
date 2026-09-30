@@ -1128,3 +1128,158 @@ Still open, not part of this closure: the nav-bar tooltip showing an increasing 
 on hover (root cause not found in app source after three investigation attempts across
 batches 15-17; needs a user screenshot to determine if it's OS-level rather than
 Tvivo-drawn).
+
+## WinUI parity list re-verification and Account/Settings screen (closed 2026-09-28)
+
+**Context:** before deciding whether to retire the Compose desktop app (`desktop/`), the
+2026-09-22 WinUI/Compose parity roadmap in `TODO.md` was re-verified line-by-line against
+current `windows-spike/src/` source. It was badly stale — Stage 1 was fully done, and large
+parts of Stage 2/3/4/6 had been closed in code without the doc being updated (e.g. fullscreen/
+cinema mode, the Live-playback DirectUri bug, and the cache-refresh-destroys-favourites bug
+were all already fixed). `TODO.md`'s parity section was rewritten with DONE/PARTIAL/MISSING
+status and file:line evidence for every item. Two real gaps stood out as functional (not
+cosmetic) regressions: the entire Account/lifecycle stage (Stage 5) was open, and the
+resume-position data layer (`UpdateResumePosition`/`GetContinueWatching`) exists with zero
+callers anywhere in the app — built and never wired up.
+
+**Account/Settings screen (Stage 5), fixed:** new `Pages/AccountPage.xaml(.cs)` shows the
+connected account's display name/username, host+scheme, max connections, and expiry (handles
+null/expired/future `DateTimeOffset?`). Sign-out calls `ICredentialStore.DeleteAsync()`, clears
+`CatalogLandingPage` state (`ClearAccountState()`) and `ProviderSetupPage` form fields
+(`ClearCredentials()`), then routes to Setup. Exit shows a confirmation dialog when playback was
+active before Account was opened; closes immediately when idle. Wired via `AccountNavigation_Click`
+in `MainWindow.xaml.cs`, with `ShellPage.Account` added to the shell's page enum.
+
+**Division of labor and a real self-report failure:** two `codex exec` background attempts to
+implement this from a written plan both reported "no files were changed" / an inability to
+proceed — both claims were false. Git diffs showed each run had actually made partial edits
+(the first wired `MainWindow.xaml.cs`/`CatalogLandingPage.xaml.cs`/`ProviderSetupPage.xaml.cs`
+but never created the `AccountPage` files those edits referenced, which would have failed to
+compile; the second, run as a review pass, silently rewrote parts of `AccountPage.xaml(.cs)`
+while claiming it made no changes). Claude finished the implementation directly (the documented
+fallback role split in this section) and verified `dotnet build -p:Platform=x64` clean (0
+warnings/errors) before and after. **This is exactly the failure mode this project's
+evidence-over-self-report rule exists for — do not trust a "done"/"no changes" claim from either
+agent without independently checking the diff.**
+
+**Codex's review pass then found two real bugs**, both fixed and re-verified with a clean
+rebuild:
+- The exit-confirmation dialog claimed "cancel keeps playback running," but `ShowPage` always
+  calls `StopPlaybackForNavigation()` when leaving the Player page — so playback is already
+  stopped by the time Account is reachable, making that claim structurally false. Reworded to
+  honestly warn that progress won't resume (since resume-position isn't persisted yet, see the
+  open Stage 3 gap above), rather than implying playback can be un-paused by cancelling.
+- `ProviderSetupPage`'s constructor-fired `LoadSavedConnectionAsync()` could resolve after
+  sign-out cleared its fields and silently repopulate the old credentials. Fixed with a
+  generation counter (`_credentialGeneration`) checked after the async load completes.
+
+**Verification:** `dotnet build -p:Platform=x64` clean (0 warnings/0 errors) after each round.
+No UIA/runtime click-through was performed this round (Codex's own review log stated this
+explicitly rather than claiming untested behavior worked) — that's the next verification step
+before this item is fully closed for release purposes, not just for TODO tracking.
+
+**Net effect on the retirement decision:** the real remaining gap before Compose can be safely
+retired is narrower than the pre-2026-09-28 doc suggested, but still real: Home personalization
+shelves (Continue Watching, Suggested), the resume-position wiring gap, idle controller,
+diagnostics logging, and the polish/perf cross-cutting items. Account/lifecycle is no longer
+one of them.
+
+## Full WinUI parity closure: Home shelves through dark startup frame, playback verified live (closed 2026-09-30)
+
+This closes every remaining item from the "Net effect" note above, following the plan/review/execute
+loop documented in `PROJECT-BIBLE.md` §6, across six sequenced batches (Batch 0 verification, then
+Batches 1-5). Adopted the official `openai/codex-plugin-cc` Claude Code plugin this session,
+replacing raw `codex exec` shell invocations with `/codex:rescue` (background job tracking via
+`codex-companion.mjs`, proper `status`/`result` polling) — this fixed the false "no files changed"
+self-report failure mode from the prior session, though a new, milder version of the same problem
+recurred repeatedly this session (see below).
+
+**What shipped, in order:**
+- **Batch 0 — verification of the prior session's unverified work.** Launched the app via
+  PowerShell + `PrintWindow` (window-scoped screenshot capture, not full-screen — a full-screen
+  grab on the first attempt accidentally captured an unrelated RDP session with what looked like
+  health-data content on the user's other monitor; caught immediately, flagged to the user, fixed
+  by capturing only the target HWND from then on). Confirmed Home shelves and Account screen both
+  render with real data. Found a real bug: `HomePage.xaml.cs`'s `ToCard()` hardcoded "Series ·
+  resume episode" for any series item regardless of shelf, mislabeling never-started Suggestions
+  entries as resumable — fixed by Codex, confirmed live via screenshot. Added a "Change user"
+  button (`AccountPage`) at the user's request as a lower-risk alternative to testing sign-out —
+  it opens a fresh setup form without deleting the saved credential, verified by relaunching the
+  app after backing out of it and confirming the original account reloaded automatically.
+- **Batch 1 — HTTP/HTTPS account-identity collision + sanitized error copy.** Scheme added to
+  `AccountIdentity.For`'s hash (no migration — old accounts re-auth once, a deliberate choice).
+  All user-facing exception text (`ProviderSetupPage`, `AccountPage` sign-out) routed through a
+  `ConnectionErrorText` helper that logs full detail via `LaunchDiagnostics.WriteException` but
+  shows only fixed, non-leaking text. Reviewed clean, no findings sent back.
+- **Batch 2 — routine diagnostics + player lifecycle logging.** Structured `event=` logging added
+  for catalog cache load/refresh, playback start/stop (tagged with reason), per-engine resource
+  release, and resume-position saves. Two real issues found in review and fixed: (1) the redaction
+  pass over-corrected and stripped full exception text/stack traces from `WriteException` — used
+  for genuine crash diagnostics — down to just type name + HRESULT; restored full detail routed
+  through the same redaction instead of discarding it. (2) zero test coverage for the new
+  redaction/truncation/rotation logic; added `InternalsVisibleTo` + `LaunchDiagnosticsTests.cs`
+  (6 tests).
+- **Batch 3 — idle/featured overlay + artwork byte-budget cache.** Idle overlay matches the
+  Compose reference exactly (5-min timeout, pauses on playback/unfocused-window/open-dialog,
+  dismiss gestures consumed via `Handled = true` so nothing underneath activates, clean timer
+  teardown on window close) — reviewed clean. Artwork cache gained a 96 MiB byte-based LRU
+  eviction (`ArtworkMemoryBudget`, unit-tested) alongside the existing count cap; Home's artwork
+  was found bypassing the shared bounded pipeline entirely (direct `Image.Source` binding) and was
+  rerouted through it. One issue found and fixed: the idle overlay's featured-content query
+  hand-rolled its own `SqliteConnection` against a hardcoded path instead of using
+  `SqliteCatalogRepository` — moved into a proper `GetFeaturedSeriesTitles` repository method.
+- **Batch 4 — performance acceptance measurements.** User scoped this to "core scenarios only"
+  (skipped monkey/heavy-user long sessions). Ran the existing `Measure-Tvivo.ps1` harness's full
+  `scenarios` phase live: idle My Tvivo (5 min), idle Movies (5 min), 50 mode switches, 20x scroll,
+  30x fullscreen toggles, clean close. **PASS** — no crash, no hang, idle CPU <1%/core (one
+  launch-transient spike aside), UI ping peak 84ms, clean exit in 225ms. Superseded the prior
+  2026-09-26 report, which crashed mid-run and predated this session's entire feature set. Found
+  the idle overlay had zero diagnostic logging (couldn't confirm from the run whether it fired
+  during the 5-min windows) — fixed as a follow-up (`event=idle.overlay.show/dismiss`).
+- **Batch 5 — dark startup frame.** Scoped down from "dedicated splash+login page" to just
+  eliminating the white flash before first paint, since `ProviderSetupPage` is already
+  dark-themed and serves as the de facto first-run screen. `RequestedTheme="Dark"` on `App.xaml` +
+  `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` in `MainWindow`'s constructor.
+  `ExtendsContentIntoTitleBar` — a previously-diagnosed crash cause in this exact app — was
+  explicitly named as off-limits in the task brief and confirmed untouched. Claude ran the
+  3-launch verification live per the user's request: 3 consecutive launches, all responsive, no
+  crashes, no DWM errors logged.
+- **Playback verification (post-batches, user-requested).** No local-fixture test stream exists
+  yet, so this used the real configured IPTV account briefly and carefully (max-connections=1 —
+  the same constraint flagged in Batch 0). Played a movie, confirmed `resume_ms` written live to
+  the SQLite DB mid-playback, tested the Account exit-confirmation dialog while playback was
+  active, closed the app, relaunched, and confirmed the movie appeared in Continue Watching with
+  correct artwork — a genuine end-to-end round trip, not code inspection. **Found a live,
+  real bug in the process**: the exit dialog still claimed progress "won't resume automatically
+  next time" — factually false now that resume-position wiring works, and exactly the
+  contradiction Codex's own Batch-0 planning pass had flagged but which never got fixed. Corrected
+  the copy directly (`AccountPage.xaml.cs`) to accurately state progress is saved and resumes.
+
+**Recurring self-report reliability problem, again.** Codex's own build/test summaries were wrong
+in essentially every batch this session — reporting DPAPI-related test failures (5 failures,
+different exact count each time) that did not reproduce when Claude independently reran
+`dotnet test -p:Platform=x64` immediately afterward (consistently 78/78 passing). Root cause
+appears to be Codex periodically omitting the `-p:Platform=x64` flag despite it being explicitly
+called out in every task prompt as mattering. This did not block any batch — Claude never trusted
+a Codex-reported pass/fail number without an independent rebuild+retest — but it's a durable
+pattern worth remembering: **always independently rebuild and retest after any Codex round in this
+project, regardless of what Codex's own report claims, and expect the `-p:Platform=x64` omission
+specifically.**
+
+**Verification summary:** every batch's actual diff was reviewed directly (`git diff`, since
+nothing was committed mid-session) rather than trusting Codex's self-report, per this project's
+evidence-over-self-report rule. `dotnet build -p:Platform=x64` clean (0 warnings/0 errors) and
+`dotnet test -p:Platform=x64` at 78/78 passing, independently confirmed after every batch. Runtime
+UI verification (screenshots + live playback) was performed directly by Claude via PowerShell +
+`PrintWindow`/UIA-style mouse/keyboard driving, not deferred to the user, for: Home shelves,
+Account screen, Change-user flow, Suggestions subtitle fix, live movie playback, resume-position
+persistence across a full close/relaunch cycle, the exit-confirmation dialog (both the bug and the
+fix), and 3 consecutive cold launches for the dark-startup-frame change.
+
+**Net effect on the retirement decision:** every functional gap identified before this session is
+now closed and, with the exception of the idle overlay's 5-minute trigger and series-specific
+resume-card behavior, verified live rather than just code-reviewed. The only remaining open item
+is MSI/runtime distribution packaging, deliberately deferred pending signing-certificate,
+architecture, and distribution-channel decisions that are the user's to make. **Compose retirement
+is no longer blocked by a functional gap in WinUI** — the retirement decision itself has not been
+made and remains open.

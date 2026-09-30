@@ -23,6 +23,8 @@ namespace Tvivo.App;
 
 public sealed partial class MainWindow : Window
 {
+    private const int DwmwaUseImmersiveDarkMode = 20;
+
     private PlaybackService _playback;
     private readonly VlcPlaybackEngine _vlcEngine;
     private readonly FFmpegInteropPlaybackEngine _nativeEngine;
@@ -31,6 +33,7 @@ public sealed partial class MainWindow : Window
     private IPlaybackEngine _engine;
     private readonly HomePage _homePage;
     private readonly ProviderSetupPage _providerSetupPage;
+    private readonly AccountPage _accountPage;
     private readonly CatalogLandingPage _catalogLandingPage;
     private readonly SqliteCatalogRepository _catalogRepository;
     private readonly PlaybackHandoff _playbackHandoff = new(TimeSpan.FromMilliseconds(350));
@@ -65,8 +68,22 @@ public sealed partial class MainWindow : Window
     private readonly WindowStateController _windowState;
     private bool _isDraggingProgress;
     private bool _isUpdatingProgress;
+    private long? _resumePositionOnStart;
+    private long? _pendingResumePosition;
+    private bool _resumeReady;
+    private DateTimeOffset _lastResumeSavedAt;
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _featuredRotationTimer = new() { Interval = TimeSpan.FromSeconds(8) };
+    private IReadOnlyList<string> _featuredSeries = Array.Empty<string>();
+    private int _featuredIndex;
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+    private DateTimeOffset _lastIdleInputAt = DateTimeOffset.UtcNow;
+    private bool _windowFocused;
+    private bool _idleOverlayVisible;
+    private long _idleOverlayShownAt;
+    private bool _windowClosed;
     private bool _backTransitionTraceActive;
     private int _backTransitionRenderSamples;
     private long _backTransitionTraceId;
@@ -75,11 +92,16 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int valueSize);
+
     public MainWindow()
     {
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _vlcEngine = App.Services.GetRequiredService<VlcPlaybackEngine>();
         _nativeEngine = App.Services.GetRequiredService<FFmpegInteropPlaybackEngine>();
+        _vlcEngine.LifecycleEvent += LaunchDiagnostics.Write;
+        _nativeEngine.LifecycleEvent += LaunchDiagnostics.Write;
         _vlcPlayback = new PlaybackService(_vlcEngine);
         _nativePlayback = new PlaybackService(_nativeEngine);
         var useVlc = string.Equals(ReadPlaybackEnginePreference(), "LibVLC", StringComparison.Ordinal);
@@ -87,15 +109,25 @@ public sealed partial class MainWindow : Window
         _playback = useVlc ? _vlcPlayback : _nativePlayback;
         _homePage = new HomePage();
         _providerSetupPage = new ProviderSetupPage();
+        _accountPage = new AccountPage();
         _catalogLandingPage = new CatalogLandingPage();
+        _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        var useDarkMode = 1;
+        var darkModeResult = DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this),
+            DwmwaUseImmersiveDarkMode, ref useDarkMode, sizeof(int));
+        if (darkModeResult < 0)
+            LaunchDiagnostics.Write($"DWM dark mode attribute failed: 0x{darkModeResult:X8}");
         PlayerRelatedList.ItemsSource = _playerEntries;
         Title = "Tvivo";
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Tvivo.ico");
         if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         TitleBarDragRegion.PointerPressed += TitleBarDragRegion_PointerPressed;
         WindowRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(WindowRoot_KeyDown), true);
+        WindowRoot.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(WindowRoot_PointerInput), true);
+        WindowRoot.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler(WindowRoot_PointerWheelInput), true);
+        WindowRoot.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(WindowRoot_PointerMoved), true);
         WindowRoot.SizeChanged += WindowRoot_SizeChanged;
         VideoView.Unloaded += (_, _) => TraceBackTransition("video-view-unloaded");
         NativePlayerElement.Unloaded += (_, _) => TraceBackTransition("native-player-unloaded");
@@ -109,14 +141,24 @@ public sealed partial class MainWindow : Window
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
         _playbackUiTimer.Start();
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
+        _idleTimer.Tick += IdleTimer_Tick;
+        _featuredRotationTimer.Tick += FeaturedRotationTimer_Tick;
+        _idleTimer.Start();
+        Activated += MainWindow_Activated;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
+        _homePage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
+        _accountPage.SignOutCompleted += AccountPage_SignOutCompleted;
+        _accountPage.ChangeUserRequested += AccountPage_ChangeUserRequested;
+        _accountPage.ExitRequested += (_, _) => Close();
         PageHost.Children.Add(_homePage);
         PageHost.Children.Add(_providerSetupPage);
+        PageHost.Children.Add(_accountPage);
         _homePage.Visibility = Visibility.Visible;
         _providerSetupPage.Visibility = Visibility.Collapsed;
+        _accountPage.Visibility = Visibility.Collapsed;
         CatalogPageHost.Content = _catalogLandingPage;
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
         LaunchDiagnostics.Write("MainWindow XAML initialized");
@@ -154,6 +196,13 @@ public sealed partial class MainWindow : Window
 
     private void WindowRoot_KeyDown(object sender, KeyRoutedEventArgs args)
     {
+        if (_idleOverlayVisible)
+        {
+            DismissIdleOverlay("keyboard");
+            args.Handled = true;
+            return;
+        }
+        ResetIdleDeadline();
         if (args.Key == Windows.System.VirtualKey.F11)
         {
             WindowStateButton_Click(sender, new RoutedEventArgs());
@@ -164,6 +213,124 @@ public sealed partial class MainWindow : Window
             ReturnFromPlayer();
             args.Handled = true;
         }
+    }
+
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+    {
+        _windowFocused = args.WindowActivationState != WindowActivationState.Deactivated;
+        if (!_windowFocused) DismissIdleOverlay("deactivation");
+        ResetIdleDeadline();
+    }
+
+    private void WindowRoot_PointerInput(object sender, PointerRoutedEventArgs args) =>
+        HandleWindowRootPointerInput(args, "pointer");
+
+    private void WindowRoot_PointerWheelInput(object sender, PointerRoutedEventArgs args) =>
+        HandleWindowRootPointerInput(args, "wheel");
+
+    private void HandleWindowRootPointerInput(PointerRoutedEventArgs args, string reason)
+    {
+        if (_idleOverlayVisible)
+        {
+            // The overlay owns the hit-test surface; its first gesture never reaches a page card.
+            DismissIdleOverlay(reason);
+            args.Handled = true;
+            return;
+        }
+        ResetIdleDeadline();
+    }
+
+    private void WindowRoot_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_idleOverlayVisible) ResetIdleDeadline();
+    }
+
+    private void IdleOverlay_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        DismissIdleOverlay("pointer");
+        args.Handled = true;
+    }
+
+    private void IdleOverlay_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
+    {
+        DismissIdleOverlay("wheel");
+        args.Handled = true;
+    }
+
+    private void ResetIdleDeadline() => _lastIdleInputAt = DateTimeOffset.UtcNow;
+
+    private bool IdleEligible()
+    {
+        if (_windowClosed || !_windowFocused || _currentPage == ShellPage.Player ||
+            _engine.IsPlaying || _engine.IsBuffering || WindowRoot.XamlRoot is null) return false;
+        return !VisualTreeHelper.GetOpenPopupsForXamlRoot(WindowRoot.XamlRoot)
+            .Any(popup => HasContentDialog(popup.Child));
+    }
+
+    private static bool HasContentDialog(DependencyObject? element)
+    {
+        if (element is null) return false;
+        if (element is ContentDialog) return true;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
+            if (HasContentDialog(VisualTreeHelper.GetChild(element, index))) return true;
+        return false;
+    }
+
+    private async void IdleTimer_Tick(object? sender, object args)
+    {
+        if (!IdleEligible())
+        {
+            ResetIdleDeadline();
+            return;
+        }
+        if (_idleOverlayVisible || DateTimeOffset.UtcNow - _lastIdleInputAt < IdleTimeout) return;
+        _idleTimer.Stop();
+        var account = _catalogLandingPage.Account;
+        _idleOverlayShownAt = Stopwatch.GetTimestamp();
+        _idleOverlayVisible = true;
+        IdleOverlay.Visibility = Visibility.Visible;
+        LaunchDiagnostics.Write($"event=idle.overlay.show hasAccount={(account is null ? "false" : "true")} featuredCount={(account is null ? "0" : "pending")}");
+        IdleOverlay.Focus(FocusState.Programmatic);
+        if (account is null)
+        {
+            _featuredSeries = Array.Empty<string>();
+            IdleFeaturedTitle.Text = "Explore Tvivo";
+            IdleFeaturedDescription.Text = "Connect a provider to discover your library.";
+            return;
+        }
+        try
+        {
+            var titles = await Task.Run(() => _catalogRepository.GetFeaturedSeriesTitles(account, 20));
+            LaunchDiagnostics.Write($"event=idle.overlay.featured count={titles.Count}");
+            if (_windowClosed || !_idleOverlayVisible || _catalogLandingPage.Account?.AccountId != account.AccountId) return;
+            _featuredSeries = titles;
+            _featuredIndex = 0;
+            IdleFeaturedTitle.Text = titles.FirstOrDefault() ?? "Explore Tvivo";
+            IdleFeaturedDescription.Text = titles.Count == 0 ? "Browse your library to find something to watch." : "A highly rated series from your library.";
+            if (titles.Count > 1) _featuredRotationTimer.Start();
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Featured series lookup failed", exception);
+        }
+    }
+
+    private void FeaturedRotationTimer_Tick(object? sender, object args)
+    {
+        if (!_idleOverlayVisible || _featuredSeries.Count < 2) return;
+        _featuredIndex = (_featuredIndex + 1) % _featuredSeries.Count;
+        IdleFeaturedTitle.Text = _featuredSeries[_featuredIndex];
+    }
+
+    private void DismissIdleOverlay(string reason)
+    {
+        if (!_idleOverlayVisible) return;
+        LaunchDiagnostics.Write($"event=idle.overlay.dismiss reason={reason} elapsedVisibleMs={(long)Stopwatch.GetElapsedTime(_idleOverlayShownAt).TotalMilliseconds}");
+        _idleOverlayVisible = false;
+        _featuredRotationTimer.Stop();
+        IdleOverlay.Visibility = Visibility.Collapsed;
+        ResetIdleDeadline();
+        if (!_windowClosed) _idleTimer.Start();
     }
 
     private void ApplyWindowChromeState()
@@ -194,6 +361,7 @@ public sealed partial class MainWindow : Window
             return;
 
         var restartCurrentPlayback = _currentPage == ShellPage.Player && _currentSource is not null;
+        if (restartCurrentPlayback) SaveResumePosition(force: true);
         await _playback.StopAsync();
         _engine = selectedEngine;
         _playback = ReferenceEquals(_engine, _vlcEngine) ? _vlcPlayback : _nativePlayback;
@@ -249,6 +417,8 @@ public sealed partial class MainWindow : Window
     private void MyTvivoNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
+    private void HomeNavigation_Click(object sender, RoutedEventArgs args) => ShowPage(ShellPage.Home);
+
     private void MoviesNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.Movies);
 
@@ -258,7 +428,37 @@ public sealed partial class MainWindow : Window
     private void LiveTvNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.LiveTv);
 
-    private void AccountNavigation_Click(object sender, RoutedEventArgs args) => ShowPage(ShellPage.Setup);
+    private void AccountNavigation_Click(object sender, RoutedEventArgs args)
+    {
+        if (_catalogLandingPage.Account is not { } account)
+        {
+            ShowPage(ShellPage.Setup);
+            return;
+        }
+
+        var playbackWasActive = _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering);
+        _accountPage.ShowAccount(account, playbackWasActive);
+        ShowPage(ShellPage.Account);
+    }
+
+    private void AccountPage_SignOutCompleted(object? sender, EventArgs args)
+    {
+        Interlocked.Increment(ref _catalogRequestGeneration);
+        _catalogLandingPage.ClearAccountState();
+        _providerSetupPage.ClearCredentials();
+        ShowPage(ShellPage.Setup);
+    }
+
+    private void AccountPage_ChangeUserRequested(object? sender, EventArgs args)
+    {
+        // Same UI reset as sign-out, but intentionally does not touch the credential store:
+        // if the user backs out of setup without connecting, the previous account's saved
+        // credentials are still there next launch.
+        Interlocked.Increment(ref _catalogRequestGeneration);
+        _catalogLandingPage.ClearAccountState();
+        _providerSetupPage.ClearCredentials();
+        ShowPage(ShellPage.Setup);
+    }
 
     private void CatalogLandingPage_InteractionReadinessChanged(object? sender, EventArgs args) =>
         SetCatalogSearchEnabled(_currentPage == ShellPage.Catalog && _catalogLandingPage.IsReadyForInteraction);
@@ -311,15 +511,20 @@ public sealed partial class MainWindow : Window
         }
 
         _currentPage = page;
+        DismissIdleOverlay("navigation");
+        ResetIdleDeadline();
+        if (page == ShellPage.Home)
+            _ = _homePage.LoadAsync(_catalogLandingPage.Account, _catalogLandingPage.Connection, _catalogRepository);
         var isPlayer = page == ShellPage.Player;
         if (isPlayer)
             _playbackUiTimer.Start();
         var isCatalog = page == ShellPage.Catalog;
-        var isStaticPage = page is ShellPage.Home or ShellPage.Setup;
+        var isStaticPage = page is ShellPage.Home or ShellPage.Setup or ShellPage.Account;
         TraceBackTransition($"show-page-visibility-begin page={page}");
         PageHost.Visibility = isStaticPage ? Visibility.Visible : Visibility.Collapsed;
         _homePage.Visibility = page == ShellPage.Home ? Visibility.Visible : Visibility.Collapsed;
         _providerSetupPage.Visibility = page == ShellPage.Setup ? Visibility.Visible : Visibility.Collapsed;
+        _accountPage.Visibility = page == ShellPage.Account ? Visibility.Visible : Visibility.Collapsed;
         PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-player-visibility-set page={page} player={PlayerPage.Visibility}");
         SetPlaybackSurfaceVisibility(isPlayer);
@@ -395,7 +600,7 @@ public sealed partial class MainWindow : Window
         SetTopNavState(MoviesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Movies);
         SetTopNavState(SeriesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Series);
         SetTopNavState(LiveTvNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.LiveTv);
-        SetTopNavState(AccountNavigation, _currentPage == ShellPage.Setup);
+        SetTopNavState(AccountNavigation, _currentPage is ShellPage.Setup or ShellPage.Account);
     }
 
     private void SetTopNavState(Button button, bool selected)
@@ -426,6 +631,7 @@ public sealed partial class MainWindow : Window
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
+        if (_currentPage == ShellPage.Player) SaveResumePosition(force: true);
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
         var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
         Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
@@ -472,6 +678,7 @@ public sealed partial class MainWindow : Window
                     .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
                 : Array.Empty<Channel>();
         _currentSource = args.Source;
+        _resumePositionOnStart = null;
         _nowPlayingChannel = args.Channel;
         PlayerTitleText.Text = args.Channel.DisplayName;
         PlayerSideTitle.Text = args.Source.Kind is StreamKind.Movie or StreamKind.Live
@@ -590,10 +797,23 @@ public sealed partial class MainWindow : Window
     private void OpenSeriesEpisode(Channel episode)
     {
         if (episode.Source.DirectUri is null) return;
+        if (_currentPage == ShellPage.Player) SaveResumePosition(force: true);
         if (_currentPage != ShellPage.Player)
             _playerReturnPage = _currentPage ?? ShellPage.Catalog;
         _currentSeriesId ??= episode.Metadata.TryGetValue("seriesId", out var seriesId) ? seriesId : null;
         _currentSeriesAccount = _catalogLandingPage.Account;
+        if (_currentSeriesId is not null && _currentSeriesAccount is not null)
+        {
+            var previous = _catalogRepository.GetSeriesPlayback(_currentSeriesAccount, _currentSeriesId);
+            _resumePositionOnStart = previous.EpisodeId == episode.Id && !previous.Finished
+                ? _catalogRepository.GetResumePosition(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId)
+                : null;
+            if (_resumePositionOnStart is null)
+            {
+                _catalogRepository.UpdateResumePosition(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId, 0);
+                LaunchDiagnostics.Write("event=resume.save kind=Series positionMs=0 completed=false reason=new-episode");
+            }
+        }
         _nowPlayingChannel = episode;
         _currentSource = episode.Source;
         if (_currentSeriesId is not null && _currentSeriesAccount is not null)
@@ -750,6 +970,18 @@ public sealed partial class MainWindow : Window
 
     private async Task StartPlaybackAsync(StreamSource source)
     {
+        var resumePosition = source.Kind switch
+        {
+            StreamKind.Movie when _catalogLandingPage.Account is { } account && _nowPlayingChannel is { } movie =>
+                _catalogRepository.GetResumePosition(account, CatalogItemType.Movie, movie.Id),
+            StreamKind.Episode => _resumePositionOnStart ??
+                (_currentSeriesAccount is { } seriesAccount && _currentSeriesId is { } seriesId
+                    ? _catalogRepository.GetResumePosition(seriesAccount, CatalogItemType.Series, seriesId) : 0),
+            _ => 0,
+        };
+        _resumePositionOnStart = null;
+        _pendingResumePosition = null;
+        _resumeReady = false;
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
@@ -764,6 +996,7 @@ public sealed partial class MainWindow : Window
         ShowPage(ShellPage.Player);
         StatusText.Text = "Starting playback…";
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        LaunchDiagnostics.Write($"event=playback.start engine={engineName} kind={source.Kind}");
         LaunchDiagnostics.Write($"Playback start: engine={engineName}, kind={source.Kind}, extension={source.ContainerExtension ?? "unspecified"}");
         PlaybackAttemptResult result;
         try
@@ -792,6 +1025,7 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
         {
+            LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason=user-cancelled");
             return;
         }
         catch (Exception exception)
@@ -807,15 +1041,22 @@ public sealed partial class MainWindow : Window
 
         if (!IsCurrentPlaybackStart(generation, sessionCts))
         {
+            LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason=user-cancelled");
             TraceClickAway(playerEntryTraceId, $"playback-completion-discarded generation={generation} currentGeneration={Volatile.Read(ref _playbackSessionGeneration)} page={_currentPage}");
             return;
         }
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
+        if (result != PlaybackAttemptResult.FirstFrame)
+            LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", _ => "error" }}");
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
             RestartCinemaCursorIdleTimer();
         StatusText.Text = PlaybackStatusMessage(result, source.Kind);
         if (result == PlaybackAttemptResult.FirstFrame)
+        {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
+            _pendingResumePosition = resumePosition > 0 ? resumePosition : null;
+            _resumeReady = true;
+        }
         PauseButton.Content = result == PlaybackAttemptResult.FirstFrame
             ? "Pause"
             : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry";
@@ -837,6 +1078,9 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        SaveResumePosition(force: true);
+        if (_currentSource is { } stoppingSource)
+            LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={stoppingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         // Hide the video host before touching playback or starting the catalog fade.
         // The WinUI LibVLC host is swap-chain-backed, so there is no child HWND whose
         // visibility or z-order can be controlled independently from this XAML element.
@@ -856,6 +1100,8 @@ public sealed partial class MainWindow : Window
         sessionCts?.Dispose();
 
         _currentSource = null;
+        _pendingResumePosition = null;
+        _resumeReady = false;
         _nowPlayingChannel = null;
         _currentSeriesId = null;
         _currentSeriesTitle = null;
@@ -1076,6 +1322,13 @@ public sealed partial class MainWindow : Window
             _playbackCompletionShown = true;
         }
         var timeline = _engine.Timeline;
+        if (_pendingResumePosition is { } resume && timeline.CanSeek)
+        {
+            _engine.Seek(Math.Min(resume, Math.Max(0, timeline.DurationMilliseconds!.Value - 1000)));
+            _pendingResumePosition = null;
+            timeline = _engine.Timeline;
+        }
+        SaveResumePosition();
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
         var time = timeline.PositionMilliseconds;
@@ -1092,6 +1345,35 @@ public sealed partial class MainWindow : Window
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         _isUpdatingProgress = false;
         PauseButton.Content = _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play";
+    }
+
+    private void SaveResumePosition(bool force = false)
+    {
+        if (!_resumeReady || _currentPage != ShellPage.Player || _nowPlayingChannel is not { } channel ||
+            _catalogLandingPage.Account is not { } account || _currentSource is null)
+            return;
+
+        CatalogItemType type;
+        string id;
+        if (channel.Source.Kind == StreamKind.Movie)
+        {
+            type = CatalogItemType.Movie;
+            id = channel.Id;
+        }
+        else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
+        {
+            type = CatalogItemType.Series;
+            id = _currentSeriesId;
+        }
+        else return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (!force && now - _lastResumeSavedAt < TimeSpan.FromSeconds(5)) return;
+        var position = _engine.IsEnded ? 0 : _engine.Timeline.PositionMilliseconds;
+        if (position <= 0 && !_engine.IsEnded) return;
+        _catalogRepository.UpdateResumePosition(account, type, id, position);
+        LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={_engine.IsEnded}");
+        _lastResumeSavedAt = now;
     }
 
     private static string FormatTime(long milliseconds)
@@ -1175,6 +1457,7 @@ public sealed partial class MainWindow : Window
     private void PlayRelatedChannel(Channel channel)
     {
         if (channel.Source.DirectUri is null || channel.Source.Kind is not (StreamKind.Movie or StreamKind.Live)) return;
+        SaveResumePosition(force: true);
 
         // ItemClick supplies the clicked data item directly. Keep the category rows
         // bound in place and update only the playing marker; rebuilding the list here
@@ -1199,6 +1482,7 @@ public sealed partial class MainWindow : Window
         }
 
         _nowPlayingChannel = channel;
+        _resumePositionOnStart = null;
         _currentSource = channel.Source;
         PlayerTitleText.Text = channel.DisplayName;
         PlayerNowPlayingText.Text = string.Empty;
@@ -1216,7 +1500,7 @@ public sealed partial class MainWindow : Window
     private void PlayerBackButton_Click(object sender, RoutedEventArgs args) => ReturnFromPlayer();
 
     private void PlayerHomeButton_Click(object sender, RoutedEventArgs args) =>
-        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
+        ShowPage(ShellPage.Home);
 
     private void ReturnFromPlayer()
     {
@@ -1368,6 +1652,16 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        _windowClosed = true;
+        DismissIdleOverlay("window-close");
+        _idleTimer.Stop();
+        _idleTimer.Tick -= IdleTimer_Tick;
+        _featuredRotationTimer.Stop();
+        _featuredRotationTimer.Tick -= FeaturedRotationTimer_Tick;
+        Activated -= MainWindow_Activated;
+        SaveResumePosition(force: true);
+        if (_currentSource is { } closingSource)
+            LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         _playbackUiTimer.Stop();
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
         _cinemaCursorIdleTimer.Stop();
@@ -1424,6 +1718,7 @@ public sealed partial class MainWindow : Window
     {
         Home,
         Setup,
+        Account,
         Catalog,
         Player
     }
