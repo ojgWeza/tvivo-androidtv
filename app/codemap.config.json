@@ -1,0 +1,49 @@
+{
+  "$comment": "codemap config for the Android TV app. UI (ViewModels) call Repository methods, which call Room DAO methods (methods are abstract; the SQL lives in a @Query annotation above the declaration, not in a body) against local SQLite tables. See skill docs + CLAUDE.md for the kotlinRoomDao / declRegex / requireVerb extensions this stack needed in scripts/codemap.mjs.",
+  "output": "CODEMAP.md",
+  "oracle": "../PROJECT-BIBLE.md",
+  "eol": "auto",
+  "exclude": [
+    "**/build/**"
+  ],
+  "controllers": {
+    "files": [
+      "src/main/java/com/dev/Tvivo/data/repository/*.kt",
+      "src/main/java/com/dev/Tvivo/auth/AuthRepository.kt"
+    ],
+    "declRegex": [
+      "^\\s*(?:private\\s+)?(?:suspend\\s+)?fun\\s+(\\w+)\\s*\\("
+    ],
+    "requireVerb": false,
+    "routeLabel": "Repository.<method>()",
+    "backendCall": [
+      "db\\.(\\w+Dao\\(\\)\\.\\w+)\\("
+    ]
+  },
+  "backend": {
+    "files": [
+      "src/main/java/com/dev/Tvivo/data/local/dao/*.kt"
+    ],
+    "kotlinRoomDao": true
+  },
+  "frontend": {
+    "files": [
+      "src/main/java/com/dev/Tvivo/ui/**/*.kt"
+    ],
+    "routeRef": [
+      "\\b(?:catalog|repo|repository|live|vod|series|playback\\w*|pb|auth)\\.(\\w+)\\s*\\("
+    ],
+    "ignore": "Test",
+    "stripPrefix": "src/main/java/com/dev/Tvivo/ui/"
+  },
+  "ownTables": "^(live_streams|vod_streams|series|series_episodes|categories|sync_meta|catalog_sync|resume_positions|favourites)$",
+  "notes": {
+    "../TODO.md": [
+      "src/main/java/com/dev/Tvivo/data/**/*.kt"
+    ],
+    "../docs/decisions.md": [
+      "src/main/java/com/dev/Tvivo/data/**/*.kt"
+    ]
+  },
+  "notesState": ".codemap/reviewed.json"
+}

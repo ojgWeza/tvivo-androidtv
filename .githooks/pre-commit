@@ -19,9 +19,9 @@
 
 set -e
 
-# Only file types the codemap can index (plus its own config/script).
+# Only file types any codemap in this repo can index (plus its own config/script).
 if ! git diff --cached --name-only --diff-filter=ACMRD \
-     | grep -qiE '\.(sql|cs|tsx?|jsx?|mjs)$|codemap\.config\.json$'; then
+     | grep -qiE '\.(sql|cs|kt|tsx?|jsx?|mjs)$|codemap\.config\.json$'; then
   exit 0
 fi
 
@@ -30,24 +30,28 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-# The folder holding codemap.config.json, relative to the git root.
-CODEMAP_DIR=windows-spike
-PROJECT="$(git rev-parse --show-toplevel)/$CODEMAP_DIR"
-SCRIPT="$PROJECT/scripts/codemap.mjs"
-[ -f "$SCRIPT" ] || exit 0
+# One folder per codemap in this repo, each holding its own codemap.config.json.
+CODEMAP_DIRS="windows-spike app"
+ROOT="$(git rev-parse --show-toplevel)"
 
-if ! (cd "$PROJECT" && node "$SCRIPT" >/dev/null 2>&1); then
-  echo "pre-commit: codemap.mjs failed; CODEMAP.md NOT regenerated." >&2
-  echo "pre-commit: commit allowed -- run 'node scripts/codemap.mjs' to see why." >&2
-  exit 0
-fi
+for CODEMAP_DIR in $CODEMAP_DIRS; do
+  PROJECT="$ROOT/$CODEMAP_DIR"
+  SCRIPT="$PROJECT/scripts/codemap.mjs"
+  [ -f "$SCRIPT" ] || continue
 
-if ! git diff --quiet -- "$PROJECT/CODEMAP.md" 2>/dev/null; then
-  git add "$PROJECT/CODEMAP.md"
-  echo "pre-commit: CODEMAP.md regenerated and staged."
-fi
+  if ! (cd "$PROJECT" && node "$SCRIPT" >/dev/null 2>&1); then
+    echo "pre-commit: $CODEMAP_DIR/scripts/codemap.mjs failed; CODEMAP.md NOT regenerated." >&2
+    echo "pre-commit: commit allowed -- run 'node scripts/codemap.mjs' in $CODEMAP_DIR to see why." >&2
+    continue
+  fi
 
-# Notes: a reminder only. Meaning cannot be regenerated, so this never blocks.
-(cd "$PROJECT" && node "$SCRIPT" changes --quiet) || true
+  if ! git diff --quiet -- "$PROJECT/CODEMAP.md" 2>/dev/null; then
+    git add "$PROJECT/CODEMAP.md"
+    echo "pre-commit: $CODEMAP_DIR/CODEMAP.md regenerated and staged."
+  fi
+
+  # Notes: a reminder only. Meaning cannot be regenerated, so this never blocks.
+  (cd "$PROJECT" && node "$SCRIPT" changes --quiet) || true
+done
 
 exit 0

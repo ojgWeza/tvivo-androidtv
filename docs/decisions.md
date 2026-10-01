@@ -1311,3 +1311,52 @@ tracking whether the body was actually entered and closing at the next return to
 for this clone; tested live (stage a touched file, run the hook by hand, confirm it regenerates and
 restages). Notes baseline (`TODO.md`, `docs/decisions.md` vs. `src/**/*.cs`) recorded in
 `.codemap/reviewed.json`. Commands and the local script extension are documented in `CLAUDE.md`.
+
+## app/CODEMAP.md added for the Android TV app (2026-10-01)
+
+Applied the same `codemap` setup to `app/` (the Android TV app), on request to extend the
+`windows-spike` setup to the other codebase. The shape here is three real layers — `ui/*`
+ViewModels call `data/repository/*.kt` Repository methods, which call `data/local/dao/*.kt` Room
+DAO methods, which run against SQLite tables — which maps naturally onto codemap's
+frontend→controller→backend→table model, *except* for two things Kotlin/Room do differently from
+the C# shape the stock script assumes:
+
+1. **No `public` keyword, no `[HttpVerb]` attribute.** Kotlin declarations are just `fun name(...)`,
+   and there is no web framework here to annotate a route. Added `controllers.declRegex` (override
+   the decl pattern per config) and `controllers.requireVerb: false` (skip the verb-gate entirely;
+   every matched declaration becomes a route, verb `CALL`) — both config-driven, no special-casing
+   of "Kotlin" in the script itself.
+2. **Room DAO methods are abstract.** The SQL is a `@Query("""...""")` annotation sitting *above*
+   the method, not a body below it — the brace-depth body scanner built for C#'s
+   `CommandText = "SELECT ..."` pattern cannot see it at all; there is no body to scan. Added
+   `backend.kotlinRoomDao: true`, a self-contained parsing branch that: tracks `interface FooDao { }`
+   boundaries (`SupportDaos.kt` holds six DAOs in one file), accumulates a `@Query(...)` annotation's
+   text across however many lines it spans, and attaches it to the *next* method declaration. DAO
+   method names collide freely across DAOs (`observe`, `get`, `upsert`, `remove`, …), so each method
+   is keyed by its accessor shape — `liveDao().pagingInCategory`, not bare `pagingInCategory` — the
+   same shape the Repository layer actually calls it by (`db.liveDao().pagingInCategory(...)`).
+   Getting this wrong would have silently merged two different DAOs' same-named methods into one
+   table-reads/writes entry.
+
+A related but deliberate asymmetry: Repository method names are *not* qualified by class, on
+purpose. `LiveRepository`, `VodRepository`, and `SeriesRepository` are explicitly "the same shape
+line for line" per their own doc comments (one repository per content type, same method names
+throughout) — BrowseViewModel even wraps them behind a type-erased `CatalogSource` interface,
+so there is no way to tell from a call site which concrete repository is in play. Merging
+`pagingInCategory` into one route that lists all three DAO calls (and the union of `live_streams` /
+`vod_streams` / `series`) is the *correct* read here: "this operation, across content types,
+touches these tables" — not a bug, unlike the DAO case where the three tables are genuinely
+unrelated data and must stay separate.
+
+Known, accepted coverage gaps (documented in `CLAUDE.md`, not fixed — regex-over-source limits):
+`CachedFetch` holds its DAO as a bare field (`syncMetaDao.get(...)`, no `db.` prefix), so those
+calls aren't linked to a route; the `CatalogSource` wrapper is itself a second indirection
+(`catalog.pagingFiltered(...)`) the frontend extractor can't see through, so it flags as a route
+"not defined" even though the real underlying call one line away resolves correctly.
+
+`app/CODEMAP.md` reports 24 routes / 65 backend (DAO) methods / 51 of those carrying their own
+inline SQL / 9 tables, spot-checked against source (`vodDao().updatePlot` writes-only `vod_streams`,
+`favouriteDao().add` correctly shows no SQL since it's `@Insert`-generated). Confirmed the
+`windows-spike` output is byte-for-byte unchanged after generalizing the shared script (diffed
+against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loop over both
+`windows-spike` and `app`; notes baselined in `app/.codemap/reviewed.json`.

@@ -1,0 +1,56 @@
+{
+  "../TODO.md": {
+    "files": {
+      "src/main/java/com/dev/Tvivo/data/local/AppDatabase.kt": "db0d3eb45e677e06",
+      "src/main/java/com/dev/Tvivo/data/local/NameNormalizer.kt": "5413997cf671b0a3",
+      "src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt": "9078b04f018f8f0a",
+      "src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt": "7f3d1e9128a1cb81",
+      "src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt": "ba7f4b74e29d7272",
+      "src/main/java/com/dev/Tvivo/data/local/dao/VodDao.kt": "bd02b52e8c0673af",
+      "src/main/java/com/dev/Tvivo/data/local/entities/Entities.kt": "5d3a4215f09de568",
+      "src/main/java/com/dev/Tvivo/data/model/AuthDtos.kt": "e5591134c4a8a19d",
+      "src/main/java/com/dev/Tvivo/data/remote/CategoryListParser.kt": "903c398c5c402b6e",
+      "src/main/java/com/dev/Tvivo/data/remote/ErrorMapper.kt": "d84d3dbf1d2a10c1",
+      "src/main/java/com/dev/Tvivo/data/remote/LiveStreamParser.kt": "5328a83c9e56a0be",
+      "src/main/java/com/dev/Tvivo/data/remote/SeriesInfoParser.kt": "b787de0ba4291e1a",
+      "src/main/java/com/dev/Tvivo/data/remote/SeriesListParser.kt": "433e9af7490f356e",
+      "src/main/java/com/dev/Tvivo/data/remote/StreamListParser.kt": "bbf56dab68721960",
+      "src/main/java/com/dev/Tvivo/data/remote/VodInfoParser.kt": "c672540d42b73bd8",
+      "src/main/java/com/dev/Tvivo/data/remote/VodStreamParser.kt": "ddf5674992ee03a7",
+      "src/main/java/com/dev/Tvivo/data/remote/XtreamApiClient.kt": "0389267e8a8f795f",
+      "src/main/java/com/dev/Tvivo/data/remote/XtreamApiService.kt": "7a909053c7796083",
+      "src/main/java/com/dev/Tvivo/data/repository/CachedFetch.kt": "c11365bbdcba2baa",
+      "src/main/java/com/dev/Tvivo/data/repository/LiveRepository.kt": "0865c7718c7348a2",
+      "src/main/java/com/dev/Tvivo/data/repository/PlaybackStateRepository.kt": "a5caeb8546bbcdfa",
+      "src/main/java/com/dev/Tvivo/data/repository/SeriesRepository.kt": "4fb1bccef0f09959",
+      "src/main/java/com/dev/Tvivo/data/repository/VodRepository.kt": "83394c1d03b612c5"
+    }
+  },
+  "../docs/decisions.md": {
+    "files": {
+      "src/main/java/com/dev/Tvivo/data/local/AppDatabase.kt": "db0d3eb45e677e06",
+      "src/main/java/com/dev/Tvivo/data/local/NameNormalizer.kt": "5413997cf671b0a3",
+      "src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt": "9078b04f018f8f0a",
+      "src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt": "7f3d1e9128a1cb81",
+      "src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt": "ba7f4b74e29d7272",
+      "src/main/java/com/dev/Tvivo/data/local/dao/VodDao.kt": "bd02b52e8c0673af",
+      "src/main/java/com/dev/Tvivo/data/local/entities/Entities.kt": "5d3a4215f09de568",
+      "src/main/java/com/dev/Tvivo/data/model/AuthDtos.kt": "e5591134c4a8a19d",
+      "src/main/java/com/dev/Tvivo/data/remote/CategoryListParser.kt": "903c398c5c402b6e",
+      "src/main/java/com/dev/Tvivo/data/remote/ErrorMapper.kt": "d84d3dbf1d2a10c1",
+      "src/main/java/com/dev/Tvivo/data/remote/LiveStreamParser.kt": "5328a83c9e56a0be",
+      "src/main/java/com/dev/Tvivo/data/remote/SeriesInfoParser.kt": "b787de0ba4291e1a",
+      "src/main/java/com/dev/Tvivo/data/remote/SeriesListParser.kt": "433e9af7490f356e",
+      "src/main/java/com/dev/Tvivo/data/remote/StreamListParser.kt": "bbf56dab68721960",
+      "src/main/java/com/dev/Tvivo/data/remote/VodInfoParser.kt": "c672540d42b73bd8",
+      "src/main/java/com/dev/Tvivo/data/remote/VodStreamParser.kt": "ddf5674992ee03a7",
+      "src/main/java/com/dev/Tvivo/data/remote/XtreamApiClient.kt": "0389267e8a8f795f",
+      "src/main/java/com/dev/Tvivo/data/remote/XtreamApiService.kt": "7a909053c7796083",
+      "src/main/java/com/dev/Tvivo/data/repository/CachedFetch.kt": "c11365bbdcba2baa",
+      "src/main/java/com/dev/Tvivo/data/repository/LiveRepository.kt": "0865c7718c7348a2",
+      "src/main/java/com/dev/Tvivo/data/repository/PlaybackStateRepository.kt": "a5caeb8546bbcdfa",
+      "src/main/java/com/dev/Tvivo/data/repository/SeriesRepository.kt": "4fb1bccef0f09959",
+      "src/main/java/com/dev/Tvivo/data/repository/VodRepository.kt": "83394c1d03b612c5"
+    }
+  }
+}
