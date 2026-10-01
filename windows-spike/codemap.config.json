@@ -1,0 +1,41 @@
+{
+  "$comment": "codemap config for windows-spike (WinUI desktop app). No web controllers/stored procs: Pages call SqliteCatalogRepository methods directly, which run inline SQLite SQL against local tables. See skill docs for field meanings.",
+  "output": "CODEMAP.md",
+  "oracle": "../PROJECT-BIBLE.md",
+  "eol": "auto",
+  "exclude": [
+    "src/**/bin/**",
+    "src/**/obj/**",
+    "**/ui-captures/**"
+  ],
+  "controllers": {
+    "routeLabel": "SqliteCatalogRepository.<Method>()"
+  },
+  "backend": {
+    "files": [
+      "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs"
+    ],
+    "inlineSql": true
+  },
+  "frontend": {
+    "files": [
+      "src/Tvivo.App/**/*.cs"
+    ],
+    "routeRef": [
+      "_repository\\.(\\w+)\\s*\\(",
+      "_catalogRepository\\.(\\w+)\\s*\\("
+    ],
+    "ignore": "Tests",
+    "stripPrefix": "src/Tvivo.App/"
+  },
+  "ownTables": "^(items|categories|favorites|series_playback|incoming_item_ids)$",
+  "notes": {
+    "../TODO.md": [
+      "src/**/*.cs"
+    ],
+    "../docs/decisions.md": [
+      "src/**/*.cs"
+    ]
+  },
+  "notesState": ".codemap/reviewed.json"
+}

@@ -1,0 +1,53 @@
+#!/bin/sh
+# Regenerate CODEMAP.md whenever a file it could index is staged, stage the
+# result, and remind (never block) about notes whose sources changed.
+#
+# WHY A HOOK. In the project this came from, CODEMAP.md carried 81 line
+# references into .sql files, so any SQL edit -- a comment included -- staled
+# it. 34 commits touched those files and only 6 touched CODEMAP.md before this
+# hook existed. `check` existed as a gate; nothing ran it. Remembering was
+# tried, and the record was 6 of 34.
+#
+# ENABLE (once per clone -- a hook in the repo does nothing on its own):
+#     git config core.hooksPath .githooks
+# ESCAPE HATCH: git commit --no-verify
+#
+# It regenerates rather than failing the commit: a gate that blocks you and
+# then asks you to run a command by hand is the same discipline problem in a
+# different hat. It never fails the commit on a generator error either -- a
+# broken generator must not become a broken repo.
+
+set -e
+
+# Only file types the codemap can index (plus its own config/script).
+if ! git diff --cached --name-only --diff-filter=ACMRD \
+     | grep -qiE '\.(sql|cs|tsx?|jsx?|mjs)$|codemap\.config\.json$'; then
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found; CODEMAP.md not regenerated." >&2
+  exit 0
+fi
+
+# The folder holding codemap.config.json, relative to the git root.
+CODEMAP_DIR=windows-spike
+PROJECT="$(git rev-parse --show-toplevel)/$CODEMAP_DIR"
+SCRIPT="$PROJECT/scripts/codemap.mjs"
+[ -f "$SCRIPT" ] || exit 0
+
+if ! (cd "$PROJECT" && node "$SCRIPT" >/dev/null 2>&1); then
+  echo "pre-commit: codemap.mjs failed; CODEMAP.md NOT regenerated." >&2
+  echo "pre-commit: commit allowed -- run 'node scripts/codemap.mjs' to see why." >&2
+  exit 0
+fi
+
+if ! git diff --quiet -- "$PROJECT/CODEMAP.md" 2>/dev/null; then
+  git add "$PROJECT/CODEMAP.md"
+  echo "pre-commit: CODEMAP.md regenerated and staged."
+fi
+
+# Notes: a reminder only. Meaning cannot be regenerated, so this never blocks.
+(cd "$PROJECT" && node "$SCRIPT" changes --quiet) || true
+
+exit 0

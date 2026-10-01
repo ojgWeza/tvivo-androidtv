@@ -13,3 +13,4 @@ gradlew text eol=lf
 *.aab binary
 *.keystore binary
 *.jks binary
+.githooks/* text eol=lf

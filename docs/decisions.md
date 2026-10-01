@@ -1283,3 +1283,31 @@ is MSI/runtime distribution packaging, deliberately deferred pending signing-cer
 architecture, and distribution-channel decisions that are the user's to make. **Compose retirement
 is no longer blocked by a functional gap in WinUI** — the retirement decision itself has not been
 made and remains open.
+
+## windows-spike/CODEMAP.md added (2026-10-01)
+
+Set up the `codemap` skill (`C:\Users\Dell\.claude\skills\codemap\`) against `windows-spike/`. The
+skill's stock script assumes a web stack (`[HttpVerb]` controllers → backend → stored procs →
+tables); this app has none of that — `Tvivo.App` Pages call `SqliteCatalogRepository` methods
+directly, which run inline SQLite SQL against local tables, with no route or proc layer in between.
+
+Rather than bend the config to fake a controller layer (which produced a map that looked broken —
+every call flagged as "frontend calls a route the controllers do not define" — when nothing
+actually was), extended `windows-spike/scripts/codemap.mjs` with a `collapsedRoutes`/
+`collapsedProcs` mode: when `controllers`/`sql` are left out of `codemap.config.json`, each backend
+method stands in as its own route and its own proc, so the index still shows real read/write table
+sets per method with no fake intermediate hop.
+
+While building that extension, found and fixed a real pre-existing bug in the stock script shared
+by both the collapsed and original modes: the per-method brace-depth tracker only closed out a
+method body on `depth < 0`, never on returning to baseline `0`. If a declaration the regex couldn't
+parse (e.g. `GetSeriesPlayback`'s tuple return type `(string? EpisodeId, bool Finished)`) was
+skipped, its body's SQL kept accumulating onto whatever method was last successfully matched —
+caught via spot-check (`RecordVisit` showed `series_playback` as a read it never touches). Fixed by
+tracking whether the body was actually entered and closing at the next return to depth 0.
+
+`windows-spike/CODEMAP.md` now reports 24 routes / 16 "procs" (repository methods with inline SQL)
+/ 5 tables, spot-checked against source. `.githooks/pre-commit` installed and `core.hooksPath` set
+for this clone; tested live (stage a touched file, run the hook by hand, confirm it regenerates and
+restages). Notes baseline (`TODO.md`, `docs/decisions.md` vs. `src/**/*.cs`) recorded in
+`.codemap/reviewed.json`. Commands and the local script extension are documented in `CLAUDE.md`.
