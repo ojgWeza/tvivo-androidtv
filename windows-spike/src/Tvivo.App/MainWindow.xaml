@@ -22,15 +22,15 @@
             <Grid x:Name="TitleBarDragRegion" Grid.Column="1" Background="Transparent"
                   AutomationProperties.AccessibilityView="Raw" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                <Button x:Name="WindowStateButton" Content="□" Click="WindowStateButton_Click"
+                <Button x:Name="WindowStateButton" Content="&#xE922;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="WindowStateButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Switch to windowed mode"
                         ToolTipService.ToolTip="{x:Null}" />
-                <Button x:Name="MinimizeWindowButton" Content="—" Click="MinimizeWindowButton_Click"
+                <Button x:Name="MinimizeWindowButton" Content="&#xE921;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="MinimizeWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Minimize window"
                         ToolTipService.ToolTip="{x:Null}" />
-                <Button x:Name="CloseWindowButton" Content="×" Click="CloseWindowButton_Click"
+                <Button x:Name="CloseWindowButton" Content="&#xE8BB;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="CloseWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Close Tvivo"
                         ToolTipService.ToolTip="{x:Null}" />
@@ -319,7 +319,7 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
-                                <Button x:Name="SeriesFavoriteButton" Grid.Column="1" Visibility="Collapsed"
+                                <Button x:Name="SeriesFavoriteButton" Grid.Column="1" Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
                                         Content="☆" Width="40" Height="40" MinWidth="40" MinHeight="40"
                                         FontSize="22" Padding="0" HorizontalContentAlignment="Center"
                                         VerticalContentAlignment="Center" Background="Transparent"
@@ -362,7 +362,7 @@
                                                         <TextBlock Text="{Binding EpisodeStatusText}" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
                                                     </StackPanel>
                                                 </StackPanel>
-                                                <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}"
+                                                <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Style="{StaticResource AppIconButtonStyle}"
                                                         Width="40" Height="40" MinWidth="40" MinHeight="40"
                                                         FontSize="22" Padding="0" HorizontalContentAlignment="Center"
                                                         VerticalContentAlignment="Center"
@@ -370,17 +370,17 @@
                                                         Visibility="{Binding FavoriteVisibility}"
                                                         AutomationProperties.Name="Toggle favorite"
                                                         Click="PlayerFavorite_Click" />
-                                                <Button Grid.Column="2" Content="⋯" Tag="{Binding}" Width="40" Height="40"
-                                                        MinWidth="40" MinHeight="40" Padding="0" Background="Transparent"
-                                                        Foreground="{StaticResource AppMutedTextBrush}"
+                                                <Button Grid.Column="2" Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Tag="{Binding}" Width="40" Height="40"
+                                                        MinWidth="40" MinHeight="40" Style="{StaticResource AppIconButtonStyle}"
                                                         Visibility="{Binding EpisodeMenuVisibility}"
+                                                        ToolTipService.ToolTip="Mark watched / unwatched"
                                                         AutomationProperties.Name="Episode watch status">
-                                                    <Button.ContextFlyout>
+                                                    <Button.Flyout>
                                                         <MenuFlyout>
                                                             <MenuFlyoutItem Text="Mark watched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
                                                             <MenuFlyoutItem Text="Mark unwatched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
                                                         </MenuFlyout>
-                                                    </Button.ContextFlyout>
+                                                    </Button.Flyout>
                                                 </Button>
                                             </Grid>
                                         </Border>

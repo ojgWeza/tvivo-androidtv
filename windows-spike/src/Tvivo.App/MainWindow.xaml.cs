@@ -285,7 +285,7 @@ public sealed partial class MainWindow : Window
         var showChrome = !_isCinemaMode;
         WindowChrome.Visibility = showChrome ? Visibility.Visible : Visibility.Collapsed;
         WindowRoot.RowDefinitions[0].Height = new GridLength(showChrome ? 44 : 0);
-        WindowStateButton.Content = fullscreen ? "▢" : "□";
+        WindowStateButton.Content = fullscreen ? "\uE923" : "\uE922";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(WindowStateButton, fullscreen
             ? "Switch to windowed mode"
             : "Switch to fullscreen mode");
