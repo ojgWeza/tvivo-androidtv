@@ -109,6 +109,9 @@ public sealed partial class CatalogLandingPage : UserControl
     public bool IsReadyForInteraction => _isReadyForInteraction;
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
     public event EventHandler? InteractionReadinessChanged;
+    // Raised when the user changes what they are browsing (mode, category, sort, search), so
+    // deferred visit ranking can be applied then and not while a returning list is on screen.
+    public event EventHandler? BrowseContextChanging;
 
     public Task<string?> GetCategoryNameForAsync(Channel channel)
     {
@@ -247,6 +250,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _loadGeneration);
         Interlocked.Increment(ref _pageQueryGeneration);
         Interlocked.Increment(ref _modeTransitionGeneration);
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         SaveModeState(_activeMode);
         _activeMode = mode;
         UpdateEpgLifecycle();
@@ -310,6 +314,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (SearchBox.Text == text)
             return;
 
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         _suppressSearchChanged = true;
         SearchBox.Text = text;
         _suppressSearchChanged = false;
@@ -1358,6 +1363,22 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SaveModeState(CatalogMode mode) =>
         _modeStates[mode] = new ModeInteractionState(_openShelfId, _openShelfType, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset);
 
+    // A new page, sort or search is a fresh list: start at the top and forget the position that
+    // was remembered for the previous list, so a later re-render cannot scroll back down.
+    private void ResetBrowseScroll()
+    {
+        _browsePositions.Remove((_activeMode, _openShelfId ?? string.Empty));
+
+        void ScrollToTop()
+        {
+            var scrollViewer = _openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+            scrollViewer?.ChangeView(null, 0, null, true);
+        }
+
+        ScrollToTop();
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, ScrollToTop);
+    }
+
     private void CaptureBrowseState()
     {
         var scrollViewer = _openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
@@ -1860,6 +1881,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task OpenShelfAsync(CatalogShelf shelf)
     {
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         LaunchDiagnostics.Write($"event=catalog.browse.open mode={_activeMode} type={shelf.Type} scope={(shelf.GroupId is null ? "shelf" : "category")}");
         if (_account is { } account)
         {
@@ -1882,6 +1904,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async void BackToShelves_Click(object sender, RoutedEventArgs args)
     {
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         _openShelfId = null;
         _openShelfType = null;
         _selectedGroupId = null;
@@ -2056,11 +2079,13 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
         if (_suppressSearchChanged || !_isReadyForInteraction) return;
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (string.IsNullOrWhiteSpace(SearchBox.Text) && _openShelfId is null)
             _selectedGroupId = null;
         _offset = 0;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
+        ResetBrowseScroll();
     }
 
     private async void ClearSearch_Click(object sender, RoutedEventArgs args)
@@ -2137,21 +2162,25 @@ public sealed partial class CatalogLandingPage : UserControl
     public async void SetCategorySort(string? tag)
     {
         if (!_isReadyForInteraction || !Enum.TryParse<CategorySort>(tag, out var sort) || sort == _categorySort) return;
+        BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         _categorySort = sort;
         if (_account is null) return;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
+        ResetBrowseScroll();
     }
 
     private async void PreviousPage_Click(object sender, RoutedEventArgs args)
     {
         _offset = Math.Max(0, _offset - PageSize);
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
+        ResetBrowseScroll();
     }
 
     private async void NextPage_Click(object sender, RoutedEventArgs args)
     {
         _offset += PageSize;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
+        ResetBrowseScroll();
     }
 
     private Task ShowCachedPageAsync() =>

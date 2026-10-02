@@ -186,6 +186,7 @@ public sealed partial class MainWindow : Window
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
         LaunchDiagnostics.Write("MainWindow XAML initialized");
         Closed += OnClosed;
+        _catalogLandingPage.BrowseContextChanging += (_, _) => FlushPendingVisits();
         LaunchDiagnostics.Write("MainWindow constructor completed");
     }
 
@@ -801,8 +802,7 @@ public sealed partial class MainWindow : Window
         var type = args.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live;
         if (_catalogLandingPage.Account is { } account)
         {
-            _catalogRepository.RecordVisit(account, type, args.Channel.Id);
-            _catalogLandingPage.NotifyVisitRecorded();
+            QueueVisit(account, type, args.Channel.Id);
         }
         _playerSiblings = args.Source.Kind == StreamKind.Movie
             ? new[] { args.Channel }
@@ -915,8 +915,7 @@ public sealed partial class MainWindow : Window
         _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
             .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
         ConfigureSeasonSelector(details.Seasons);
-        _catalogRepository.RecordVisit(account, CatalogItemType.Series, series.Id);
-        _catalogLandingPage.NotifyVisitRecorded();
+        QueueVisit(account, CatalogItemType.Series, series.Id);
         OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected));
     }
 
@@ -1201,6 +1200,23 @@ public sealed partial class MainWindow : Window
             PlayerSeasonLabel.Text = SeasonProgressLabel(onlySeason);
     }
 
+    // Visits feed the "most visited" ranking. Applying one immediately re-sorts the list the user
+    // is about to return to (the played title jumps to the top and the scroll position is lost),
+    // so visits are held until the browse context changes or the app closes.
+    private readonly List<(ProviderAccount Account, CatalogItemType Type, string Id)> _pendingVisits = new();
+
+    private void QueueVisit(ProviderAccount account, CatalogItemType type, string id) =>
+        _pendingVisits.Add((account, type, id));
+
+    private void FlushPendingVisits()
+    {
+        if (_pendingVisits.Count == 0) return;
+        foreach (var visit in _pendingVisits)
+            _catalogRepository.RecordVisit(visit.Account, visit.Type, visit.Id);
+        _pendingVisits.Clear();
+        _catalogLandingPage.NotifyVisitRecorded();
+    }
+
     private async Task StartPlaybackAsync(StreamSource source)
     {
         var resumePosition = source.Kind switch
@@ -1274,6 +1290,7 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             LaunchDiagnostics.Write($"Playback start failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
+            LaunchDiagnostics.Write("Playback start failure stack: " + (exception.StackTrace ?? string.Empty).Replace("\r", string.Empty).Replace("\n", " | "));
             result = PlaybackAttemptResult.HostFailure;
         }
         finally
@@ -1971,10 +1988,9 @@ public sealed partial class MainWindow : Window
 
         if (_catalogLandingPage.Account is { } account)
         {
-            _catalogRepository.RecordVisit(account,
+            QueueVisit(account,
                 channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live,
                 channel.Id);
-            _catalogLandingPage.NotifyVisitRecorded();
         }
 
         _nowPlayingChannel = channel;
@@ -2150,6 +2166,7 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        FlushPendingVisits();
         SaveResumePosition(force: true);
         if (_currentSource is { } closingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");

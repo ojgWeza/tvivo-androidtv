@@ -404,8 +404,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _handlers = null;
             _currentSession = null;
         }
-        _trackProbeCancellation?.Cancel();
-        _trackProbeCancellation = null;
+        CancelTrackProbe();
         lock (_trackSync)
         {
             _tracks = PlaybackTrackSnapshot.Unresolved;
@@ -504,8 +503,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _handlers = null;
             _currentSession = null;
         }
-        _trackProbeCancellation?.Cancel();
-        _trackProbeCancellation = null;
+        CancelTrackProbe();
         lock (_trackSync)
         {
             _tracks = PlaybackTrackSnapshot.Unresolved;
@@ -546,7 +544,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private void StartTrackProbe(PlaybackSessionToken session, MediaPlayer player)
     {
         var cancellation = new CancellationTokenSource();
-        _trackProbeCancellation?.Cancel();
+        CancelTrackProbe();
         _trackProbeCancellation = cancellation;
         _ = ProbeTracksAsync(session, player, cancellation);
     }
@@ -578,7 +576,23 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         }
         finally
         {
+            // A probe that ran to its deadline must not leave a disposed source behind for the
+            // next StopCore/StartTrackProbe to Cancel (that threw ObjectDisposedException and
+            // blocked every later start).
+            Interlocked.CompareExchange(ref _trackProbeCancellation, null, cancellation);
             cancellation.Dispose();
+        }
+    }
+
+    private void CancelTrackProbe()
+    {
+        var probe = Interlocked.Exchange(ref _trackProbeCancellation, null);
+        try
+        {
+            probe?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 
