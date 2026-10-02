@@ -162,6 +162,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             var player = new MediaPlayer(libVlc)
             {
                 Media = media,
+                // LibVLC's own click-to-pause would toggle on each click of a double-click;
+                // the window handles video clicks itself (single = pause, double = cinema).
+                EnableMouseInput = false,
             };
             var handlers = new EventHandlers(
                 player,

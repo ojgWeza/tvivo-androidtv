@@ -79,6 +79,7 @@ public sealed partial class MainWindow : Window
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _videoClickPauseTimer;
     private Windows.Foundation.Point _lastVideoTapPoint;
     private readonly WindowStateController _windowState;
     private bool _isDraggingProgress;
@@ -2058,6 +2059,9 @@ public sealed partial class MainWindow : Window
         if (now - _lastVideoTapAt <= TimeSpan.FromMilliseconds(500) &&
             delta * delta + deltaY * deltaY <= 24 * 24)
         {
+            // The first click of this double-click has a pending pause toggle; drop it so a
+            // double-click does not pause and resume the video.
+            _videoClickPauseTimer?.Stop();
             SetCinemaMode(!_isCinemaMode);
             _lastVideoTapAt = default;
             return;
@@ -2065,6 +2069,26 @@ public sealed partial class MainWindow : Window
 
         _lastVideoTapAt = now;
         _lastVideoTapPoint = point;
+
+        if (!args.GetCurrentPoint(sender as UIElement).Properties.IsLeftButtonPressed)
+            return;
+        // A single click pauses/resumes, but only once the double-click window has passed.
+        _videoClickPauseTimer ??= CreateVideoClickPauseTimer();
+        _videoClickPauseTimer.Stop();
+        _videoClickPauseTimer.Start();
+    }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer CreateVideoClickPauseTimer()
+    {
+        var timer = WindowRoot.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(520);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            if (_currentPage == ShellPage.Player && _currentSource is not null)
+                PauseButton_Click(this, new RoutedEventArgs());
+        };
+        return timer;
     }
 
     private void VideoSurface_PointerReleased(object sender, PointerRoutedEventArgs args)
