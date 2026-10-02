@@ -1323,9 +1323,9 @@ public sealed partial class MainWindow : Window
             _activePlaybackSessionGeneration = generation;
             _resumeReady = true;
         }
-        PauseButton.Content = result == PlaybackAttemptResult.FirstFrame
+        SetPauseButtonState(result == PlaybackAttemptResult.FirstFrame
             ? "Pause"
-            : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry";
+            : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry");
         VolumeSlider.Value = _engine.Volume;
     }
 
@@ -1393,7 +1393,7 @@ public sealed partial class MainWindow : Window
         ProgressSlider.IsEnabled = false;
         RewindButton.IsEnabled = false;
         ForwardButton.IsEnabled = false;
-        PauseButton.Content = "Play";
+        SetPauseButtonState("Play");
         PlayerTitleText.Text = string.Empty;
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
@@ -1414,6 +1414,15 @@ public sealed partial class MainWindow : Window
 
         _playbackStopTask = StopBothPlaybackEnginesAsync();
         TraceBackTransition($"player-stop-return asyncStopStarted={!_playbackStopTask.IsCompleted} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
+    }
+
+    // The pause control is an icon; its label lives in the automation name and tooltip so
+    // screen readers and UI tests still see "Pause" / "Play" / "Retry".
+    private void SetPauseButtonState(string label)
+    {
+        PauseButton.Content = label switch { "Pause" => "\uE769", "Retry" => "\uE72C", _ => "\uE768" };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PauseButton, label);
+        ToolTipService.SetToolTip(PauseButton, label);
     }
 
     private async Task StopBothPlaybackEnginesAsync()
@@ -1707,7 +1716,7 @@ public sealed partial class MainWindow : Window
         if (!_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused))
         {
             _engine.TogglePause();
-            PauseButton.Content = _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play";
+            SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
         }
         else
             await StartPlaybackAsync(_currentSource);
@@ -1802,7 +1811,7 @@ public sealed partial class MainWindow : Window
         ElapsedText.Text = FormatTime(time);
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         _isUpdatingProgress = false;
-        PauseButton.Content = _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play";
+        SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
     }
 
     private void RecordEpisodeCompletion(long position, long? duration)
@@ -1826,7 +1835,7 @@ public sealed partial class MainWindow : Window
         {
             LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
             StatusText.Text = "Playback stalled. Select Retry to resume.";
-            PauseButton.Content = "Retry";
+            SetPauseButtonState("Retry");
             return;
         }
         _stallRecoveryAttempted = true;
@@ -2086,8 +2095,13 @@ public sealed partial class MainWindow : Window
         PlayerPage.Padding = enabled ? new Thickness(0) : new Thickness(24);
         PlayerNavigation.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         PlayerNavigationRow.Height = enabled ? new GridLength(0) : GridLength.Auto;
-        CinemaButton.Content = enabled ? "Exit cinema" : "Cinema mode";
-        NativeCinemaButton.Content = CinemaButton.Content;
+        var cinemaLabel = enabled ? "Exit cinema" : "Cinema mode";
+        foreach (var button in new[] { CinemaButton, NativeCinemaButton })
+        {
+            button.Content = enabled ? "\uE73F" : "\uE740";
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, cinemaLabel);
+            ToolTipService.SetToolTip(button, cinemaLabel);
+        }
         ApplyPlayerLayout();
 
         if (!enabled)

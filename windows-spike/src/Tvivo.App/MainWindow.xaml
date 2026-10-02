@@ -148,9 +148,9 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <StackPanel x:Name="PlayerNavigation" Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
-                    <Button x:Name="PlayerBackButton" Content="← Back" Style="{StaticResource AppQuietButtonStyle}"
+                    <Button x:Name="PlayerBackButton" Content="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Back to catalog"
                             Click="PlayerBackButton_Click" AutomationProperties.Name="Back to catalog" />
-                    <Button x:Name="PlayerHomeButton" Content="Home" Style="{StaticResource AppQuietButtonStyle}"
+                    <Button x:Name="PlayerHomeButton" Content="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Go home"
                             Click="PlayerHomeButton_Click" AutomationProperties.Name="Go home" />
                 </StackPanel>
                 <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
@@ -250,9 +250,9 @@
                             Grid.Row="1"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center"
-                            Content="Cinema mode"
+                            Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode"
                             Visibility="Collapsed"
-                            Style="{StaticResource AppQuietButtonStyle}"
+                            Style="{StaticResource AppIconButtonStyle}"
                             Click="CinemaButton_Click" />
 
                     <!-- Keep one app-owned transport below both playback surfaces. -->
@@ -270,8 +270,8 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="PauseButton" Grid.Column="0" Content="Pause" Style="{StaticResource AppQuietButtonStyle}" Click="PauseButton_Click" />
-                        <Button x:Name="RewindButton" Grid.Column="1" Content="−10s" Style="{StaticResource AppQuietButtonStyle}" Click="RewindButton_Click" AutomationProperties.Name="Rewind 10 seconds" />
+                        <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
+                        <Button x:Name="RewindButton" Grid.Column="1" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
                         <Grid Grid.Column="2" ColumnSpacing="10" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -282,23 +282,23 @@
                             <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
                             <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="0:00" />
                         </Grid>
-                        <Button x:Name="ForwardButton" Grid.Column="3" Content="+10s" Style="{StaticResource AppQuietButtonStyle}" Click="ForwardButton_Click" AutomationProperties.Name="Forward 10 seconds" />
-                        <Button x:Name="PreviousEpisodeButton" Grid.Column="4" Content="⏮" Visibility="Collapsed"
+                        <Button x:Name="ForwardButton" Grid.Column="3" Style="{StaticResource AppIconButtonStyle}" Click="ForwardButton_Click" AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds" Content="&#xEB9D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                        <Button x:Name="PreviousEpisodeButton" Grid.Column="4" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Previous episode"
                                 Style="{StaticResource AppIconButtonStyle}" Click="PreviousEpisode_Click"
                                 AutomationProperties.Name="Previous episode" />
-                        <Button x:Name="NextEpisodeButton" Grid.Column="5" Content="⏭" Visibility="Collapsed"
+                        <Button x:Name="NextEpisodeButton" Grid.Column="5" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Next episode"
                                 Style="{StaticResource AppIconButtonStyle}" Click="NextEpisode_Click"
                                 AutomationProperties.Name="Next episode" />
-                        <Button x:Name="AudioSubtitlesButton" Grid.Column="6" Content="Audio &amp; subtitles"
-                                Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Audio and subtitles"
+                        <Button x:Name="AudioSubtitlesButton" Grid.Column="6" Content="&#xED1E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Audio and subtitles"
                                 ToolTipService.ToolTip="Audio &amp; subtitles">
                             <Button.Flyout>
                                 <MenuFlyout x:Name="AudioSubtitlesFlyout" />
                             </Button.Flyout>
                         </Button>
-                        <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="Volume" />
+                        <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16" Text="&#xE767;" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" />
                         <Slider x:Name="VolumeSlider" Grid.Column="8" Width="112" Minimum="0" Maximum="100" Value="100" VerticalAlignment="Center" ValueChanged="VolumeSlider_ValueChanged" />
-                        <Button x:Name="CinemaButton" Grid.Column="9" Content="Cinema mode" Style="{StaticResource AppQuietButtonStyle}" Click="CinemaButton_Click" />
+                        <Button x:Name="CinemaButton" Grid.Column="9" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
                     </Grid>
                     </Border>
                     </Grid>
