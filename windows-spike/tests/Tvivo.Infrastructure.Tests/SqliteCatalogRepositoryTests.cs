@@ -255,6 +255,32 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Recently_added_shows_a_title_listed_in_two_categories_once_and_keeps_the_limit_filled()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var start = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+            Channel Titled(string id, string title, DateTimeOffset added) =>
+                new(account.AccountId, id, id.StartsWith("dup") ? "cat-" + id : "cat", title, title, null, added, null,
+                    new(id, StreamKind.Series, "mp4"), new Dictionary<string, string>());
+            var items = new List<Channel>
+            {
+                Titled("dup-a", "East of Eden", start.AddDays(5)),
+                Titled("dup-b", "East of Eden", start.AddDays(4)),
+                Titled("dup-c", "east of eden ", start.AddDays(3)),
+            };
+            for (var i = 0; i < 6; i++) items.Add(Titled("other-" + i, "Other " + i, start.AddDays(2).AddHours(-i)));
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), items);
+
+            var recent = repo.GetRecentlyAdded(account, CatalogItemType.Series, limit: 5);
+
+            Assert.Equal(new[] { "dup-a", "other-0", "other-1", "other-2", "other-3" }, recent.Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Recently_added_is_provider_timestamp_ordered_across_catalog_types()
     {
         using var repo = Create(out var dir); var account = Account();

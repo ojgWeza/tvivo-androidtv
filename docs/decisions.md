@@ -1441,3 +1441,13 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   `CancellationTokenSource` at its 10 s deadline while the engine kept the reference, so the next `StopCore` threw
   `ObjectDisposedException` and every later start failed (HostFailure). `CancelTrackProbe()` now detaches and cancels
   safely. Verified live: three consecutive switches from the player list, each >10 s after the previous start.
+
+- **Recently added: series dates and duplicate titles (2026-10-02).** Xtream series carry `last_modified`, not `added`, so every
+  series had no date and the shelf only held series first seen after the initial sync (a few dozen, vs 200 movies). The
+  provider mapping now uses `added`, falling back to `last_modified` for series (it means "last updated", e.g. a new episode).
+  The provider also lists one show under several categories with different ids (East of Eden: 20794 in ENGLISH SERIES NEW,
+  20796 in NETFILX SERIES NEW; ~78 titles in this account), so the Recently added shelf now collapses entries with the same
+  title and year, newest first, and refills to the limit. Categories and All series still list every provider entry.
+- **Replaying a finished episode (2026-10-02).** `SaveProgress` is last-write-wins (it used to keep `finished=1` forever), and an
+  episode starts from its own `media_progress` row (`GetEpisodeResumePosition`), never the series-wide resume value, which
+  belongs to whichever episode was played last. Watched state is derived from playback only; there is no manual menu.

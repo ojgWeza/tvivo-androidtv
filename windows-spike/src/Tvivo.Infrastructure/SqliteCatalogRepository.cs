@@ -437,10 +437,20 @@ public sealed class SqliteCatalogRepository : IDisposable
     }
 
     public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 200, string? filter = null)
-        => GetOrderedItems(account, type, connection,
+    {
+        var capped = Math.Clamp(limit, 0, 200);
+        // Providers often list one title under several categories with different ids. A "recently
+        // added" shelf should show it once (the newest entry wins), so over-fetch before collapsing.
+        var candidates = GetOrderedItems(account, type, connection,
             "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
             "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC, id ASC",
-            Math.Clamp(limit, 0, 200), filter, useRecentlyAddedSortKey: true);
+            capped * 4, filter, useRecentlyAddedSortKey: true);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return candidates.Where(item => seen.Add(DuplicateTitleKey(item))).Take(capped).ToArray();
+    }
+
+    private static string DuplicateTitleKey(Channel item) =>
+        item.DisplayName.Trim().ToLowerInvariant() + "|" + (item.Metadata.TryGetValue("year", out var year) ? year.Trim() : string.Empty);
 
     public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 200, string? filter = null)
         => Enum.GetValues<CatalogItemType>()

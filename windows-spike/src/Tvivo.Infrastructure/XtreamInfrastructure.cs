@@ -229,7 +229,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         if (string.IsNullOrWhiteSpace(id)) return null;
         var name = JsonValue.String(value, "name") ?? id;
         var icon = JsonValue.Uri(value, type == CatalogItemType.Series ? "cover" : "stream_icon");
-        var added = JsonValue.UnixTime(value, "added");
+        // Xtream movies and live channels carry "added"; series only carry "last_modified".
+        var added = JsonValue.UnixTime(value, "added") ??
+            (type == CatalogItemType.Series ? JsonValue.UnixTime(value, "last_modified") : null);
         var order = JsonValue.Int(value, "num");
         var groupId = JsonValue.String(value, "category_id");
         var extension = type == CatalogItemType.Live

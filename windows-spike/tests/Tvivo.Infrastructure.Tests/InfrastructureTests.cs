@@ -155,6 +155,31 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task Provider_uses_last_modified_as_the_series_date_and_added_for_movies()
+    {
+        var handler = new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("action=get_vod_categories", StringComparison.Ordinal) ||
+                query.Contains("action=get_series_categories", StringComparison.Ordinal))
+                return JsonBody("[]");
+            if (query.Contains("action=get_vod_streams", StringComparison.Ordinal))
+                return JsonBody("[{\"stream_id\":\"movie-1\",\"name\":\"Movie\",\"added\":\"1790000000\"}]");
+            return JsonBody("[{\"series_id\":\"series-1\",\"name\":\"Series\",\"last_modified\":\"1790864164\"}]");
+        });
+        var provider = new XtreamCatalogProvider(new HttpClient(handler));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+
+        var movie = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Movie));
+        var series = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Series));
+
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1790000000), movie.AddedAt);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1790864164), series.AddedAt);
+    }
+
+    [Fact]
     public async Task Provider_maps_movie_and_series_metadata_from_info_objects()
     {
         string? movieQuery = null;
