@@ -75,6 +75,10 @@ public sealed partial class MainWindow : Window
     private bool _isClosing;
     private bool _isCinemaMode;
     private bool _cinemaCursorHidden;
+    // Cinema mode shows the transport as an overlay that fades out while playing and the mouse is idle.
+    private bool _cinemaControlsVisible = true;
+    private bool _cinemaPointerOverControls;
+    private Windows.Foundation.Point _lastCinemaPointer;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
@@ -222,6 +226,9 @@ public sealed partial class MainWindow : Window
     {
         if (args.Handled || AudioSubtitlesFlyout.IsOpen)
             return;
+
+        if (_isCinemaMode && _currentPage == ShellPage.Player)
+            ShowCinemaControls();
 
         if (args.Key == Windows.System.VirtualKey.F11)
         {
@@ -1297,7 +1304,7 @@ public sealed partial class MainWindow : Window
             ClearPlayerNowNext();
         }
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
-            RestartCinemaCursorIdleTimer();
+            ShowCinemaControls();
         StatusText.Text = PlaybackStatusMessage(result, source.Kind);
         if (result == PlaybackAttemptResult.FirstFrame)
         {
@@ -1714,8 +1721,13 @@ public sealed partial class MainWindow : Window
         }
         if (_isCinemaMode)
         {
-            if (_engine.IsPlaying || _engine.IsBuffering) RestartCinemaCursorIdleTimer();
-            else StopCinemaCursorIdleTimer(showCursor: true);
+            if (_engine.IsPlaying || _engine.IsBuffering)
+            {
+                // Resumed after a pause: start hiding the overlay again.
+                if (_cinemaControlsVisible && !_cinemaCursorIdleTimer.IsEnabled && !_cinemaPointerOverControls)
+                    _cinemaCursorIdleTimer.Start();
+            }
+            else ShowCinemaControls(); // paused, ended or failed: keep the controls up
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
@@ -2102,8 +2114,7 @@ public sealed partial class MainWindow : Window
         }
 
         _isCinemaMode = enabled;
-        if (enabled && (_engine.IsPlaying || _engine.IsBuffering)) RestartCinemaCursorIdleTimer();
-        else StopCinemaCursorIdleTimer(showCursor: true);
+        _cinemaPointerOverControls = false;
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 72);
@@ -2118,6 +2129,8 @@ public sealed partial class MainWindow : Window
             ToolTipService.SetToolTip(button, cinemaLabel);
         }
         ApplyPlayerLayout();
+        if (enabled) ShowCinemaControls();
+        else StopCinemaCursorIdleTimer(showCursor: true);
 
         if (!enabled)
         {
@@ -2135,26 +2148,61 @@ public sealed partial class MainWindow : Window
 
     private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
-        RestartCinemaCursorIdleTimer();
+        if (!_isCinemaMode) return;
+        var point = args.GetCurrentPoint(PlayerPage).Position;
+        // Hiding the cursor can raise a move event without real motion; ignore tiny jitter.
+        if (Math.Abs(point.X - _lastCinemaPointer.X) < 3 && Math.Abs(point.Y - _lastCinemaPointer.Y) < 3) return;
+        _lastCinemaPointer = point;
+        ShowCinemaControls();
+    }
+
+    private void VlcTransportBar_PointerEntered(object sender, PointerRoutedEventArgs args) =>
+        _cinemaPointerOverControls = true;
+
+    private void VlcTransportBar_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _cinemaPointerOverControls = false;
+        if (_isCinemaMode && (_engine.IsPlaying || _engine.IsBuffering)) ShowCinemaControls();
     }
 
     private void CinemaCursorIdleTimer_Tick(object? sender, object args)
     {
         _cinemaCursorIdleTimer.Stop();
-        if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
-            SetCinemaCursorVisible(false);
+        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
+        // Keep the overlay while it is being used.
+        if (_cinemaPointerOverControls || AudioSubtitlesFlyout.IsOpen || _isDraggingProgress)
+        {
+            _cinemaCursorIdleTimer.Start();
+            return;
+        }
+        SetCinemaControlsVisible(false);
+        SetCinemaCursorVisible(false);
     }
 
-    private void RestartCinemaCursorIdleTimer()
+    private void ShowCinemaControls()
     {
-        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
-        SetCinemaCursorVisible(false);
+        if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
+        SetCinemaControlsVisible(true);
+        SetCinemaCursorVisible(true);
+        _cinemaCursorIdleTimer.Stop();
+        if (_engine.IsPlaying || _engine.IsBuffering) _cinemaCursorIdleTimer.Start();
+    }
+
+    private void SetCinemaControlsVisible(bool visible)
+    {
+        _cinemaControlsVisible = visible;
+        if (!_isCinemaMode) return;
+        if (visible) CinemaTitleText.Text = PlayerTitleText.Text;
+        VlcTransportBar.Opacity = visible ? 1 : 0;
+        VlcTransportBar.IsHitTestVisible = visible;
+        CinemaTitleStrip.Opacity = visible ? 1 : 0;
     }
 
     private void StopCinemaCursorIdleTimer(bool showCursor)
     {
         _cinemaCursorIdleTimer.Stop();
         if (showCursor) SetCinemaCursorVisible(true);
+        SetCinemaControlsVisible(true);
     }
 
     private void SetCinemaCursorVisible(bool visible)
@@ -2186,7 +2234,24 @@ public sealed partial class MainWindow : Window
         PlayerDetailsRow.Height = cinema ? new GridLength(0) : GridLength.Auto;
         PlayerTransportRow.Height = cinema ? new GridLength(0) : GridLength.Auto;
         PlayerDetailsPanel.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
-        VlcTransportBar.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
+        // Cinema: the same transport floats over the bottom of the video instead of sitting below it.
+        Grid.SetRow(VlcTransportBar, cinema ? 0 : 2);
+        VlcTransportBar.Visibility = Visibility.Visible;
+        VlcTransportBar.VerticalAlignment = cinema ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
+        VlcTransportBar.HorizontalAlignment = cinema ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
+        VlcTransportBar.Margin = cinema ? new Thickness(24, 0, 24, 28) : new Thickness(0);
+        var panelBrush = (Brush)Application.Current.Resources["AppPanelSurfaceBrush"];
+        VlcTransportBar.Background = cinema && panelBrush is SolidColorBrush solid
+            ? new SolidColorBrush(Windows.UI.Color.FromArgb(0xE0, solid.Color.R, solid.Color.G, solid.Color.B))
+            : panelBrush;
+        CinemaTitleStrip.Visibility = cinema ? Visibility.Visible : Visibility.Collapsed;
+        if (!cinema)
+        {
+            VlcTransportBar.Opacity = 1;
+            VlcTransportBar.IsHitTestVisible = true;
+            CinemaTitleStrip.Opacity = 0;
+        }
         ApplyPlayerNowNextVisibility();
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         NativePlayerElement.AreTransportControlsEnabled = false;
