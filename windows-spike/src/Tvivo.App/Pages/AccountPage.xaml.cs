@@ -10,7 +10,6 @@ namespace Tvivo.App.Pages;
 public sealed partial class AccountPage : UserControl
 {
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
-    private bool _playbackActiveOnShow;
 
     public AccountPage()
     {
@@ -19,12 +18,58 @@ public sealed partial class AccountPage : UserControl
 
     public event EventHandler? SignOutCompleted;
     public event EventHandler? ChangeUserRequested;
-    public event EventHandler? ExitRequested;
+    public event EventHandler? RefreshCatalogRequested;
+    public event EventHandler<string>? PlaybackEngineChanged;
 
-    public void ShowAccount(ProviderAccount account, bool playbackActive)
+    private bool _suppressEngineChanged;
+
+    public void SetPlaybackEngine(string tag)
     {
+        _suppressEngineChanged = true;
+        PlaybackEngineSelector.SelectedIndex = tag == "LibVLC" ? 1 : 0;
+        _suppressEngineChanged = false;
+    }
+
+    private void PlaybackEngineSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_suppressEngineChanged || PlaybackEngineSelector.SelectedItem is not ComboBoxItem { Tag: string tag }) return;
+        PlaybackEngineChanged?.Invoke(this, tag);
+    }
+
+    private string? _openTab;
+
+    private void SettingsTab_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { Tag: string tab }) SetOpenTab(tab == _openTab ? null : tab);
+    }
+
+    private void SetOpenTab(string? tab)
+    {
+        _openTab = tab;
+        AccountTabPanel.Visibility = tab == "Account" ? Visibility.Visible : Visibility.Collapsed;
+        PlayerTabPanel.Visibility = tab == "Player" ? Visibility.Visible : Visibility.Collapsed;
+        LibraryTabPanel.Visibility = tab == "Library" ? Visibility.Visible : Visibility.Collapsed;
+        MarkTab(AccountTabButton, tab == "Account");
+        MarkTab(PlayerTabButton, tab == "Player");
+        MarkTab(LibraryTabButton, tab == "Library");
+    }
+
+    private static void MarkTab(Button button, bool selected)
+    {
+        button.Foreground = (Brush)App.Current.Resources[selected ? "AppTextBrush" : "AppMutedTextBrush"];
+        button.BorderBrush = selected
+            ? (Brush)App.Current.Resources["AppAccentBrush"]
+            : new SolidColorBrush(Colors.Transparent);
+    }
+
+    public void ShowAccount(ProviderAccount account, DateTimeOffset? lastRefreshAt)
+    {
+        SetOpenTab("Library");
         ErrorText.Visibility = Visibility.Collapsed;
-        _playbackActiveOnShow = playbackActive;
+        RefreshCatalogButton.IsEnabled = true;
+        LastRefreshText.Text = lastRefreshAt is { } refreshed
+            ? refreshed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "Not refreshed in this session";
 
         DisplayNameText.Text = string.IsNullOrWhiteSpace(account.DisplayName) ? account.Username : account.DisplayName;
         UsernameText.Text = account.Username;
@@ -69,30 +114,11 @@ public sealed partial class AccountPage : UserControl
         ChangeUserRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private async void ExitButton_Click(object sender, RoutedEventArgs args)
+    private void RefreshCatalogButton_Click(object sender, RoutedEventArgs args)
     {
-        if (!_playbackActiveOnShow)
-        {
-            ExitRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        // Navigating here already stopped playback (MainWindow.ShowPage stops any active
-        // playback when leaving the Player page). Progress is saved via resume-position
-        // tracking, so this just confirms stopping playback, not a loss-of-progress warning.
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Exit Tvivo?",
-            Content = "You're currently watching something. Exiting will stop playback here, but your progress is saved and picks up where you left off next time. Exit anyway?",
-            PrimaryButtonText = "Exit",
-            CloseButtonText = "Stay",
-            DefaultButton = ContentDialogButton.Close
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary)
-            ExitRequested?.Invoke(this, EventArgs.Empty);
+        RefreshCatalogButton.IsEnabled = false;
+        LastRefreshText.Text = "Refreshing... returning to your catalog";
+        RefreshCatalogRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void ShowError(string message)

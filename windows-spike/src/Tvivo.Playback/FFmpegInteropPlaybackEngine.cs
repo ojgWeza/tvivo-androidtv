@@ -1,20 +1,28 @@
 using FFmpegInteropX;
+using System.Globalization;
 using Tvivo.Core;
+using Windows.Foundation.Collections;
+using Windows.Media.Core;
 using Windows.Media.Playback;
 
 namespace Tvivo.Playback;
 
-public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
+public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable
 {
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly MediaPlayer _player = new();
     private FFmpegMediaSource? _source;
+    private MediaPlaybackItem? _playbackItem;
     private PlaybackSessionToken? _currentSession;
     private TaskCompletionSource<PlaybackAttemptResult>? _startup;
     private bool _disposed;
     private volatile bool _ended;
+    private readonly object _trackSync = new();
+    private PlaybackTrackSnapshot _tracks = PlaybackTrackSnapshot.Unresolved;
+    private bool _defaultSubtitleApplied;
     public event Action<string>? LifecycleEvent;
+    public event EventHandler? TracksChanged;
 
     public MediaPlayer Player => _player;
     public bool IsPlaying => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Playing;
@@ -30,6 +38,101 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
     {
         get => (int)Math.Round(_player.Volume * 100);
         set => _player.Volume = Math.Clamp(value, 0, 100) / 100d;
+    }
+
+    public PlaybackTrackSnapshot GetTracks()
+    {
+        lock (_trackSync)
+            return _tracks;
+    }
+
+    public bool SelectAudio(string key)
+    {
+        if (!int.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out var index))
+            return false;
+
+        MediaPlaybackItem? item;
+        lock (_trackSync)
+        {
+            item = _playbackItem;
+            if (item is null || index >= item.AudioTracks.Count)
+                return false;
+        }
+
+        try
+        {
+            item.AudioTracks.SelectedIndex = index;
+            RefreshNativeTracks(item, resolved: true);
+            LifecycleEvent?.Invoke($"event=playback.tracks.select engine=Native kind=Audio key={key} success=true");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LifecycleEvent?.Invoke($"event=playback.tracks.select engine=Native kind=Audio key={key} success=false error={exception.GetType().Name}");
+            return false;
+        }
+    }
+
+    public bool SelectSubtitle(string? keyOrNullForOff)
+    {
+        uint selectedIndex = 0;
+        if (keyOrNullForOff is not null &&
+            !uint.TryParse(keyOrNullForOff, NumberStyles.None, CultureInfo.InvariantCulture, out selectedIndex))
+            return false;
+
+        MediaPlaybackItem? item;
+        lock (_trackSync)
+        {
+            item = _playbackItem;
+            if (item is null || (keyOrNullForOff is not null && selectedIndex >= (uint)item.TimedMetadataTracks.Count))
+                return false;
+        }
+
+        try
+        {
+            for (uint index = 0; index < (uint)item.TimedMetadataTracks.Count; index++)
+            {
+                var mode = keyOrNullForOff is not null && index == selectedIndex
+                    ? TimedMetadataTrackPresentationMode.PlatformPresented
+                    : TimedMetadataTrackPresentationMode.Disabled;
+                item.TimedMetadataTracks.SetPresentationMode(index, mode);
+            }
+            lock (_trackSync)
+                _defaultSubtitleApplied = true;
+            RefreshNativeTracks(item, resolved: true);
+            LifecycleEvent?.Invoke($"event=playback.tracks.select engine=Native kind=Subtitle key={keyOrNullForOff ?? "off"} success=true");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LifecycleEvent?.Invoke($"event=playback.tracks.select engine=Native kind=Subtitle key={keyOrNullForOff ?? "off"} success=false error={exception.GetType().Name}");
+            return false;
+        }
+    }
+
+    public void ApplyDefaultSubtitle(
+        string? preferredLanguage,
+        bool explicitOff,
+        string? uiCultureTwoLetterCode)
+    {
+        PlaybackTrackSnapshot snapshot;
+        lock (_trackSync)
+        {
+            if (_defaultSubtitleApplied)
+                return;
+            snapshot = _tracks;
+        }
+
+        if (snapshot.Subtitles.Count == 0)
+            return;
+
+        var key = TrackSelectionPolicy.PickSubtitle(
+            snapshot.Subtitles,
+            preferredLanguage,
+            explicitOff,
+            uiCultureTwoLetterCode);
+        if (SelectSubtitle(key))
+            LifecycleEvent?.Invoke($"event=playback.tracks.default engine=Native key={key ?? "off"}");
     }
 
     public FFmpegInteropPlaybackEngine()
@@ -74,7 +177,10 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
             {
                 _source = await FFmpegMediaSource.CreateFromUriAsync(source.DirectUri.AbsoluteUri);
                 cancellationToken.ThrowIfCancellationRequested();
-                _player.Source = _source.CreateMediaPlaybackItem();
+                _playbackItem = _source.CreateMediaPlaybackItem();
+                _playbackItem.AudioTracksChanged += OnAudioTracksChanged;
+                _playbackItem.TimedMetadataTracksChanged += OnTimedMetadataTracksChanged;
+                _player.Source = _playbackItem;
                 _player.Play();
                 var timeout = Task.Delay(StartupDeadline, linked.Token);
                 var completed = await Task.WhenAny(_startup.Task, timeout).ConfigureAwait(true);
@@ -145,13 +251,23 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
         _gate.Dispose();
     }
 
-    private void OnMediaOpened(MediaPlayer sender, object args) =>
+    private void OnMediaOpened(MediaPlayer sender, object args)
+    {
+        if (_playbackItem is { } item)
+            RefreshNativeTracks(item, resolved: true);
         _startup?.TrySetResult(PlaybackAttemptResult.FirstFrame);
+    }
 
     private void OnMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) =>
         _startup?.TrySetResult(PlaybackAttemptResult.DecodeFailure);
 
     private void OnMediaEnded(MediaPlayer sender, object args) => _ended = true;
+
+    private void OnAudioTracksChanged(MediaPlaybackItem sender, IVectorChangedEventArgs args) =>
+        RefreshNativeTracks(sender, resolved: true);
+
+    private void OnTimedMetadataTracksChanged(MediaPlaybackItem sender, IVectorChangedEventArgs args) =>
+        RefreshNativeTracks(sender, resolved: true);
 
     private void StopCore(string? reason = null)
     {
@@ -161,6 +277,17 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
         _startup = null;
         _currentSession = null;
         _ended = false;
+        if (_playbackItem is { } item)
+        {
+            item.AudioTracksChanged -= OnAudioTracksChanged;
+            item.TimedMetadataTracksChanged -= OnTimedMetadataTracksChanged;
+        }
+        _playbackItem = null;
+        lock (_trackSync)
+        {
+            _tracks = PlaybackTrackSnapshot.Unresolved;
+            _defaultSubtitleApplied = false;
+        }
         _player.Pause();
         _player.Source = null;
         _source?.Dispose();
@@ -168,4 +295,87 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IDisposable
         if (hadSource)
             LifecycleEvent?.Invoke($"event=playback.engine.release engine=Native reason={reason} source=released playerSource=cleared callbacks=retained-until-dispose");
     }
+
+    private void RefreshNativeTracks(MediaPlaybackItem item, bool resolved)
+    {
+        lock (_trackSync)
+        {
+            if (!ReferenceEquals(_playbackItem, item))
+                return;
+        }
+
+        PlaybackTrackSnapshot snapshot;
+        try
+        {
+            var audio = new List<PlaybackTrack>();
+            for (var index = 0; index < item.AudioTracks.Count; index++)
+            {
+                var track = item.AudioTracks[index];
+                var languageCode = track.Language;
+                var sourceLabel = string.IsNullOrWhiteSpace(track.Label) ? track.Name : track.Label;
+                audio.Add(new PlaybackTrack(
+                    TrackKind.Audio,
+                    index.ToString(CultureInfo.InvariantCulture),
+                    TrackSelectionPolicy.GetDisplayName(TrackKind.Audio, sourceLabel, languageCode, (int)index + 1),
+                    languageCode,
+                    item.AudioTracks.SelectedIndex == index));
+            }
+
+            var subtitles = new List<PlaybackTrack>();
+            var subtitleOrdinal = 0;
+            for (var index = 0; index < item.TimedMetadataTracks.Count; index++)
+            {
+                var track = item.TimedMetadataTracks[index];
+                if (!IsSubtitleTrack(track))
+                    continue;
+
+                var mode = item.TimedMetadataTracks.GetPresentationMode((uint)index);
+                var sourceLabel = string.IsNullOrWhiteSpace(track.Label) ? track.Name : track.Label;
+                subtitleOrdinal++;
+                subtitles.Add(new PlaybackTrack(
+                    TrackKind.Subtitle,
+                    index.ToString(CultureInfo.InvariantCulture),
+                    TrackSelectionPolicy.GetDisplayName(TrackKind.Subtitle, sourceLabel, track.Language, subtitleOrdinal),
+                    track.Language,
+                    mode != TimedMetadataTrackPresentationMode.Disabled));
+            }
+
+            snapshot = new PlaybackTrackSnapshot(audio, subtitles, resolved);
+        }
+        catch (Exception exception)
+        {
+            LifecycleEvent?.Invoke($"Track enumeration failed. engine=Native {exception.GetType().Name}");
+            return;
+        }
+
+        bool changed;
+        lock (_trackSync)
+        {
+            changed = !TrackSnapshotsEqual(_tracks, snapshot);
+            if (changed)
+                _tracks = snapshot;
+        }
+
+        if (!changed)
+            return;
+
+        var audioLanguages = string.Join(",", snapshot.Audio.Select(track => track.LanguageCode ?? "unknown"));
+        var subtitleLanguages = string.Join(",", snapshot.Subtitles.Select(track => track.LanguageCode ?? "unknown"));
+        var selectedAudio = snapshot.Audio.FirstOrDefault(track => track.IsSelected)?.Key ?? "none";
+        var selectedSubtitle = snapshot.Subtitles.FirstOrDefault(track => track.IsSelected)?.Key ?? "off";
+        LifecycleEvent?.Invoke(
+            $"event=playback.tracks engine=Native resolved={snapshot.IsResolved} " +
+            $"audioCount={snapshot.Audio.Count} subtitleCount={snapshot.Subtitles.Count} " +
+            $"audioLanguages=[{audioLanguages}] subtitleLanguages=[{subtitleLanguages}] " +
+            $"selectedAudio={selectedAudio} selectedSubtitle={selectedSubtitle}");
+        TracksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static bool TrackSnapshotsEqual(PlaybackTrackSnapshot left, PlaybackTrackSnapshot right) =>
+        left.IsResolved == right.IsResolved &&
+        left.Audio.SequenceEqual(right.Audio) &&
+        left.Subtitles.SequenceEqual(right.Subtitles);
+
+    private static bool IsSubtitleTrack(TimedMetadataTrack track) =>
+        track.TimedMetadataKind is TimedMetadataKind.Caption or TimedMetadataKind.Subtitle or TimedMetadataKind.ImageSubtitle;
 }

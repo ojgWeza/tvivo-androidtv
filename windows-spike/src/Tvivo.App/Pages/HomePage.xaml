@@ -48,13 +48,24 @@
                             <DataTemplate>
                                 <StackPanel Width="172" Spacing="7" Margin="0,0,10,0">
                                     <Border Width="160" Height="225" Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="8">
-                                        <Image Stretch="UniformToFill" Loaded="Artwork_Loaded"
-                                               Unloaded="Artwork_Unloaded" DataContextChanged="Artwork_DataContextChanged" />
+                                        <Grid>
+                                            <Image Stretch="UniformToFill" Loaded="Artwork_Loaded"
+                                                   Unloaded="Artwork_Unloaded" DataContextChanged="Artwork_DataContextChanged" />
+                                            <Border Height="4" VerticalAlignment="Bottom" CornerRadius="2"
+                                                    Background="{StaticResource AppPanelSurfaceBrush}"
+                                                    Visibility="{Binding ProgressTrackVisibility}"
+                                                    AutomationProperties.Name="{Binding ProgressAutomationName}">
+                                                <Border HorizontalAlignment="Left" Width="{Binding ProgressWidth}"
+                                                        CornerRadius="2" Background="{StaticResource AppAccentBrush}" />
+                                            </Border>
+                                        </Grid>
                                     </Border>
                                     <TextBlock Text="{Binding Title}" Foreground="{StaticResource AppTextBrush}"
                                                FontSize="15" MaxLines="2" TextWrapping="Wrap" />
                                     <TextBlock Text="{Binding Subtitle}" Foreground="{StaticResource AppMutedTextBrush}"
                                                FontSize="13" />
+                                    <TextBlock Text="{Binding TimeLeft}" Foreground="{StaticResource AppMutedTextBrush}"
+                                               FontSize="12" Visibility="{Binding ProgressTrackVisibility}" />
                                 </StackPanel>
                             </DataTemplate>
                         </GridView.ItemTemplate>
@@ -74,13 +85,24 @@
                             <DataTemplate>
                                 <StackPanel Width="172" Spacing="7" Margin="0,0,10,0">
                                     <Border Width="160" Height="225" Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="8">
-                                        <Image Stretch="UniformToFill" Loaded="Artwork_Loaded"
-                                               Unloaded="Artwork_Unloaded" DataContextChanged="Artwork_DataContextChanged" />
+                                        <Grid>
+                                            <Image Stretch="UniformToFill" Loaded="Artwork_Loaded"
+                                                   Unloaded="Artwork_Unloaded" DataContextChanged="Artwork_DataContextChanged" />
+                                            <Border Height="4" VerticalAlignment="Bottom" CornerRadius="2"
+                                                    Background="{StaticResource AppPanelSurfaceBrush}"
+                                                    Visibility="{Binding ProgressTrackVisibility}"
+                                                    AutomationProperties.Name="{Binding ProgressAutomationName}">
+                                                <Border HorizontalAlignment="Left" Width="{Binding ProgressWidth}"
+                                                        CornerRadius="2" Background="{StaticResource AppAccentBrush}" />
+                                            </Border>
+                                        </Grid>
                                     </Border>
                                     <TextBlock Text="{Binding Title}" Foreground="{StaticResource AppTextBrush}"
                                                FontSize="15" MaxLines="2" TextWrapping="Wrap" />
                                     <TextBlock Text="{Binding Subtitle}" Foreground="{StaticResource AppMutedTextBrush}"
                                                FontSize="13" />
+                                    <TextBlock Text="{Binding TimeLeft}" Foreground="{StaticResource AppMutedTextBrush}"
+                                               FontSize="12" Visibility="{Binding ProgressTrackVisibility}" />
                                 </StackPanel>
                             </DataTemplate>
                         </GridView.ItemTemplate>

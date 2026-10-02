@@ -122,6 +122,19 @@ public static class SeriesEpisodeResolver
         if (index < 0) return episodes[0];
         return lastEpisodeFinished ? episodes[Math.Min(index + 1, episodes.Length - 1)] : episodes[index];
     }
+
+    public static SeriesEpisode? Resolve(SeriesDetails details, IReadOnlySet<string> finishedEpisodeIds, string? lastInProgressEpisodeId = null)
+    {
+        var episodes = details.Seasons
+            .OrderBy(season => season.Number)
+            .SelectMany(season => season.Episodes.OrderBy(episode => episode.EpisodeNumber))
+            .ToArray();
+        if (episodes.Length == 0) return null;
+        if (!string.IsNullOrEmpty(lastInProgressEpisodeId) &&
+            episodes.FirstOrDefault(episode => episode.Id == lastInProgressEpisodeId) is { } inProgress)
+            return inProgress;
+        return episodes.FirstOrDefault(episode => !finishedEpisodeIds.Contains(episode.Id)) ?? episodes[^1];
+    }
 }
 
 public static class PlayerSideTitleResolver
@@ -183,6 +196,15 @@ public interface IPlaybackEngine
     void Seek(long timeMilliseconds);
     Task<PlaybackAttemptResult> StartAsync(StreamSource source, PlaybackSessionToken session, CancellationToken cancellationToken = default);
     Task StopAsync(PlaybackSessionToken session, CancellationToken cancellationToken = default);
+}
+
+public interface ITrackSelectingEngine
+{
+    PlaybackTrackSnapshot GetTracks();
+    bool SelectAudio(string key);
+    bool SelectSubtitle(string? keyOrNullForOff);
+    event EventHandler? TracksChanged;
+    void ApplyDefaultSubtitle(string? preferredLanguage, bool explicitOff, string? uiCultureTwoLetterCode);
 }
 
 public interface ICredentialStore

@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using LibVLCSharp.Platforms.Windows;
@@ -31,6 +32,11 @@ public sealed partial class MainWindow : Window
     private readonly PlaybackService _vlcPlayback;
     private readonly PlaybackService _nativePlayback;
     private IPlaybackEngine _engine;
+    private readonly EpgCoordinator _epgCoordinator;
+    private ITrackSelectingEngine? _trackSelectingEngine;
+    private PlaybackTrackSnapshot _trackSnapshot = PlaybackTrackSnapshot.Unresolved;
+    private bool _defaultSubtitleAppliedForSession;
+    private int _trackRefreshQueued;
     private readonly HomePage _homePage;
     private readonly ProviderSetupPage _providerSetupPage;
     private readonly AccountPage _accountPage;
@@ -43,22 +49,31 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private double? _playerListPointerPressOffset;
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+    private IReadOnlyDictionary<string, PlaybackProgress> _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private string? _currentSeriesId;
     private string? _currentSeriesTitle;
     private ProviderAccount? _currentSeriesAccount;
     private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
     private bool _seriesCompletionRecorded;
+    private bool _episodeCompletionExplicitlyOverridden;
     private bool _playbackCompletionShown;
+    private bool _nextEpisodeAutoPlaySuppressed;
+    private bool _nextEpisodeAdvanceStarted;
     private long _catalogRequestGeneration;
     private long _itemSelectionGeneration;
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
+    private long _activePlaybackSessionGeneration = -1;
     private long _metadataGeneration;
     private long _playerEntryTraceId;
     private long _playerEntryTraceStartedAt;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
+    private readonly DispatcherTimer _playerEpgTimer = new() { Interval = TimeSpan.FromSeconds(45) };
+    private EpgNowNext? _playerNowNext;
+    private long _playerEpgGeneration;
+    private bool _isClosing;
     private bool _isCinemaMode;
     private bool _cinemaCursorHidden;
     private WindowStateController.WindowMode _preCinemaWindowMode;
@@ -72,18 +87,12 @@ public sealed partial class MainWindow : Window
     private long? _pendingResumePosition;
     private bool _resumeReady;
     private DateTimeOffset _lastResumeSavedAt;
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(12);
+    private long _lastStallCheckPositionMs = -1;
+    private DateTimeOffset _lastStallProgressAt;
+    private bool _stallRecoveryAttempted;
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
-    private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly DispatcherTimer _featuredRotationTimer = new() { Interval = TimeSpan.FromSeconds(8) };
-    private IReadOnlyList<string> _featuredSeries = Array.Empty<string>();
-    private int _featuredIndex;
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
-    private DateTimeOffset _lastIdleInputAt = DateTimeOffset.UtcNow;
-    private bool _windowFocused;
-    private bool _idleOverlayVisible;
-    private long _idleOverlayShownAt;
-    private bool _windowClosed;
     private bool _backTransitionTraceActive;
     private int _backTransitionRenderSamples;
     private long _backTransitionTraceId;
@@ -105,8 +114,22 @@ public sealed partial class MainWindow : Window
         _vlcPlayback = new PlaybackService(_vlcEngine);
         _nativePlayback = new PlaybackService(_nativeEngine);
         var useVlc = string.Equals(ReadPlaybackEnginePreference(), "LibVLC", StringComparison.Ordinal);
-        _engine = useVlc ? _vlcEngine : _nativeEngine;
+        Volatile.Write(ref _engine, useVlc ? _vlcEngine : _nativeEngine);
         _playback = useVlc ? _vlcPlayback : _nativePlayback;
+        _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
+        _epgCoordinator.PlaybackBusy = () =>
+        {
+            try
+            {
+                var sessionCts = Volatile.Read(ref _playbackSessionCts);
+                var engine = Volatile.Read(ref _engine);
+                return sessionCts is not null || engine.IsBuffering;
+            }
+            catch
+            {
+                return false;
+            }
+        };
         _homePage = new HomePage();
         _providerSetupPage = new ProviderSetupPage();
         _accountPage = new AccountPage();
@@ -114,6 +137,11 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
+        AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
+        SetTrackSelectingEngine(_engine);
+        _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
+        _playerEpgTimer.Tick += PlayerEpgTimer_Tick;
         var useDarkMode = 1;
         var darkModeResult = DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this),
             DwmwaUseImmersiveDarkMode, ref useDarkMode, sizeof(int));
@@ -125,9 +153,7 @@ public sealed partial class MainWindow : Window
         if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         TitleBarDragRegion.PointerPressed += TitleBarDragRegion_PointerPressed;
         WindowRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(WindowRoot_KeyDown), true);
-        WindowRoot.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(WindowRoot_PointerInput), true);
         WindowRoot.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler(WindowRoot_PointerWheelInput), true);
-        WindowRoot.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(WindowRoot_PointerMoved), true);
         WindowRoot.SizeChanged += WindowRoot_SizeChanged;
         VideoView.Unloaded += (_, _) => TraceBackTransition("video-view-unloaded");
         NativePlayerElement.Unloaded += (_, _) => TraceBackTransition("native-player-unloaded");
@@ -136,15 +162,12 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage.InteractionReadinessChanged += CatalogLandingPage_InteractionReadinessChanged;
         _nativeEngine.Player.Volume = 1;
         NativePlayerElement.SetMediaPlayer(_nativeEngine.Player);
-        PlaybackEngineSelector.SelectedIndex = useVlc ? 1 : 0;
+        _accountPage.SetPlaybackEngine(useVlc ? "LibVLC" : "Native");
+        _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
         _playbackUiTimer.Start();
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
-        _idleTimer.Tick += IdleTimer_Tick;
-        _featuredRotationTimer.Tick += FeaturedRotationTimer_Tick;
-        _idleTimer.Start();
-        Activated += MainWindow_Activated;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ChannelSelected += CatalogLandingPage_ChannelSelected;
@@ -152,7 +175,7 @@ public sealed partial class MainWindow : Window
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
         _accountPage.SignOutCompleted += AccountPage_SignOutCompleted;
         _accountPage.ChangeUserRequested += AccountPage_ChangeUserRequested;
-        _accountPage.ExitRequested += (_, _) => Close();
+        _accountPage.RefreshCatalogRequested += AccountPage_RefreshCatalogRequested;
         PageHost.Children.Add(_homePage);
         PageHost.Children.Add(_providerSetupPage);
         PageHost.Children.Add(_accountPage);
@@ -196,13 +219,9 @@ public sealed partial class MainWindow : Window
 
     private void WindowRoot_KeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (_idleOverlayVisible)
-        {
-            DismissIdleOverlay("keyboard");
-            args.Handled = true;
+        if (args.Handled || AudioSubtitlesFlyout.IsOpen)
             return;
-        }
-        ResetIdleDeadline();
+
         if (args.Key == Windows.System.VirtualKey.F11)
         {
             WindowStateButton_Click(sender, new RoutedEventArgs());
@@ -213,124 +232,49 @@ public sealed partial class MainWindow : Window
             ReturnFromPlayer();
             args.Handled = true;
         }
-    }
-
-    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
-    {
-        _windowFocused = args.WindowActivationState != WindowActivationState.Deactivated;
-        if (!_windowFocused) DismissIdleOverlay("deactivation");
-        ResetIdleDeadline();
-    }
-
-    private void WindowRoot_PointerInput(object sender, PointerRoutedEventArgs args) =>
-        HandleWindowRootPointerInput(args, "pointer");
-
-    private void WindowRoot_PointerWheelInput(object sender, PointerRoutedEventArgs args) =>
-        HandleWindowRootPointerInput(args, "wheel");
-
-    private void HandleWindowRootPointerInput(PointerRoutedEventArgs args, string reason)
-    {
-        if (_idleOverlayVisible)
+        else if (_currentPage == ShellPage.Player && _currentSource is not null)
         {
-            // The overlay owns the hit-test surface; its first gesture never reaches a page card.
-            DismissIdleOverlay(reason);
-            args.Handled = true;
-            return;
+            switch (args.Key)
+            {
+                case Windows.System.VirtualKey.Space:
+                    PauseButton_Click(sender, new RoutedEventArgs());
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.PageUp:
+                    PlayAdjacentEpisode(-1);
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.PageDown:
+                    PlayAdjacentEpisode(1);
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.Left:
+                    SeekBy(-10_000);
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.Right:
+                    SeekBy(10_000);
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.Up:
+                    AdjustVolume(5);
+                    args.Handled = true;
+                    break;
+                case Windows.System.VirtualKey.Down:
+                    AdjustVolume(-5);
+                    args.Handled = true;
+                    break;
+            }
         }
-        ResetIdleDeadline();
     }
 
-    private void WindowRoot_PointerMoved(object sender, PointerRoutedEventArgs args)
+    private void WindowRoot_PointerWheelInput(object sender, PointerRoutedEventArgs args)
     {
-        if (!_idleOverlayVisible) ResetIdleDeadline();
-    }
-
-    private void IdleOverlay_PointerPressed(object sender, PointerRoutedEventArgs args)
-    {
-        DismissIdleOverlay("pointer");
+        if (args.Handled || _currentPage != ShellPage.Player || _currentSource is null) return;
+        var delta = args.GetCurrentPoint(null).Properties.MouseWheelDelta;
+        if (delta == 0) return;
+        AdjustVolume(delta > 0 ? 5 : -5);
         args.Handled = true;
-    }
-
-    private void IdleOverlay_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
-    {
-        DismissIdleOverlay("wheel");
-        args.Handled = true;
-    }
-
-    private void ResetIdleDeadline() => _lastIdleInputAt = DateTimeOffset.UtcNow;
-
-    private bool IdleEligible()
-    {
-        if (_windowClosed || !_windowFocused || _currentPage == ShellPage.Player ||
-            _engine.IsPlaying || _engine.IsBuffering || WindowRoot.XamlRoot is null) return false;
-        return !VisualTreeHelper.GetOpenPopupsForXamlRoot(WindowRoot.XamlRoot)
-            .Any(popup => HasContentDialog(popup.Child));
-    }
-
-    private static bool HasContentDialog(DependencyObject? element)
-    {
-        if (element is null) return false;
-        if (element is ContentDialog) return true;
-        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
-            if (HasContentDialog(VisualTreeHelper.GetChild(element, index))) return true;
-        return false;
-    }
-
-    private async void IdleTimer_Tick(object? sender, object args)
-    {
-        if (!IdleEligible())
-        {
-            ResetIdleDeadline();
-            return;
-        }
-        if (_idleOverlayVisible || DateTimeOffset.UtcNow - _lastIdleInputAt < IdleTimeout) return;
-        _idleTimer.Stop();
-        var account = _catalogLandingPage.Account;
-        _idleOverlayShownAt = Stopwatch.GetTimestamp();
-        _idleOverlayVisible = true;
-        IdleOverlay.Visibility = Visibility.Visible;
-        LaunchDiagnostics.Write($"event=idle.overlay.show hasAccount={(account is null ? "false" : "true")} featuredCount={(account is null ? "0" : "pending")}");
-        IdleOverlay.Focus(FocusState.Programmatic);
-        if (account is null)
-        {
-            _featuredSeries = Array.Empty<string>();
-            IdleFeaturedTitle.Text = "Explore Tvivo";
-            IdleFeaturedDescription.Text = "Connect a provider to discover your library.";
-            return;
-        }
-        try
-        {
-            var titles = await Task.Run(() => _catalogRepository.GetFeaturedSeriesTitles(account, 20));
-            LaunchDiagnostics.Write($"event=idle.overlay.featured count={titles.Count}");
-            if (_windowClosed || !_idleOverlayVisible || _catalogLandingPage.Account?.AccountId != account.AccountId) return;
-            _featuredSeries = titles;
-            _featuredIndex = 0;
-            IdleFeaturedTitle.Text = titles.FirstOrDefault() ?? "Explore Tvivo";
-            IdleFeaturedDescription.Text = titles.Count == 0 ? "Browse your library to find something to watch." : "A highly rated series from your library.";
-            if (titles.Count > 1) _featuredRotationTimer.Start();
-        }
-        catch (Exception exception)
-        {
-            LaunchDiagnostics.WriteException("Featured series lookup failed", exception);
-        }
-    }
-
-    private void FeaturedRotationTimer_Tick(object? sender, object args)
-    {
-        if (!_idleOverlayVisible || _featuredSeries.Count < 2) return;
-        _featuredIndex = (_featuredIndex + 1) % _featuredSeries.Count;
-        IdleFeaturedTitle.Text = _featuredSeries[_featuredIndex];
-    }
-
-    private void DismissIdleOverlay(string reason)
-    {
-        if (!_idleOverlayVisible) return;
-        LaunchDiagnostics.Write($"event=idle.overlay.dismiss reason={reason} elapsedVisibleMs={(long)Stopwatch.GetElapsedTime(_idleOverlayShownAt).TotalMilliseconds}");
-        _idleOverlayVisible = false;
-        _featuredRotationTimer.Stop();
-        IdleOverlay.Visibility = Visibility.Collapsed;
-        ResetIdleDeadline();
-        if (!_windowClosed) _idleTimer.Start();
     }
 
     private void ApplyWindowChromeState()
@@ -351,19 +295,20 @@ public sealed partial class MainWindow : Window
             _vlcEngine.InitializeView(view, args);
     }
 
-    private async void PlaybackEngineSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    private async void AccountPage_PlaybackEngineChanged(object? sender, string engineTag)
     {
-        if (PlaybackEngineSelector.SelectedItem is not ComboBoxItem selected || _currentPage is null)
+        if (_currentPage is null)
             return;
 
-        var selectedEngine = (selected.Tag as string) == "LibVLC" ? (IPlaybackEngine)_vlcEngine : _nativeEngine;
+        var selectedEngine = engineTag == "LibVLC" ? (IPlaybackEngine)_vlcEngine : _nativeEngine;
         if (ReferenceEquals(selectedEngine, _engine))
             return;
 
         var restartCurrentPlayback = _currentPage == ShellPage.Player && _currentSource is not null;
         if (restartCurrentPlayback) SaveResumePosition(force: true);
         await _playback.StopAsync();
-        _engine = selectedEngine;
+        Volatile.Write(ref _engine, selectedEngine);
+        SetTrackSelectingEngine(_engine);
         _playback = ReferenceEquals(_engine, _vlcEngine) ? _vlcPlayback : _nativePlayback;
         WritePlaybackEnginePreference(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native");
         ApplyPlaybackEngineVisuals();
@@ -394,6 +339,187 @@ public sealed partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         TraceBackTransition($"playback-surface-state requestedVisible={visible} {VideoSurfaceState()}");
+    }
+
+    private void SetTrackSelectingEngine(IPlaybackEngine? engine)
+    {
+        var next = engine as ITrackSelectingEngine;
+        if (ReferenceEquals(next, _trackSelectingEngine))
+            return;
+
+        if (_trackSelectingEngine is not null)
+            _trackSelectingEngine.TracksChanged -= TrackSelectingEngine_TracksChanged;
+
+        _trackSelectingEngine = next;
+        _trackSnapshot = next?.GetTracks() ?? PlaybackTrackSnapshot.Unresolved;
+        _defaultSubtitleAppliedForSession = false;
+        if (next is not null)
+            next.TracksChanged += TrackSelectingEngine_TracksChanged;
+        RefreshAudioSubtitlesButton();
+    }
+
+    private void TrackSelectingEngine_TracksChanged(object? sender, EventArgs args)
+    {
+        if (Interlocked.Exchange(ref _trackRefreshQueued, 1) != 0)
+            return;
+
+        if (!WindowRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                Interlocked.Exchange(ref _trackRefreshQueued, 0);
+                if (_trackSelectingEngine is not { } engine)
+                {
+                    _trackSnapshot = PlaybackTrackSnapshot.Unresolved;
+                    RefreshAudioSubtitlesButton();
+                    return;
+                }
+
+                var snapshot = engine.GetTracks();
+                _trackSnapshot = snapshot;
+                if (snapshot.Subtitles.Count > 0 && !_defaultSubtitleAppliedForSession)
+                {
+                    _defaultSubtitleAppliedForSession = true;
+                    // Off/language persistence is deferred until the format-by-engine matrix exists.
+                    engine.ApplyDefaultSubtitle(
+                        preferredLanguage: null,
+                        explicitOff: false,
+                        uiCultureTwoLetterCode: CultureInfo.CurrentUICulture.TwoLetterISOLanguageName);
+                }
+                RefreshAudioSubtitlesButton();
+            }))
+        {
+            Interlocked.Exchange(ref _trackRefreshQueued, 0);
+        }
+    }
+
+    private void AudioSubtitlesFlyout_Opened(object? sender, object args)
+    {
+        if (_trackSelectingEngine is { } engine)
+            _trackSnapshot = engine.GetTracks();
+        RefreshAudioSubtitlesButton();
+    }
+
+    private void AudioSubtitlesFlyout_Closed(object? sender, object args)
+    {
+        if (_currentPage == ShellPage.Player)
+        {
+            var focusTarget = AudioSubtitlesButton.Visibility == Visibility.Visible
+                ? AudioSubtitlesButton
+                : PauseButton;
+            focusTarget.Focus(FocusState.Programmatic);
+        }
+    }
+
+    private void RefreshAudioSubtitlesButton()
+    {
+        var hasTracks = _trackSnapshot.Audio.Count > 0 || _trackSnapshot.Subtitles.Count > 0;
+        var isLiveWithoutTracks = _currentSource?.Kind == StreamKind.Live && !hasTracks;
+        var inPlayer = _currentPage == ShellPage.Player && _currentSource is not null;
+        AudioSubtitlesButton.Visibility = inPlayer && !isLiveWithoutTracks
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        AudioSubtitlesButton.IsEnabled = inPlayer && hasTracks && _trackSelectingEngine is not null;
+        if (AudioSubtitlesFlyout.IsOpen)
+            RebuildAudioSubtitlesFlyout();
+    }
+
+    private void RebuildAudioSubtitlesFlyout()
+    {
+        AudioSubtitlesFlyout.Items.Clear();
+        var snapshot = _trackSnapshot;
+        if (snapshot.Audio.Count == 0 && snapshot.Subtitles.Count == 0)
+        {
+            AudioSubtitlesFlyout.Items.Add(new MenuFlyoutItem
+            {
+                Text = "No alternate tracks",
+                IsEnabled = false,
+                Foreground = (Brush)Application.Current.Resources["AppMutedTextBrush"],
+            });
+            return;
+        }
+
+        if (snapshot.Audio.Count > 0)
+        {
+            AudioSubtitlesFlyout.Items.Add(CreateTrackSectionHeader("Audio"));
+            foreach (var track in snapshot.Audio)
+            {
+                var item = new RadioMenuFlyoutItem
+                {
+                    Text = track.DisplayName,
+                    Tag = track.Key,
+                    GroupName = "AudioTracks",
+                    IsChecked = track.IsSelected,
+                    Foreground = track.IsSelected
+                        ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                        : (Brush)Application.Current.Resources["AppTextBrush"],
+                };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Audio: {track.DisplayName}");
+                item.Click += AudioTrackMenuItem_Click;
+                AudioSubtitlesFlyout.Items.Add(item);
+            }
+        }
+
+        if (snapshot.Audio.Count > 0)
+            AudioSubtitlesFlyout.Items.Add(new MenuFlyoutSeparator());
+
+        AudioSubtitlesFlyout.Items.Add(CreateTrackSectionHeader("Subtitles"));
+        var subtitleOff = new RadioMenuFlyoutItem
+        {
+            Text = "Off",
+            GroupName = "SubtitleTracks",
+            IsChecked = !snapshot.Subtitles.Any(track => track.IsSelected),
+            Foreground = !snapshot.Subtitles.Any(track => track.IsSelected)
+                ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                : (Brush)Application.Current.Resources["AppTextBrush"],
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(subtitleOff, "Subtitles off");
+        subtitleOff.Click += SubtitleTrackMenuItem_Click;
+        AudioSubtitlesFlyout.Items.Add(subtitleOff);
+        foreach (var track in snapshot.Subtitles)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = track.DisplayName,
+                Tag = track.Key,
+                GroupName = "SubtitleTracks",
+                IsChecked = track.IsSelected,
+                Foreground = track.IsSelected
+                    ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                    : (Brush)Application.Current.Resources["AppTextBrush"],
+            };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Subtitle: {track.DisplayName}");
+            item.Click += SubtitleTrackMenuItem_Click;
+            AudioSubtitlesFlyout.Items.Add(item);
+        }
+    }
+
+    private static MenuFlyoutItem CreateTrackSectionHeader(string text) => new()
+    {
+        Text = text,
+        IsEnabled = false,
+        Foreground = (Brush)Application.Current.Resources["AppAccentSoftBrush"],
+    };
+
+    private void AudioTrackMenuItem_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not RadioMenuFlyoutItem item || item.Tag is not string key || _trackSelectingEngine is not { } engine)
+            return;
+        if (engine.SelectAudio(key))
+            item.IsChecked = true;
+    }
+
+    private void SubtitleTrackMenuItem_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not RadioMenuFlyoutItem item || _trackSelectingEngine is not { } engine)
+            return;
+        if (engine.SelectSubtitle(item.Tag as string))
+            item.IsChecked = true;
+    }
+
+    private void ResetTrackSelectionForSession()
+    {
+        _defaultSubtitleAppliedForSession = false;
+        _trackSnapshot = PlaybackTrackSnapshot.Unresolved;
+        RefreshAudioSubtitlesButton();
     }
 
     private static string? ReadPlaybackEnginePreference()
@@ -436,9 +562,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var playbackWasActive = _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering);
-        _accountPage.ShowAccount(account, playbackWasActive);
+        _accountPage.ShowAccount(account, _catalogLandingPage.LastRefreshAt);
         ShowPage(ShellPage.Account);
+    }
+
+    private async void AccountPage_RefreshCatalogRequested(object? sender, EventArgs args)
+    {
+        var generation = Interlocked.Increment(ref _catalogRequestGeneration);
+        ShowPage(ShellPage.Catalog, updateTopNavigation: false);
+        await _catalogLandingPage.RefreshNowAsync();
+        if (generation == Volatile.Read(ref _catalogRequestGeneration))
+            UpdateTopNavigationState();
     }
 
     private void AccountPage_SignOutCompleted(object? sender, EventArgs args)
@@ -511,8 +645,6 @@ public sealed partial class MainWindow : Window
         }
 
         _currentPage = page;
-        DismissIdleOverlay("navigation");
-        ResetIdleDeadline();
         if (page == ShellPage.Home)
             _ = _homePage.LoadAsync(_catalogLandingPage.Account, _catalogLandingPage.Connection, _catalogRepository);
         var isPlayer = page == ShellPage.Player;
@@ -546,6 +678,7 @@ public sealed partial class MainWindow : Window
         else if (isCatalog) FadeIn(CatalogPageArea);
         _catalogLandingPage.SetActive(isCatalog);
         TraceBackTransition($"show-page-visibility page={page} host={PageHost.Visibility} catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility} cinema={_isCinemaMode}");
+        CatalogSearchBar.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
         SetCatalogSearchEnabled(isCatalog && _catalogLandingPage.IsReadyForInteraction);
         if (updateTopNavigation)
             UpdateTopNavigationState();
@@ -555,7 +688,13 @@ public sealed partial class MainWindow : Window
     private void SetCatalogSearchEnabled(bool enabled)
     {
         TopSearchBox.IsEnabled = enabled;
-        TopClearSearchButton.IsEnabled = enabled;
+        TopSortBox.IsEnabled = enabled;
+    }
+
+    private void TopSortBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (TopSortBox.SelectedItem is ComboBoxItem { Tag: string tag })
+            _catalogLandingPage.SetCategorySort(tag);
     }
 
     private void BeginBackTransitionTrace(string message)
@@ -615,18 +754,9 @@ public sealed partial class MainWindow : Window
 
     private void TopSearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
-        TopClearSearchButton.Visibility = string.IsNullOrWhiteSpace(TopSearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (!_catalogLandingPage.IsReadyForInteraction)
             return;
         _catalogLandingPage.SetSearchText(TopSearchBox.Text);
-    }
-
-    private void TopClearSearchButton_Click(object sender, RoutedEventArgs args)
-    {
-        if (!_catalogLandingPage.IsReadyForInteraction)
-            return;
-        TopSearchBox.Text = string.Empty;
-        TopSearchBox.Focus(FocusState.Programmatic);
     }
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
@@ -660,7 +790,10 @@ public sealed partial class MainWindow : Window
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+        _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
+        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         SeriesFavoriteButton.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
         if (_currentPage != ShellPage.Player)
@@ -680,6 +813,7 @@ public sealed partial class MainWindow : Window
         _currentSource = args.Source;
         _resumePositionOnStart = null;
         _nowPlayingChannel = args.Channel;
+        UpdateEpisodeNavigationButtons();
         PlayerTitleText.Text = args.Channel.DisplayName;
         PlayerSideTitle.Text = args.Source.Kind is StreamKind.Movie or StreamKind.Live
             ? "Loading category…"
@@ -760,8 +894,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var progress = _catalogRepository.GetSeriesPlayback(account, series.Id);
-        var selected = SeriesEpisodeResolver.Resolve(details, progress.EpisodeId, progress.Finished);
+        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, series.Id);
+        var selected = _catalogRepository.SelectResumeEpisode(account, details);
         if (selected is null)
         {
             StatusText.Text = "This series has no episodes available.";
@@ -804,21 +938,17 @@ public sealed partial class MainWindow : Window
         _currentSeriesAccount = _catalogLandingPage.Account;
         if (_currentSeriesId is not null && _currentSeriesAccount is not null)
         {
-            var previous = _catalogRepository.GetSeriesPlayback(_currentSeriesAccount, _currentSeriesId);
-            _resumePositionOnStart = previous.EpisodeId == episode.Id && !previous.Finished
-                ? _catalogRepository.GetResumePosition(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId)
-                : null;
-            if (_resumePositionOnStart is null)
-            {
-                _catalogRepository.UpdateResumePosition(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId, 0);
-                LaunchDiagnostics.Write("event=resume.save kind=Series positionMs=0 completed=false reason=new-episode");
-            }
+            _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+            _seriesEpisodeProgress.TryGetValue(episode.Id, out var episodeProgress);
+            _resumePositionOnStart = episodeProgress?.State == PlaybackProgressState.InProgress ? episodeProgress.ResumeMs : null;
+            _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
+                _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
+            _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
         }
         _nowPlayingChannel = episode;
         _currentSource = episode.Source;
-        if (_currentSeriesId is not null && _currentSeriesAccount is not null)
-            _catalogRepository.UpdateSeriesPlayback(_currentSeriesAccount, _currentSeriesId, episode.Id, finished: false);
         _seriesCompletionRecorded = false;
+        _episodeCompletionExplicitlyOverridden = false;
         _playbackCompletionShown = false;
         PlayerTitleText.Text = episode.DisplayName;
         PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
@@ -835,8 +965,61 @@ public sealed partial class MainWindow : Window
             ? selectedSeason.Episodes.Select(item => ToEpisodeChannel(account, _currentSeriesId, item)).ToArray()
             : _playerSiblings;
         SetPlayerList(visibleEpisodes, episode);
+        _nextEpisodeAutoPlaySuppressed = false;
+        _nextEpisodeAdvanceStarted = false;
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        UpdateEpisodeNavigationButtons();
         ShowPage(ShellPage.Player);
         _ = StartPlaybackAsync(episode.Source);
+    }
+
+    private Channel? GetAdjacentEpisode(int offset)
+    {
+        if (_nowPlayingChannel?.Source.Kind != StreamKind.Episode || offset == 0) return null;
+        var details = new SeriesDetails(_currentSeriesId ?? string.Empty, _currentSeriesTitle ?? string.Empty, _playerSeriesSeasons);
+        var episodes = _playerSeriesSeasons
+            .OrderBy(season => season.Number)
+            .SelectMany(season => season.Episodes.OrderBy(episode => episode.EpisodeNumber))
+            .ToArray();
+        var index = Array.FindIndex(episodes, episode => episode.Id == _nowPlayingChannel.Id);
+        var target = index + offset;
+        if (index < 0 || target < 0 || target >= episodes.Length || _currentSeriesAccount is null || _currentSeriesId is null)
+            return null;
+        var resolved = offset > 0
+            ? SeriesEpisodeResolver.Resolve(details, _nowPlayingChannel.Id, lastEpisodeFinished: true)
+            : episodes[target];
+        return resolved is null ? null : _playerSiblings.FirstOrDefault(channel => channel.Id == resolved.Id);
+    }
+
+    private void UpdateEpisodeNavigationButtons()
+    {
+        var isEpisode = _nowPlayingChannel?.Source.Kind == StreamKind.Episode;
+        PreviousEpisodeButton.Visibility = isEpisode ? Visibility.Visible : Visibility.Collapsed;
+        NextEpisodeButton.Visibility = isEpisode ? Visibility.Visible : Visibility.Collapsed;
+        PreviousEpisodeButton.IsEnabled = GetAdjacentEpisode(-1) is not null;
+        NextEpisodeButton.IsEnabled = GetAdjacentEpisode(1) is not null;
+    }
+
+    private void PlayAdjacentEpisode(int offset)
+    {
+        if (GetAdjacentEpisode(offset) is { } episode)
+            OpenSeriesEpisode(episode);
+    }
+
+    private void PreviousEpisode_Click(object sender, RoutedEventArgs args) => PlayAdjacentEpisode(-1);
+
+    private void NextEpisode_Click(object sender, RoutedEventArgs args) => PlayAdjacentEpisode(1);
+
+    private void NextEpisodePlayNow_Click(object sender, RoutedEventArgs args)
+    {
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        PlayAdjacentEpisode(1);
+    }
+
+    private void NextEpisodeCancel_Click(object sender, RoutedEventArgs args)
+    {
+        _nextEpisodeAutoPlaySuppressed = true;
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
     }
 
     private void SetPlayerList(IReadOnlyList<Channel> channels, Channel current)
@@ -848,11 +1031,15 @@ public sealed partial class MainWindow : Window
         {
             _playerEntries.Clear();
             foreach (var channel in channels)
-                _playerEntries.Add(new PlayerListEntry(channel, IsChannelFavorite(channel)));
+                _playerEntries.Add(new PlayerListEntry(channel, IsChannelFavorite(channel),
+                    channel.Source.Kind == StreamKind.Episode && _seriesEpisodeProgress.TryGetValue(channel.Id, out var progress) ? progress : null));
         }
         else
             foreach (var entry in _playerEntries)
+            {
                 entry.IsFavorite = IsChannelFavorite(entry.Channel);
+                entry.SetProgress(entry.Channel.Source.Kind == StreamKind.Episode && _seriesEpisodeProgress.TryGetValue(entry.Channel.Id, out var progress) ? progress : null);
+            }
 
         SetCurrentPlayerEntry(current);
         if (!sameRows && scrollOffset.HasValue)
@@ -955,8 +1142,12 @@ public sealed partial class MainWindow : Window
         PlayerSeasonComboBox.ItemsSource = seasons;
         var hasMultipleSeasons = seasons.Count > 1;
         PlayerSeasonComboBox.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
-        PlayerSeasonLabel.Text = seasons.Count == 1 ? seasons[0].Name : string.Empty;
+        PlayerSeasonLabel.Text = seasons.Count == 1 ? SeasonProgressLabel(seasons[0]) : string.Empty;
         PlayerSeasonLabel.Visibility = seasons.Count == 1 ? Visibility.Visible : Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Text = hasMultipleSeasons && PlayerSeasonComboBox.SelectedItem is SeriesSeason selected
+            ? SeasonWatchedCount(selected) : string.Empty;
+        ResumeEpisodeButton.Visibility = seasons.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -966,6 +1157,48 @@ public sealed partial class MainWindow : Window
         if (account is null || _currentSeriesId is null) return;
         var episodes = season.Episodes.Select(episode => ToEpisodeChannel(account, _currentSeriesId, episode)).ToArray();
         SetPlayerList(episodes, _nowPlayingChannel);
+        PlayerSeasonWatchedCount.Text = SeasonWatchedCount(season);
+        if (_playerSeriesSeasons.Count == 1) PlayerSeasonLabel.Text = SeasonProgressLabel(season);
+    }
+
+    private string SeasonProgressLabel(SeriesSeason season) => $"{season.Name} · {SeasonWatchedCount(season)}";
+
+    private string SeasonWatchedCount(SeriesSeason season)
+    {
+        var watched = season.Episodes.Count(episode => _seriesEpisodeProgress.TryGetValue(episode.Id, out var progress) && progress.State == PlaybackProgressState.Finished);
+        return $"{watched}/{season.Episodes.Count} watched";
+    }
+
+    private void ResumeEpisode_Click(object sender, RoutedEventArgs args)
+    {
+        if (_currentSeriesAccount is null || _currentSeriesId is null || _nowPlayingChannel is null) return;
+        var details = new SeriesDetails(_currentSeriesId, _currentSeriesTitle ?? string.Empty, _playerSeriesSeasons);
+        if (_catalogRepository.SelectResumeEpisode(_currentSeriesAccount, details) is not { } selected) return;
+        OpenSeriesEpisode(ToEpisodeChannel(_currentSeriesAccount, _currentSeriesId, selected));
+    }
+
+    private void EpisodeProgressMenu_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not MenuFlyoutItem { Tag: PlayerListEntry entry } item || _currentSeriesAccount is null || _currentSeriesId is null) return;
+        if (item.Text == "Mark watched") _catalogRepository.MarkEpisodeWatched(_currentSeriesAccount, _currentSeriesId, entry.Channel.Id);
+        else _catalogRepository.MarkEpisodeUnwatched(_currentSeriesAccount, _currentSeriesId, entry.Channel.Id);
+        if (_nowPlayingChannel?.Id == entry.Channel.Id)
+        {
+            _seriesCompletionRecorded = item.Text == "Mark watched";
+            _episodeCompletionExplicitlyOverridden = item.Text == "Mark unwatched";
+        }
+        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+        foreach (var row in _playerEntries)
+            row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
+        RefreshSeasonProgressCount();
+    }
+
+    private void RefreshSeasonProgressCount()
+    {
+        if (PlayerSeasonComboBox.SelectedItem is SeriesSeason season)
+            PlayerSeasonWatchedCount.Text = SeasonWatchedCount(season);
+        if (_playerSeriesSeasons.Count == 1 && _playerSeriesSeasons[0] is { } onlySeason)
+            PlayerSeasonLabel.Text = SeasonProgressLabel(onlySeason);
     }
 
     private async Task StartPlaybackAsync(StreamSource source)
@@ -982,6 +1215,9 @@ public sealed partial class MainWindow : Window
         _resumePositionOnStart = null;
         _pendingResumePosition = null;
         _resumeReady = false;
+        _lastStallCheckPositionMs = -1;
+        _lastStallProgressAt = DateTimeOffset.UtcNow;
+        _stallRecoveryAttempted = false;
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
@@ -989,11 +1225,18 @@ public sealed partial class MainWindow : Window
         previousCts?.Cancel();
         previousCts?.Dispose();
         _currentSource = source;
+        ResetTrackSelectionForSession();
+        ClearPlayerNowNext();
         _playbackCompletionShown = false;
         if (_nowPlayingChannel is { } selectedChannel)
             PlayerTitleText.Text = selectedChannel.DisplayName;
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         ShowPage(ShellPage.Player);
+        if (source.Kind == StreamKind.Live)
+        {
+            StartPlayerEpgUpdates();
+            _ = RefreshPlayerNowNextAsync();
+        }
         StatusText.Text = "Starting playback…";
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
         LaunchDiagnostics.Write($"event=playback.start engine={engineName} kind={source.Kind}");
@@ -1048,6 +1291,11 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
         if (result != PlaybackAttemptResult.FirstFrame)
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", _ => "error" }}");
+        if (source.Kind == StreamKind.Live && result != PlaybackAttemptResult.FirstFrame)
+        {
+            StopPlayerEpgUpdates();
+            ClearPlayerNowNext();
+        }
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
             RestartCinemaCursorIdleTimer();
         StatusText.Text = PlaybackStatusMessage(result, source.Kind);
@@ -1055,6 +1303,7 @@ public sealed partial class MainWindow : Window
         {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
             _pendingResumePosition = resumePosition > 0 ? resumePosition : null;
+            _activePlaybackSessionGeneration = generation;
             _resumeReady = true;
         }
         PauseButton.Content = result == PlaybackAttemptResult.FirstFrame
@@ -1085,6 +1334,7 @@ public sealed partial class MainWindow : Window
         // The WinUI LibVLC host is swap-chain-backed, so there is no child HWND whose
         // visibility or z-order can be controlled independently from this XAML element.
         SetPlaybackSurfaceVisibility(false);
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var playerEntryElapsed = Stopwatch.GetTimestamp() - Volatile.Read(ref _playerEntryTraceStartedAt);
         var playerEntryElapsedMilliseconds = playerEntryElapsed * 1000d / Stopwatch.Frequency;
@@ -1100,6 +1350,8 @@ public sealed partial class MainWindow : Window
         sessionCts?.Dispose();
 
         _currentSource = null;
+        ClearPlayerNowNext();
+        ResetTrackSelectionForSession();
         _pendingResumePosition = null;
         _resumeReady = false;
         _nowPlayingChannel = null;
@@ -1109,6 +1361,9 @@ public sealed partial class MainWindow : Window
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
         _playerSiblings = Array.Empty<Channel>();
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        PreviousEpisodeButton.Visibility = Visibility.Collapsed;
+        NextEpisodeButton.Visibility = Visibility.Collapsed;
         _playbackUiTimer.Stop();
         _isDraggingProgress = false;
         _isUpdatingProgress = false;
@@ -1134,6 +1389,9 @@ public sealed partial class MainWindow : Window
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
         PlayerSeasonLabel.Text = string.Empty;
         PlayerSeasonLabel.Visibility = Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Text = string.Empty;
+        PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
+        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         _playerEntries.Clear();
         SetCinemaMode(false);
 
@@ -1293,6 +1551,139 @@ public sealed partial class MainWindow : Window
         PlayerAboutText.Text = about.Count == 0 ? "No description is available for this title." : string.Join(Environment.NewLine + Environment.NewLine, about);
     }
 
+    private void EpgCoordinator_EpgUpdated(object? sender, EventArgs args)
+    {
+        if (_isClosing) return;
+        if (!WindowRoot.DispatcherQueue.HasThreadAccess)
+        {
+            WindowRoot.DispatcherQueue.TryEnqueue(() => EpgCoordinator_EpgUpdated(sender, args));
+            return;
+        }
+        if (_currentPage == ShellPage.Player && _currentSource?.Kind == StreamKind.Live)
+            _ = RefreshPlayerNowNextAsync();
+    }
+
+    private void PlayerEpgTimer_Tick(object? sender, object args)
+    {
+        if (_currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live)
+        {
+            StopPlayerEpgUpdates();
+            return;
+        }
+        _ = RefreshPlayerNowNextAsync();
+    }
+
+    private void StartPlayerEpgUpdates()
+    {
+        StopPlayerEpgUpdates();
+        if (_isClosing || _currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+            _nowPlayingChannel?.Metadata.TryGetValue("epg_channel_id", out var epgChannelId) != true ||
+            string.IsNullOrWhiteSpace(epgChannelId) || _catalogLandingPage.Account is null)
+            return;
+        _playerEpgTimer.Start();
+    }
+
+    private void StopPlayerEpgUpdates() => _playerEpgTimer.Stop();
+
+    private void ClearPlayerNowNext()
+    {
+        Interlocked.Increment(ref _playerEpgGeneration);
+        StopPlayerEpgUpdates();
+        ApplyPlayerNowNext(null);
+    }
+
+    private async Task RefreshPlayerNowNextAsync()
+    {
+        if (_isClosing) return;
+        if (!WindowRoot.DispatcherQueue.HasThreadAccess)
+        {
+            WindowRoot.DispatcherQueue.TryEnqueue(() => _ = RefreshPlayerNowNextAsync());
+            return;
+        }
+
+        if (_currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+            _nowPlayingChannel is not { } channel ||
+            channel.Metadata.TryGetValue("epg_channel_id", out var epgChannelId) != true ||
+            string.IsNullOrWhiteSpace(epgChannelId) || _catalogLandingPage.Account is not { } account)
+        {
+            ClearPlayerNowNext();
+            return;
+        }
+
+        var generation = Volatile.Read(ref _playerEpgGeneration);
+        var id = epgChannelId;
+        try
+        {
+            var nowNext = await Task.Run(() => _epgCoordinator.GetNowNext(account, new[] { id }));
+            if (_isClosing || generation != Volatile.Read(ref _playerEpgGeneration) ||
+                _currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+                _nowPlayingChannel?.Id != channel.Id)
+                return;
+
+            nowNext.TryGetValue(id, out var programme);
+            ApplyPlayerNowNext(programme);
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"Player EPG update failed: {exception.GetType().Name}");
+            if (!_isClosing && generation == Volatile.Read(ref _playerEpgGeneration))
+                ApplyPlayerNowNext(null);
+        }
+    }
+
+    private void ApplyPlayerNowNext(EpgNowNext? nowNext)
+    {
+        _playerNowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;
+        if (_playerNowNext?.Now is { } now)
+        {
+            PlayerNowText.Text = $"Now: {now.Title}";
+            PlayerNowText.Visibility = Visibility.Visible;
+            PlayerNowProgress.Value = NowNextProgress(now);
+            PlayerNowProgress.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PlayerNowText.Text = string.Empty;
+            PlayerNowText.Visibility = Visibility.Collapsed;
+            PlayerNowProgress.Value = 0;
+            PlayerNowProgress.Visibility = Visibility.Collapsed;
+        }
+
+        if (_playerNowNext?.Next is { } next)
+        {
+            PlayerNextText.Text = $"Next: {next.Title} · {FormatLocalTime(next.StartUtc)}";
+            PlayerNextText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PlayerNextText.Text = string.Empty;
+            PlayerNextText.Visibility = Visibility.Collapsed;
+        }
+
+        var accessibleParts = new List<string>();
+        if (_playerNowNext?.Now is { } accessibleNow)
+            accessibleParts.Add($"Now playing: {accessibleNow.Title}, {NowNextProgress(accessibleNow):0} percent through");
+        if (_playerNowNext?.Next is { } accessibleNext)
+            accessibleParts.Add($"next: {accessibleNext.Title} at {FormatLocalTime(accessibleNext.StartUtc)}");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+            PlayerNowNextPanel, string.Join(", ", accessibleParts));
+        ApplyPlayerNowNextVisibility();
+    }
+
+    private void ApplyPlayerNowNextVisibility() =>
+        PlayerNowNextPanel.Visibility = _playerNowNext is not null &&
+            _currentPage == ShellPage.Player && !_isCinemaMode &&
+            VlcTransportBar.Visibility == Visibility.Visible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private static double NowNextProgress(EpgProgramme programme) =>
+        Math.Clamp((DateTimeOffset.UtcNow - programme.StartUtc).TotalSeconds /
+            Math.Max(1, (programme.EndUtc - programme.StartUtc).TotalSeconds) * 100, 0, 100);
+
+    private static string FormatLocalTime(DateTimeOffset utcTime) =>
+        utcTime.ToLocalTime().ToString("HH:mm", CultureInfo.CurrentCulture);
+
     private async void PauseButton_Click(object sender, RoutedEventArgs args)
     {
         if (_currentSource is null) return;
@@ -1307,21 +1698,44 @@ public sealed partial class MainWindow : Window
 
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
-        if (_currentPage != ShellPage.Player) return;
-        if (_isCinemaMode && !(_engine.IsPlaying || _engine.IsBuffering))
-            StopCinemaCursorIdleTimer(showCursor: true);
+        if (_currentPage != ShellPage.Player)
+        {
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (_isCinemaMode)
+        {
+            if (_engine.IsPlaying || _engine.IsBuffering) RestartCinemaCursorIdleTimer();
+            else StopCinemaCursorIdleTimer(showCursor: true);
+        }
+        var timeline = _engine.Timeline;
+        var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
+        if (sessionIsCurrent && !_seriesCompletionRecorded && !_episodeCompletionExplicitlyOverridden && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
+            _currentSeriesId is not null && _currentSeriesAccount is not null)
+        {
+            var measuredDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
+            var position = ClampPosition(timeline.PositionMilliseconds, measuredDuration);
+            if (_engine.IsEnded || measuredDuration is { } measuredLength && position >= measuredLength * 0.9)
+                RecordEpisodeCompletion(position, measuredDuration);
+        }
+        if (sessionIsCurrent && _engine.IsEnded && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
+            !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted && GetAdjacentEpisode(1) is { } endedNextEpisode)
+        {
+            _nextEpisodeAdvanceStarted = true;
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            OpenSeriesEpisode(endedNextEpisode);
+            return;
+        }
         if (!_seriesCompletionRecorded && _engine.IsEnded && _currentSeriesId is not null &&
             _currentSeriesAccount is not null && _nowPlayingChannel?.Source.Kind == StreamKind.Episode)
         {
-            _catalogRepository.UpdateSeriesPlayback(_currentSeriesAccount, _currentSeriesId, _nowPlayingChannel.Id, finished: true);
-            _seriesCompletionRecorded = true;
+            if (sessionIsCurrent) RecordEpisodeCompletion(0, timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null);
         }
-        if (!_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
+        if (sessionIsCurrent && !_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
         {
             SetCurrentPlayerEntry(finishedChannel);
             _playbackCompletionShown = true;
         }
-        var timeline = _engine.Timeline;
         if (_pendingResumePosition is { } resume && timeline.CanSeek)
         {
             _engine.Seek(Math.Min(resume, Math.Max(0, timeline.DurationMilliseconds!.Value - 1000)));
@@ -1332,6 +1746,33 @@ public sealed partial class MainWindow : Window
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
         var time = timeline.PositionMilliseconds;
+        var nextEpisode = GetAdjacentEpisode(1);
+        if (_nowPlayingChannel?.Source.Kind == StreamKind.Episode && duration is > 0 && nextEpisode is not null &&
+            !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted && duration.Value - time <= 20_000 && !_engine.IsEnded)
+        {
+            NextEpisodePromptTitle.Text = $"Next episode: {nextEpisode.DisplayName}";
+            NextEpisodePrompt.Visibility = Visibility.Visible;
+        }
+        else
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        if (_currentSource is not null && !_isDraggingProgress && !_engine.IsPaused && !_engine.IsEnded &&
+            (_engine.IsPlaying || _engine.IsBuffering))
+        {
+            if (time != _lastStallCheckPositionMs)
+            {
+                _lastStallCheckPositionMs = time;
+                _lastStallProgressAt = DateTimeOffset.UtcNow;
+            }
+            else if (DateTimeOffset.UtcNow - _lastStallProgressAt > StallTimeout)
+            {
+                _lastStallProgressAt = DateTimeOffset.UtcNow;
+                HandleStall(time);
+            }
+        }
+        else
+        {
+            _lastStallCheckPositionMs = -1;
+        }
         var seekEnabled = timeline.CanSeek && _currentSource is not null &&
             (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused || _engine.IsEnded);
         _isUpdatingProgress = true;
@@ -1347,9 +1788,41 @@ public sealed partial class MainWindow : Window
         PauseButton.Content = _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play";
     }
 
+    private void RecordEpisodeCompletion(long position, long? duration)
+    {
+        if (_seriesCompletionRecorded || _episodeCompletionExplicitlyOverridden || _currentSeriesAccount is null || _currentSeriesId is null ||
+            _nowPlayingChannel?.Source.Kind != StreamKind.Episode) return;
+        _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", _nowPlayingChannel.Id, _currentSeriesId,
+            position, duration, finished: true);
+        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+        foreach (var row in _playerEntries)
+            row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
+        RefreshSeasonProgressCount();
+        _seriesCompletionRecorded = true;
+    }
+
+    private async void HandleStall(long lastPositionMs)
+    {
+        if (_currentSource is not { } source) return;
+        var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        if (_stallRecoveryAttempted)
+        {
+            LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
+            StatusText.Text = "Playback stalled. Select Retry to resume.";
+            PauseButton.Content = "Retry";
+            return;
+        }
+        _stallRecoveryAttempted = true;
+        LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=reconnecting");
+        await StartPlaybackAsync(source);
+        if (ReferenceEquals(_currentSource, source) && (_engine.IsPlaying || _engine.IsBuffering))
+            _pendingResumePosition = lastPositionMs > 0 ? lastPositionMs : null;
+    }
+
     private void SaveResumePosition(bool force = false)
     {
-        if (!_resumeReady || _currentPage != ShellPage.Player || _nowPlayingChannel is not { } channel ||
+        if (!_resumeReady || _activePlaybackSessionGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
+            _currentPage != ShellPage.Player || _nowPlayingChannel is not { } channel ||
             _catalogLandingPage.Account is not { } account || _currentSource is null)
             return;
 
@@ -1369,12 +1842,25 @@ public sealed partial class MainWindow : Window
 
         var now = DateTimeOffset.UtcNow;
         if (!force && now - _lastResumeSavedAt < TimeSpan.FromSeconds(5)) return;
-        var position = _engine.IsEnded ? 0 : _engine.Timeline.PositionMilliseconds;
-        if (position <= 0 && !_engine.IsEnded) return;
-        _catalogRepository.UpdateResumePosition(account, type, id, position);
+        var timeline = _engine.Timeline;
+        var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
+        var position = _engine.IsEnded ? 0 : ClampPosition(timeline.PositionMilliseconds, duration);
+        if (type == CatalogItemType.Movie)
+            _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, _engine.IsEnded);
+        else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
+        {
+            var finished = !_episodeCompletionExplicitlyOverridden &&
+                (_seriesCompletionRecorded || _engine.IsEnded || duration is { } measured && position >= measured * 0.9);
+            _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
+            if (finished) _seriesCompletionRecorded = true;
+        }
+        else return;
         LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={_engine.IsEnded}");
         _lastResumeSavedAt = now;
     }
+
+    private static long ClampPosition(long position, long? duration) =>
+        duration is > 0 ? Math.Clamp(position, 0, duration.Value) : Math.Max(0, position);
 
     private static string FormatTime(long milliseconds)
     {
@@ -1427,11 +1913,18 @@ public sealed partial class MainWindow : Window
             return;
 
         if (timeline.ClampSeekTarget(targetMilliseconds) is { } target)
+        {
             _engine.Seek(target);
+            if (timeline.DurationMilliseconds is { } duration && duration - target > 20_000)
+                NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args) =>
         _engine.Volume = (int)args.NewValue;
+
+    private void AdjustVolume(int deltaPercent) =>
+        VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + deltaPercent, VolumeSlider.Minimum, VolumeSlider.Maximum);
 
     private void PlayerRelatedList_ItemClick(object sender, ItemClickEventArgs args)
     {
@@ -1469,7 +1962,10 @@ public sealed partial class MainWindow : Window
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
+        _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
+        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
         SeriesFavoriteButton.Visibility = Visibility.Collapsed;
 
@@ -1484,6 +1980,10 @@ public sealed partial class MainWindow : Window
         _nowPlayingChannel = channel;
         _resumePositionOnStart = null;
         _currentSource = channel.Source;
+        _nextEpisodeAutoPlaySuppressed = false;
+        _nextEpisodeAdvanceStarted = false;
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        UpdateEpisodeNavigationButtons();
         PlayerTitleText.Text = channel.DisplayName;
         PlayerNowPlayingText.Text = string.Empty;
         SetPlayerMetadata(null);
@@ -1590,8 +2090,6 @@ public sealed partial class MainWindow : Window
 
     private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
-        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
-        SetCinemaCursorVisible(true);
         RestartCinemaCursorIdleTimer();
     }
 
@@ -1605,9 +2103,7 @@ public sealed partial class MainWindow : Window
     private void RestartCinemaCursorIdleTimer()
     {
         if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
-        SetCinemaCursorVisible(true);
-        _cinemaCursorIdleTimer.Stop();
-        _cinemaCursorIdleTimer.Start();
+        SetCinemaCursorVisible(false);
     }
 
     private void StopCinemaCursorIdleTimer(bool showCursor)
@@ -1646,28 +2142,28 @@ public sealed partial class MainWindow : Window
         PlayerTransportRow.Height = cinema ? new GridLength(0) : GridLength.Auto;
         PlayerDetailsPanel.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
         VlcTransportBar.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
+        ApplyPlayerNowNextVisibility();
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         NativePlayerElement.AreTransportControlsEnabled = false;
     }
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
-        _windowClosed = true;
-        DismissIdleOverlay("window-close");
-        _idleTimer.Stop();
-        _idleTimer.Tick -= IdleTimer_Tick;
-        _featuredRotationTimer.Stop();
-        _featuredRotationTimer.Tick -= FeaturedRotationTimer_Tick;
-        Activated -= MainWindow_Activated;
+        _isClosing = true;
         SaveResumePosition(force: true);
         if (_currentSource is { } closingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         _playbackUiTimer.Stop();
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
+        StopPlayerEpgUpdates();
+        _playerEpgTimer.Tick -= PlayerEpgTimer_Tick;
+        _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
         _cinemaCursorIdleTimer.Stop();
         _cinemaCursorIdleTimer.Tick -= CinemaCursorIdleTimer_Tick;
         SetCinemaCursorVisible(true);
+        _windowState.ClearFullscreenHint();
         _catalogLandingPage.Shutdown();
+        SetTrackSelectingEngine(null);
         Interlocked.Increment(ref _playbackSessionGeneration);
         var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
         sessionCts?.Cancel();
@@ -1723,10 +2219,11 @@ public sealed partial class MainWindow : Window
         Player
     }
 
-    public sealed class PlayerListEntry(Channel channel, bool isFavorite = false) : INotifyPropertyChanged
+    public sealed class PlayerListEntry(Channel channel, bool isFavorite = false, PlaybackProgress? progress = null) : INotifyPropertyChanged
     {
         private bool _isCurrent;
         private bool _isFavorite = isFavorite;
+        private PlaybackProgress? _progress = progress;
         private static Brush AccentBrush => (Brush)Application.Current.Resources["AppAccentBrush"];
         private static Brush NormalBrush => (Brush)Application.Current.Resources["AppTextBrush"];
         private static Brush SelectedTextBrush => (Brush)Application.Current.Resources["AppDeepBrush"];
@@ -1743,6 +2240,17 @@ public sealed partial class MainWindow : Window
             ? (Brush)Application.Current.Resources["AppFavoriteBrush"]
             : MutedBrush;
         public string FavoriteGlyph => _isFavorite ? "★" : "☆";
+        public Visibility EpisodeMenuVisibility => Channel.Source.Kind == StreamKind.Episode ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility EpisodeStatusVisibility => ProgressState is PlaybackProgressState.Finished or PlaybackProgressState.InProgress
+            ? Visibility.Visible : Visibility.Collapsed;
+        public string EpisodeStatusText => ProgressState switch
+        {
+            PlaybackProgressState.Finished => "Watched",
+            PlaybackProgressState.InProgress => "In progress",
+            _ => string.Empty,
+        };
+        public string EpisodeStatusGlyph => ProgressState == PlaybackProgressState.Finished ? "✓" : ProgressState == PlaybackProgressState.InProgress ? "◷" : string.Empty;
+        private PlaybackProgressState ProgressState => _progress?.State ?? PlaybackProgressState.Unwatched;
         public bool IsFavorite
         {
             get => _isFavorite;
@@ -1766,6 +2274,15 @@ public sealed partial class MainWindow : Window
                 OnPropertyChanged(nameof(BackgroundBrush));
                 OnPropertyChanged(nameof(ForegroundBrush));
             }
+        }
+
+        public void SetProgress(PlaybackProgress? progress)
+        {
+            if (_progress == progress) return;
+            _progress = progress;
+            OnPropertyChanged(nameof(EpisodeStatusVisibility));
+            OnPropertyChanged(nameof(EpisodeStatusText));
+            OnPropertyChanged(nameof(EpisodeStatusGlyph));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

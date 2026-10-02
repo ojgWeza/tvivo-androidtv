@@ -51,13 +51,16 @@ public sealed partial class HomePage : UserControl
 
         try
         {
-            var (continueWatching, suggestions) = await Task.Run(() =>
+            var (continueWatching, suggestions, progress) = await Task.Run(() =>
             {
                 IReadOnlyList<Channel> continuing = repository.GetContinueWatching(account, connection, 40)
                     .Concat(repository.GetRecentlyPlayed(account, CatalogItemType.Live, connection, 10))
                     .Take(50).ToArray();
+                var movies = repository.GetPlaybackProgress(account, "movie", continuing.Where(item => item.Source.Kind == StreamKind.Movie).Select(item => item.Id).ToArray());
+                var series = repository.GetPlaybackProgress(account, "series", continuing.Where(item => item.Source.Kind == StreamKind.Series).Select(item => item.Id).ToArray());
+                var playback = movies.Concat(series).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
                 if (_suggestionsAccountId == account.AccountId)
-                    return (continuing, _suggestions);
+                    return (continuing, _suggestions, playback);
 
                 var excluded = new HashSet<(CatalogItemType Type, string Id)>();
                 foreach (var type in Enum.GetValues<CatalogItemType>())
@@ -74,12 +77,13 @@ public sealed partial class HomePage : UserControl
                 if (sampled.Count == 0)
                     sampled = repository.GetSuggestions(account, connection,
                         new HashSet<(CatalogItemType Type, string Id)>());
-                return (continuing, sampled);
+                return (continuing, sampled, playback);
             });
             if (generation != Volatile.Read(ref _loadGeneration)) return;
             _suggestionsAccountId = account.AccountId;
             _suggestions = suggestions;
-            ContinueGrid.ItemsSource = continueWatching.Select(channel => ToCard(channel, isContinueWatching: true)).ToArray();
+            ContinueGrid.ItemsSource = continueWatching.Select(channel => ToCard(channel, isContinueWatching: true,
+                progress.TryGetValue(channel.Id, out var itemProgress) ? itemProgress : null)).ToArray();
             ContinueSection.Visibility = continueWatching.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             SuggestionsGrid.ItemsSource = suggestions.Select(channel => ToCard(channel, isContinueWatching: false)).ToArray();
         }
@@ -94,13 +98,25 @@ public sealed partial class HomePage : UserControl
         }
     }
 
-    private static HomeShelfCard ToCard(Channel channel, bool isContinueWatching) => new(channel,
-        channel.DisplayName, channel.LogoUri?.ToString(), channel.Source.Kind switch
+    private static HomeShelfCard ToCard(Channel channel, bool isContinueWatching, PlaybackProgress? progress = null)
+    {
+        var durationMs = progress?.DurationMs;
+        var hasMeasuredProgress = isContinueWatching && (channel.Source.Kind is StreamKind.Movie or StreamKind.Series) && durationMs is > 0;
+        var percent = hasMeasuredProgress ? Math.Clamp(progress!.ResumeMs * 100d / durationMs!.Value, 0, 100) : 0;
+        var minutesLeft = hasMeasuredProgress && durationMs!.Value > progress!.ResumeMs
+            ? (int?)Math.Ceiling((durationMs.Value - progress.ResumeMs) / 60_000d) : null;
+        var spoken = hasMeasuredProgress
+            ? $"{Math.Round(percent, MidpointRounding.AwayFromZero)} percent watched" + (minutesLeft is { } minutes ? $", {minutes} minute{(minutes == 1 ? "" : "s")} left" : string.Empty)
+            : string.Empty;
+        return new(channel, channel.DisplayName, channel.LogoUri?.ToString(), channel.Source.Kind switch
         {
             StreamKind.Movie => "Movie",
             StreamKind.Series => isContinueWatching ? "Series · resume episode" : "Series",
             _ => "Live TV",
-        });
+        }, minutesLeft is { } remaining ? $"{remaining} min left" : string.Empty, hasMeasuredProgress,
+            percent, Math.Clamp(160 * percent / 100, 0, 160), spoken,
+            hasMeasuredProgress ? Visibility.Visible : Visibility.Collapsed);
+    }
 
     private void Shelf_ItemClick(object sender, ItemClickEventArgs args)
     {
@@ -113,5 +129,7 @@ public sealed partial class HomePage : UserControl
     private void SetupProvider_Click(object sender, RoutedEventArgs args) =>
         ProviderSetupRequested?.Invoke(this, EventArgs.Empty);
 
-    public sealed record HomeShelfCard(Channel Channel, string Title, string? ArtworkUrl, string Subtitle);
+    public sealed record HomeShelfCard(Channel Channel, string Title, string? ArtworkUrl, string Subtitle,
+        string TimeLeft, bool HasMeasuredProgress, double ProgressPercent, double ProgressWidth,
+        string ProgressAutomationName, Visibility ProgressTrackVisibility);
 }

@@ -37,6 +37,28 @@ public sealed class CoreSmokeTests
     }
 
     [Fact]
+    public void Series_resolution_with_finished_ids_prefers_last_in_progress_then_first_unfinished_and_final_replay()
+    {
+        static SeriesEpisode Episode(string id, int season, int number) => new(id, id, season.ToString(), $"Season {season}", season,
+            number, new StreamSource(id, StreamKind.Episode));
+        var first = Episode("opaque-a", 1, 1);
+        var gap = Episode("opaque-c", 1, 3);
+        var final = Episode("opaque-z", 2, 1);
+        var details = new SeriesDetails("show", "Show", new[]
+        {
+            new SeriesSeason("2", "Season 2", 2, new[] { final }),
+            new SeriesSeason("1", "Season 1", 1, new[] { gap, first }),
+        });
+        var finished = new HashSet<string>(StringComparer.Ordinal) { first.Id };
+
+        Assert.Equal(gap, SeriesEpisodeResolver.Resolve(details, finished));
+        Assert.Equal(final, SeriesEpisodeResolver.Resolve(details, finished, final.Id));
+        Assert.Equal(final, SeriesEpisodeResolver.Resolve(details, new HashSet<string> { first.Id, gap.Id, final.Id }));
+        Assert.Equal(first, SeriesEpisodeResolver.Resolve(details, new HashSet<string>()));
+        Assert.Null(SeriesEpisodeResolver.Resolve(new SeriesDetails("empty", "Empty", Array.Empty<SeriesSeason>()), finished));
+    }
+
+    [Fact]
     public void Player_side_titles_name_the_list_contents()
     {
         Assert.Equal("The Expanse", PlayerSideTitleResolver.ForEpisodes(" The Expanse "));

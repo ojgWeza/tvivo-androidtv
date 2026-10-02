@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -9,6 +10,9 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using Windows.Storage.Streams;
 using System.ComponentModel;
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 
@@ -23,6 +27,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly SqliteCatalogRepository _repository = App.Services.GetRequiredService<SqliteCatalogRepository>();
     private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
+    private readonly EpgCoordinator _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
     private ProviderAccount? _account;
     private ProviderConnection? _connection;
     private IReadOnlyList<ChannelGroup> _groups = Array.Empty<ChannelGroup>();
@@ -30,6 +35,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private string? _openShelfId;
     private CatalogItemType? _openShelfType;
     private CatalogMode _activeMode = CatalogMode.MyTvivo;
+    private const CategorySort SpotlightSort = CategorySort.Visited;
     private CategorySort _categorySort = CategorySort.Visited;
     private int _offset;
     private long _loadGeneration;
@@ -46,11 +52,22 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
     private readonly Dictionary<(string AccountId, CatalogMode Mode), DateTimeOffset> _lastRefreshAt = new();
     private readonly Dictionary<CatalogMode, ModeInteractionState> _modeStates = new();
+    private readonly Dictionary<(CatalogMode Mode, string ShelfId), BrowsePosition> _browsePositions = new();
     private readonly HashSet<string> _recentSpotlightIds = new(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
+    private readonly object _spotlightShelvesLock = new();
+    private readonly Dictionary<(string AccountId, CatalogMode Mode), IReadOnlyList<CatalogShelf>> _spotlightShelvesCache = new();
     private static readonly string SpotlightSessionId = Guid.NewGuid().ToString("N");
     private const int SnapshotCacheCapacity = 16;
     private static readonly TimeSpan SnapshotFreshness = TimeSpan.FromMinutes(15);
+    private static readonly Regex QualityToken = new(
+        @"(?i)(?<![\p{L}\p{N}])(?<quality>FULL[\s_\-]?HD|FHD|UHD|4K|2160p|1080[pi]|720p|576p|480p|HD|SD)(?![\p{L}\p{N}])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex CodecToken = new(
+        @"(?i)(?<![\p{L}\p{N}])(?:HEVC|H[\s.]?26[45]|x26[45])(?![\p{L}\p{N}])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex EmptyBrackets = new(@"[\(\[\{]\s*[\)\]\}]", RegexOptions.Compiled);
+    private static readonly Regex RepeatedSpaces = new(@"\s{2,}", RegexOptions.Compiled);
     private readonly Dictionary<string, Task> _activeRefreshTasks = new(StringComparer.Ordinal);
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
@@ -67,6 +84,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<string> _artworkDiagnosticsLogged = new(StringComparer.Ordinal);
     private readonly HashSet<string> _artworkFailuresLogged = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
+    private readonly DispatcherTimer _epgTimer = new() { Interval = TimeSpan.FromSeconds(60) };
+    private readonly SemaphoreSlim _epgQueryGate = new(1, 1);
+    private readonly SemaphoreSlim _epgStartGate = new(1, 1);
+    private readonly HashSet<string> _epgMapLoadedAccounts = new(StringComparer.Ordinal);
 #if DEBUG
     private readonly HashSet<FrameworkElement> _realizedShelves = new();
 #endif
@@ -116,6 +137,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         InitializeComponent();
         _spotlightTimer.Tick += SpotlightTimer_Tick;
+        _epgTimer.Tick += EpgTimer_Tick;
+        _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         UpdateModeChrome();
 #if DEBUG
         if (LocalFixturePath is not null)
@@ -123,11 +146,14 @@ public sealed partial class CatalogLandingPage : UserControl
             var fixtureButton = new Button
             {
                 Content = "Debug: Gate 9 fixture",
-                HorizontalAlignment = HorizontalAlignment.Left,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 0, 8),
                 Style = (Style)Application.Current.Resources["AppQuietButtonStyle"],
             };
             fixtureButton.Click += LocalFixtureButton_Click;
-            ModeButtonStackPanel.Children.Add(fixtureButton);
+            Grid.SetRowSpan(fixtureButton, 3);
+            CatalogPageRoot.Children.Add(fixtureButton);
         }
 #endif
     }
@@ -137,6 +163,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _isActive = active;
         if (active) _spotlightTimer.Start();
         else _spotlightTimer.Stop();
+        UpdateEpgLifecycle();
     }
 
     public void InvalidateCatalogSnapshots()
@@ -185,6 +212,9 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         _spotlightTimer.Stop();
         _spotlightTimer.Tick -= SpotlightTimer_Tick;
+        _epgTimer.Stop();
+        _epgTimer.Tick -= EpgTimer_Tick;
+        _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
         CancelArtworkLoads();
     }
 
@@ -219,6 +249,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _modeTransitionGeneration);
         SaveModeState(_activeMode);
         _activeMode = mode;
+        UpdateEpgLifecycle();
         var keepVisibleSnapshot = _renderedSnapshot is not null;
         _showModeLoadingFrame = !keepVisibleSnapshot;
         _spotlightTimer.Stop();
@@ -400,6 +431,7 @@ public sealed partial class CatalogLandingPage : UserControl
             var shouldRefresh = forceRefresh || !HasCatalogData(cached) || IsSnapshotStale(account);
             if (!shouldRefresh)
             {
+                StartEpgIfVisible();
                 RefreshInfoBar.IsOpen = false;
                 DismissFirstLoadTakeover();
                 return;
@@ -429,6 +461,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
             CacheSnapshot(account, refreshed);
             await ApplySnapshotAsync(refreshed, () => IsCurrentLoad(generation));
+            StartEpgIfVisible();
             _firstCatalogLoadCompleted = true;
             DismissFirstLoadTakeover();
             RefreshInfoBar.IsOpen = false;
@@ -461,7 +494,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var openShelfId = _openShelfId;
         var openShelfType = _openShelfType;
-        return await Task.Run(() =>
+        var snapshot = await Task.Run(() =>
         {
             if (mode == CatalogMode.MyTvivo)
             {
@@ -484,6 +517,28 @@ public sealed partial class CatalogLandingPage : UserControl
 
             var type = TypeForMode(mode);
             var groups = _repository.GetGroups(account, type);
+            if (openShelfId is null && mode != CatalogMode.MyTvivo && !string.IsNullOrWhiteSpace(filter))
+            {
+                var groupNames = groups.ToDictionary(group => group.Id, group => group.DisplayName, StringComparer.Ordinal);
+                var matchCounts = _repository.GetCategoryMatchCounts(account, type, filter)
+                    .Where(match => match.MatchCount > 0)
+                    .OrderByDescending(match => match.MatchCount)
+                    .ThenBy(match => groupNames.GetValueOrDefault(match.CategoryId, match.CategoryId), StringComparer.CurrentCultureIgnoreCase)
+                    .ToArray();
+                var searchGroupId = requestedGroupId is not null && matchCounts.Any(match => match.CategoryId == requestedGroupId)
+                    ? requestedGroupId
+                    : null;
+                var searchFirstPage = _repository.GetChannels(account, _connection, type, searchGroupId, filter, 0, PageSize, sortOrder: ToItemSortOrder(sort));
+                var searchLastValidOffset = searchFirstPage.TotalCount == 0 ? 0 : ((searchFirstPage.TotalCount - 1) / PageSize) * PageSize;
+                var searchOffset = Math.Clamp(requestedOffset, 0, searchLastValidOffset);
+                var searchPage = searchOffset == 0
+                    ? searchFirstPage
+                    : _repository.GetChannels(account, _connection, type, searchGroupId, filter, searchOffset, PageSize, sortOrder: ToItemSortOrder(sort));
+                return new CatalogSnapshot(mode, groups, searchGroupId, searchOffset, searchPage, Array.Empty<CatalogShelf>(),
+                    SearchCategoryCounts: matchCounts.Select(match => new SearchCategoryCount(match.CategoryId,
+                        groupNames.GetValueOrDefault(match.CategoryId, match.CategoryId), match.MatchCount)).ToArray(),
+                    IsFlatSearch: true, SearchFilter: filter);
+            }
             if (openShelfId is "__recent_added" or "__recent_played" or "__favorites")
             {
                 var allItems = openShelfId switch
@@ -516,6 +571,24 @@ public sealed partial class CatalogLandingPage : UserControl
             var shelves = BuildShelves(account, groups, filter, mode, sort);
             return new CatalogSnapshot(mode, groups, groupId, offset, page, shelves);
         });
+
+        if (string.IsNullOrWhiteSpace(filter) && sort == SpotlightSort)
+        {
+            lock (_spotlightShelvesLock) _spotlightShelvesCache[(account.AccountId, mode)] = snapshot.Shelves;
+            return snapshot;
+        }
+
+        var spotlight = await Task.Run(() =>
+        {
+            lock (_spotlightShelvesLock)
+            {
+                if (_spotlightShelvesCache.TryGetValue((account.AccountId, mode), out var cached)) return cached;
+            }
+            var built = BuildShelves(account, snapshot.Groups, null, mode, SpotlightSort);
+            lock (_spotlightShelvesLock) _spotlightShelvesCache[(account.AccountId, mode)] = built;
+            return built;
+        });
+        return snapshot with { SpotlightSource = spotlight };
     }
 
     private async Task<CatalogSnapshot?> ReadCurrentCatalogSnapshotAsync(ProviderAccount account, long generation)
@@ -559,6 +632,134 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
+    private void UpdateEpgLifecycle()
+    {
+        if (_isActive && _activeMode == CatalogMode.LiveTv)
+            _epgTimer.Start();
+        else
+            _epgTimer.Stop();
+    }
+
+    private void StartEpgIfVisible()
+    {
+        if (!_isActive || _activeMode != CatalogMode.LiveTv ||
+            _account is not { } account || _connection is not { } connection)
+            return;
+
+        _activeRefreshTasks.TryGetValue(account.AccountId, out var catalogRefreshTask);
+        _ = StartEpgAsync(account, connection, catalogRefreshTask);
+    }
+
+    private async Task StartEpgAsync(ProviderAccount account, ProviderConnection connection, Task? catalogRefreshTask)
+    {
+        if (!await _epgStartGate.WaitAsync(0).ConfigureAwait(false)) return;
+
+        try
+        {
+            if (catalogRefreshTask is not null)
+            {
+                try
+                {
+                    await catalogRefreshTask.ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    LaunchDiagnostics.Write($"Catalog refresh before EPG warm-up failed: {exception.GetType().Name}");
+                }
+            }
+
+            var mapLoaded = false;
+            lock (_epgMapLoadedAccounts)
+                mapLoaded = _epgMapLoadedAccounts.Contains(account.AccountId);
+
+            if (!mapLoaded)
+            {
+                try
+                {
+                    await _provider.GetChannelsAsync(account, CatalogItemType.Live).ConfigureAwait(false);
+                    lock (_epgMapLoadedAccounts) _epgMapLoadedAccounts.Add(account.AccountId);
+                }
+                catch (Exception exception)
+                {
+                    LaunchDiagnostics.Write($"EPG channel map warm-up failed: {exception.GetType().Name}");
+                }
+            }
+
+            await _epgCoordinator.StartIfDueAsync(account, connection).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"EPG start failed: {exception.GetType().Name}");
+        }
+        finally
+        {
+            _epgStartGate.Release();
+        }
+    }
+
+    private void EpgTimer_Tick(object? sender, object args)
+    {
+        StartEpgIfVisible();
+        _ = RefreshVisibleEpgAsync();
+    }
+
+    private void EpgCoordinator_EpgUpdated(object? sender, EventArgs args)
+    {
+        if (!_isActive || _activeMode != CatalogMode.LiveTv) return;
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            _ = RefreshVisibleEpgAsync();
+            return;
+        }
+
+        DispatcherQueue.TryEnqueue(() => _ = RefreshVisibleEpgAsync());
+    }
+
+    private async Task RefreshVisibleEpgAsync()
+    {
+        if (!_isActive || _activeMode != CatalogMode.LiveTv || _account is not { } account ||
+            !await _epgQueryGate.WaitAsync(0))
+            return;
+
+        try
+        {
+            var cards = RenderedCards()
+                .Where(card => card.Channel?.Metadata.TryGetValue("epg_channel_id", out var id) == true &&
+                               !string.IsNullOrWhiteSpace(id))
+                .ToArray();
+            if (cards.Length == 0) return;
+
+            var ids = cards.Select(card => card.Channel!.Metadata["epg_channel_id"])
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var nowNext = await Task.Run(() => _epgCoordinator.GetNowNext(account, ids));
+            if (!_isActive || _activeMode != CatalogMode.LiveTv || _account?.AccountId != account.AccountId)
+                return;
+
+            foreach (var card in cards)
+            {
+                var epgId = card.Channel!.Metadata["epg_channel_id"];
+                nowNext.TryGetValue(epgId, out var programme);
+                card.ApplyNowNext(programme);
+            }
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"EPG card update failed: {exception.GetType().Name}");
+        }
+        finally
+        {
+            _epgQueryGate.Release();
+        }
+    }
+
+    private IEnumerable<CatalogCard> RenderedCards()
+    {
+        var shelfCards = _renderedSnapshot?.Shelves.SelectMany(shelf => shelf.Cards)
+            ?? Enumerable.Empty<CatalogCard>();
+        return shelfCards.Concat(OpenShelfGrid.Items.OfType<CatalogCard>()).Distinct();
+    }
+
     private IReadOnlyList<CatalogShelf> BuildShelves(
         ProviderAccount account,
         IReadOnlyList<ChannelGroup> groups,
@@ -572,38 +773,58 @@ public sealed partial class CatalogLandingPage : UserControl
         var type = TypeForMode(mode);
         var noun = NounFor(type);
         var shelves = new List<CatalogShelf>();
-        AddActivityShelf(shelves, "__recent_added", "Recently added", type,
+        AddActivityShelf(account, shelves, "__recent_added", "Recently added", type,
             _repository.GetRecentlyAdded(account, type, _connection, int.MaxValue, filter));
-        AddActivityShelf(shelves, "__recent_played", "Recently played", type,
+        AddActivityShelf(account, shelves, "__recent_played", "Recently played", type,
             _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter));
-        AddActivityShelf(shelves, "__favorites", "Favorites", type,
+        AddActivityShelf(account, shelves, "__favorites", "Favorites", type,
             _repository.GetFavorites(account, type, _connection, int.MaxValue, filter));
 
         var allChannels = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize);
         if (allChannels.Items.Count > 0)
         {
-            shelves.Add(new CatalogShelf(
+            var latestAddedAt = _repository.GetRecentlyAdded(account, type, _connection, 1, filter)
+                .FirstOrDefault()?.AddedAt;
+            shelves.Add(CreateShelf(account,
                 "__recent",
                 AllItemsShelfTitle(type),
                 CountLabel(allChannels.TotalCount, noun),
                 allChannels.Items.Select(channel => ToCard(channel, type)).ToArray(),
                 type,
                 null,
-                false));
+                false,
+                latestAddedAt));
         }
 
         var pages = _repository.GetChannelsGroupedByCategory(account, _connection, type, filter, ShelfPreviewSize);
+        IReadOnlyDictionary<string, CatalogPage>? unfilteredPages = null;
         foreach (var group in SortGroups(groups, sort))
         {
-            if (!pages.TryGetValue(group.Id, out var page)) continue;
-            shelves.Add(new CatalogShelf(
+            var titleMatchesFilter = !string.IsNullOrWhiteSpace(filter) &&
+                group.DisplayName.Contains(filter, StringComparison.CurrentCultureIgnoreCase);
+
+            CatalogPage page;
+            if (titleMatchesFilter)
+            {
+                unfilteredPages ??= _repository.GetChannelsGroupedByCategory(account, _connection, type, null, ShelfPreviewSize);
+                if (!unfilteredPages.TryGetValue(group.Id, out var unfilteredPage)) continue;
+                page = unfilteredPage;
+            }
+            else
+            {
+                if (!pages.TryGetValue(group.Id, out var filteredPage)) continue;
+                page = filteredPage;
+            }
+
+            shelves.Add(CreateShelf(account,
                 group.Id,
                 group.DisplayName,
                 CountLabel(page.TotalCount, noun),
-                page.Items.Select(channel => ToCard(channel, type)).ToArray(),
+                page.Items.Select(channel => ToCard(channel, type, QualityFromText(group.DisplayName))).ToArray(),
                 type,
                 group.Id,
-                true));
+                true,
+                page.LatestAddedAt));
         }
 
         return shelves;
@@ -643,7 +864,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyList<CatalogShelf> BuildMyTvivoShelves(ProviderAccount account, string? filter)
     {
         return MyTvivoShelfDefinitions.All
-            .Select(definition => CreateMyTvivoShelf(definition, GetMyTvivoShelfItems(account, definition, filter)))
+            .Select(definition => CreateMyTvivoShelf(account, definition, GetMyTvivoShelfItems(account, definition, filter)))
             .Where(shelf => ShelfVisibilityPolicy.HasItems(shelf.Cards.Count))
             .ToArray();
     }
@@ -660,6 +881,7 @@ public sealed partial class CatalogLandingPage : UserControl
     };
 
     private void AddActivityShelf(
+        ProviderAccount account,
         ICollection<CatalogShelf> shelves,
         string id,
         string title,
@@ -667,17 +889,19 @@ public sealed partial class CatalogLandingPage : UserControl
         IReadOnlyList<Channel> channels)
     {
         if (channels.Count == 0) return;
-        shelves.Add(new CatalogShelf(id, title, CountLabel(channels.Count, NounFor(type)),
-            channels.Take(ShelfPreviewSize).Select(channel => ToCard(channel, type)).ToArray(), type, null, false));
+        shelves.Add(CreateShelf(account, id, title, CountLabel(channels.Count, NounFor(type)),
+            channels.Take(ShelfPreviewSize).Select(channel => ToCard(channel, type)).ToArray(), type, null, false,
+            channels.Where(channel => channel.AddedAt.HasValue).Select(channel => channel.AddedAt).Max()));
     }
 
-    private CatalogShelf CreateMyTvivoShelf(MyTvivoShelfDefinition definition, IReadOnlyList<Channel> channels)
+    private CatalogShelf CreateMyTvivoShelf(ProviderAccount account, MyTvivoShelfDefinition definition, IReadOnlyList<Channel> channels)
     {
         var preview = channels.Take(ShelfPreviewSize)
             .Select(channel => ToCard(channel, definition.Type))
             .ToArray();
-        return new CatalogShelf(definition.Id, definition.Title, CountLabel(channels.Count, NounFor(definition.Type)), preview,
-            definition.Type, null, false);
+        return CreateShelf(account, definition.Id, definition.Title, CountLabel(channels.Count, NounFor(definition.Type)), preview,
+            definition.Type, null, false,
+            channels.Where(channel => channel.AddedAt.HasValue).Select(channel => channel.AddedAt).Max());
     }
 
     private static CatalogItemType TypeForSource(StreamKind kind) => kind switch
@@ -687,14 +911,121 @@ public sealed partial class CatalogLandingPage : UserControl
         _ => CatalogItemType.Movie,
     };
 
-    private static CatalogCard ToCard(Channel channel, CatalogItemType type) => new(
-        $"{channel.ProviderAccountId}:{channel.Source.Kind}:{channel.Id}",
-        channel.DisplayName,
-        SubtitleFor(type),
-        channel.LogoUri?.ToString(),
-        190,
-        type == CatalogItemType.Live ? 138 : 250,
-        channel);
+    private CatalogShelf CreateShelf(ProviderAccount account, string id, string title, string countLabel,
+        IReadOnlyList<CatalogCard> cards, CatalogItemType type, string? groupId, bool opensPagedGrid,
+        DateTimeOffset? latestAddedAt)
+    {
+        var lastVisitedAt = GetLastShelfVisitAt(account, type, id) ?? DateTimeOffset.UtcNow;
+        return new CatalogShelf(id, title, countLabel, cards, type, groupId, opensPagedGrid, latestAddedAt,
+            latestAddedAt is { } addedAt && addedAt > lastVisitedAt);
+    }
+
+    // ApplicationData.Current requires a packaged app identity, which this unpackaged WinUI3 app
+    // does not have -- it throws InvalidOperationException at runtime (confirmed live: it broke
+    // catalog loading entirely). Match the existing plain-file settings convention used elsewhere
+    // in this file (see GetPlaybackEnginePreferencePath in MainWindow.xaml.cs) instead.
+    private static readonly string ShelfVisitsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "shelf-visits.json");
+    private static readonly object ShelfVisitsLock = new();
+
+    private static string ShelfVisitSettingKey(ProviderAccount account, CatalogItemType type, string shelfId) =>
+        $"catalog.shelf.last-visited.{account.AccountId}.{type}.{shelfId}";
+
+    private static Dictionary<string, long> ReadShelfVisits()
+    {
+        try
+        {
+            return File.Exists(ShelfVisitsPath)
+                ? JsonSerializer.Deserialize<Dictionary<string, long>>(File.ReadAllText(ShelfVisitsPath)) ?? new()
+                : new();
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"Shelf-visit settings read failed: {exception.GetType().Name}");
+            return new();
+        }
+    }
+
+    private static DateTimeOffset? GetLastShelfVisitAt(ProviderAccount account, CatalogItemType type, string shelfId)
+    {
+        lock (ShelfVisitsLock)
+        {
+            var key = ShelfVisitSettingKey(account, type, shelfId);
+            return ReadShelfVisits().TryGetValue(key, out var milliseconds)
+                ? DateTimeOffset.FromUnixTimeMilliseconds(milliseconds)
+                : null;
+        }
+    }
+
+    private static void RecordShelfVisit(ProviderAccount account, CatalogItemType type, string shelfId)
+    {
+        lock (ShelfVisitsLock)
+        {
+            try
+            {
+                var visits = ReadShelfVisits();
+                visits[ShelfVisitSettingKey(account, type, shelfId)] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                Directory.CreateDirectory(Path.GetDirectoryName(ShelfVisitsPath)!);
+                File.WriteAllText(ShelfVisitsPath, JsonSerializer.Serialize(visits));
+            }
+            catch (Exception exception)
+            {
+                LaunchDiagnostics.Write($"Shelf-visit settings write failed: {exception.GetType().Name}");
+            }
+        }
+    }
+
+    private static CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null, string? subtitleOverride = null)
+    {
+        var (title, qualityBadge) = SplitQualityBadge(channel.DisplayName);
+        return new CatalogCard(
+            $"{channel.ProviderAccountId}:{channel.Source.Kind}:{channel.Id}",
+            title,
+            subtitleOverride ?? SubtitleFor(type),
+            channel.LogoUri?.ToString(),
+            190,
+            type == CatalogItemType.Live ? 138 : 250,
+            channel,
+            qualityBadge ?? categoryQuality);
+    }
+
+    private static int QualityRank(string badge) => badge switch { "SD" => 1, "HD" => 2, "FHD" => 3, _ => 4 };
+
+    private static string NormalizeQuality(string token)
+    {
+        var value = token.ToUpperInvariant().Replace(" ", "").Replace("_", "").Replace("-", "");
+        return value switch
+        {
+            "FULLHD" or "1080P" or "1080I" => "FHD",
+            "2160P" => "4K",
+            "720P" => "HD",
+            "576P" or "480P" => "SD",
+            _ => value
+        };
+    }
+
+    // Quality can sit anywhere in a provider title ("Name FHD (2023)", "4K - Name", "Name HD H265"), so it is
+    // read from any position and stripped from the display title; a category name is the fallback source.
+    private static string? QualityFromText(string text)
+    {
+        string? best = null;
+        foreach (Match match in QualityToken.Matches(text))
+        {
+            var badge = NormalizeQuality(match.Groups["quality"].Value);
+            if (best is null || QualityRank(badge) > QualityRank(best)) best = badge;
+        }
+        return best;
+    }
+
+    private static (string Title, string? QualityBadge) SplitQualityBadge(string title)
+    {
+        var badge = QualityFromText(title);
+        if (badge is null) return (title, null);
+        var clean = CodecToken.Replace(QualityToken.Replace(title, " "), " ");
+        clean = EmptyBrackets.Replace(clean, " ");
+        clean = RepeatedSpaces.Replace(clean, " ").Trim(' ', '-', '|', '_', '.', ',', ':', '–', '—');
+        return string.IsNullOrWhiteSpace(clean) ? (title, null) : (clean, badge);
+    }
 
     public void NotifyMetadataChanged(string channelId)
     {
@@ -762,7 +1093,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private static bool HasCatalogData(CatalogSnapshot snapshot) =>
-        snapshot.Groups.Count > 0 || snapshot.Page.TotalCount > 0 || snapshot.Shelves.Count > 0;
+        snapshot.IsFlatSearch || snapshot.Groups.Count > 0 || snapshot.Page.TotalCount > 0 || snapshot.Shelves.Count > 0;
 
     private async Task ApplySnapshotAsync(CatalogSnapshot snapshot, Func<bool>? isCurrent = null)
     {
@@ -809,17 +1140,27 @@ public sealed partial class CatalogLandingPage : UserControl
 
             UpdateModeChrome();
             UpdateEmptyCopy();
+            if (snapshot.IsFlatSearch)
+            {
+                SearchResultsCount.Text = $"{snapshot.Page.TotalCount} {(snapshot.Page.TotalCount == 1 ? "match" : "matches")}";
+                UpdateSearchCategoryChips(snapshot);
+                if (snapshot.Page.TotalCount == 0)
+                {
+                    EmptyTitle.Text = "No matches";
+                    EmptyMessage.Text = $"No matches for \"{snapshot.SearchFilter}\"";
+                }
+            }
             var snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
             if (snapshotChanged || _renderedOpenShelfId != _openShelfId)
             {
-                if (snapshotChanged) RenderSpotlight(snapshot.Shelves);
+                if (snapshotChanged) RenderSpotlight(snapshot.SpotlightShelves);
                 RenderShelfSurface(snapshot);
                 _renderedSnapshot = snapshot;
                 _renderedOpenShelfId = _openShelfId;
             }
             UpdatePaging(snapshot.Page.TotalCount);
 
-            if (snapshot.Shelves.Count == 0)
+            if ((snapshot.IsFlatSearch && snapshot.Page.TotalCount == 0) || (!snapshot.IsFlatSearch && snapshot.Shelves.Count == 0))
                 SetState(empty: true);
             else
                 SetState(content: true);
@@ -827,8 +1168,11 @@ public sealed partial class CatalogLandingPage : UserControl
             // On first use the surface was hidden before binding; on later mode
             // changes the outgoing surface has already faded away.
             ContentState.UpdateLayout();
+            RestoreBrowseStateIfMatching(snapshot.Mode);
             ContentState.IsHitTestVisible = true;
             contentApplied = true;
+            if (_isActive && _activeMode == CatalogMode.LiveTv)
+                _ = RefreshVisibleEpgAsync();
             if (_isActive) _spotlightTimer.Start();
         }
         finally
@@ -859,6 +1203,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
+        var previousCard = _spotlightCard;
         var candidates = GetSpotlightCandidates(shelves);
         SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -874,12 +1219,13 @@ public sealed partial class CatalogLandingPage : UserControl
             _spotlightByMode[_activeMode] = card;
             if (_recentSpotlightIds.Count > 64) _recentSpotlightIds.Clear();
         }
+        var unchanged = card is not null && previousCard?.Id == card.Id && SpotlightArtwork.Source is not null;
         _spotlightCard = card;
         SpotlightPanel.Visibility = card is null ? Visibility.Collapsed : Visibility.Visible;
         RenderSpotlightIndicators(candidates, card is null
             ? -1
             : Array.FindIndex(candidates, candidate => candidate.Id == card.Id));
-        if (card is null) return;
+        if (card is null || unchanged) return;
 
         StopArtwork(SpotlightArtwork);
         SpotlightArtworkFallback.Visibility = Visibility.Visible;
@@ -920,13 +1266,13 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         snapshot ??= _renderedSnapshot;
         if (snapshot is null) return;
-        var candidates = GetSpotlightCandidates(snapshot.Shelves);
+        var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
         if (candidates.Length < 2) return;
         var index = Array.FindIndex(candidates, card => card.Id == _spotlightCard?.Id);
         if (index < 0) index = delta > 0 ? -1 : 0;
         var nextIndex = ((index + delta) % candidates.Length + candidates.Length) % candidates.Length;
         _spotlightByMode[_activeMode] = candidates[nextIndex];
-        RenderSpotlight(snapshot.Shelves);
+        RenderSpotlight(snapshot.SpotlightShelves);
     }
 
     private void RenderSpotlightIndicators(IReadOnlyList<CatalogCard> candidates, int selectedIndex)
@@ -963,10 +1309,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightIndicator_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { Tag: int index } || _renderedSnapshot is not { } snapshot) return;
-        var candidates = GetSpotlightCandidates(snapshot.Shelves);
+        var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
         if (index < 0 || index >= candidates.Length) return;
         _spotlightByMode[_activeMode] = candidates[index];
-        RenderSpotlight(snapshot.Shelves);
+        RenderSpotlight(snapshot.SpotlightShelves);
     }
 
     private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
@@ -997,12 +1343,100 @@ public sealed partial class CatalogLandingPage : UserControl
             _snapshotCache.Remove(key);
         _snapshotCacheOrder.Clear();
         foreach (var key in _snapshotCache.Keys) _snapshotCacheOrder.Enqueue(key);
+        lock (_spotlightShelvesLock)
+        {
+            foreach (var key in _spotlightShelvesCache.Keys.Where(key => key.AccountId == accountId).ToArray())
+                _spotlightShelvesCache.Remove(key);
+        }
         foreach (var key in _lastRefreshAt.Keys.Where(key => key.AccountId == accountId).ToArray())
             _lastRefreshAt.Remove(key);
     }
 
     private void SaveModeState(CatalogMode mode) =>
         _modeStates[mode] = new ModeInteractionState(_openShelfId, _openShelfType, _selectedGroupId, SearchBox.Text ?? string.Empty, _offset);
+
+    private void CaptureBrowseState()
+    {
+        var scrollViewer = _openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+        var offset = scrollViewer?.VerticalOffset ?? 0;
+
+        string? focusedCardId = null;
+        if (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is DependencyObject focused)
+        {
+            for (var current = focused; current is not null; current = VisualTreeHelper.GetParent(current))
+            {
+                if (current is FrameworkElement { DataContext: CatalogCard card })
+                {
+                    focusedCardId = card.Id;
+                    break;
+                }
+            }
+        }
+
+        _browsePositions[(_activeMode, _openShelfId ?? string.Empty)] = new BrowsePosition(offset, focusedCardId);
+    }
+
+    private void RestoreBrowseStateIfMatching(CatalogMode mode)
+    {
+        var key = (mode, _openShelfId ?? string.Empty);
+        if (!_browsePositions.TryGetValue(key, out var position)) return;
+        // Deliberately not removed here: a background catalog refresh can re-render this same
+        // shelf again shortly after we return (e.g. NotifyVisitRecorded invalidates the snapshot
+        // cache on every play), and that second render needs the same remembered position too.
+        // It's only replaced by the next real CaptureBrowseState call (a fresh navigation away).
+        var openShelfId = _openShelfId;
+
+        // Scrolling to an exact pixel offset right after ItemsSource rebinds can be clamped,
+        // because the virtualizing panel hasn't finished measuring its full extent yet. Defer
+        // two low-priority dispatch passes so layout settles first, and prefer ScrollIntoView
+        // on the remembered card (which handles realization itself) over a raw pixel offset.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (openShelfId is not null && position.FocusedCardId is { } cardId)
+                {
+                    var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(c => c.Id == cardId);
+                    if (card is not null)
+                    {
+                        OpenShelfGrid.ScrollIntoView(card, ScrollIntoViewAlignment.Leading);
+                        // ScrollIntoView queues its own layout pass before the container exists,
+                        // and something elsewhere (page-visibility change moving focus off the
+                        // unloading Player) can reassign focus around the same time. Poll briefly
+                        // instead of guessing a single right moment to focus the container.
+                        var attempts = 0;
+                        var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+                        retryTimer.Tick += (_, _) =>
+                        {
+                            attempts++;
+                            var container = OpenShelfGrid.ContainerFromItem(card) as Control;
+                            if (container is not null)
+                                container.Focus(FocusState.Programmatic);
+                            var nowFocused = container is not null && ReferenceEquals(FocusManager.GetFocusedElement(XamlRoot), container);
+                            if (nowFocused || attempts >= 6)
+                                retryTimer.Stop();
+                        };
+                        retryTimer.Start();
+                        return;
+                    }
+                }
+
+                // Fallback used only when no focused card was captured (e.g. the user scrolled
+                // without clicking anything). A single ChangeView here can undershoot because the
+                // virtualizing panel may not have measured its full extent yet; retry briefly.
+                var scrollViewer = openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+                if (scrollViewer is null || position.ScrollOffset <= 0) return;
+                var scrollAttempts = 0;
+                var scrollRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+                scrollRetryTimer.Tick += (_, _) =>
+                {
+                    scrollAttempts++;
+                    scrollViewer.ChangeView(null, position.ScrollOffset, null, true);
+                    if (Math.Abs(scrollViewer.VerticalOffset - position.ScrollOffset) < 1.0 || scrollAttempts >= 6)
+                        scrollRetryTimer.Stop();
+                };
+                scrollRetryTimer.Start();
+            }));
+    }
 
     private void SetSearchTextWithoutReload(string value)
     {
@@ -1360,29 +1794,40 @@ public sealed partial class CatalogLandingPage : UserControl
     private void RenderShelfSurface(CatalogSnapshot snapshot)
     {
         var openShelf = _openShelfId is null ? null : snapshot.Shelves.FirstOrDefault(shelf => shelf.Id == _openShelfId);
+        var isSearch = snapshot.IsFlatSearch;
         var isOpen = openShelf is not null;
+        SearchResultsPanel.Visibility = isSearch ? Visibility.Visible : Visibility.Collapsed;
         OpenShelfHeader.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
-        OpenShelfGrid.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
-        ShelvesItems.Visibility = isOpen ? Visibility.Collapsed : Visibility.Visible;
-        SpotlightPanel.Visibility = isOpen || _spotlightCard is null ? Visibility.Collapsed : Visibility.Visible;
-        if (isOpen)
+        OpenShelfGrid.Visibility = isOpen || isSearch ? Visibility.Visible : Visibility.Collapsed;
+        ShelvesItems.Visibility = isOpen || isSearch ? Visibility.Collapsed : Visibility.Visible;
+        SpotlightPanel.Visibility = isOpen || isSearch || _spotlightCard is null ? Visibility.Collapsed : Visibility.Visible;
+        if (isOpen || isSearch)
             StopArtwork(SpotlightArtwork);
         else if (_spotlightCard is not null && SpotlightArtwork.Source is null)
             StartArtwork(SpotlightArtwork, _spotlightCard.ArtworkUrl);
-        PagerPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
-        SortPanel.Opacity = 1;
-        SortPanel.IsHitTestVisible = true;
-        SortLabel.Text = isOpen ? "Sort titles" : "Sort categories";
+        PagerPanel.Visibility = isOpen || isSearch ? Visibility.Visible : Visibility.Collapsed;
         PageSearchPanel.Visibility = Visibility.Collapsed;
 
-        if (isOpen)
+        if (isSearch)
+        {
+            var type = TypeForMode(snapshot.Mode);
+            OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel =>
+            {
+                var categoryName = channel.GroupId is { } groupId
+                    ? snapshot.Groups.FirstOrDefault(group => group.Id == groupId)?.DisplayName
+                    : null;
+                return ToCard(channel, type, QualityFromText(categoryName ?? string.Empty), categoryName);
+            }).ToArray();
+        }
+        else if (isOpen)
         {
             OpenShelfTitle.Text = openShelf!.Title;
             var type = openShelf!.Type;
             OpenShelfCount.Text = CountLabel(snapshot.Page.TotalCount, snapshot.Mode == CatalogMode.MyTvivo ? "items" : NounFor(type));
             if (!ReferenceEquals(_renderedSnapshot, snapshot) || _renderedOpenShelfId != _openShelfId)
                 OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel => ToCard(channel,
-                    snapshot.Mode == CatalogMode.MyTvivo ? TypeForSource(channel.Source.Kind) : type)).ToArray();
+                    snapshot.Mode == CatalogMode.MyTvivo ? TypeForSource(channel.Source.Kind) : type,
+                    QualityFromText(openShelf!.Title))).ToArray();
         }
         else
         {
@@ -1413,6 +1858,18 @@ public sealed partial class CatalogLandingPage : UserControl
     private async Task OpenShelfAsync(CatalogShelf shelf)
     {
         LaunchDiagnostics.Write($"event=catalog.browse.open mode={_activeMode} type={shelf.Type} scope={(shelf.GroupId is null ? "shelf" : "category")}");
+        if (_account is { } account)
+        {
+            RecordShelfVisit(account, shelf.Type, shelf.Id);
+            // Only the shelf-LIST view (OpenShelfId empty) bakes HasNewItems into its cached
+            // CatalogShelf records, so only that needs invalidating to clear this shelf's NEW
+            // badge promptly. A blanket InvalidateCatalogSnapshots() here would wipe every other
+            // shelf/mode's cache too, forcing a full DB refetch on every single shelf-open.
+            foreach (var key in _snapshotCache.Keys.Where(k => k.AccountId == account.AccountId && k.Mode == _activeMode && k.OpenShelfId.Length == 0).ToArray())
+                _snapshotCache.Remove(key);
+            _snapshotCacheOrder.Clear();
+            foreach (var key in _snapshotCache.Keys) _snapshotCacheOrder.Enqueue(key);
+        }
         _openShelfId = shelf.Id;
         _openShelfType = shelf.Type;
         _selectedGroupId = shelf.GroupId;
@@ -1583,7 +2040,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_spotlightCard?.Channel is { } channel)
         {
-            var siblings = _renderedSnapshot?.Shelves
+            var siblings = _renderedSnapshot?.SpotlightShelves
                 .FirstOrDefault(shelf => shelf.Cards.Any(card => card.Id == _spotlightCard.Id))?
                 .Cards.Where(card => card.Channel is not null).Select(card => card.Channel!).ToArray();
             RaiseChannelSelected(channel, siblings);
@@ -1597,6 +2054,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_suppressSearchChanged || !_isReadyForInteraction) return;
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
+        if (string.IsNullOrWhiteSpace(SearchBox.Text) && _openShelfId is null)
+            _selectedGroupId = null;
         _offset = 0;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
     }
@@ -1607,17 +2066,74 @@ public sealed partial class CatalogLandingPage : UserControl
         _suppressSearchChanged = true;
         SearchBox.Text = string.Empty;
         _suppressSearchChanged = false;
+        _selectedGroupId = null;
         ClearSearchButton.Visibility = Visibility.Collapsed;
         _offset = 0;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
         SearchBox.Focus(FocusState.Programmatic);
     }
 
-    private async void CategorySortBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    private void UpdateSearchCategoryChips(CatalogSnapshot snapshot)
     {
-        if (!_isReadyForInteraction ||
-            CategorySortBox.SelectedItem is not ComboBoxItem { Tag: string tag } ||
-            !Enum.TryParse<CategorySort>(tag, out var sort)) return;
+        SearchCategoryChips.Children.Clear();
+        var categories = snapshot.SearchCategoryCounts ?? Array.Empty<SearchCategoryCount>();
+        var allCount = categories.Sum(category => category.MatchCount);
+        AddSearchCategoryChip(string.Empty, "All", allCount, snapshot.SelectedGroupId is null);
+        foreach (var category in categories)
+            AddSearchCategoryChip(category.CategoryId, category.Name, category.MatchCount,
+                snapshot.SelectedGroupId == category.CategoryId);
+    }
+
+    private void AddSearchCategoryChip(string groupId, string name, int count, bool selected)
+    {
+        var label = $"{name} {count}";
+        var button = new Button
+        {
+            Content = label,
+            Tag = groupId,
+            Style = (Style)Application.Current.Resources["AppQuietButtonStyle"],
+            Padding = new Thickness(12, 7, 12, 7),
+            MinHeight = 0,
+            Background = selected
+                ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                : (Brush)Application.Current.Resources["AppPanelSurfaceBrush"],
+            Foreground = selected
+                ? (Brush)Application.Current.Resources["AppDeepBrush"]
+                : (Brush)Application.Current.Resources["AppTextBrush"],
+            BorderBrush = selected
+                ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                : (Brush)Application.Current.Resources["AppLineBrush"],
+        };
+        AutomationProperties.SetName(button, label);
+        button.Click += SearchCategoryChip_Click;
+        SearchCategoryChips.Children.Add(button);
+    }
+
+    private async void SearchCategoryChip_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: string groupId } || !_isReadyForInteraction) return;
+        _selectedGroupId = string.IsNullOrEmpty(groupId) ? null : groupId;
+        _offset = 0;
+        await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
+    }
+
+    public DateTimeOffset? LastRefreshAt
+    {
+        get
+        {
+            if (_account is not { } account) return null;
+            var times = _lastRefreshAt.Where(entry => entry.Key.AccountId == account.AccountId).Select(entry => entry.Value).ToArray();
+            return times.Length == 0 ? null : times.Max();
+        }
+    }
+
+    public Task RefreshNowAsync() => _account is { } account
+        ? LoadAsync(account, forceRefresh: true)
+        : LoadSavedAsync();
+
+    public async void SetCategorySort(string? tag)
+    {
+        if (!_isReadyForInteraction || !Enum.TryParse<CategorySort>(tag, out var sort) || sort == _categorySort) return;
         _categorySort = sort;
         if (_account is null) return;
         await ShowCachedPageAsync(_activeMode, SearchBox.Text, _selectedGroupId, _offset);
@@ -1704,21 +2220,15 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void UpdatePaging(int total)
     {
-        PageStatus.Text = total == 0 ? "0 channels" : $"{_offset + 1}-{Math.Min(_offset + PageSize, total)} of {total}";
+        PageStatus.Text = _openShelfId is null && _activeMode != CatalogMode.MyTvivo && !string.IsNullOrWhiteSpace(SearchBox.Text)
+            ? total == 0 ? "0 matches" : $"{_offset + 1}-{Math.Min(_offset + PageSize, total)} of {total} matches"
+            : total == 0 ? "0 channels" : $"{_offset + 1}-{Math.Min(_offset + PageSize, total)} of {total}";
         PreviousPageButton.IsEnabled = _offset > 0;
         NextPageButton.IsEnabled = _offset + PageSize < total;
     }
 
     private void UpdateModeChrome()
     {
-        (PageEyebrow.Text, PageTitle.Text) = _activeMode switch
-        {
-            CatalogMode.Movies => ("CATALOG - MOVIES", "Movies"),
-            CatalogMode.Series => ("CATALOG - SERIES", "Series"),
-            CatalogMode.LiveTv => ("CHANNEL GUIDE", "Live TV"),
-            _ => ("YOUR LIBRARY", "My Tvivo"),
-        };
-
         SetModeButtonState(MyTvivoButton, _activeMode == CatalogMode.MyTvivo);
         SetModeButtonState(MoviesButton, _activeMode == CatalogMode.Movies);
         SetModeButtonState(SeriesButton, _activeMode == CatalogMode.Series);
@@ -1857,8 +2367,11 @@ public sealed partial class CatalogLandingPage : UserControl
         else await LoadSavedAsync();
     }
 
-    private void RaiseChannelSelected(Channel channel, IReadOnlyList<Channel>? related = null) =>
+    private void RaiseChannelSelected(Channel channel, IReadOnlyList<Channel>? related = null)
+    {
+        CaptureBrowseState();
         ChannelSelected?.Invoke(this, new ChannelSelectedEventArgs(channel, related ?? Array.Empty<Channel>()));
+    }
 
     private void ShowError(string message)
     {
@@ -1918,11 +2431,12 @@ public sealed partial class CatalogLandingPage : UserControl
         _isReadyForInteraction = ready;
         SearchBox.IsEnabled = ready;
         ClearSearchButton.IsEnabled = ready;
-        CategorySortBox.IsEnabled = ready;
         ModeButtons.IsEnabled = ready;
         if (changed)
             InteractionReadinessChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private sealed record SearchCategoryCount(string CategoryId, string Name, int MatchCount);
 
     private sealed record CatalogSnapshot(
         CatalogMode Mode,
@@ -1930,7 +2444,14 @@ public sealed partial class CatalogLandingPage : UserControl
         string? SelectedGroupId,
         int Offset,
         CatalogPage Page,
-        IReadOnlyList<CatalogShelf> Shelves);
+        IReadOnlyList<CatalogShelf> Shelves,
+        IReadOnlyList<CatalogShelf>? SpotlightSource = null,
+        IReadOnlyList<SearchCategoryCount>? SearchCategoryCounts = null,
+        bool IsFlatSearch = false,
+        string? SearchFilter = null)
+    {
+        public IReadOnlyList<CatalogShelf> SpotlightShelves => SpotlightSource ?? Shelves;
+    }
 
     private sealed record CatalogSnapshotKey(string AccountId, CatalogMode Mode, string OpenShelfId, string OpenShelfType, string GroupId, string Filter, CategorySort Sort, int Offset);
     private sealed record CachedCatalogSnapshot(CatalogSnapshot Snapshot);
@@ -1949,6 +2470,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap, long DecodedBytes);
     private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset);
 
+    private sealed record BrowsePosition(double ScrollOffset, string? FocusedCardId);
+
     private sealed record CatalogShelf(
         string Id,
         string Title,
@@ -1956,11 +2479,18 @@ public sealed partial class CatalogLandingPage : UserControl
         IReadOnlyList<CatalogCard> Cards,
         CatalogItemType Type,
         string? GroupId,
-        bool OpensPagedGrid);
+        bool OpensPagedGrid,
+        DateTimeOffset? LatestAddedAt,
+        bool HasNewItems)
+    {
+        public Visibility NewSinceLastVisitVisibility => HasNewItems ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
-        double width, double height, Channel? channel) : INotifyPropertyChanged
+        double width, double height, Channel? channel, string? qualityBadge) : INotifyPropertyChanged
     {
+        private EpgNowNext? _nowNext;
+
         public string Id { get; } = id;
         public string Title { get; } = title;
         public string Subtitle { get; } = subtitle;
@@ -1968,15 +2498,79 @@ public sealed partial class CatalogLandingPage : UserControl
         public double Width { get; } = width;
         public double Height { get; } = height;
         public Channel? Channel { get; } = channel;
+        public string? QualityBadge { get; } = qualityBadge;
+        public Visibility QualityBadgeVisibility => string.IsNullOrWhiteSpace(QualityBadge) ? Visibility.Collapsed : Visibility.Visible;
+        public string NowText => _nowNext?.Now is { } now ? $"Now: {now.Title}" : string.Empty;
+        public Visibility NowVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
+        public double ProgressValue => _nowNext?.Now is { } now
+            ? Math.Clamp((DateTimeOffset.UtcNow - now.StartUtc).TotalSeconds /
+                Math.Max(1, (now.EndUtc - now.StartUtc).TotalSeconds) * 100, 0, 100)
+            : 0;
+        public Visibility ProgressVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
+        public string NextText => _nowNext?.Next is { } next
+            ? $"Next: {next.Title} · {FormatLocalTime(next.StartUtc)}"
+            : string.Empty;
+        public Visibility NextVisibility => _nowNext?.Next is null ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility EpgVisibility => _nowNext?.Now is null && _nowNext?.Next is null
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        public string EpgAutomationName
+        {
+            get
+            {
+                var parts = new List<string>();
+                if (_nowNext?.Now is { } now)
+                    parts.Add($"Now playing: {now.Title}, {Math.Clamp((int)Math.Round(ProgressValue), 0, 100)} percent through");
+                if (_nowNext?.Next is { } next)
+                    parts.Add($"next: {next.Title} at {FormatLocalTime(next.StartUtc)}");
+                return string.Join(", ", parts);
+            }
+        }
         public string DetailsLine => Channel is null ? string.Empty : string.Join(" · ", new[]
         {
             Channel.Metadata.GetValueOrDefault("year"),
             Channel.Metadata.TryGetValue("rating", out var rating) && RatingDisplayFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
             Channel.Metadata.GetValueOrDefault("genre"),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        public string HoverPreviewText
+        {
+            get
+            {
+                var details = Channel?.Metadata;
+                return string.Join(Environment.NewLine + Environment.NewLine, new[]
+                {
+                    Title,
+                    DetailsLine,
+                    details?.GetValueOrDefault("plot"),
+                    details is not null && !string.IsNullOrWhiteSpace(details.GetValueOrDefault("cast"))
+                        ? $"Cast: {details.GetValueOrDefault("cast")}"
+                        : null,
+                }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            }
+        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        public void NotifyMetadataChanged() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+        public void ApplyNowNext(EpgNowNext? nowNext)
+        {
+            _nowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressValue)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NextText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NextVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgAutomationName)));
+        }
+
+        public void NotifyMetadataChanged()
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverPreviewText)));
+        }
+
+        private static string FormatLocalTime(DateTimeOffset utcTime) =>
+            utcTime.ToLocalTime().ToString("HH:mm", CultureInfo.CurrentCulture);
     }
 
     public enum CatalogMode

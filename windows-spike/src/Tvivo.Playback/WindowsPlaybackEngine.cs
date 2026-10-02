@@ -1,6 +1,6 @@
-using LibVLCSharp.Shared;
-using LibVLCSharp.Platforms.Windows;
+using LibVLCSharp.Shared;using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
+using System.Globalization;
 
 namespace Tvivo.Playback;
 
@@ -25,12 +25,14 @@ public sealed class VlcPlaybackStateChangedEventArgs : EventArgs
     public VlcPlaybackState State { get; }
 }
 
-public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisposable
+public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TrackProbeDeadline = TimeSpan.FromSeconds(10);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _lifecycleLock = new();
+    private readonly object _trackSync = new();
     private readonly TaskCompletionSource<LibVLC> _libVlcReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private VideoView? _view;
@@ -39,6 +41,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     private MediaPlayer? _player;
     private PlaybackSessionToken? _currentSession;
     private EventHandlers? _handlers;
+    private CancellationTokenSource? _trackProbeCancellation;
+    private PlaybackTrackSnapshot _tracks = PlaybackTrackSnapshot.Unresolved;
+    private bool _defaultSubtitleApplied;
     private Task _abandonedCleanupTask = Task.CompletedTask;
     private bool _disposed;
 
@@ -75,7 +80,48 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     }
 
     public event EventHandler<VlcPlaybackStateChangedEventArgs>? StateChanged;
+    public event EventHandler? TracksChanged;
     public event Action<string>? LifecycleEvent;
+
+    public PlaybackTrackSnapshot GetTracks()
+    {
+        lock (_trackSync)
+            return _tracks;
+    }
+
+    public bool SelectAudio(string key) => TryQueueTrackSelection(TrackKind.Audio, key, markDefaultApplied: false);
+
+    public bool SelectSubtitle(string? keyOrNullForOff) =>
+        TryQueueTrackSelection(TrackKind.Subtitle, keyOrNullForOff, markDefaultApplied: true);
+
+    public void ApplyDefaultSubtitle(
+        string? preferredLanguage,
+        bool explicitOff,
+        string? uiCultureTwoLetterCode)
+    {
+        PlaybackTrackSnapshot snapshot;
+        lock (_trackSync)
+        {
+            if (_defaultSubtitleApplied)
+                return;
+            snapshot = _tracks;
+        }
+
+        if (snapshot.Subtitles.Count == 0)
+            return;
+
+        var key = TrackSelectionPolicy.PickSubtitle(
+            snapshot.Subtitles,
+            preferredLanguage,
+            explicitOff,
+            uiCultureTwoLetterCode);
+        if (TryQueueTrackSelection(TrackKind.Subtitle, key, markDefaultApplied: false))
+        {
+            lock (_trackSync)
+                _defaultSubtitleApplied = true;
+            Log($"event=playback.tracks.default engine=LibVLC key={key ?? "off"}");
+        }
+    }
 
     public async Task<PlaybackAttemptResult> StartAsync(
         StreamSource source,
@@ -119,18 +165,32 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
             };
             var handlers = new EventHandlers(
                 player,
-                state => PublishState(session, state));
+                state => PublishState(session, state),
+                resolved => RefreshVlcTracks(session, player, resolved),
+                () =>
+                {
+                    RefreshVlcTracks(session, player, resolvedWhenTracksPresent: false);
+                    StartTrackProbe(session, player);
+                });
 
-            _media = media;
-            _player = player;
-            _handlers = handlers;
-            _currentSession = session;
+            lock (_trackSync)
+            {
+                _media = media;
+                _player = player;
+                _handlers = handlers;
+                _currentSession = session;
+                _tracks = PlaybackTrackSnapshot.Unresolved;
+                _defaultSubtitleApplied = false;
+            }
             View.MediaPlayer = player;
 
             player.Playing += handlers.Playing;
             player.Vout += handlers.Vout;
             player.EncounteredError += handlers.EncounteredError;
             player.EndReached += handlers.EndReached;
+            player.ESAdded += handlers.ESAdded;
+            player.ESDeleted += handlers.ESDeleted;
+            player.ESSelected += handlers.ESSelected;
             PublishState(session, VlcPlaybackState.Preparing);
 
             try
@@ -331,18 +391,28 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         Task<bool> playTask,
         string reason)
     {
-        if (_currentSession != session)
-            return;
+        lock (_trackSync)
+        {
+            if (_currentSession != session)
+                return;
+        }
 
-        _player = null;
-        _media = null;
-        _handlers = null;
-        _currentSession = null;
+        lock (_trackSync)
+        {
+            _player = null;
+            _media = null;
+            _handlers = null;
+            _currentSession = null;
+        }
+        _trackProbeCancellation?.Cancel();
+        _trackProbeCancellation = null;
+        lock (_trackSync)
+        {
+            _tracks = PlaybackTrackSnapshot.Unresolved;
+            _defaultSubtitleApplied = false;
+        }
         handlers.Invalidate();
-        player.Playing -= handlers.Playing;
-        player.Vout -= handlers.Vout;
-        player.EncounteredError -= handlers.EncounteredError;
-        player.EndReached -= handlers.EndReached;
+        DetachPlayerHandlers(player, handlers);
         DetachPlayerFromView();
 
         _abandonedCleanupTask = playTask.ContinueWith(_ =>
@@ -410,17 +480,37 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
 
     private void StopCore(PlaybackSessionToken? session, string? reason = null)
     {
-        if (session is not null && _currentSession != session)
-            return;
+        if (session is not null)
+        {
+            lock (_trackSync)
+            {
+                if (_currentSession != session)
+                    return;
+            }
+        }
 
-        var player = _player;
-        var media = _media;
-        var handlers = _handlers;
-        var currentSession = _currentSession;
-        _player = null;
-        _media = null;
-        _handlers = null;
-        _currentSession = null;
+        MediaPlayer? player;
+        Media? media;
+        EventHandlers? handlers;
+        PlaybackSessionToken? currentSession;
+        lock (_trackSync)
+        {
+            player = _player;
+            media = _media;
+            handlers = _handlers;
+            currentSession = _currentSession;
+            _player = null;
+            _media = null;
+            _handlers = null;
+            _currentSession = null;
+        }
+        _trackProbeCancellation?.Cancel();
+        _trackProbeCancellation = null;
+        lock (_trackSync)
+        {
+            _tracks = PlaybackTrackSnapshot.Unresolved;
+            _defaultSubtitleApplied = false;
+        }
 
         if (player is null)
             return;
@@ -432,10 +522,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         if (handlers is not null)
         {
             handlers.Invalidate();
-            player.Playing -= handlers.Playing;
-            player.Vout -= handlers.Vout;
-            player.EncounteredError -= handlers.EncounteredError;
-            player.EndReached -= handlers.EndReached;
+            DetachPlayerHandlers(player, handlers);
         }
 
         DetachPlayerFromView();
@@ -444,6 +531,216 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         media?.Dispose();
         LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=immediate callbacks=detached surface=detach-requested player=released media=released");
     }
+
+    private static void DetachPlayerHandlers(MediaPlayer player, EventHandlers handlers)
+    {
+        player.Playing -= handlers.Playing;
+        player.Vout -= handlers.Vout;
+        player.EncounteredError -= handlers.EncounteredError;
+        player.EndReached -= handlers.EndReached;
+        player.ESAdded -= handlers.ESAdded;
+        player.ESDeleted -= handlers.ESDeleted;
+        player.ESSelected -= handlers.ESSelected;
+    }
+
+    private void StartTrackProbe(PlaybackSessionToken session, MediaPlayer player)
+    {
+        var cancellation = new CancellationTokenSource();
+        _trackProbeCancellation?.Cancel();
+        _trackProbeCancellation = cancellation;
+        _ = ProbeTracksAsync(session, player, cancellation);
+    }
+
+    private async Task ProbeTracksAsync(
+        PlaybackSessionToken session,
+        MediaPlayer player,
+        CancellationTokenSource cancellation)
+    {
+        var deadline = DateTimeOffset.UtcNow + TrackProbeDeadline;
+        try
+        {
+            while (IsCurrentPlayer(session, player))
+            {
+                var atDeadline = DateTimeOffset.UtcNow >= deadline;
+                RefreshVlcTracks(session, player, atDeadline);
+                if (atDeadline)
+                    return;
+
+                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellation.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            Log($"Track probe failed. {exception.GetType().Name}");
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
+    }
+
+    private void RefreshVlcTracks(
+        PlaybackSessionToken session,
+        MediaPlayer player,
+        bool resolvedWhenTracksPresent)
+    {
+        if (!IsCurrentPlayer(session, player))
+            return;
+
+        PlaybackTrackSnapshot snapshot;
+        try
+        {
+            Media? media;
+            lock (_trackSync)
+                media = _media;
+            var mediaTracks = media?.Tracks ?? Array.Empty<MediaTrack>();
+            var audioLanguages = mediaTracks
+                .Where(track => track.TrackType == TrackType.Audio)
+                .ToDictionary(track => track.Id, track => track.Language);
+            var subtitleLanguages = mediaTracks
+                .Where(track => track.TrackType == TrackType.Text)
+                .ToDictionary(track => track.Id, track => track.Language);
+
+            var audio = (player.AudioTrackDescription ?? [])
+                .Where(description => description.Id != -1)
+                .Select((description, index) => new PlaybackTrack(
+                    TrackKind.Audio,
+                    description.Id.ToString(CultureInfo.InvariantCulture),
+                    TrackSelectionPolicy.GetDisplayName(
+                        TrackKind.Audio,
+                        description.Name,
+                        audioLanguages.GetValueOrDefault(description.Id),
+                        index + 1),
+                    audioLanguages.GetValueOrDefault(description.Id),
+                    description.Id == player.AudioTrack))
+                .ToArray();
+            var subtitles = (player.SpuDescription ?? [])
+                .Where(description => description.Id != -1)
+                .Select((description, index) => new PlaybackTrack(
+                    TrackKind.Subtitle,
+                    description.Id.ToString(CultureInfo.InvariantCulture),
+                    TrackSelectionPolicy.GetDisplayName(
+                        TrackKind.Subtitle,
+                        description.Name,
+                        subtitleLanguages.GetValueOrDefault(description.Id),
+                        index + 1),
+                    subtitleLanguages.GetValueOrDefault(description.Id),
+                    description.Id == player.Spu))
+                .ToArray();
+
+            snapshot = new PlaybackTrackSnapshot(
+                audio,
+                subtitles,
+                resolvedWhenTracksPresent || audio.Length > 0 || subtitles.Length > 0);
+        }
+        catch (Exception exception)
+        {
+            Log($"Track enumeration failed. {exception.GetType().Name}");
+            return;
+        }
+
+        PublishTracks(snapshot, "probe", session, player);
+    }
+
+    private void PublishTracks(
+        PlaybackTrackSnapshot snapshot,
+        string source,
+        PlaybackSessionToken session,
+        MediaPlayer player)
+    {
+        bool changed;
+        lock (_trackSync)
+        {
+            if (_currentSession != session || !ReferenceEquals(_player, player))
+                return;
+            changed = !TrackSnapshotsEqual(_tracks, snapshot);
+            if (changed)
+                _tracks = snapshot;
+        }
+
+        if (!changed)
+            return;
+
+        var audioLanguages = string.Join(",", snapshot.Audio.Select(track => track.LanguageCode ?? "unknown"));
+        var subtitleLanguages = string.Join(",", snapshot.Subtitles.Select(track => track.LanguageCode ?? "unknown"));
+        var selectedAudio = snapshot.Audio.FirstOrDefault(track => track.IsSelected)?.Key ?? "none";
+        var selectedSubtitle = snapshot.Subtitles.FirstOrDefault(track => track.IsSelected)?.Key ?? "off";
+        var message = $"event=playback.tracks engine=LibVLC source={source} resolved={snapshot.IsResolved} " +
+                      $"audioCount={snapshot.Audio.Count} subtitleCount={snapshot.Subtitles.Count} " +
+                      $"audioLanguages=[{audioLanguages}] subtitleLanguages=[{subtitleLanguages}] " +
+                      $"selectedAudio={selectedAudio} selectedSubtitle={selectedSubtitle}";
+        Log(message);
+        LifecycleEvent?.Invoke(message);
+        TracksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private bool TryQueueTrackSelection(TrackKind kind, string? key, bool markDefaultApplied)
+    {
+        MediaPlayer? player;
+        PlaybackSessionToken session;
+        lock (_trackSync)
+        {
+            player = _player;
+            if (player is null || _currentSession is not { } currentSession)
+                return false;
+            session = currentSession;
+
+            if (kind == TrackKind.Audio &&
+                !int.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                return false;
+            if (kind == TrackKind.Subtitle && key is not null &&
+                !int.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                return false;
+            if (markDefaultApplied && kind == TrackKind.Subtitle)
+                _defaultSubtitleApplied = true;
+        }
+
+        void ApplySelection()
+        {
+            if (!IsCurrentPlayer(session, player))
+                return;
+
+            try
+            {
+                var selected = kind == TrackKind.Audio
+                    ? player.SetAudioTrack(int.Parse(key!, CultureInfo.InvariantCulture))
+                    : player.SetSpu(key is null ? -1 : int.Parse(key, CultureInfo.InvariantCulture));
+                Log($"event=playback.tracks.select engine=LibVLC kind={kind} key={key ?? "off"} success={selected}");
+                RefreshVlcTracks(session, player, resolvedWhenTracksPresent: true);
+            }
+            catch (Exception exception)
+            {
+                Log($"Track selection failed. engine=LibVLC kind={kind} {exception.GetType().Name}");
+            }
+        }
+
+        try
+        {
+            if (_view?.DispatcherQueue?.TryEnqueue(ApplySelection) == true)
+                return true;
+        }
+        catch (Exception exception)
+        {
+            Log($"Track selection dispatcher enqueue failed. {exception.GetType().Name}");
+        }
+
+        _ = Task.Run(ApplySelection);
+        return true;
+    }
+
+    private bool IsCurrentPlayer(PlaybackSessionToken session, MediaPlayer player)
+    {
+        lock (_trackSync)
+            return _currentSession == session && ReferenceEquals(_player, player) && !_disposed;
+    }
+
+    private static bool TrackSnapshotsEqual(PlaybackTrackSnapshot left, PlaybackTrackSnapshot right) =>
+        left.IsResolved == right.IsResolved &&
+        left.Audio.SequenceEqual(right.Audio) &&
+        left.Subtitles.SequenceEqual(right.Subtitles);
 
     private void PublishState(PlaybackSessionToken session, VlcPlaybackState state)
     {
@@ -457,18 +754,27 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
     private sealed class EventHandlers
     {
         private readonly Action<VlcPlaybackState> _publishState;
+        private readonly Action<bool> _refreshTracks;
+        private readonly Action _onPlaying;
         private int _invalidated;
         private int _firstFrameReported;
 
         public EventHandlers(
             MediaPlayer player,
-            Action<VlcPlaybackState> publishState)
+            Action<VlcPlaybackState> publishState,
+            Action<bool> refreshTracks,
+            Action onPlaying)
         {
             _publishState = publishState;
+            _refreshTracks = refreshTracks;
+            _onPlaying = onPlaying;
             Playing = (_, _) =>
             {
                 if (IsCurrent)
+                {
                     _publishState(VlcPlaybackState.Playing);
+                    _onPlaying();
+                }
             };
             Vout = (_, _) =>
             {
@@ -491,6 +797,21 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
                     Completion.TrySetResult(PlaybackAttemptResult.UnknownFailure);
                 }
             };
+            ESAdded = (_, _) =>
+            {
+                if (IsCurrent)
+                    _refreshTracks(true);
+            };
+            ESDeleted = (_, _) =>
+            {
+                if (IsCurrent)
+                    _refreshTracks(true);
+            };
+            ESSelected = (_, _) =>
+            {
+                if (IsCurrent)
+                    _refreshTracks(true);
+            };
         }
 
         public TaskCompletionSource<PlaybackAttemptResult> Completion { get; } =
@@ -500,6 +821,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, IDisposable, IAsyncDisp
         public EventHandler<MediaPlayerVoutEventArgs> Vout { get; }
         public EventHandler<EventArgs> EncounteredError { get; }
         public EventHandler<EventArgs> EndReached { get; }
+        public EventHandler<MediaPlayerESAddedEventArgs> ESAdded { get; }
+        public EventHandler<MediaPlayerESDeletedEventArgs> ESDeleted { get; }
+        public EventHandler<MediaPlayerESSelectedEventArgs> ESSelected { get; }
 
         private bool IsCurrent => Volatile.Read(ref _invalidated) == 0;
 

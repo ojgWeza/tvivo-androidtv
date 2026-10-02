@@ -36,7 +36,8 @@
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="CatalogCardTemplate">
-            <Grid Width="{Binding Width}" Height="{Binding Height}">
+            <Grid Width="{Binding Width}" Height="{Binding Height}"
+                  ToolTipService.ToolTip="{Binding HoverPreviewText}">
                 <Border CornerRadius="12" Background="{StaticResource AppRaisedSurfaceBrush}">
                     <Grid>
                         <Grid>
@@ -70,7 +71,37 @@
                                            Foreground="{StaticResource AppMutedTextBrush}"
                                            FontSize="11"
                                            TextTrimming="CharacterEllipsis" />
+                                <StackPanel Visibility="{Binding EpgVisibility}"
+                                            Spacing="1"
+                                            AutomationProperties.Name="{Binding EpgAutomationName}">
+                                    <TextBlock Text="{Binding NowText}"
+                                               Visibility="{Binding NowVisibility}"
+                                               Foreground="{StaticResource AppTextBrush}"
+                                               FontSize="11"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <ProgressBar Value="{Binding ProgressValue}"
+                                                 Maximum="100"
+                                                 Height="2"
+                                                 Padding="0"
+                                                 IsHitTestVisible="False"
+                                                 Visibility="{Binding ProgressVisibility}"
+                                                 Foreground="{StaticResource AppAccentBrush}"
+                                                 Background="{StaticResource AppLineBrush}" />
+                                    <TextBlock Text="{Binding NextText}"
+                                               Visibility="{Binding NextVisibility}"
+                                               Foreground="{StaticResource AppMutedTextBrush}"
+                                               FontSize="11"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
                             </StackPanel>
+                        </Border>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8,8,8,0"
+                                Padding="7,3" CornerRadius="8"
+                                Background="{StaticResource AppAccentBrush}"
+                                Visibility="{Binding QualityBadgeVisibility}">
+                            <TextBlock Text="{Binding QualityBadge}"
+                                       Foreground="{StaticResource AppCanvasBrush}"
+                                       FontSize="10" FontWeight="Bold" />
                         </Border>
                     </Grid>
                 </Border>
@@ -78,7 +109,7 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <Grid x:Name="CatalogPageRoot" Padding="48,38,48,64" Background="{StaticResource AppCanvasBrush}" RowSpacing="24">
+    <Grid x:Name="CatalogPageRoot" Padding="48,24,48,64" Background="{StaticResource AppCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -90,16 +121,6 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Spacing="6">
-                <TextBlock x:Name="PageEyebrow"
-                           Style="{StaticResource AppEyebrowTextStyle}"
-                           Text="YOUR LIBRARY" />
-                <TextBlock x:Name="PageTitle"
-                           Foreground="{StaticResource AppTextBrush}"
-                           FontSize="36"
-                           FontWeight="SemiBold"
-                           Text="My Tvivo" />
-            </StackPanel>
             <ContentControl x:Name="ModeButtons"
                             Grid.Column="1"
                             VerticalAlignment="Center"
@@ -124,7 +145,7 @@
             </ContentControl>
         </Grid>
 
-        <Grid Grid.Row="1" ColumnSpacing="18" MinHeight="52">
+        <Grid Grid.Row="1" ColumnSpacing="18">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -157,21 +178,6 @@
                             Click="ClearSearch_Click" />
                 </Grid>
             </Border>
-            <StackPanel x:Name="SortPanel" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" HorizontalAlignment="Right">
-                <TextBlock x:Name="SortLabel" Foreground="{StaticResource AppMutedTextBrush}"
-                           FontSize="12"
-                           VerticalAlignment="Center"
-                           Text="Sort categories" />
-                <ComboBox x:Name="CategorySortBox"
-                          MinWidth="180"
-                          SelectionChanged="CategorySortBox_SelectionChanged">
-                    <ComboBoxItem Content="Most visited" Tag="Visited" IsSelected="True" />
-                    <ComboBoxItem Content="Alphabetical (A-Z)" Tag="AlphabeticalAsc" />
-                    <ComboBoxItem Content="Alphabetical (Z-A)" Tag="AlphabeticalDesc" />
-                    <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
-                    <ComboBoxItem Content="Recently updated" Tag="RecentlyUpdated" />
-                </ComboBox>
-            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="2">
@@ -230,6 +236,16 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
+                    <StackPanel x:Name="SearchResultsPanel" Grid.Row="0" Visibility="Collapsed" Spacing="12">
+                        <Grid>
+                            <TextBlock x:Name="SearchResultsCount" Foreground="{StaticResource AppTextBrush}"
+                                       FontSize="22" FontWeight="SemiBold" />
+                        </Grid>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                      HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
+                            <StackPanel x:Name="SearchCategoryChips" Orientation="Horizontal" Spacing="8" />
+                        </ScrollViewer>
+                    </StackPanel>
                     <Grid x:Name="OpenShelfHeader" Grid.Row="0" Visibility="Collapsed" ColumnSpacing="18">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -267,18 +283,6 @@
                         </ListView.ItemContainerStyle>
                         <ListView.Header>
                         <StackPanel Spacing="26">
-                            <InfoBar x:Name="RefreshInfoBar"
-                                     IsOpen="False"
-                                     IsClosable="False"
-                                     Severity="Informational"
-                                     Message="Refreshing...">
-                                <InfoBar.ActionButton>
-                                    <Button x:Name="RefreshRetryButton"
-                                            Content="Retry"
-                                            Visibility="Collapsed"
-                                            Click="Retry_Click" />
-                                </InfoBar.ActionButton>
-                            </InfoBar>
                             <Border x:Name="SpotlightPanel"
                                     Padding="30,22"
                                     CornerRadius="18">
@@ -359,10 +363,21 @@
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <Button Content="{Binding Title}"
-                                                        Style="{StaticResource AppShelfTitleButtonStyle}"
+                                                <Button Style="{StaticResource AppShelfTitleButtonStyle}"
                                                         Click="ShelfTitle_Click"
-                                                        Tag="{Binding}" />
+                                                        Tag="{Binding}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <TextBlock Text="{Binding Title}" />
+                                                        <Border Padding="6,2" CornerRadius="7"
+                                                                Background="{StaticResource AppAccentBrush}"
+                                                                VerticalAlignment="Center"
+                                                                Visibility="{Binding NewSinceLastVisitVisibility}"
+                                                                AutomationProperties.Name="New since last visit">
+                                                            <TextBlock Text="NEW" FontSize="10" FontWeight="Bold"
+                                                                       Foreground="{StaticResource AppCanvasBrush}" />
+                                                        </Border>
+                                                    </StackPanel>
+                                                </Button>
                                                 <Button Grid.Column="1"
                                                         Content="{Binding CountLabel}"
                                                         Tag="{Binding}"
@@ -427,6 +442,25 @@
                     </StackPanel>
             </Grid>
         </Grid>
+
+        <InfoBar x:Name="RefreshInfoBar"
+                 Grid.Row="0"
+                 Grid.RowSpan="3"
+                 VerticalAlignment="Bottom"
+                 HorizontalAlignment="Center"
+                 MaxWidth="640"
+                 Margin="0,0,0,8"
+                 IsOpen="False"
+                 IsClosable="False"
+                 Severity="Informational"
+                 Message="Refreshing...">
+            <InfoBar.ActionButton>
+                <Button x:Name="RefreshRetryButton"
+                        Content="Retry"
+                        Visibility="Collapsed"
+                        Click="Retry_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
 
         <Grid x:Name="FirstLoadTakeover"
               Grid.Row="0"

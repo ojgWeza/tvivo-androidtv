@@ -5,41 +5,84 @@
     <Grid Padding="52,40" Background="{StaticResource AppCanvasBrush}">
         <StackPanel MaxWidth="640" Spacing="14">
             <TextBlock Foreground="{StaticResource AppAccentBrush}" FontSize="13" FontWeight="Bold"
-                       CharacterSpacing="180" Text="ACCOUNT" />
+                       CharacterSpacing="180" Text="SETTINGS" />
             <TextBlock Foreground="{StaticResource AppTextBrush}" FontSize="38" FontWeight="SemiBold"
-                       Text="Account &amp; settings" />
-            <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24" Margin="0,10,0,0">
-                <StackPanel Spacing="14">
-                    <StackPanel Spacing="2">
-                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Signed in as" />
-                        <TextBlock x:Name="DisplayNameText" Foreground="{StaticResource AppTextBrush}" FontSize="20" FontWeight="SemiBold" />
-                    </StackPanel>
-                    <StackPanel Spacing="2">
-                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Username" />
-                        <TextBlock x:Name="UsernameText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
-                    </StackPanel>
-                    <StackPanel Spacing="2">
-                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Server" />
-                        <TextBlock x:Name="ServerText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
-                    </StackPanel>
-                    <StackPanel Spacing="2">
-                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Max connections" />
-                        <TextBlock x:Name="MaxConnectionsText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
-                    </StackPanel>
-                    <StackPanel Spacing="2">
-                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Subscription expiry" />
-                        <TextBlock x:Name="ExpiryText" FontSize="16" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,10,0,0">
-                <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}"
-                        Content="Sign out" Click="SignOutButton_Click" />
-                <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
-                        Content="Change user" Click="ChangeUserButton_Click" />
-                <Button x:Name="ExitButton" Style="{StaticResource AppQuietButtonStyle}"
-                        Content="Exit Tvivo" Click="ExitButton_Click" />
+                       Text="Settings" />
+
+            <StackPanel Orientation="Horizontal" Spacing="28" Margin="0,6,0,0">
+                <Button x:Name="LibraryTabButton" Content="Library" Tag="Library"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
+                        Click="SettingsTab_Click" />
+                <Button x:Name="PlayerTabButton" Content="Player" Tag="Player"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
+                        Click="SettingsTab_Click" />
+                <Button x:Name="AccountTabButton" Content="Account" Tag="Account"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
+                        Click="SettingsTab_Click" />
             </StackPanel>
+
+            <StackPanel x:Name="AccountTabPanel" Spacing="14" Visibility="Collapsed">
+                <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="2">
+                            <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Signed in as" />
+                            <TextBlock x:Name="DisplayNameText" Foreground="{StaticResource AppTextBrush}" FontSize="20" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Username" />
+                            <TextBlock x:Name="UsernameText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Server" />
+                            <TextBlock x:Name="ServerText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Max connections" />
+                            <TextBlock x:Name="MaxConnectionsText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Subscription expiry" />
+                            <TextBlock x:Name="ExpiryText" FontSize="16" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}"
+                            Content="Sign out" Click="SignOutButton_Click" />
+                    <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
+                            Content="Change user" Click="ChangeUserButton_Click" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel x:Name="PlayerTabPanel" Visibility="Collapsed">
+                <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
+                    <StackPanel Spacing="10">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Playback engine" />
+                        <ComboBox x:Name="PlaybackEngineSelector"
+                                  MinWidth="220"
+                                  SelectionChanged="PlaybackEngineSelector_SelectionChanged"
+                                  AutomationProperties.Name="Playback engine">
+                            <ComboBoxItem Content="Native player" Tag="Native" />
+                            <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel x:Name="LibraryTabPanel" Visibility="Collapsed">
+                <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
+                    <StackPanel Spacing="10">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Last catalog refresh" />
+                        <TextBlock x:Name="LastRefreshText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                        <Button x:Name="RefreshCatalogButton" Style="{StaticResource AppQuietButtonStyle}"
+                                HorizontalAlignment="Left" Content="Refresh catalog now"
+                                Click="RefreshCatalogButton_Click" />
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" TextWrapping="Wrap"
+                                   Text="Re-downloads your provider's catalog. Favorites, resume positions and visit history are kept. Large catalogs can take a few minutes." />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
             <TextBlock x:Name="ErrorText" Foreground="#FFFF8A80" FontSize="15" TextWrapping="Wrap"
                        Visibility="Collapsed" />
         </StackPanel>

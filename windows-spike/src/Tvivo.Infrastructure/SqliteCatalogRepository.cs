@@ -4,11 +4,14 @@ using Tvivo.Core;
 
 namespace Tvivo.Infrastructure;
 
-public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount);
+public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount, DateTimeOffset? LatestAddedAt = null);
+public sealed record CatalogCategoryMatchCount(string CategoryId, int MatchCount);
+public enum PlaybackProgressState { Unwatched, InProgress, Finished }
+public sealed record PlaybackProgress(string ItemId, PlaybackProgressState State, long ResumeMs, long? DurationMs);
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 15;
+    private const int SchemaVersion = 16;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -22,7 +25,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -79,6 +82,19 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 14)
                 MigrateFavorites(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 15)
+                MigrateMediaProgress(connection);
+        }
+    }
+
+    private static void MigrateMediaProgress(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "CREATE TABLE media_progress(account_id TEXT NOT NULL,kind TEXT NOT NULL,item_id TEXT NOT NULL,series_id TEXT NULL,resume_ms INTEGER NOT NULL DEFAULT 0,duration_ms INTEGER NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,kind,item_id)); CREATE INDEX media_progress_series ON media_progress(account_id,series_id); INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) SELECT sp.account_id,'episode',sp.last_episode_id,sp.series_id,CASE WHEN sp.finished=0 THEN COALESCE(i.resume_ms,0) ELSE 0 END,NULL,sp.finished,sp.updated_at FROM series_playback sp LEFT JOIN items i ON i.account_id=sp.account_id AND i.type='Series' AND i.id=sp.series_id; PRAGMA user_version=16;");
+        transaction.Commit();
     }
 
     private static void MigrateFavorites(SqliteConnection connection)
@@ -326,6 +342,22 @@ public sealed class SqliteCatalogRepository : IDisposable
         return new(rows, total);
     }
 
+    public IReadOnlyList<CatalogCategoryMatchCount> GetCategoryMatchCounts(ProviderAccount account, CatalogItemType type, string filter)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT category_id,COUNT(*) FROM items WHERE account_id=$a AND type=$type AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') GROUP BY category_id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
+        command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+        using var reader = command.ExecuteReader();
+        var counts = new List<CatalogCategoryMatchCount>();
+        while (reader.Read())
+            counts.Add(new(reader.GetString(0), reader.GetInt32(1)));
+        return counts;
+    }
+
     public IReadOnlyList<Channel> GetAllChannels(
         ProviderAccount account,
         ProviderConnection? providerConnection,
@@ -358,12 +390,13 @@ public sealed class SqliteCatalogRepository : IDisposable
             WITH ranked AS (
                 SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast],
                        COUNT(*) OVER (PARTITION BY category_id) AS total_count,
+                       MAX(added_at) OVER (PARTITION BY category_id) AS latest_added_at,
                        ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY title, id) AS row_number
                 FROM items
                 WHERE account_id=$a AND type=$type
                   AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\')
             )
-            SELECT id, category_id, title, artwork, extension, added_at, total_count, year, rating, genre, plot, [cast]
+            SELECT id, category_id, title, artwork, extension, added_at, total_count, latest_added_at, year, rating, genre, plot, [cast]
             FROM ranked
             WHERE row_number <= $limit
             ORDER BY category_id, title, id;
@@ -376,6 +409,7 @@ public sealed class SqliteCatalogRepository : IDisposable
 
         var pages = new Dictionary<string, List<Channel>>(StringComparer.Ordinal);
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var latestAddedAt = new Dictionary<string, DateTimeOffset?>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -389,18 +423,26 @@ public sealed class SqliteCatalogRepository : IDisposable
                 rows = new List<Channel>();
                 pages[categoryId] = rows;
                 counts[categoryId] = reader.GetInt32(6);
+                var latestAddedMilliseconds = reader.IsDBNull(7) ? 0 : reader.GetInt64(7);
+                latestAddedAt[categoryId] = latestAddedMilliseconds > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(latestAddedMilliseconds)
+                    : null;
             }
             var title = CleanTitle(reader.GetString(2));
-            rows.Add(new(account.AccountId, id, categoryId, title, title, artwork, added, null, StreamSourceFor(connection, type, id, extension), ReadChannelMetadata(reader, 7)));
+            rows.Add(new(account.AccountId, id, categoryId, title, title, artwork, added, null, StreamSourceFor(connection, type, id, extension), ReadChannelMetadata(reader, 8)));
         }
 
-        return pages.ToDictionary(pair => pair.Key, pair => new CatalogPage(pair.Value, counts[pair.Key]), StringComparer.Ordinal);
+        return pages.ToDictionary(pair => pair.Key,
+            pair => new CatalogPage(pair.Value, counts[pair.Key], latestAddedAt[pair.Key]), StringComparer.Ordinal);
     }
 
-    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 50, string? filter = null)
-        => GetOrderedItems(account, type, connection, "added_at > 0", "added_at DESC, id ASC", Math.Clamp(limit, 0, 50), filter);
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 200, string? filter = null)
+        => GetOrderedItems(account, type, connection,
+            "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
+            "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC, id ASC",
+            Math.Clamp(limit, 0, 200), filter, useRecentlyAddedSortKey: true);
 
-    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 50, string? filter = null)
+    public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, ProviderConnection? connection = null, int limit = 200, string? filter = null)
         => Enum.GetValues<CatalogItemType>()
             .SelectMany(type => GetRecentlyAdded(account, type, connection, limit, filter))
             .OrderByDescending(item => item.AddedAt)
@@ -474,19 +516,6 @@ public sealed class SqliteCatalogRepository : IDisposable
         return selected.UnorderedItems.OrderByDescending(item => item.Priority).Select(item => item.Element).ToArray();
     }
 
-    public IReadOnlyList<string> GetFeaturedSeriesTitles(ProviderAccount account, int limit)
-    {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT title FROM items WHERE account_id=$account AND type='Series' ORDER BY CAST(NULLIF(TRIM(rating), '') AS REAL) DESC, title COLLATE NOCASE LIMIT $limit";
-        command.Parameters.AddWithValue("$account", account.AccountId);
-        command.Parameters.AddWithValue("$limit", Math.Max(0, limit));
-        using var reader = command.ExecuteReader();
-        var titles = new List<string>();
-        while (reader.Read()) titles.Add(reader.GetString(0));
-        return titles;
-    }
-
     public void SetFavorite(ProviderAccount account, CatalogItemType type, string id, bool isFavorite)
     {
         using var connection = Open();
@@ -540,6 +569,118 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public IReadOnlyDictionary<string, PlaybackProgress> GetEpisodeProgressForSeries(ProviderAccount account, string seriesId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT item_id,resume_ms,duration_ms,finished FROM media_progress WHERE account_id=$a AND kind='episode' AND series_id=$series";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$series", seriesId);
+        using var reader = command.ExecuteReader();
+        var rows = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            var resume = Math.Max(0, reader.GetInt64(1));
+            var finished = reader.GetInt32(3) != 0;
+            rows[reader.GetString(0)] = new(reader.GetString(0), finished ? PlaybackProgressState.Finished : resume > 0 ? PlaybackProgressState.InProgress : PlaybackProgressState.Unwatched,
+                finished ? 0 : resume, reader.IsDBNull(2) ? null : Math.Max(0, reader.GetInt64(2)));
+        }
+        return rows;
+    }
+
+    public IReadOnlyDictionary<string, PlaybackProgress> GetPlaybackProgress(ProviderAccount account, string kind, IReadOnlyCollection<string> ids)
+    {
+        if (ids.Count == 0) return new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        var keys = ids.Distinct(StringComparer.Ordinal).ToArray();
+        var parameters = string.Join(",", keys.Select((_, index) => "$id" + index));
+        command.CommandText = kind.Equals("series", StringComparison.OrdinalIgnoreCase)
+            ? $"SELECT sp.series_id,mp.resume_ms,mp.duration_ms,mp.finished,i.resume_ms FROM series_playback sp LEFT JOIN media_progress mp ON mp.account_id=sp.account_id AND mp.kind='episode' AND mp.item_id=sp.last_episode_id AND mp.series_id=sp.series_id LEFT JOIN items i ON i.account_id=sp.account_id AND i.type='Series' AND i.id=sp.series_id WHERE sp.account_id=$a AND sp.series_id IN ({parameters})"
+            : $"SELECT item_id,resume_ms,duration_ms,finished,NULL FROM media_progress WHERE account_id=$a AND kind=$kind AND item_id IN ({parameters})";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        if (!kind.Equals("series", StringComparison.OrdinalIgnoreCase)) command.Parameters.AddWithValue("$kind", kind.ToLowerInvariant());
+        for (var index = 0; index < keys.Length; index++) command.Parameters.AddWithValue("$id" + index, keys[index]);
+        using var reader = command.ExecuteReader();
+        var rows = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            var fallbackResume = reader.IsDBNull(4) ? 0 : Math.Max(0, reader.GetInt64(4));
+            var resume = reader.IsDBNull(1) ? fallbackResume : Math.Max(0, reader.GetInt64(1));
+            var finished = !reader.IsDBNull(3) && reader.GetInt32(3) != 0;
+            var duration = reader.IsDBNull(2) ? (long?)null : Math.Max(0, reader.GetInt64(2));
+            rows[id] = new(id, finished ? PlaybackProgressState.Finished : resume > 0 ? PlaybackProgressState.InProgress : PlaybackProgressState.Unwatched,
+                finished ? 0 : resume, duration);
+        }
+        return rows;
+    }
+
+    public SeriesEpisode? SelectResumeEpisode(ProviderAccount account, SeriesDetails details)
+    {
+        var progress = GetEpisodeProgressForSeries(account, details.Id);
+        var last = GetSeriesPlayback(account, details.Id).EpisodeId;
+        var inProgress = last is not null && progress.TryGetValue(last, out var lastProgress) && lastProgress.State == PlaybackProgressState.InProgress
+            ? last : GetLastInProgressEpisodeId(account, details.Id);
+        return SeriesEpisodeResolver.Resolve(details, progress.Where(pair => pair.Value.State == PlaybackProgressState.Finished)
+            .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal), inProgress);
+    }
+
+    private string? GetLastInProgressEpisodeId(ProviderAccount account, string seriesId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT item_id FROM media_progress WHERE account_id=$a AND kind='episode' AND series_id=$series AND finished=0 AND resume_ms>0 ORDER BY updated_at DESC,item_id LIMIT 1";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$series", seriesId);
+        return command.ExecuteScalar() as string;
+    }
+
+    public void SaveProgress(ProviderAccount account, string kind, string itemId, string? seriesId, long resumeMs, long? durationMs, bool finished)
+    {
+        kind = kind.ToLowerInvariant();
+        if (kind is not ("movie" or "episode")) throw new ArgumentOutOfRangeException(nameof(kind));
+        var duration = durationMs is > 0 ? durationMs : null;
+        var position = duration is { } measuredDuration ? Math.Clamp(resumeMs, 0, measuredDuration) : Math.Max(0, resumeMs);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,$kind,$id,$series,$resume,$duration,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=CASE WHEN media_progress.finished=1 OR excluded.finished=1 THEN 0 ELSE excluded.resume_ms END,duration_ms=COALESCE(excluded.duration_ms,media_progress.duration_ms),finished=CASE WHEN media_progress.finished=1 OR excluded.finished=1 THEN 1 ELSE 0 END,updated_at=excluded.updated_at",
+            ("$a", account.AccountId), ("$kind", kind), ("$id", itemId), ("$series", (object?)seriesId ?? DBNull.Value), ("$resume", finished ? 0 : position), ("$duration", (object?)duration ?? DBNull.Value), ("$finished", finished ? 1 : 0), ("$now", now));
+        var saved = QueryProgressFinished(connection, transaction, account.AccountId, kind, itemId);
+        if (kind == "movie")
+            Execute(connection, transaction, "UPDATE items SET resume_ms=$resume,resume_updated_at=$now WHERE account_id=$a AND type='Movie' AND id=$id", ("$resume", saved ? 0 : position), ("$now", now), ("$a", account.AccountId), ("$id", itemId));
+        else if (!string.IsNullOrEmpty(seriesId))
+        {
+            Execute(connection, transaction, "UPDATE items SET resume_ms=$resume,resume_updated_at=$now WHERE account_id=$a AND type='Series' AND id=$series", ("$resume", saved ? 0 : position), ("$now", now), ("$a", account.AccountId), ("$series", seriesId));
+            Execute(connection, transaction, "INSERT INTO series_playback(account_id,series_id,last_episode_id,finished,updated_at) VALUES($a,$series,$id,$finished,$now) ON CONFLICT(account_id,series_id) DO UPDATE SET last_episode_id=excluded.last_episode_id,finished=excluded.finished,updated_at=excluded.updated_at", ("$a", account.AccountId), ("$series", seriesId), ("$id", itemId), ("$finished", saved ? 1 : 0), ("$now", now));
+        }
+        transaction.Commit();
+    }
+
+    public void MarkEpisodeWatched(ProviderAccount account, string seriesId, string episodeId) => SetEpisodeWatched(account, seriesId, episodeId, true);
+    public void MarkEpisodeUnwatched(ProviderAccount account, string seriesId, string episodeId) => SetEpisodeWatched(account, seriesId, episodeId, false);
+
+    private void SetEpisodeWatched(ProviderAccount account, string seriesId, string episodeId, bool watched)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,'episode',$episode,$series,0,NULL,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=0,finished=excluded.finished,updated_at=excluded.updated_at", ("$a", account.AccountId), ("$episode", episodeId), ("$series", seriesId), ("$finished", watched ? 1 : 0), ("$now", now));
+        Execute(connection, transaction, "UPDATE series_playback SET finished=$finished,updated_at=$now WHERE account_id=$a AND series_id=$series AND last_episode_id=$episode", ("$finished", watched ? 1 : 0), ("$now", now), ("$a", account.AccountId), ("$series", seriesId), ("$episode", episodeId));
+        Execute(connection, transaction, "UPDATE items SET resume_ms=CASE WHEN EXISTS(SELECT 1 FROM series_playback sp JOIN media_progress mp ON mp.account_id=sp.account_id AND mp.kind='episode' AND mp.item_id=sp.last_episode_id WHERE sp.account_id=$a AND sp.series_id=$series AND mp.finished=0) THEN (SELECT resume_ms FROM media_progress mp JOIN series_playback sp ON sp.account_id=mp.account_id AND sp.last_episode_id=mp.item_id WHERE mp.account_id=$a AND mp.kind='episode' AND mp.series_id=$series AND mp.finished=0) ELSE 0 END WHERE account_id=$a AND type='Series' AND id=$series", ("$a", account.AccountId), ("$series", seriesId));
+        transaction.Commit();
+    }
+
+    private static bool QueryProgressFinished(SqliteConnection connection, SqliteTransaction transaction, string accountId, string kind, string itemId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT finished FROM media_progress WHERE account_id=$a AND kind=$kind AND item_id=$id";
+        command.Parameters.AddWithValue("$a", accountId); command.Parameters.AddWithValue("$kind", kind); command.Parameters.AddWithValue("$id", itemId);
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
     public void RecordVisit(ProviderAccount account, CatalogItemType type, string id)
     {
         using var connection = Open();
@@ -565,22 +706,21 @@ public sealed class SqliteCatalogRepository : IDisposable
 
     public void UpdateSeriesPlayback(ProviderAccount account, string seriesId, string episodeId, bool finished)
     {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO series_playback(account_id,series_id,last_episode_id,finished,updated_at) VALUES($a,$series,$episode,$finished,$now) ON CONFLICT(account_id,series_id) DO UPDATE SET last_episode_id=excluded.last_episode_id,finished=excluded.finished,updated_at=excluded.updated_at";
-        command.Parameters.AddWithValue("$a", account.AccountId);
-        command.Parameters.AddWithValue("$series", seriesId);
-        command.Parameters.AddWithValue("$episode", episodeId);
-        command.Parameters.AddWithValue("$finished", finished ? 1 : 0);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        command.ExecuteNonQuery();
+        var progress = GetEpisodeProgressForSeries(account, seriesId);
+        progress.TryGetValue(episodeId, out var existing);
+        SaveProgress(account, "episode", episodeId, seriesId,
+            existing?.State == PlaybackProgressState.InProgress ? existing.ResumeMs : 0,
+            existing?.DurationMs, finished);
     }
 
-    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter = null)
+    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter = null, bool useRecentlyAddedSortKey = false)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        var addedAt = useRecentlyAddedSortKey
+            ? "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END)"
+            : "added_at";
+        command.CommandText = $"SELECT id,category_id,title,artwork,extension,{addedAt},year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));

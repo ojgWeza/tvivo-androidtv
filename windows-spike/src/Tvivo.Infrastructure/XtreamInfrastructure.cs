@@ -1,4 +1,5 @@
 using System.Net;
+using System.IO.Compression;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,15 +9,23 @@ using Tvivo.Core;
 
 namespace Tvivo.Infrastructure;
 
-public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider, IMovieInfoProvider
+public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider, IMovieInfoProvider, IEpgProvider
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _epgHttp;
     private readonly Dictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
+    private readonly Action<string>? _epgLog;
 
-    public XtreamCatalogProvider(HttpClient? httpClient = null)
+    public XtreamCatalogProvider(HttpClient? httpClient = null, HttpClient? epgHttpClient = null, Action<string>? epgLog = null)
     {
-        _http = httpClient ?? new HttpClient();
+        _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        _epgHttp = epgHttpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        _epgLog = epgLog;
     }
 
     public async Task<AuthenticationResult> AuthenticateAsync(ProviderConnection connection, CancellationToken cancellationToken = default)
@@ -160,8 +169,31 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default) =>
         GetArrayAsync(account, CategoryAction(type), null, MapGroup, cancellationToken);
 
-    public Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default) =>
-        GetArrayAsync(account, ItemAction(type), groupId, (value, accountId) => MapChannel(value, accountId, type), cancellationToken);
+    public async Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default)
+    {
+        var channels = await GetArrayAsync(account, ItemAction(type), groupId, (value, accountId) => MapChannel(value, accountId, type), cancellationToken).ConfigureAwait(false);
+        if (type == CatalogItemType.Live)
+        {
+            var incoming = channels
+                .Select(channel => channel.Metadata.TryGetValue("epg_channel_id", out var epgId)
+                    ? new EpgChannelMap(channel.Source.StreamId, epgId)
+                    : null)
+                .Where(map => map is not null)
+                .Cast<EpgChannelMap>()
+                .ToArray();
+            if (groupId is null)
+                _epgMaps[account.AccountId] = incoming;
+            else
+            {
+                var merged = _epgMaps.TryGetValue(account.AccountId, out var existing)
+                    ? existing.ToDictionary(map => map.StreamId, StringComparer.Ordinal)
+                    : new Dictionary<string, EpgChannelMap>(StringComparer.Ordinal);
+                foreach (var map in incoming) merged[map.StreamId] = map;
+                _epgMaps[account.AccountId] = merged.Values.ToArray();
+            }
+        }
+        return channels;
+    }
 
     private async Task<IReadOnlyList<T>> GetArrayAsync<T>(ProviderAccount account, string action, string? groupId,
         Func<JsonElement, string, T?> map, CancellationToken cancellationToken) where T : class
@@ -203,9 +235,12 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         var extension = type == CatalogItemType.Live
             ? JsonValue.String(value, "ext")?.Trim().TrimStart('.')
             : JsonValue.String(value, "container_extension")?.Trim().TrimStart('.');
+        var metadata = new Dictionary<string, string>();
+        if (type == CatalogItemType.Live && JsonValue.String(value, "epg_channel_id")?.Trim() is { Length: > 0 } epgChannelId)
+            metadata["epg_channel_id"] = epgChannelId;
         return new Channel(accountId, id, groupId, name, name.Trim(), icon, added, order,
             new StreamSource(id, StreamKindFor(type), string.IsNullOrEmpty(extension) ? null : extension),
-            new Dictionary<string, string>());
+            metadata);
     }
 
     private static string CategoryAction(CatalogItemType type) => type switch
@@ -229,6 +264,114 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         _ => StreamKind.Live,
     };
 
+    public Task<IReadOnlyList<EpgChannelMap>> GetEpgChannelMapAsync(ProviderAccount account, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_epgMaps.TryGetValue(account.AccountId, out var maps)
+            ? maps
+            : (IReadOnlyList<EpgChannelMap>)Array.Empty<EpgChannelMap>());
+    }
+
+    public async Task<EpgProbeResult> ProbeAsync(
+        ProviderAccount account,
+        ProviderConnection connection,
+        string streamId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _epgHttp.GetAsync(XtreamRequest.ShortEpgUri(connection, streamId), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            LogEpg("player_api.php", "get_short_epg", (int)response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+                return new EpgProbeResult(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotImplemented
+                    ? EpgCapability.Unavailable : EpgCapability.Failed, (int)response.StatusCode);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var programmes = await XtreamEpgJsonParser.ParseAsync(stream, streamId, cancellationToken).ConfigureAwait(false);
+            return new EpgProbeResult(programmes.Count == 0 ? EpgCapability.Empty : EpgCapability.Usable,
+                (int)response.StatusCode, programmes.Count);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            LogEpg("player_api.php", "get_short_epg", null);
+            return new EpgProbeResult(EpgCapability.Failed);
+        }
+    }
+
+    public async Task<Stream> OpenProgrammeStreamAsync(
+        ProviderAccount account,
+        ProviderConnection connection,
+        CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage? response = null;
+        try
+        {
+            response = await _epgHttp.GetAsync(XtreamRequest.XmltvUri(connection), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            LogEpg("xmltv.php", "bulk", (int)response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+            {
+                var status = (int)response.StatusCode;
+                response.Dispose();
+                throw new EpgProviderHttpException(status);
+            }
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            return new ResponseContentStream(response, stream);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (EpgProviderHttpException)
+        {
+            throw;
+        }
+        catch
+        {
+            response?.Dispose();
+            LogEpg("xmltv.php", "bulk", null);
+            throw new EpgProviderHttpException(null);
+        }
+    }
+
+    private void LogEpg(string endpoint, string action, int? status)
+    {
+        _epgLog?.Invoke($"EPG endpoint={endpoint} action={action} status={(status?.ToString(CultureInfo.InvariantCulture) ?? "transport_failure")}");
+    }
+
+    private sealed class ResponseContentStream(HttpResponseMessage response, Stream inner) : Stream
+    {
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => inner.Read(buffer);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => inner.ReadAsync(buffer, offset, count, cancellationToken);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => inner.ReadAsync(buffer, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+                response.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+}
+
+public sealed class EpgProviderHttpException(int? statusCode) : IOException("The EPG request failed.")
+{
+    public int? StatusCode { get; } = statusCode;
 }
 
 public static class AccountIdentity
@@ -251,8 +394,13 @@ public static class StreamUrlBuilder
     public static string Series(ProviderEndpoint endpoint, string username, string password, string streamId, string? extension) =>
         Build(endpoint, username, password, "series", streamId, extension);
 
-    public static string Redact(string value) => System.Text.RegularExpressions.Regex.Replace(
-        value, @"/(live|movie|series)/([^/]+)/([^/]+)/", "/$1/***/***/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    public static string Redact(string value)
+    {
+        var redacted = System.Text.RegularExpressions.Regex.Replace(
+            value, @"/(live|movie|series)/([^/]+)/([^/]+)/", "/$1/***/***/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return System.Text.RegularExpressions.Regex.Replace(
+            redacted, @"([?&](?:username|password)=)[^&]*", "$1***", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
 
     private static string Build(ProviderEndpoint endpoint, string username, string password, string type, string id, string? extension)
     {
@@ -326,6 +474,100 @@ internal static class XtreamRequest
             Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_vod_info&vod_id={WebUtility.UrlEncode(movieId)}"
         };
         return builder.Uri;
+    }
+
+    public static Uri ShortEpgUri(ProviderConnection connection, string streamId)
+    {
+        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "player_api.php");
+        builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_short_epg&stream_id={WebUtility.UrlEncode(streamId)}&limit=20";
+        return builder.Uri;
+    }
+
+    public static Uri XmltvUri(ProviderConnection connection)
+    {
+        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "xmltv.php");
+        builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}";
+        return builder.Uri;
+    }
+}
+
+public static class XtreamEpgJsonParser
+{
+    public static Task<IReadOnlyList<EpgProgramme>> ParseAsync(Stream source, CancellationToken cancellationToken = default) =>
+        ParseAsync(source, string.Empty, cancellationToken);
+
+    public static async Task<IReadOnlyList<EpgProgramme>> ParseAsync(Stream source, string fallbackChannelId, CancellationToken cancellationToken = default)
+    {
+        using var document = await JsonDocument.ParseAsync(source, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        var array = root.ValueKind == JsonValueKind.Array
+            ? root
+            : root.ValueKind == JsonValueKind.Object && root.TryGetProperty("epg_listings", out var listings) && listings.ValueKind == JsonValueKind.Array
+                ? listings
+                : root.ValueKind == JsonValueKind.Object && root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array
+                    ? data
+                    : default;
+        if (array.ValueKind != JsonValueKind.Array) return Array.Empty<EpgProgramme>();
+
+        var result = new List<EpgProgramme>();
+        foreach (var item in array.EnumerateArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            var channelId = FirstText(item, "epg_id", "channel_id", "channel")?.Trim();
+            if (string.IsNullOrWhiteSpace(channelId)) channelId = fallbackChannelId.Trim();
+            if (string.IsNullOrWhiteSpace(channelId)) continue;
+            if (!TryTime(item, "start_timestamp", "start", out var start) ||
+                !TryTime(item, "stop_timestamp", "stop", out var end) || end <= start) continue;
+            var title = DecodeProviderText(FirstText(item, "title", "name"));
+            if (string.IsNullOrWhiteSpace(title)) continue;
+            var description = DecodeProviderText(FirstText(item, "description", "desc"));
+            result.Add(new EpgProgramme(channelId, start, end, title.Trim(), string.IsNullOrWhiteSpace(description) ? null : description.Trim()));
+        }
+        return result;
+    }
+
+    public static string? DecodeProviderText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var text = value.Trim();
+        try
+        {
+            var bytes = Convert.FromBase64String(text);
+            var decoded = Encoding.UTF8.GetString(bytes);
+            if (bytes.Length > 0 && !decoded.Contains('\uFFFD') &&
+                decoded.All(character => !char.IsControl(character) || character is '\r' or '\n' or '\t'))
+                return decoded;
+        }
+        catch (FormatException)
+        {
+        }
+        return text;
+    }
+
+    private static string? FirstText(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var text = JsonValue.String(item, name);
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+        }
+        return null;
+    }
+
+    private static bool TryTime(JsonElement item, string unixName, string textName, out DateTimeOffset value)
+    {
+        value = default;
+        var unix = JsonValue.String(item, unixName);
+        if (long.TryParse(unix, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds))
+        {
+            value = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            return true;
+        }
+        var text = JsonValue.String(item, textName)?.Trim();
+        if (string.IsNullOrWhiteSpace(text) || !System.Text.RegularExpressions.Regex.IsMatch(text, @"(?:Z|[+-]\d{2}:?\d{2})$", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            return false;
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
     }
 }
 

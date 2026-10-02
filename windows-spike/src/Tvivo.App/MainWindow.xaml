@@ -44,7 +44,6 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <Button x:Name="BrandNavigation"
@@ -80,59 +79,64 @@
                             ToolTipService.ToolTip="{x:Null}" />
                 </StackPanel>
 
-                <Border Grid.Column="2"
-                        MinWidth="230"
-                        MaxWidth="320"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        BorderBrush="{StaticResource AppLineBrush}"
-                        BorderThickness="1"
-                        Background="{StaticResource AppPanelSurfaceBrush}"
-                        CornerRadius="22"
-                        Padding="12,8">
-                    <Grid ColumnSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="⌕"
-                                   Foreground="{StaticResource AppMutedTextBrush}"
-                                   VerticalAlignment="Center" />
-                        <TextBox x:Name="TopSearchBox"
-                                 Grid.Column="1"
-                                 PlaceholderText="Search current catalog"
-                                 Background="Transparent"
-                                 BorderThickness="0"
-                                 Foreground="{StaticResource AppTextBrush}"
-                                 TextChanged="TopSearchBox_TextChanged"
-                                 ToolTipService.ToolTip="{x:Null}" />
-                        <Button x:Name="TopClearSearchButton"
-                                Grid.Column="2"
-                                Content="×"
-                                Padding="4,0"
-                                Visibility="Collapsed"
-                                Click="TopClearSearchButton_Click"
-                                ToolTipService.ToolTip="{x:Null}" />
-                    </Grid>
-                </Border>
+                <StackPanel x:Name="CatalogSearchBar" Grid.Column="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <Border Width="320"
+                            BorderBrush="{StaticResource AppLineBrush}"
+                            BorderThickness="1"
+                            Background="{StaticResource AppPanelSurfaceBrush}"
+                            CornerRadius="22"
+                            Padding="12,8">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="⌕"
+                                       Foreground="{StaticResource AppMutedTextBrush}"
+                                       VerticalAlignment="Center" />
+                            <TextBox x:Name="TopSearchBox"
+                                     Grid.Column="1"
+                                     PlaceholderText="Search current catalog"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Foreground="{StaticResource AppTextBrush}"
+                                     TextChanged="TopSearchBox_TextChanged"
+                                     ToolTipService.ToolTip="{x:Null}" />
+                        </Grid>
+                    </Border>
+                    <ComboBox x:Name="TopSortBox"
+                              MinWidth="190"
+                              VerticalAlignment="Center"
+                              CornerRadius="22"
+                              Padding="16,10,8,10"
+                              BorderThickness="1"
+                              Background="{StaticResource AppPanelSurfaceBrush}"
+                              BorderBrush="{StaticResource AppLineBrush}"
+                              Foreground="{StaticResource AppTextBrush}"
+                              SelectionChanged="TopSortBox_SelectionChanged"
+                              AutomationProperties.Name="Sort categories"
+                              ToolTipService.ToolTip="{x:Null}">
+                        <ComboBox.Resources>
+                            <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource AppSurfaceColor}" />
+                            <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource AppSurfaceColor}" />
+                            <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="{StaticResource AppSurfaceColor}" />
+                            <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="{StaticResource AppSurfaceColor}" />
+                            <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="{StaticResource AppSurfaceColor}" />
+                        </ComboBox.Resources>
+                        <ComboBoxItem Content="Most visited" Tag="Visited" IsSelected="True" />
+                        <ComboBoxItem Content="Alphabetical (A-Z)" Tag="AlphabeticalAsc" />
+                        <ComboBoxItem Content="Alphabetical (Z-A)" Tag="AlphabeticalDesc" />
+                        <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
+                        <ComboBoxItem Content="Recently updated" Tag="RecentlyUpdated" />
+                    </ComboBox>
+                </StackPanel>
 
                 <Button x:Name="AccountNavigation"
                         Grid.Column="3"
-                        Content="Account"
+                        Content="Settings"
                         Style="{StaticResource AppTopNavButtonStyle}"
                         Click="AccountNavigation_Click"
                         ToolTipService.ToolTip="{x:Null}" />
-                <ComboBox x:Name="PlaybackEngineSelector"
-                          Grid.Column="4"
-                          MinWidth="150"
-                          VerticalAlignment="Center"
-                          SelectionChanged="PlaybackEngineSelector_SelectionChanged"
-                          AutomationProperties.Name="Playback engine"
-                          ToolTipService.ToolTip="{x:Null}">
-                    <ComboBoxItem Content="Native player" Tag="Native" />
-                    <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
-                </ComboBox>
             </Grid>
         </Border>
 
@@ -177,6 +181,31 @@
                                         Background="{StaticResource AppPanelSurfaceBrush}" />
                     <Border x:Name="PlayerVideoCurtain" Grid.Row="0" Background="{StaticResource AppPanelSurfaceBrush}"
                             Visibility="Collapsed" IsHitTestVisible="False" />
+                    <Border x:Name="NextEpisodePrompt" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                            Margin="20" Padding="18,12" CornerRadius="10" Background="{StaticResource AppPanelSurfaceBrush}"
+                            Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                            <TextBlock x:Name="NextEpisodePromptTitle" VerticalAlignment="Center" Foreground="{StaticResource AppTextBrush}"
+                                       TextWrapping="Wrap" MaxWidth="520" />
+                            <Button Content="Play now" Style="{StaticResource AppQuietButtonStyle}" Click="NextEpisodePlayNow_Click" />
+                            <Button Content="Cancel" Style="{StaticResource AppQuietButtonStyle}" Click="NextEpisodeCancel_Click" />
+                            </StackPanel>
+                    </Border>
+                    <Border x:Name="PlayerNowNextPanel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Margin="20" Padding="14,10" MaxWidth="520" CornerRadius="10"
+                            Background="{StaticResource AppPanelSurfaceBrush}"
+                            Visibility="Collapsed" IsHitTestVisible="False">
+                        <StackPanel Spacing="6">
+                            <TextBlock x:Name="PlayerNowText" Foreground="{StaticResource AppTextBrush}"
+                                       TextWrapping="Wrap" />
+                            <ProgressBar x:Name="PlayerNowProgress" Height="3" Minimum="0" Maximum="100"
+                                         Foreground="{StaticResource AppAccentBrush}"
+                                         Background="{StaticResource AppMutedTextBrush}"
+                                         Visibility="Collapsed" IsHitTestVisible="False" />
+                            <TextBlock x:Name="PlayerNextText" Foreground="{StaticResource AppMutedTextBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
 
                     <StackPanel x:Name="PlayerDetailsPanel" Grid.Row="1" Spacing="3">
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -237,6 +266,9 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PauseButton" Grid.Column="0" Content="Pause" Style="{StaticResource AppQuietButtonStyle}" Click="PauseButton_Click" />
                         <Button x:Name="RewindButton" Grid.Column="1" Content="−10s" Style="{StaticResource AppQuietButtonStyle}" Click="RewindButton_Click" AutomationProperties.Name="Rewind 10 seconds" />
@@ -251,9 +283,22 @@
                             <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="0:00" />
                         </Grid>
                         <Button x:Name="ForwardButton" Grid.Column="3" Content="+10s" Style="{StaticResource AppQuietButtonStyle}" Click="ForwardButton_Click" AutomationProperties.Name="Forward 10 seconds" />
-                        <TextBlock Grid.Column="4" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="Volume" />
-                        <Slider x:Name="VolumeSlider" Grid.Column="5" Width="112" Minimum="0" Maximum="100" Value="100" VerticalAlignment="Center" ValueChanged="VolumeSlider_ValueChanged" />
-                        <Button x:Name="CinemaButton" Grid.Column="6" Content="Cinema mode" Style="{StaticResource AppQuietButtonStyle}" Click="CinemaButton_Click" />
+                        <Button x:Name="PreviousEpisodeButton" Grid.Column="4" Content="⏮" Visibility="Collapsed"
+                                Style="{StaticResource AppIconButtonStyle}" Click="PreviousEpisode_Click"
+                                AutomationProperties.Name="Previous episode" />
+                        <Button x:Name="NextEpisodeButton" Grid.Column="5" Content="⏭" Visibility="Collapsed"
+                                Style="{StaticResource AppIconButtonStyle}" Click="NextEpisode_Click"
+                                AutomationProperties.Name="Next episode" />
+                        <Button x:Name="AudioSubtitlesButton" Grid.Column="6" Content="Audio &amp; subtitles"
+                                Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Audio and subtitles"
+                                ToolTipService.ToolTip="Audio &amp; subtitles">
+                            <Button.Flyout>
+                                <MenuFlyout x:Name="AudioSubtitlesFlyout" />
+                            </Button.Flyout>
+                        </Button>
+                        <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="Volume" />
+                        <Slider x:Name="VolumeSlider" Grid.Column="8" Width="112" Minimum="0" Maximum="100" Value="100" VerticalAlignment="Center" ValueChanged="VolumeSlider_ValueChanged" />
+                        <Button x:Name="CinemaButton" Grid.Column="9" Content="Cinema mode" Style="{StaticResource AppQuietButtonStyle}" Click="CinemaButton_Click" />
                     </Grid>
                     </Border>
                     </Grid>
@@ -261,6 +306,7 @@
                     <Border x:Name="PlayerSidePanel" Grid.Column="1" MinWidth="290" Padding="18" Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="14">
                         <Grid RowSpacing="12">
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
@@ -283,21 +329,39 @@
                             </Grid>
                             <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Foreground="{StaticResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
                             <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Visibility="Collapsed" />
-                            <TextBlock x:Name="PlayerSeasonLabel" Grid.Row="3" Visibility="Collapsed"
-                                       Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" />
-                            <ComboBox x:Name="PlayerSeasonComboBox" Grid.Row="3" Visibility="Collapsed"
-                                      DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
-                                      AutomationProperties.Name="Series season" />
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
+                            <Grid Grid.Row="3" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="PlayerSeasonLabel" Visibility="Collapsed"
+                                           Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" />
+                                <ComboBox x:Name="PlayerSeasonComboBox" Visibility="Collapsed"
+                                          DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
+                                          AutomationProperties.Name="Series season" />
+                                <TextBlock x:Name="PlayerSeasonWatchedCount" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Visibility="Collapsed" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
+                            </Grid>
+                            <Button x:Name="ResumeEpisodeButton" Grid.Row="4" Visibility="Collapsed"
+                                    Content="Resume episode" HorizontalAlignment="Stretch"
+                                    Style="{StaticResource AppQuietButtonStyle}" Click="ResumeEpisode_Click" />
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">
                                             <Grid ColumnSpacing="8">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="3" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
+                                                    <StackPanel Orientation="Horizontal" Spacing="5" Visibility="{Binding EpisodeStatusVisibility}">
+                                                        <TextBlock Text="{Binding EpisodeStatusGlyph}" Foreground="{StaticResource AppAccentBrush}" />
+                                                        <TextBlock Text="{Binding EpisodeStatusText}" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
+                                                    </StackPanel>
+                                                </StackPanel>
                                                 <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}"
                                                         Width="40" Height="40" MinWidth="40" MinHeight="40"
                                                         FontSize="22" Padding="0" HorizontalContentAlignment="Center"
@@ -306,6 +370,18 @@
                                                         Visibility="{Binding FavoriteVisibility}"
                                                         AutomationProperties.Name="Toggle favorite"
                                                         Click="PlayerFavorite_Click" />
+                                                <Button Grid.Column="2" Content="⋯" Tag="{Binding}" Width="40" Height="40"
+                                                        MinWidth="40" MinHeight="40" Padding="0" Background="Transparent"
+                                                        Foreground="{StaticResource AppMutedTextBrush}"
+                                                        Visibility="{Binding EpisodeMenuVisibility}"
+                                                        AutomationProperties.Name="Episode watch status">
+                                                    <Button.ContextFlyout>
+                                                        <MenuFlyout>
+                                                            <MenuFlyoutItem Text="Mark watched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
+                                                            <MenuFlyoutItem Text="Mark unwatched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
+                                                        </MenuFlyout>
+                                                    </Button.ContextFlyout>
+                                                </Button>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
@@ -316,33 +392,10 @@
                 </Grid>
             </Grid>
             <Grid x:Name="CatalogPageArea" Visibility="Collapsed">
-                <ContentControl x:Name="CatalogPageHost" />
+                <ContentControl x:Name="CatalogPageHost"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch" />
             </Grid>
         </Grid>
-        <Button x:Name="IdleOverlay" Grid.RowSpan="3" Visibility="Collapsed"
-                Background="#E6000000" BorderThickness="0"
-                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                PointerPressed="IdleOverlay_PointerPressed"
-                PointerWheelChanged="IdleOverlay_PointerWheelChanged"
-                AutomationProperties.Name="Featured content. Press any key or click to return">
-            <Grid>
-                <Border Width="540" MaxWidth="540" Padding="36" CornerRadius="16"
-                        Background="{StaticResource AppPanelSurfaceBrush}"
-                        HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <StackPanel Spacing="18">
-                        <TextBlock Text="FEATURED SERIES" Foreground="{StaticResource AppAccentBrush}"
-                                   FontSize="14" FontWeight="Bold" CharacterSpacing="120" />
-                        <TextBlock x:Name="IdleFeaturedTitle" Text="Explore Tvivo"
-                                   Foreground="{StaticResource AppTextBrush}" FontSize="36"
-                                   FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <TextBlock x:Name="IdleFeaturedDescription"
-                                   Foreground="{StaticResource AppMutedTextBrush}" FontSize="17"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Text="Press any key or click to return"
-                                   Foreground="{StaticResource AppMutedTextBrush}" FontSize="14" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Button>
     </Grid>
 </Window>

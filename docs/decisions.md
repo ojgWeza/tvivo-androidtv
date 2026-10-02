@@ -1360,3 +1360,67 @@ inline SQL / 9 tables, spot-checked against source (`vodDao().updatePlot` writes
 `windows-spike` output is byte-for-byte unchanged after generalizing the shared script (diffed
 against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loop over both
 `windows-spike` and `app`; notes baselined in `app/.codemap/reviewed.json`.
+
+## WinUI top bar, spotlight and Settings rework (2026-10-02)
+
+- **Idle/featured overlay removed** (supersedes the "Batch 3 — idle/featured overlay" entry above): the
+  user judged it nonsense. Timer, focus/pointer tracking, overlay XAML and the now-unused
+  `GetFeaturedSeriesTitles` repository method (and its test) are gone.
+- **Search + sort pills moved to the top bar** and collapse on every non-catalog page (disabled-but-visible
+  controls on Settings were noise). Page titles inside catalog pages were removed so the spotlight is first.
+- **Spotlight is fixed**: it never follows the search filter or the sort pill. It is always built from the
+  unfiltered shelves at `SpotlightSort` (Most visited) and cached per (account, mode) in
+  `_spotlightShelvesCache`; `CatalogSnapshot.SpotlightShelves` falls back to `Shelves` when that is the same set.
+- **Account page is now Settings** (class stays `AccountPage`): horizontal tabs in the order Library
+  (last refresh + "Refresh catalog now" via `CatalogLandingPage.RefreshNowAsync`, **selected by default**),
+  Player (playback engine) and Account (details, Sign out, Change user). Diagnostics and About tabs were built
+  then removed at the user's request. The engine picker left the top bar. The in-page **Exit Tvivo** button (and its playing-confirmation dialog) was removed as redundant with
+  the title-bar close button. Not built: Playback defaults (needs track switching first), Appearance, Profiles.
+- **Taskbar hint (2026-10-02):** the borderless fullscreen window covers the whole monitor, so the shell hides
+  the taskbar; after force-kills/crashes it could stay hidden. `WindowStateController` now calls
+  `ITaskbarList2.MarkFullscreenWindow` on every enter/leave fullscreen and `ClearFullscreenHint()` from
+  `MainWindow.OnClosed`. Unverified fix - the stuck state was only ever observed, not reproduced.
+- **Cinema cursor**: hidden for the whole of cinema playback (no longer re-shown on pointer move); shown again
+  when playback pauses/stops or cinema mode closes.
+- **Refresh status bar** (`RefreshInfoBar`) moved from the top of the catalog list header to a bottom overlay.
+- **Quality pill** (`HD/FHD/4K/SD`): the badge was parsed only from a *trailing* title token, which missed
+  `Name FHD (2023)`, `4K - Name`, `Name FHD H265`, `1080p`/`BluRay` forms (about 1 in 10 live titles with a
+  token and a few thousand movie titles were missed in the local DB). It now reads the token from anywhere in
+  the title (highest wins; FULL HD/1080p->FHD, 2160p->4K, 720p->HD, 480/576p->SD), strips it and codec tags from
+  the display title, and falls back to the category name (e.g. "beIN SPORTS HD"). Xtream list endpoints carry
+  no resolution field; `get_vod_info` has one but would need a per-item fetch (not done).
+- Debug-only "Gate 9 fixture" button is overlaid bottom-right in `CatalogPageRoot` so it no longer costs a row.
+
+## WinUI search, progress, track picker and EPG batch (2026-10-02, built and unit-tested; interactive UI verification still pending)
+
+- **Search is flat + category chips.** Per-category result grouping was dropped: results are one paged flat
+  list, with count-sorted category chips (`GetCategoryMatchCounts`) above it. There is still no global search.
+- **Recently added** = max(provider `added_at`, post-baseline `first_indexed_at`), 200 per type, so newly
+  indexed items surface even when the provider reports no add date.
+- **Previous/next episode** controls in the player bar plus PageUp/PageDown, and a next-episode overlay.
+- **Viewing map + progress (catalog schema v16, `media_progress`).** Per-episode state Unwatched/InProgress/
+  Finished. Completion is recorded before auto-advance, on engine end or at 90% of a positive measured
+  duration (seeking past 90% therefore counts as finished: open question). Home Continue Watching shows a
+  progress track and "min left" only when a duration was measured. Episode list: watched marks, per-season
+  counts, Resume episode, Mark watched/unwatched. Back up `winui-catalog.sqlite` before the first v16 run.
+- **Audio and subtitle picker.** `ITrackSelectingEngine` on both engines; control-bar flyout with Audio and
+  Subtitles (Off first). Default subtitle policy: explicit Off, then preferred language, then UI-culture
+  match, then first track; applied once per playback session. Nothing is persisted yet (Off/language
+  persistence waits for a format-by-engine matrix). Native engine may enumerate timed-metadata tracks it
+  cannot render. The picker is hidden in cinema mode (transport bar hides there).
+- **EPG, Now/Next only.** Separate `winui-epg.sqlite` (v1), XMLTV parse with DTD disabled, caps 512 MB / 1M
+  programmes, window now-6h to now+48h, due-gated and playback-busy-aware refresh via `EpgCoordinator`
+  (App singleton). Live cards show Now / progress / Next; the player shows the same panel for live channels
+  with an `epg_channel_id`. Nothing shows without data. Guide grid, reminders and catch-up are out of scope.
+  Real feed size and coverage are unknown until tested against the real account.
+- **Review fix:** `EpgRepository` never set its `PRAGMA user_version` command text (would throw on every
+  construction); fixed before first build.
+- **First build (2026-10-02).** Debug win-x64 builds with 0 warnings; Core 17, Infrastructure 62, Playback 4 and
+  App 16 tests pass; 3-launch startup test clean on the migrated v16 catalog (backup taken first). Build/test
+  caught real defects, all fixed: XMLTV parser skipped the node after each `ReadElementContentAsString` (dropped
+  the next programme), EPG staging temp tables survived on pooled connections (second import failed), plus
+  compile errors against the WinRT track-list projection, a LibVLC `TrackDescription` reference, a nullable
+  conditional and two scope collisions. `EpgImportLimitExceededException` now derives from `Exception`
+  (`InvalidDataException` is sealed). Not yet verified on screen: subtitle/audio picker on both engines, live
+  Now/Next on cards and in the player (LibVLC overlay z-order), prev/next + overlay, viewmap/progress bars,
+  flat search + chips, Recently added.

@@ -99,7 +99,46 @@ internal sealed class WindowStateController
         }
 
         Mode = mode;
+        MarkFullscreen(mode == WindowMode.Fullscreen);
         LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} apply-complete mode={Mode}");
+    }
+
+    // Tells the shell this window is (no longer) fullscreen so the taskbar is not left hidden after we leave or exit.
+    internal void ClearFullscreenHint() => MarkFullscreen(false);
+
+    private ITaskbarList2? _taskbarList;
+
+    private void MarkFullscreen(bool fullscreen)
+    {
+        try
+        {
+            if (_taskbarList is null)
+            {
+                var list = (ITaskbarList2)new TaskbarListCom();
+                list.HrInit();
+                _taskbarList = list;
+            }
+            _taskbarList.MarkFullscreenWindow(_hwnd, fullscreen);
+            LaunchDiagnostics.Write($"WINDOW-STATE taskbar-hint fullscreen={fullscreen}");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"WINDOW-STATE taskbar-hint failed fullscreen={fullscreen} {exception.GetType().Name}");
+        }
+    }
+
+    [ComImport, Guid("56FDF344-FD6D-11d0-958A-006097C9A090")]
+    private class TaskbarListCom { }
+
+    [ComImport, Guid("602D4995-B13A-429b-A66E-1935E44F4317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ITaskbarList2
+    {
+        void HrInit();
+        void AddTab(nint hwnd);
+        void DeleteTab(nint hwnd);
+        void ActivateTab(nint hwnd);
+        void SetActiveAlt(nint hwnd);
+        void MarkFullscreenWindow(nint hwnd, [MarshalAs(UnmanagedType.Bool)] bool fullscreen);
     }
 
     internal void Minimize() => ShowWindow(_hwnd, SwMinimize);

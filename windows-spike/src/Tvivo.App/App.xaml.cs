@@ -78,6 +78,8 @@ public partial class App : Application
     {
         var services = new ServiceCollection();
         services.AddSingleton<ICatalogProvider, XtreamCatalogProvider>();
+        services.AddSingleton<IEpgProvider>(sp => (IEpgProvider)sp.GetRequiredService<ICatalogProvider>());
+        services.AddSingleton<EpgCoordinator>();
         services.AddSingleton<SqliteCatalogRepository>();
         services.AddSingleton<CatalogRefreshService>();
         services.AddSingleton<ICredentialStore, DpapiCredentialStore>();

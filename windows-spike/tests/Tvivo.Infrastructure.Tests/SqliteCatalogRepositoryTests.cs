@@ -1,5 +1,6 @@
 using Tvivo.Core;
 using Tvivo.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Net;
 using System.Text;
 using Xunit;
@@ -53,6 +54,34 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal(37, result.Count);
             Assert.Contains(result, channel => channel.Id == "movie-37");
             Assert.All(result, channel => Assert.Equal(StreamKind.Movie, channel.Source.Kind));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Category_match_counts_use_the_title_filter_and_item_type()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "a", "Drama"), Group(account, "b", "Comedy") }, new[]
+            {
+                ChannelFor(account, "m1", "a", "Needle one"),
+                ChannelFor(account, "m2", "a", "Needle two"),
+                ChannelFor(account, "m3", "b", "Needle three"),
+                ChannelFor(account, "m4", "b", "Other title"),
+            });
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, new[] { Group(account, "a", "Drama") }, new[]
+            {
+                new Channel(account.AccountId, "s1", "a", "Needle series", "Needle series", null, null, null,
+                    new("s1", StreamKind.Series, "mkv"), new Dictionary<string, string>()),
+            });
+
+            Assert.Equal(new[] { new CatalogCategoryMatchCount("a", 2), new CatalogCategoryMatchCount("b", 1) },
+                repo.GetCategoryMatchCounts(account, CatalogItemType.Movie, "Needle"));
+            Assert.Equal(new[] { new CatalogCategoryMatchCount("a", 1) },
+                repo.GetCategoryMatchCounts(account, CatalogItemType.Series, "Needle"));
+            Assert.Empty(repo.GetCategoryMatchCounts(account, CatalogItemType.Movie, "Missing"));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -192,36 +221,6 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
-    public void Featured_series_titles_are_account_scoped_numeric_rating_ordered_and_limited()
-    {
-        using var repo = Create(out var dir); var account = Account(); var other = Account("account-b");
-        try
-        {
-            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[]
-            {
-                ChannelFor(account, "lower", "", "Lower"),
-                ChannelFor(account, "tie-z", "", "zeta"),
-                ChannelFor(account, "highest", "", "Highest"),
-                ChannelFor(account, "tie-a", "", "Alpha"),
-            });
-            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
-                new[] { ChannelFor(account, "movie", "", "Movie") });
-            repo.ReplaceSnapshot(other, CatalogItemType.Series, Array.Empty<ChannelGroup>(),
-                new[] { ChannelFor(other, "other", "", "Other account") });
-            repo.SaveMetadata(account, CatalogItemType.Series, "lower", new CatalogMetadata(null, "2", null, null, null));
-            repo.SaveMetadata(account, CatalogItemType.Series, "tie-z", new CatalogMetadata(null, "8", null, null, null));
-            repo.SaveMetadata(account, CatalogItemType.Series, "highest", new CatalogMetadata(null, "10", null, null, null));
-            repo.SaveMetadata(account, CatalogItemType.Series, "tie-a", new CatalogMetadata(null, "8", null, null, null));
-            repo.SaveMetadata(account, CatalogItemType.Movie, "movie", new CatalogMetadata(null, "99", null, null, null));
-            repo.SaveMetadata(other, CatalogItemType.Series, "other", new CatalogMetadata(null, "99", null, null, null));
-
-            Assert.Equal(new[] { "Highest", "Alpha", "zeta" }, repo.GetFeaturedSeriesTitles(account, 3));
-            Assert.Empty(repo.GetFeaturedSeriesTitles(account, 0));
-        }
-        finally { repo.Dispose(); Directory.Delete(dir, true); }
-    }
-
-    [Fact]
     public void My_Tvivo_order_uses_visit_count_then_letters_digits_symbols_fallback()
     {
         using var repo = Create(out var dir); var account = Account();
@@ -274,14 +273,14 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
-    public void Recently_added_is_capped_to_the_newest_fifty_independently_per_type()
+    public void Recently_added_is_capped_to_the_newest_two_hundred_independently_per_type()
     {
         using var repo = Create(out var dir); var account = Account();
         try
         {
             foreach (var type in new[] { CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live })
             {
-                var channels = Enumerable.Range(0, 51)
+                var channels = Enumerable.Range(0, 205)
                     .Select(index => ChannelAdded(account, type, $"{type}-{index:00}", DateTimeOffset.UnixEpoch.AddDays(index)))
                     .ToArray();
                 repo.ReplaceSnapshot(account, type, Array.Empty<ChannelGroup>(), channels);
@@ -290,11 +289,11 @@ public sealed class SqliteCatalogRepositoryTests
             foreach (var type in new[] { CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live })
             {
                 var recentlyAdded = repo.GetRecentlyAdded(account, type, limit: int.MaxValue);
-                Assert.Equal(50, recentlyAdded.Count);
-                Assert.Equal(Enumerable.Range(1, 50).Reverse().Select(index => $"{type}-{index:00}"),
+                Assert.Equal(200, recentlyAdded.Count);
+                Assert.Equal(Enumerable.Range(5, 200).Reverse().Select(index => $"{type}-{index:00}"),
                     recentlyAdded.Select(item => item.Id));
-                Assert.Equal($"{type}-50", recentlyAdded[0].Id);
-                Assert.Equal($"{type}-01", recentlyAdded[^1].Id);
+                Assert.Equal($"{type}-204", recentlyAdded[0].Id);
+                Assert.Equal($"{type}-05", recentlyAdded[^1].Id);
                 Assert.All(recentlyAdded, item => Assert.Equal(type switch
                 {
                     CatalogItemType.Movie => StreamKind.Movie,
@@ -304,8 +303,37 @@ public sealed class SqliteCatalogRepositoryTests
             }
 
             var acrossTypes = repo.GetRecentlyAdded(account, limit: int.MaxValue);
-            Assert.Equal(150, acrossTypes.Count);
-            Assert.All(acrossTypes.GroupBy(item => item.Source.Kind), group => Assert.Equal(50, group.Count()));
+            Assert.Equal(600, acrossTypes.Count);
+            Assert.All(acrossTypes.GroupBy(item => item.Source.Kind), group => Assert.Equal(200, group.Count()));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Recently_added_includes_post_baseline_indexing_without_promoting_initial_sync_rows()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "initial-a", "g", "Initial A"),
+                ChannelFor(account, "initial-b", "g", "Initial B"),
+                ChannelFor(account, "old-provider-date", "g", "Old provider item") with
+                    { AddedAt = DateTimeOffset.FromUnixTimeMilliseconds(500_000) },
+                ChannelFor(account, "newly-indexed", "g", "Newly indexed"),
+            });
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(dir, "catalog.sqlite"),
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE items SET first_indexed_at=CASE id WHEN 'initial-a' THEN 1000000 WHEN 'initial-b' THEN 1000001 WHEN 'old-provider-date' THEN 1000002 WHEN 'newly-indexed' THEN 1600000 END, added_at=CASE id WHEN 'old-provider-date' THEN 500000 ELSE 0 END";
+            command.ExecuteNonQuery();
+
+            Assert.Equal(new[] { "newly-indexed", "old-provider-date" },
+                repo.GetRecentlyAdded(account, CatalogItemType.Movie, limit: 200).Select(item => item.Id));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -445,7 +473,7 @@ public sealed class SqliteCatalogRepositoryTests
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id)); INSERT INTO items(account_id,type,id,title) VALUES('a','Movie','1','Film ( ) HD'),('a','Series','2','( )'),('a','Live','3','Show (2024)'); PRAGMA user_version=8;";
+                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,favourite INTEGER NOT NULL DEFAULT 0,resume_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id)); INSERT INTO items(account_id,type,id,title) VALUES('a','Movie','1','Film ( ) HD'),('a','Series','2','( )'),('a','Live','3','Show (2024)'); PRAGMA user_version=8;";
                 command.ExecuteNonQuery();
             }
 
@@ -464,7 +492,7 @@ public sealed class SqliteCatalogRepositoryTests
                     Assert.False(reader.Read());
                 }
                 verify.CommandText = "PRAGMA user_version;";
-                Assert.Equal(15, Convert.ToInt32(verify.ExecuteScalar()));
+                Assert.Equal(16, Convert.ToInt32(verify.ExecuteScalar()));
             }
         }
         finally
@@ -486,7 +514,7 @@ public sealed class SqliteCatalogRepositoryTests
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,favourite INTEGER NOT NULL,favourite_added_at INTEGER,PRIMARY KEY(account_id,type,id)); INSERT INTO items VALUES('account-a','Movie','old-favorite',1,1234); PRAGMA user_version=14;";
+                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,favourite INTEGER NOT NULL,favourite_added_at INTEGER,resume_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id)); CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id)); INSERT INTO items(account_id,type,id,favourite,favourite_added_at,resume_ms) VALUES('account-a','Movie','old-favorite',1,1234,0); PRAGMA user_version=14;";
                 command.ExecuteNonQuery();
             }
 
@@ -497,9 +525,108 @@ public sealed class SqliteCatalogRepositoryTests
             migrated.Open();
             using var verify = migrated.CreateCommand();
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(15, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(16, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Schema_v15_migrates_additively_backfills_only_last_episode_and_reopens_at_v16()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "catalog.sqlite");
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE items(account_id TEXT NOT NULL,type TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,resume_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,type,id)); CREATE TABLE favorites(account_id TEXT NOT NULL,type TEXT NOT NULL,item_id TEXT NOT NULL,added_at INTEGER NOT NULL,PRIMARY KEY(account_id,type,item_id)); CREATE TABLE series_playback(account_id TEXT NOT NULL,series_id TEXT NOT NULL,last_episode_id TEXT NOT NULL,finished INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,series_id)); INSERT INTO items VALUES('account-a','Series','show','Show',42000); INSERT INTO items VALUES('account-a','Movie','movie','Movie',12000); INSERT INTO favorites VALUES('account-a','Movie','movie',10); INSERT INTO series_playback VALUES('account-a','show','opaque:season-2/episode-07',0,99); INSERT INTO series_playback VALUES('account-b','show','finished-id',1,100); PRAGMA user_version=15;";
+                command.ExecuteNonQuery();
+            }
+            using (var repo = new SqliteCatalogRepository(path))
+            {
+                Assert.Equal(42_000L, repo.GetResumePosition(Account(), CatalogItemType.Series, "show"));
+                Assert.True(repo.IsFavorite(Account(), CatalogItemType.Movie, "movie"));
+                Assert.Equal(("opaque:season-2/episode-07", false), repo.GetSeriesPlayback(Account(), "show"));
+                var migratedEpisode = Assert.Single(repo.GetEpisodeProgressForSeries(Account(), "show").Values);
+                Assert.Equal("opaque:season-2/episode-07", migratedEpisode.ItemId);
+                Assert.Equal(PlaybackProgressState.InProgress, migratedEpisode.State);
+                Assert.Equal(42_000L, migratedEpisode.ResumeMs);
+                Assert.Null(migratedEpisode.DurationMs);
+            }
+            using (var reopened = new SqliteCatalogRepository(path))
+            using (var migrated = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                migrated.Open();
+                using var verify = migrated.CreateCommand();
+                verify.CommandText = "PRAGMA user_version;";
+                Assert.Equal(16, Convert.ToInt32(verify.ExecuteScalar()));
+                verify.CommandText = "SELECT COUNT(*) FROM media_progress WHERE account_id='account-a' AND series_id='show';";
+                Assert.Equal(1, Convert.ToInt32(verify.ExecuteScalar()));
+                verify.CommandText = "SELECT finished,resume_ms FROM media_progress WHERE account_id='account-b' AND item_id='finished-id';";
+                using var reader = verify.ExecuteReader();
+                Assert.True(reader.Read()); Assert.Equal(1, reader.GetInt32(0)); Assert.Equal(0L, reader.GetInt64(1));
+            }
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Fresh_schema_and_progress_api_preserve_account_scope_manual_overrides_and_snapshot_refresh()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            var other = Account("account-b");
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")};Pooling=False"))
+            {
+                connection.Open();
+                using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
+                Assert.Equal(16, Convert.ToInt32(version.ExecuteScalar()));
+            }
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Movie, "movie", DateTimeOffset.UtcNow) });
+            repo.SaveProgress(account, "episode", "episode:opaque/42", "show", 30_000, null, false);
+            Assert.Equal(PlaybackProgressState.InProgress, Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).State);
+            Assert.Empty(repo.GetEpisodeProgressForSeries(other, "show"));
+            Assert.Null(Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).DurationMs);
+            repo.MarkEpisodeWatched(account, "show", "episode:opaque/42");
+            repo.SaveProgress(account, "episode", "episode:opaque/42", "show", 9_000, 60_000, false);
+            var replayed = Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values);
+            Assert.Equal(PlaybackProgressState.Finished, replayed.State);
+            Assert.Equal(0L, replayed.ResumeMs);
+            repo.MarkEpisodeUnwatched(account, "show", "episode:opaque/42");
+            Assert.Equal(PlaybackProgressState.Unwatched, Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).State);
+            repo.SaveProgress(account, "movie", "movie", null, 30_000, 120_000, false);
+            Assert.Equal(PlaybackProgressState.InProgress, repo.GetPlaybackProgress(account, "movie", new[] { "movie" })["movie"].State);
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
+            Assert.Single(repo.GetEpisodeProgressForSeries(account, "show"));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Resume_selection_uses_last_in_progress_then_provider_order_then_final_replay()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            var first = new SeriesEpisode("opaque-first", "First", "s1", "Season 1", 1, 1, new("1", StreamKind.Episode));
+            var second = new SeriesEpisode("opaque-second", "Second", "s1", "Season 1", 1, 2, new("2", StreamKind.Episode));
+            var details = new SeriesDetails("show", "Show", new[] { new SeriesSeason("s1", "Season 1", 1, new[] { first, second }) });
+            repo.SaveProgress(account, "episode", second.Id, details.Id, 12_000, 60_000, false);
+            Assert.Equal(second, repo.SelectResumeEpisode(account, details));
+            repo.MarkEpisodeWatched(account, details.Id, first.Id);
+            repo.MarkEpisodeWatched(account, details.Id, second.Id);
+            Assert.Equal(second, repo.SelectResumeEpisode(account, details));
+            repo.MarkEpisodeUnwatched(account, details.Id, first.Id);
+            Assert.Equal(first, repo.SelectResumeEpisode(account, details));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
     [Fact]
