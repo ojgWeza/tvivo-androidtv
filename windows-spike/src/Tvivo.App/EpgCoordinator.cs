@@ -50,6 +50,7 @@ public sealed class EpgCoordinator : IDisposable
             if (!acquired) return;
 
             var result = await _refreshService.StartAsync(account, connection, cancellationToken).ConfigureAwait(false);
+            LaunchDiagnostics.Write($"EPG refresh result: {result}");
             if (result == EpgRefreshResult.Refreshed)
                 RaiseEpgUpdated();
         }

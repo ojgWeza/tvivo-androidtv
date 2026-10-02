@@ -77,7 +77,7 @@ public partial class App : Application
     private static IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ICatalogProvider, XtreamCatalogProvider>();
+        services.AddSingleton<ICatalogProvider>(_ => new XtreamCatalogProvider(epgLog: LaunchDiagnostics.Write));
         services.AddSingleton<IEpgProvider>(sp => (IEpgProvider)sp.GetRequiredService<ICatalogProvider>());
         services.AddSingleton<EpgCoordinator>();
         services.AddSingleton<SqliteCatalogRepository>();

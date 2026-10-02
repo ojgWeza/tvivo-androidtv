@@ -644,7 +644,10 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (!_isActive || _activeMode != CatalogMode.LiveTv ||
             _account is not { } account || _connection is not { } connection)
+        {
+            LaunchDiagnostics.Write($"EPG start skipped: active={_isActive} mode={_activeMode} account={_account is not null} connection={_connection is not null}");
             return;
+        }
 
         _activeRefreshTasks.TryGetValue(account.AccountId, out var catalogRefreshTask);
         _ = StartEpgAsync(account, connection, catalogRefreshTask);
