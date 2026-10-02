@@ -41,8 +41,8 @@
 | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L475) | CALL | `MainWindow.xaml.cs` | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L475) | `GetResumePosition` | _direct SQL, see §7_ | `items` |
 | [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L486) | CALL | — ⚠️ | [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L486) | `GetSuggestions` | _direct SQL, see §7_ | `items` |
 | [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L540) | CALL | `MainWindow.xaml.cs` | [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L540) | `IsFavorite` | _direct SQL, see §7_ | `favorites` |
-| [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L662) | CALL | `MainWindow.xaml.cs` | [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L662) | `MarkEpisodeUnwatched` | `items`<br>`media_progress`<br>`series_playback` | `media_progress`<br>`series_playback` |
-| [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | CALL | `MainWindow.xaml.cs` | [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | — | — | — |
+| [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L662) | CALL | — ⚠️ | [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L662) | `MarkEpisodeUnwatched` | `items`<br>`media_progress`<br>`series_playback` | `media_progress`<br>`series_playback` |
+| [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | CALL | — ⚠️ | [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | — | — | — |
 | [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | CALL | — ⚠️ | [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | `PlaybackProgress` | `favorites`<br>`media_progress` | `items`<br>`series_playback` |
 | [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L684) | CALL | `MainWindow.xaml.cs` | [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L684) | `RecordVisit` | `items` | — |
 | [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L538) | CALL | — ⚠️ | [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L538) | — | — | — |
@@ -71,6 +71,8 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `GetContinueWatching` (CALL)
 - `GetPlaybackProgress` (CALL)
 - `GetSuggestions` (CALL)
+- `MarkEpisodeUnwatched` (CALL)
+- `MarkEpisodeWatched` (CALL)
 - `PlaybackProgress` (CALL)
 - `RemoveFavorite` (CALL)
 - `ReplaceSnapshot` (CALL)

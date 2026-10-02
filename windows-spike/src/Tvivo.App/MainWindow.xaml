@@ -348,20 +348,14 @@
                             <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="10,12" CornerRadius="8" Background="{Binding BackgroundBrush}">
-                                            <Grid ColumnSpacing="8">
+                                        <Border Padding="0" CornerRadius="8" Background="{Binding BackgroundBrush}">
+                                          <Grid>
+                                            <Grid ColumnSpacing="8" Margin="10,12">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                                <StackPanel Spacing="3" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
-                                                    <StackPanel Orientation="Horizontal" Spacing="5" Visibility="{Binding EpisodeStatusVisibility}">
-                                                        <TextBlock Text="{Binding EpisodeStatusGlyph}" Foreground="{StaticResource AppAccentBrush}" />
-                                                        <TextBlock Text="{Binding EpisodeStatusText}" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
-                                                    </StackPanel>
-                                                </StackPanel>
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
                                                 <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Style="{StaticResource AppIconButtonStyle}"
                                                         Width="40" Height="40" MinWidth="40" MinHeight="40"
                                                         FontSize="22" Padding="0" HorizontalContentAlignment="Center"
@@ -370,19 +364,14 @@
                                                         Visibility="{Binding FavoriteVisibility}"
                                                         AutomationProperties.Name="Toggle favorite"
                                                         Click="PlayerFavorite_Click" />
-                                                <Button Grid.Column="2" Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Tag="{Binding}" Width="40" Height="40"
-                                                        MinWidth="40" MinHeight="40" Style="{StaticResource AppIconButtonStyle}"
-                                                        Visibility="{Binding EpisodeMenuVisibility}"
-                                                        ToolTipService.ToolTip="Mark watched / unwatched"
-                                                        AutomationProperties.Name="Episode watch status">
-                                                    <Button.Flyout>
-                                                        <MenuFlyout>
-                                                            <MenuFlyoutItem Text="Mark watched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
-                                                            <MenuFlyoutItem Text="Mark unwatched" Tag="{Binding}" Click="EpisodeProgressMenu_Click" />
-                                                        </MenuFlyout>
-                                                    </Button.Flyout>
-                                                </Button>
                                             </Grid>
+                                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
+                                                         Visibility="{Binding ProgressVisibility}"
+                                                         Foreground="{Binding ProgressBarBrush}" Background="#33FFFFFF"
+                                                         Height="3" MinHeight="3" VerticalAlignment="Bottom"
+                                                         Margin="10,0,10,4" IsHitTestVisible="False"
+                                                         AutomationProperties.Name="{Binding ProgressAutomationName}" />
+                                          </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>

@@ -56,7 +56,6 @@ public sealed partial class MainWindow : Window
     private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
     private bool _seriesCompletionRecorded;
-    private bool _episodeCompletionExplicitlyOverridden;
     private bool _playbackCompletionShown;
     private bool _nextEpisodeAutoPlaySuppressed;
     private bool _nextEpisodeAdvanceStarted;
@@ -948,7 +947,6 @@ public sealed partial class MainWindow : Window
         _nowPlayingChannel = episode;
         _currentSource = episode.Source;
         _seriesCompletionRecorded = false;
-        _episodeCompletionExplicitlyOverridden = false;
         _playbackCompletionShown = false;
         PlayerTitleText.Text = episode.DisplayName;
         PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
@@ -1175,22 +1173,6 @@ public sealed partial class MainWindow : Window
         var details = new SeriesDetails(_currentSeriesId, _currentSeriesTitle ?? string.Empty, _playerSeriesSeasons);
         if (_catalogRepository.SelectResumeEpisode(_currentSeriesAccount, details) is not { } selected) return;
         OpenSeriesEpisode(ToEpisodeChannel(_currentSeriesAccount, _currentSeriesId, selected));
-    }
-
-    private void EpisodeProgressMenu_Click(object sender, RoutedEventArgs args)
-    {
-        if (sender is not MenuFlyoutItem { Tag: PlayerListEntry entry } item || _currentSeriesAccount is null || _currentSeriesId is null) return;
-        if (item.Text == "Mark watched") _catalogRepository.MarkEpisodeWatched(_currentSeriesAccount, _currentSeriesId, entry.Channel.Id);
-        else _catalogRepository.MarkEpisodeUnwatched(_currentSeriesAccount, _currentSeriesId, entry.Channel.Id);
-        if (_nowPlayingChannel?.Id == entry.Channel.Id)
-        {
-            _seriesCompletionRecorded = item.Text == "Mark watched";
-            _episodeCompletionExplicitlyOverridden = item.Text == "Mark unwatched";
-        }
-        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
-        foreach (var row in _playerEntries)
-            row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
-        RefreshSeasonProgressCount();
     }
 
     private void RefreshSeasonProgressCount()
@@ -1737,7 +1719,7 @@ public sealed partial class MainWindow : Window
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
-        if (sessionIsCurrent && !_seriesCompletionRecorded && !_episodeCompletionExplicitlyOverridden && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
+        if (sessionIsCurrent && !_seriesCompletionRecorded && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
             _currentSeriesId is not null && _currentSeriesAccount is not null)
         {
             var measuredDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
@@ -1817,7 +1799,7 @@ public sealed partial class MainWindow : Window
 
     private void RecordEpisodeCompletion(long position, long? duration)
     {
-        if (_seriesCompletionRecorded || _episodeCompletionExplicitlyOverridden || _currentSeriesAccount is null || _currentSeriesId is null ||
+        if (_seriesCompletionRecorded || _currentSeriesAccount is null || _currentSeriesId is null ||
             _nowPlayingChannel?.Source.Kind != StreamKind.Episode) return;
         _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", _nowPlayingChannel.Id, _currentSeriesId,
             position, duration, finished: true);
@@ -1876,10 +1858,19 @@ public sealed partial class MainWindow : Window
             _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, _engine.IsEnded);
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
-            var finished = !_episodeCompletionExplicitlyOverridden &&
-                (_seriesCompletionRecorded || _engine.IsEnded || duration is { } measured && position >= measured * 0.9);
+            var finished = _seriesCompletionRecorded || _engine.IsEnded || duration is { } measured && position >= measured * 0.9;
             _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
+            var newlyFinished = finished && !_seriesCompletionRecorded;
             if (finished) _seriesCompletionRecorded = true;
+            // Keep the row bar in step with what was just saved, without re-reading the database.
+            if (_playerEntries.FirstOrDefault(row => row.Channel.Id == channel.Id) is { } playingRow)
+                playingRow.SetProgress(new PlaybackProgress(channel.Id,
+                    finished ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress, finished ? 0 : position, duration));
+            if (newlyFinished)
+            {
+                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, _currentSeriesId);
+                RefreshSeasonProgressCount();
+            }
         }
         else return;
         LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={_engine.IsEnded}");
@@ -2295,16 +2286,16 @@ public sealed partial class MainWindow : Window
             ? (Brush)Application.Current.Resources["AppFavoriteBrush"]
             : MutedBrush;
         public string FavoriteGlyph => _isFavorite ? "★" : "☆";
-        public Visibility EpisodeMenuVisibility => Channel.Source.Kind == StreamKind.Episode ? Visibility.Visible : Visibility.Collapsed;
-        public Visibility EpisodeStatusVisibility => ProgressState is PlaybackProgressState.Finished or PlaybackProgressState.InProgress
+        // Row bar: full once watched, otherwise how far playback got (hidden until a duration is known).
+        public Visibility ProgressVisibility => ProgressState == PlaybackProgressState.Finished ||
+            ProgressState == PlaybackProgressState.InProgress && _progress is { ResumeMs: > 0, DurationMs: > 0 }
             ? Visibility.Visible : Visibility.Collapsed;
-        public string EpisodeStatusText => ProgressState switch
-        {
-            PlaybackProgressState.Finished => "Watched",
-            PlaybackProgressState.InProgress => "In progress",
-            _ => string.Empty,
-        };
-        public string EpisodeStatusGlyph => ProgressState == PlaybackProgressState.Finished ? "✓" : ProgressState == PlaybackProgressState.InProgress ? "◷" : string.Empty;
+        public double ProgressValue => ProgressState == PlaybackProgressState.Finished
+            ? 100
+            : _progress is { DurationMs: > 0 } p ? Math.Clamp(p.ResumeMs * 100.0 / p.DurationMs.Value, 0, 100) : 0;
+        public Brush ProgressBarBrush => _isCurrent ? SelectedTextBrush : AccentBrush;
+        public string ProgressAutomationName => ProgressState == PlaybackProgressState.Finished
+            ? "Watched" : $"Watched {ProgressValue:0}%";
         private PlaybackProgressState ProgressState => _progress?.State ?? PlaybackProgressState.Unwatched;
         public bool IsFavorite
         {
@@ -2328,6 +2319,7 @@ public sealed partial class MainWindow : Window
                 OnPropertyChanged(nameof(IsCurrent));
                 OnPropertyChanged(nameof(BackgroundBrush));
                 OnPropertyChanged(nameof(ForegroundBrush));
+                OnPropertyChanged(nameof(ProgressBarBrush));
             }
         }
 
@@ -2335,9 +2327,9 @@ public sealed partial class MainWindow : Window
         {
             if (_progress == progress) return;
             _progress = progress;
-            OnPropertyChanged(nameof(EpisodeStatusVisibility));
-            OnPropertyChanged(nameof(EpisodeStatusText));
-            OnPropertyChanged(nameof(EpisodeStatusGlyph));
+            OnPropertyChanged(nameof(ProgressVisibility));
+            OnPropertyChanged(nameof(ProgressValue));
+            OnPropertyChanged(nameof(ProgressAutomationName));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
