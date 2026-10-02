@@ -574,6 +574,43 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Replaying_a_finished_episode_resets_it_and_each_episode_resumes_from_its_own_position()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
+
+            repo.SaveProgress(account, "episode", "e1", "show", 55_000, 60_000, true);
+            Assert.Equal(PlaybackProgressState.Finished, repo.GetEpisodeProgressForSeries(account, "show")["e1"].State);
+            Assert.Equal(0L, repo.GetEpisodeResumePosition(account, "e1"));
+
+            // Another episode's position (stored series-wide) must never leak into a finished one.
+            repo.SaveProgress(account, "episode", "e2", "show", 12_000, 60_000, false);
+            Assert.Equal(12_000L, repo.GetEpisodeResumePosition(account, "e2"));
+            Assert.Equal(0L, repo.GetEpisodeResumePosition(account, "e1"));
+            Assert.Equal(0L, repo.GetEpisodeResumePosition(account, "never-played"));
+
+            // Opening the finished episode again resets it; progress then tracks the new viewing.
+            repo.SaveProgress(account, "episode", "e1", "show", 0, 60_000, false);
+            Assert.NotEqual(PlaybackProgressState.Finished, repo.GetEpisodeProgressForSeries(account, "show")["e1"].State);
+            repo.SaveProgress(account, "episode", "e1", "show", 20_000, 60_000, false);
+            var partial = repo.GetEpisodeProgressForSeries(account, "show")["e1"];
+            Assert.Equal(PlaybackProgressState.InProgress, partial.State);
+            Assert.Equal(20_000L, partial.ResumeMs);
+            Assert.Equal(20_000L, repo.GetEpisodeResumePosition(account, "e1"));
+
+            // ...and finishing it again is recorded.
+            repo.SaveProgress(account, "episode", "e1", "show", 56_000, 60_000, true);
+            var again = repo.GetEpisodeProgressForSeries(account, "show")["e1"];
+            Assert.Equal(PlaybackProgressState.Finished, again.State);
+            Assert.Equal(0L, again.ResumeMs);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Fresh_schema_and_progress_api_preserve_account_scope_manual_overrides_and_snapshot_refresh()
     {
         var repo = Create(out var dir);
@@ -594,10 +631,12 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Empty(repo.GetEpisodeProgressForSeries(other, "show"));
             Assert.Null(Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).DurationMs);
             repo.MarkEpisodeWatched(account, "show", "episode:opaque/42");
+            Assert.Equal(PlaybackProgressState.Finished, Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).State);
+            // Playing a watched episode again is not blocked by the earlier completion.
             repo.SaveProgress(account, "episode", "episode:opaque/42", "show", 9_000, 60_000, false);
             var replayed = Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values);
-            Assert.Equal(PlaybackProgressState.Finished, replayed.State);
-            Assert.Equal(0L, replayed.ResumeMs);
+            Assert.Equal(PlaybackProgressState.InProgress, replayed.State);
+            Assert.Equal(9_000L, replayed.ResumeMs);
             repo.MarkEpisodeUnwatched(account, "show", "episode:opaque/42");
             Assert.Equal(PlaybackProgressState.Unwatched, Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values).State);
             repo.SaveProgress(account, "movie", "movie", null, 30_000, 120_000, false);

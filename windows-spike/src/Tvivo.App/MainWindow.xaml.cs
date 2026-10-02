@@ -1207,8 +1207,8 @@ public sealed partial class MainWindow : Window
             StreamKind.Movie when _catalogLandingPage.Account is { } account && _nowPlayingChannel is { } movie =>
                 _catalogRepository.GetResumePosition(account, CatalogItemType.Movie, movie.Id),
             StreamKind.Episode => _resumePositionOnStart ??
-                (_currentSeriesAccount is { } seriesAccount && _currentSeriesId is { } seriesId
-                    ? _catalogRepository.GetResumePosition(seriesAccount, CatalogItemType.Series, seriesId) : 0),
+                (_currentSeriesAccount is { } seriesAccount && _nowPlayingChannel is { } episode
+                    ? _catalogRepository.GetEpisodeResumePosition(seriesAccount, episode.Id) : 0),
             _ => 0,
         };
         _resumePositionOnStart = null;

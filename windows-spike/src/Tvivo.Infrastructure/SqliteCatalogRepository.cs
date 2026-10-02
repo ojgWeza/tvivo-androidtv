@@ -472,6 +472,18 @@ public sealed class SqliteCatalogRepository : IDisposable
             "items.resume_ms > 0 AND items.type IN ('Movie','Series')",
             "items.resume_updated_at DESC, items.type, items.id", limit, null);
 
+    // Where an episode should start: its own saved position, never the series-wide one (which
+    // belongs to whichever episode was played last). Finished or never-played episodes start at 0.
+    public long GetEpisodeResumePosition(ProviderAccount account, string episodeId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT resume_ms FROM media_progress WHERE account_id=$a AND kind='episode' AND item_id=$id AND finished=0";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$id", episodeId);
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L);
+    }
+
     public long GetResumePosition(ProviderAccount account, CatalogItemType type, string id)
     {
         using var connection = Open();
@@ -645,7 +657,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,$kind,$id,$series,$resume,$duration,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=CASE WHEN media_progress.finished=1 OR excluded.finished=1 THEN 0 ELSE excluded.resume_ms END,duration_ms=COALESCE(excluded.duration_ms,media_progress.duration_ms),finished=CASE WHEN media_progress.finished=1 OR excluded.finished=1 THEN 1 ELSE 0 END,updated_at=excluded.updated_at",
+        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,$kind,$id,$series,$resume,$duration,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=excluded.resume_ms,duration_ms=COALESCE(excluded.duration_ms,media_progress.duration_ms),finished=excluded.finished,updated_at=excluded.updated_at",
             ("$a", account.AccountId), ("$kind", kind), ("$id", itemId), ("$series", (object?)seriesId ?? DBNull.Value), ("$resume", finished ? 0 : position), ("$duration", (object?)duration ?? DBNull.Value), ("$finished", finished ? 1 : 0), ("$now", now));
         var saved = QueryProgressFinished(connection, transaction, account.AccountId, kind, itemId);
         if (kind == "movie")
