@@ -1424,3 +1424,10 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   (`InvalidDataException` is sealed). Not yet verified on screen: subtitle/audio picker on both engines, live
   Now/Next on cards and in the player (LibVLC overlay z-order), prev/next + overlay, viewmap/progress bars,
   flat search + chips, Recently added.
+
+- **Live verification (2026-10-02).** Flat search + chips verified from Movies; series previous/next verified on a real
+  stream (East of Eden S01: E01 -> E02 -> E01, Previous disabled at E01). The audio/subtitle picker could not be
+  exercised: the Gate 9 fixture has no tracks, so the button is correctly disabled. **EPG is inert on the current
+  provider:** `xmltv.php` returns 404, refresh result `Unavailable`, `winui-epg.sqlite` stays empty, so no Now/Next
+  renders. Decision: keep EPG as built, no `get_short_epg` fallback. Refresh result and endpoint status are now
+  logged to `tvivo-launch.log`.

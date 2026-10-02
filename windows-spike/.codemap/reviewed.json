@@ -1,13 +1,13 @@
 {
   "../TODO.md": {
     "files": {
-      "src/Tvivo.App/App.xaml.cs": "6f9e3db90baa5eae",
+      "src/Tvivo.App/App.xaml.cs": "8990159a58484628",
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
-      "src/Tvivo.App/EpgCoordinator.cs": "fee1ee3a52612299",
+      "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
       "src/Tvivo.App/MainWindow.xaml.cs": "6ff92dda6ec2c0d5",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "b19b6989836a2e15",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "512261908077132e",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
@@ -28,13 +28,13 @@
   },
   "../docs/decisions.md": {
     "files": {
-      "src/Tvivo.App/App.xaml.cs": "6f9e3db90baa5eae",
+      "src/Tvivo.App/App.xaml.cs": "8990159a58484628",
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
-      "src/Tvivo.App/EpgCoordinator.cs": "fee1ee3a52612299",
+      "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
       "src/Tvivo.App/MainWindow.xaml.cs": "6ff92dda6ec2c0d5",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "b19b6989836a2e15",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "512261908077132e",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
