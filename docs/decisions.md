@@ -1431,3 +1431,13 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   provider:** `xmltv.php` returns 404, refresh result `Unavailable`, `winui-epg.sqlite` stays empty, so no Now/Next
   renders. Decision: keep EPG as built, no `get_short_epg` fallback. Refresh result and endpoint status are now
   logged to `tvivo-launch.log`.
+
+- **Visit ranking is deferred (2026-10-02).** Playing a title used to record the visit immediately, so "Most visited"
+  (`visit_count DESC, last_tuned_at DESC`) re-sorted the list under the user: the played title jumped to the top and the
+  remembered scroll/focus pointed at a different card on return. Visits are now queued in `MainWindow` and applied when the
+  browse context changes (mode, open/close category, sort, search) or the app closes. Next/Previous page, sort and search
+  also reset the scroll to the top and drop the remembered position.
+- **Fixed: playback refused to start after the track probe finished.** `ProbeTracksAsync` disposed its
+  `CancellationTokenSource` at its 10 s deadline while the engine kept the reference, so the next `StopCore` threw
+  `ObjectDisposedException` and every later start failed (HostFailure). `CancelTrackProbe()` now detaches and cancels
+  safely. Verified live: three consecutive switches from the player list, each >10 s after the previous start.

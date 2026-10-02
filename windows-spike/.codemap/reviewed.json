@@ -5,9 +5,9 @@
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
       "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
-      "src/Tvivo.App/MainWindow.xaml.cs": "6ff92dda6ec2c0d5",
+      "src/Tvivo.App/MainWindow.xaml.cs": "972cd5e7c848d8ca",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "512261908077132e",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "118a897bd8fa6bd2",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
@@ -23,7 +23,7 @@
       "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "3768be584c5f5fc8",
       "src/Tvivo.Infrastructure/XtreamInfrastructure.cs": "52abe608282d9869",
       "src/Tvivo.Playback/FFmpegInteropPlaybackEngine.cs": "0fce455c80b70bc5",
-      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "624c4c220b1e7e0d"
+      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "c32173ff9a726836"
     }
   },
   "../docs/decisions.md": {
@@ -32,9 +32,9 @@
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
       "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
-      "src/Tvivo.App/MainWindow.xaml.cs": "6ff92dda6ec2c0d5",
+      "src/Tvivo.App/MainWindow.xaml.cs": "972cd5e7c848d8ca",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "512261908077132e",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "118a897bd8fa6bd2",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
@@ -50,7 +50,7 @@
       "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "3768be584c5f5fc8",
       "src/Tvivo.Infrastructure/XtreamInfrastructure.cs": "52abe608282d9869",
       "src/Tvivo.Playback/FFmpegInteropPlaybackEngine.cs": "0fce455c80b70bc5",
-      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "624c4c220b1e7e0d"
+      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "c32173ff9a726836"
     }
   }
 }
