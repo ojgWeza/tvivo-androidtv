@@ -2,7 +2,8 @@
     x:Class="Tvivo.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:lvs="using:LibVLCSharp.Platforms.Windows">
+    xmlns:lvs="using:LibVLCSharp.Platforms.Windows"
+    xmlns:local="using:Tvivo.App">
     <Grid x:Name="WindowRoot" Background="{StaticResource AppCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="44" />
@@ -140,9 +141,10 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2">
+        <Grid x:Name="ContentSurfaceHost" Grid.Row="2">
             <Grid x:Name="PageHost" />
-            <Grid x:Name="PlayerPage" Visibility="Collapsed" Padding="24" KeyDown="PlayerPage_KeyDown">
+            <Grid x:Name="PlayerPage" Canvas.ZIndex="2" Visibility="Collapsed" Padding="24" KeyDown="PlayerPage_KeyDown"
+                  AutomationProperties.Name="Player" AutomationProperties.AutomationId="CompactPlayerCard">
                 <Grid.RowDefinitions>
                     <RowDefinition x:Name="PlayerNavigationRow" Height="Auto" />
                     <RowDefinition Height="*" />
@@ -225,6 +227,114 @@
                                    Foreground="{StaticResource AppTextBrush}" TextTrimming="CharacterEllipsis" />
                     </Border>
 
+                    <Grid x:Name="CompactChrome" Grid.Row="0" Visibility="Collapsed" IsHitTestVisible="True"
+                          PointerMoved="CompactChrome_PointerMoved">
+                        <Border x:Name="CompactVideoClickTarget" Grid.Row="1" Background="Transparent"
+                                PointerPressed="CompactVideoClickTarget_PointerPressed"
+                                PointerMoved="CompactVideoClickTarget_PointerMoved"
+                                PointerReleased="CompactVideoClickTarget_PointerReleased"
+                                PointerCaptureLost="CompactVideoClickTarget_PointerCaptureLost"
+                                AutomationProperties.Name="Mini player video" AutomationProperties.AutomationId="CompactVideoClickTarget" />
+                        <Grid x:Name="CompactControlsChrome" IsHitTestVisible="True">
+                        <Grid.OpacityTransition>
+                            <ScalarTransition Duration="0:0:0.25" />
+                        </Grid.OpacityTransition>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Border x:Name="CompactDragRegion" Padding="10" Background="#CC000000"
+                                PointerEntered="CompactControls_PointerEntered" PointerExited="CompactControls_PointerExited">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="CompactTitleText" VerticalAlignment="Center" Foreground="White"
+                                           TextTrimming="CharacterEllipsis" AutomationProperties.Name="Mini player title"
+                                           AutomationProperties.AutomationId="CompactTitleText" />
+                                <Button x:Name="CompactExpandButton" Grid.Column="1" Content="&#xE8A7;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
+                                        ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
+                                <Button x:Name="CompactCloseButton" Grid.Column="2" Content="&#xE8BB;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactCloseButton"
+                                        ToolTipService.ToolTip="Return to player" Click="CompactCloseButton_Click" />
+                                <Button x:Name="CompactMinimizeButton" Grid.Column="3" Content="&#xE921;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Minimize" AutomationProperties.AutomationId="CompactMinimizeButton"
+                                        ToolTipService.ToolTip="Minimize" Click="CompactMinimizeButton_Click" />
+                            </Grid>
+                        </Border>
+                        <Border Grid.Row="2" Padding="10" Background="#CC000000"
+                                PointerEntered="CompactControls_PointerEntered" PointerExited="CompactControls_PointerExited">
+                            <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                                <Button x:Name="CompactPauseButton" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                        Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Pause"
+                                        AutomationProperties.AutomationId="CompactPlayPauseButton" Click="PauseButton_Click" />
+                                <Button x:Name="CompactRewindButton" Grid.Column="1" Content="&#xEB9E;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Rewind 10 seconds" Click="RewindButton_Click"
+                                        PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
+                                        PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
+                                        LostFocus="SeekButton_LostFocus" />
+                                <ProgressBar x:Name="CompactProgressBar" Grid.Column="2" Height="3" MinHeight="3"
+                                             VerticalAlignment="Center" Minimum="0" Maximum="100" IsHitTestVisible="False"
+                                             Foreground="{StaticResource AppAccentBrush}" Background="#55FFFFFF"
+                                             AutomationProperties.Name="Mini player progress" />
+                                <TextBlock x:Name="CompactElapsedText" Grid.Column="4" VerticalAlignment="Center"
+                                           Foreground="White" FontSize="11" Text="0:00" />
+                                <Button x:Name="CompactForwardButton" Grid.Column="3" Content="&#xEB9D;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Forward 10 seconds" Click="ForwardButton_Click"
+                                        PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
+                                        PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
+                                        LostFocus="SeekButton_LostFocus" />
+                                <Button x:Name="CompactMuteButton" Grid.Column="5" Content="&#xE767;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Mute" AutomationProperties.AutomationId="CompactMuteButton"
+                                        ToolTipService.ToolTip="Mute" Click="ToggleMute_Click" />
+                            </Grid>
+                        </Border>
+                        </Grid>
+                        <local:CompactResizeZone x:Name="CompactResizeEdgeLeft" HorizontalAlignment="Left" VerticalAlignment="Stretch" Width="7"
+                                                 Edges="Left" CursorShape="SizeWestEast" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeLeft" />
+                        <local:CompactResizeZone x:Name="CompactResizeEdgeTop" HorizontalAlignment="Stretch" VerticalAlignment="Top" Height="7"
+                                                 Edges="Top" CursorShape="SizeNorthSouth" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeTop" />
+                        <local:CompactResizeZone x:Name="CompactResizeEdgeRight" HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="7"
+                                                 Edges="Right" CursorShape="SizeWestEast" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeRight" />
+                        <local:CompactResizeZone x:Name="CompactResizeEdgeBottom" HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Height="7"
+                                                 Edges="Bottom" CursorShape="SizeNorthSouth" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeBottom" />
+                        <local:CompactResizeZone x:Name="CompactResizeCornerTopLeft" HorizontalAlignment="Left" VerticalAlignment="Top" Width="7" Height="7"
+                                                 Edges="Left, Top" CursorShape="SizeNorthwestSoutheast" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerTopLeft" />
+                        <local:CompactResizeZone x:Name="CompactResizeCornerTopRight" HorizontalAlignment="Right" VerticalAlignment="Top" Width="7" Height="7"
+                                                 Edges="Right, Top" CursorShape="SizeNortheastSouthwest" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerTopRight" />
+                        <local:CompactResizeZone x:Name="CompactResizeCornerBottomLeft" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="7" Height="7"
+                                                 Edges="Left, Bottom" CursorShape="SizeNortheastSouthwest" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerBottomLeft" />
+                        <local:CompactResizeZone x:Name="CompactResizeCornerBottomRight" HorizontalAlignment="Right" VerticalAlignment="Bottom" Width="7" Height="7"
+                                                 Edges="Right, Bottom" CursorShape="SizeNorthwestSoutheast" Background="Transparent"
+                                                 AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerBottomRight" />
+                    </Grid>
+
                     <StackPanel x:Name="PlayerDetailsPanel" Grid.Row="1" Spacing="3">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock x:Name="PlayerTitleText" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="Now playing" VerticalAlignment="Center" />
@@ -290,6 +400,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
                         <Button x:Name="RewindButton" Grid.Column="2" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
@@ -317,9 +428,9 @@
                                 <MenuFlyout x:Name="AudioSubtitlesFlyout" />
                             </Button.Flyout>
                         </Button>
-                        <Button x:Name="VolumeButton" Grid.Column="7" Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppIconButtonStyle}">
+                        <Button x:Name="VolumeButton" Grid.Column="7" Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppIconButtonStyle}" DoubleTapped="VolumeButton_DoubleTapped">
                             <Button.Flyout>
-                                <Flyout x:Name="VolumeFlyout" Placement="Top">
+                                <Flyout x:Name="VolumeFlyout" Placement="Top" Opened="VolumeFlyout_Opened" Closed="VolumeFlyout_Closed">
                                     <Flyout.FlyoutPresenterStyle>
                                         <Style TargetType="FlyoutPresenter">
                                             <Setter Property="Padding" Value="0" />
@@ -328,11 +439,18 @@
                                             <Setter Property="CornerRadius" Value="8" />
                                         </Style>
                                     </Flyout.FlyoutPresenterStyle>
-                                    <Slider x:Name="VolumeSlider" Orientation="Vertical" Height="110" Margin="9,10" Minimum="0" Maximum="100" Value="100" AutomationProperties.Name="Volume" ValueChanged="VolumeSlider_ValueChanged" />
+                                    <StackPanel Spacing="4" Padding="6">
+                                        <TextBlock x:Name="VolumeStateText" Text="" HorizontalAlignment="Center" AutomationProperties.Name="Volume state" />
+                                        <Slider x:Name="VolumeSlider" Orientation="Vertical" Height="110" Margin="3,4" Minimum="0" Maximum="100" Value="100" AutomationProperties.Name="Volume" ValueChanged="VolumeSlider_ValueChanged" />
+                                    </StackPanel>
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
                         <Button x:Name="CinemaButton" Grid.Column="8" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
+                        <Button x:Name="MiniPlayerButton" Grid.Column="9" Content="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                AutomationProperties.Name="Mini player" AutomationProperties.AutomationId="MiniPlayerButton"
+                                ToolTipService.ToolTip="Mini player" Style="{StaticResource AppIconButtonStyle}"
+                                Click="MiniPlayerButton_Click" />
                     </Grid>
                     </Border>
                     </Grid>
@@ -340,7 +458,6 @@
                     <Border x:Name="PlayerSidePanel" Grid.Column="1" MinWidth="290" Padding="18" Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="14">
                         <Grid>
                             <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -391,10 +508,7 @@
                                 <TextBlock x:Name="PlayerSeasonWatchedCount" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
                                            Visibility="Collapsed" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
                             </Grid>
-                            <Button x:Name="ResumeEpisodeButton" Grid.Row="4" Margin="0,10,0,0" Visibility="Collapsed"
-                                    Content="Resume episode" HorizontalAlignment="Stretch"
-                                    Style="{StaticResource AppQuietButtonStyle}" Click="ResumeEpisode_Click" />
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Margin="0,10,0,0" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="4" Margin="0,10,0,0" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                                         <Setter Property="MinHeight" Value="0" />

@@ -25,11 +25,15 @@ public static class MovieCompletion
     private const long MinimumDurationMilliseconds = 5 * 60_000;
     private const double MaximumTailShare = 0.05;
 
+    public static long CreditsTailMilliseconds(long durationMilliseconds) => durationMilliseconds <= 0
+        ? 0
+        : Math.Min(CreditsMilliseconds, (long)(durationMilliseconds * MaximumTailShare));
+
     public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended)
     {
         if (ended) return true;
         if (durationMilliseconds is not { } duration || duration < MinimumDurationMilliseconds) return false;
-        var tail = Math.Min(CreditsMilliseconds, (long)(duration * MaximumTailShare));
+        var tail = CreditsTailMilliseconds(duration);
         return duration - Math.Clamp(positionMilliseconds, 0, duration) <= tail;
     }
 }

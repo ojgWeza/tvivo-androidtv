@@ -65,6 +65,17 @@
                             <ComboBoxItem Content="Native player" Tag="Native" />
                             <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
                         </ComboBox>
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13"
+                                   Text="When minimizing while a video is open" />
+                        <ComboBox x:Name="MinimizeToMiniSelector" MinWidth="300"
+                                  SelectionChanged="MinimizeToMiniSelector_SelectionChanged"
+                                  AutomationProperties.Name="When minimizing while a video is open">
+                            <ComboBoxItem Content="Mini player while playing" Tag="MiniPlayerWhilePlaying" />
+                            <ComboBoxItem Content="Mini player while playing or paused" Tag="MiniPlayerWhilePlayingOrPaused" />
+                            <ComboBoxItem Content="Always minimize normally" Tag="AlwaysMinimizeNormally" />
+                        </ComboBox>
+                        <TextBlock x:Name="MinimizeToMiniDescription" Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" TextWrapping="Wrap"
+                                   Text="When LibVLC is playing or paused, minimizing keeps the video in a small always-on-top window." />
                     </StackPanel>
                 </Border>
             </StackPanel>

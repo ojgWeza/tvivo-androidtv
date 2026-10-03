@@ -46,6 +46,19 @@ public sealed partial class MainWindow : Window
     private readonly PlaybackHandoff _playbackHandoff = new(TimeSpan.FromMilliseconds(350));
     private ShellPage? _currentPage;
     private ShellPage _playerReturnPage = ShellPage.Catalog;
+    private PlayerPresentation _playerPresentation = PlayerPresentation.Full;
+    private CompactPlayerGeometry _compactGeometry = CompactPlayerGeometry.Default;
+    private CompactPlayerGeometry _compactDisplayedGeometry = CompactPlayerGeometry.Default;
+    private bool _compactGeometryLoaded;
+    private bool _compactGeometryDirty;
+    private bool _compactGeometryNeedsDefaultAnchor;
+    private bool _compactGeometryGestureActive;
+    private bool _compactGeometryResize;
+    private CompactResizeEdges _compactResizeEdges;
+    private uint _compactGeometryPointerId;
+    private Windows.Foundation.Point _compactPointerStart;
+    private CompactPlayerGeometry _compactGeometryStart;
+    private CompactPlayerGeometry _compactGeometryLogicalStart;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private readonly NextPlaybackSelector _nextPlaybackSelector = new();
@@ -55,7 +68,16 @@ public sealed partial class MainWindow : Window
     private bool _preparedNextWasShuffle;
     private PlaybackMode _episodePlaybackMode = PlaybackMode.Next;
     private PlaybackMode _moviePlaybackMode = PlaybackMode.Shuffle;
+    private MinimizeToMiniMode _minimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying;
+    private WindowMiniGeometry _windowMiniGeometry = WindowMiniGeometry.Default;
+    private WindowMiniGeometry _windowMiniGeometryAtEntry;
+    private bool _windowMiniGeometryDirty;
+    private bool _windowMiniTransitionInProgress;
+    private ShellPage? _windowMiniPreviousPage;
+    private PlayerPresentation _windowMiniPreviousPresentation = PlayerPresentation.Full;
+    private bool _windowMiniPreviousCinema;
     private bool _initializingPlaybackOptions = true;
+    private bool _suppressTopSearchChanged;
     private bool _playerMovieProgressReady = true;
     private long _playerMovieProgressGeneration;
     private double? _playerListPointerPressOffset;
@@ -86,16 +108,25 @@ public sealed partial class MainWindow : Window
     private long _playerEpgGeneration;
     private bool _isClosing;
     private bool _isCinemaMode;
+    private bool _cinemaTransitionInProgress;
+    private int _cinemaTransitionGeneration;
     private bool _cinemaCursorHidden;
+    private readonly CinemaCursorController _cinemaCursorController;
     // Cinema mode shows the transport as an overlay that fades out while playing and the mouse is idle.
     private bool _cinemaControlsVisible = true;
     private bool _cinemaPointerOverControls;
+    private bool _compactPointerOverControls;
     private bool _cinemaPointerMoveDiagnosticWritten;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _videoClickPauseTimer;
     private Windows.Foundation.Point _lastVideoTapPoint;
+    private bool _lastVideoTapWasCompact;
+    private bool _compactVideoPointerActive;
+    private bool _compactVideoPointerDragged;
+    private uint _compactVideoPointerId;
+    private Windows.Foundation.Point _compactVideoPointerStart;
     private readonly WindowStateController _windowState;
     private bool _isDraggingProgress;
     private bool _isHeldSeeking;
@@ -109,6 +140,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _heldSeekTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private bool _isUpdatingProgress;
     private bool _isUpdatingVolume;
+    private PlaybackMuteState _playbackMuteState;
     private long? _resumePositionOnStart;
     private long? _pendingResumePosition;
     private bool _resumeReady;
@@ -124,9 +156,6 @@ public sealed partial class MainWindow : Window
     private long _backTransitionTraceId;
     private long _backTransitionStartedAt;
 
-    [DllImport("user32.dll")]
-    private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
-
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int valueSize);
 
@@ -134,6 +163,7 @@ public sealed partial class MainWindow : Window
     {
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _vlcEngine = App.Services.GetRequiredService<VlcPlaybackEngine>();
+        _vlcEngine.StateChanged += VlcEngine_StateChanged;
         _nativeEngine = App.Services.GetRequiredService<FFmpegInteropPlaybackEngine>();
         _vlcEngine.LifecycleEvent += LaunchDiagnostics.Write;
         _nativeEngine.LifecycleEvent += LaunchDiagnostics.Write;
@@ -163,9 +193,11 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        _cinemaCursorController = new CinemaCursorController(WinRT.Interop.WindowNative.GetWindowHandle(this));
         var playbackOptions = ReadPlaybackOptions();
         _episodePlaybackMode = playbackOptions.EpisodeMode;
         _moviePlaybackMode = playbackOptions.MovieMode;
+        _minimizeToMiniMode = playbackOptions.MinimizeToMiniMode;
         try
         {
             SyncPlaybackModeToggles(_episodePlaybackMode);
@@ -176,6 +208,7 @@ public sealed partial class MainWindow : Window
         }
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
+        SetMutePresentation();
         SetTrackSelectingEngine(_engine);
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         _playerEpgTimer.Tick += PlayerEpgTimer_Tick;
@@ -191,15 +224,29 @@ public sealed partial class MainWindow : Window
         TitleBarDragRegion.PointerPressed += TitleBarDragRegion_PointerPressed;
         WindowRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(WindowRoot_KeyDown), true);
         WindowRoot.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler(WindowRoot_PointerWheelInput), true);
+        CompactChrome.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(CompactChrome_PointerPressed), true);
+        CompactChrome.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(CompactChrome_PointerReleased), true);
+        CompactChrome.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(CompactChrome_PointerCaptureLost), true);
+        CompactChrome.GotFocus += CompactChrome_GotFocus;
+        CompactChrome.LostFocus += CompactChrome_LostFocus;
         WindowRoot.SizeChanged += WindowRoot_SizeChanged;
+        ContentSurfaceHost.Loaded += ContentSurfaceHost_Loaded;
+        ContentSurfaceHost.SizeChanged += ContentSurfaceHost_SizeChanged;
         VideoView.Unloaded += (_, _) => TraceBackTransition("video-view-unloaded");
         NativePlayerElement.Unloaded += (_, _) => TraceBackTransition("native-player-unloaded");
         _windowState = new WindowStateController(this);
+        _windowMiniGeometry = ReadWindowMiniGeometry() ?? _windowState.GetDefaultWindowMiniGeometry();
+        _windowState.InstallMinimizeInterceptor(WindowRoot.DispatcherQueue,
+            () => ShouldMinimizeBecomeWindowMini(), () => EnterWindowMiniPlayer(), HandleWindowMiniModeRequest, ForceExitWindowMini);
+        _windowState.WindowMiniGeometryChanged += WindowState_WindowMiniGeometryChanged;
         ApplyWindowChromeState();
         _catalogLandingPage.InteractionReadinessChanged += CatalogLandingPage_InteractionReadinessChanged;
+        _catalogLandingPage.SearchTextChanged += CatalogLandingPage_SearchTextChanged;
         _nativeEngine.Player.Volume = 1;
         NativePlayerElement.SetMediaPlayer(_nativeEngine.Player);
         _accountPage.SetPlaybackEngine(useVlc ? "LibVLC" : "Native");
+        _accountPage.SetMinimizeToMiniMode(_minimizeToMiniMode);
+        _accountPage.MinimizeToMiniModeChanged += AccountPage_MinimizeToMiniModeChanged;
         _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
@@ -231,22 +278,23 @@ public sealed partial class MainWindow : Window
 
     public void PrepareForActivation()
     {
-        _windowState.Apply(WindowStateController.WindowMode.Fullscreen);
+        _windowState.RequestWindowMode(WindowStateController.WindowMode.Fullscreen);
         ApplyWindowChromeState();
     }
 
     private void WindowStateButton_Click(object sender, RoutedEventArgs args)
     {
-        var target = _windowState.Mode == WindowStateController.WindowMode.Fullscreen
+        var target = _windowState.EffectiveMode == WindowStateController.WindowMode.Fullscreen
             ? WindowStateController.WindowMode.Windowed
             : WindowStateController.WindowMode.Fullscreen;
-        _windowState.Apply(target);
+        _windowState.RequestWindowMode(target);
         ApplyWindowChromeState();
     }
 
     private void MinimizeWindowButton_Click(object sender, RoutedEventArgs args)
     {
-        _windowState.Minimize();
+        if (ShouldMinimizeBecomeWindowMini(_windowState.IsShiftDown)) EnterWindowMiniPlayer();
+        else _windowState.Minimize();
     }
 
     private void CloseWindowButton_Click(object sender, RoutedEventArgs args) => Close();
@@ -265,9 +313,22 @@ public sealed partial class MainWindow : Window
         if (_isCinemaMode && _currentPage == ShellPage.Player)
             ShowCinemaControls();
 
+        if (_windowState.IsWindowMini && args.Key == Windows.System.VirtualKey.Escape)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: false);
+            args.Handled = true;
+            return;
+        }
+
         if (args.Key == Windows.System.VirtualKey.F11)
         {
             WindowStateButton_Click(sender, new RoutedEventArgs());
+            args.Handled = true;
+        }
+        else if (args.Key == Windows.System.VirtualKey.Escape &&
+            _playerPresentation == PlayerPresentation.Compact && HasCompactKeyboardFocus())
+        {
+            CompactCloseButton_Click(this, new RoutedEventArgs());
             args.Handled = true;
         }
         else if (args.Key == Windows.System.VirtualKey.Escape && _currentPage == ShellPage.Player)
@@ -350,9 +411,23 @@ public sealed partial class MainWindow : Window
         StopHeldSeek(commit: true, released: false);
         StopCinemaCursorIdleTimer(showCursor: true);
 
-        var restartCurrentPlayback = _currentPage == ShellPage.Player && _currentSource is not null;
+        var restartCurrentPlayback = IsPlaybackUiActive;
         if (restartCurrentPlayback) SaveResumePosition(force: true);
-        await _playback.StopAsync();
+        if (_playerPresentation == PlayerPresentation.Compact)
+        {
+            SetPlayerPresentation(PlayerPresentation.Full);
+            ShowPage(ShellPage.Player);
+        }
+        try
+        {
+            await _playback.StopAsync();
+        }
+        catch (Exception exception)
+        {
+            // A failing stop must not leave the engine switch half-applied (stale visuals/buttons).
+            LaunchDiagnostics.WriteException("Stopping playback before the engine switch failed", exception);
+        }
+        selectedEngine.IsMuted = _playbackMuteState.IsMuted;
         Volatile.Write(ref _engine, selectedEngine);
         SetTrackSelectingEngine(_engine);
         _playback = ReferenceEquals(_engine, _vlcEngine) ? _vlcPlayback : _nativePlayback;
@@ -365,7 +440,11 @@ public sealed partial class MainWindow : Window
     private void ApplyPlaybackEngineVisuals()
     {
         var native = ReferenceEquals(_engine, _nativeEngine);
-        SetPlaybackSurfaceVisibility(_currentPage == ShellPage.Player);
+        SetPlaybackSurfaceVisibility(_currentPage == ShellPage.Player || _playerPresentation == PlayerPresentation.Compact);
+        // Mini player (button + minimize-to-mini setting) is LibVLC-only; the button is hidden
+        // under Native by ApplyPlayerLayout so it follows the engine on every layout pass.
+        MiniPlayerButton.IsEnabled = true;
+        _accountPage.SetMinimizeToMiniAvailable(!native);
         VlcTransportBar.Visibility = Visibility.Visible;
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         if (native)
@@ -591,6 +670,27 @@ public sealed partial class MainWindow : Window
         "Tvivo",
         "playback-options.json");
 
+    private static string GetWindowMiniGeometryPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Tvivo",
+        "window-mini-geometry.json");
+
+    private static WindowMiniGeometry? ReadWindowMiniGeometry()
+    {
+        try
+        {
+            var path = GetWindowMiniGeometryPath();
+            return File.Exists(path)
+                ? JsonSerializer.Deserialize<WindowMiniGeometry>(File.ReadAllText(path))
+                : null;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Window mini geometry could not be read; using defaults", exception);
+            return null;
+        }
+    }
+
     private static PlaybackModePreferences ReadPlaybackOptions()
     {
         try
@@ -613,11 +713,62 @@ public sealed partial class MainWindow : Window
         {
             var path = GetPlaybackOptionsPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, new PlaybackModePreferences(_episodePlaybackMode, _moviePlaybackMode).ToJson());
+            File.WriteAllText(path, new PlaybackModePreferences(
+                _episodePlaybackMode, _moviePlaybackMode, _minimizeToMiniMode).ToJson());
         }
         catch (Exception exception)
         {
             LaunchDiagnostics.WriteException("Playback options could not be saved", exception);
+        }
+    }
+
+    private void AccountPage_MinimizeToMiniModeChanged(object? sender, MinimizeToMiniMode mode)
+    {
+        _minimizeToMiniMode = mode;
+        WritePlaybackOptions();
+    }
+
+    private bool ShouldMinimizeBecomeWindowMini(bool shiftHeld = false) => PlayerPresentationPolicy.ShouldMinimizeBecomeMini(
+        _minimizeToMiniMode,
+        _engine.IsPlaying,
+        _engine.IsPaused,
+        _currentSource is not null,
+        _engine.IsEnded,
+        _currentSource?.Kind,
+        ReferenceEquals(_engine, _vlcEngine) ? MiniPlayerEngineKind.LibVlc : MiniPlayerEngineKind.Native,
+        _windowState.IsWindowMini,
+        shiftHeld);
+
+    private bool ShouldExplicitCinemaMiniButtonBecomeWindowMini() =>
+        PlayerPresentationPolicy.ShouldEnterMiniFromCinemaButton(
+            _currentSource is not null && (_engine.IsPlaying || _engine.IsPaused || _engine.IsBuffering),
+            _currentSource?.Kind,
+            ReferenceEquals(_engine, _vlcEngine) ? MiniPlayerEngineKind.LibVlc : MiniPlayerEngineKind.Native,
+            _windowState.IsWindowMini,
+            _engine.IsEnded);
+
+    private void WindowState_WindowMiniGeometryChanged(WindowMiniGeometry geometry)
+    {
+        if (!_windowState.IsWindowMini) return;
+        _windowMiniGeometry = geometry;
+        _windowMiniGeometryDirty = _windowMiniGeometry != _windowMiniGeometryAtEntry;
+    }
+
+    private void SaveWindowMiniGeometryIfChanged()
+    {
+        if (!_windowMiniGeometryDirty) return;
+        try
+        {
+            var path = GetWindowMiniGeometryPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temporaryPath = path + ".tmp";
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(_windowMiniGeometry));
+            File.Move(temporaryPath, path, overwrite: true);
+            _windowMiniGeometryDirty = false;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Window mini geometry could not be saved", exception);
         }
     }
 
@@ -632,7 +783,9 @@ public sealed partial class MainWindow : Window
     private void SetPlaybackMode(PlaybackMode mode)
     {
         if (_initializingPlaybackOptions) return;
-        var kind = _nowPlayingChannel?.Source.Kind;
+        // The toggles show the mode of the kind they were last configured for; edit that one,
+        // not whatever _nowPlayingChannel happens to be mid-transition (null after a stop).
+        var kind = _playlistOptionsKind ?? _nowPlayingChannel?.Source.Kind;
         if (kind == StreamKind.Episode)
             _episodePlaybackMode = mode;
         else if (kind == StreamKind.Movie)
@@ -669,8 +822,11 @@ public sealed partial class MainWindow : Window
         ShuffleToggle.IsChecked = mode == PlaybackMode.Shuffle;
     }
 
+    private StreamKind? _playlistOptionsKind;
+
     private void UpdatePlaylistOptionControls(StreamKind kind)
     {
+        _playlistOptionsKind = kind;
         _initializingPlaybackOptions = true;
         try
         {
@@ -780,16 +936,26 @@ public sealed partial class MainWindow : Window
         if (_currentPage == page)
             return;
 
-        if (_currentPage == ShellPage.Player && page != ShellPage.Player)
+        if (page != ShellPage.Player && _isCinemaMode)
+            StopCinemaCursorIdleTimer(showCursor: true);
+
+        if (page == ShellPage.Player && _playerPresentation == PlayerPresentation.Compact)
+            SetPlayerPresentation(PlayerPresentation.Full);
+
+        var shouldStopPlayback = _currentPage is { } currentPage && page != ShellPage.Player &&
+            PlayerPresentationPolicy.ShouldStopPlaybackOnPageChange(
+                _playerPresentation, ToPlayerPageKind(currentPage), ToPlayerPageKind(page));
+
+        if (shouldStopPlayback)
             StopHeldSeek(commit: true, released: false);
 
         var returningFromPlayer = page == ShellPage.Catalog && _currentPage == ShellPage.Player;
 
-        if (_currentPage == ShellPage.Player && page != ShellPage.Player && !_backTransitionTraceActive)
+        if (shouldStopPlayback && !_backTransitionTraceActive)
             BeginBackTransitionTrace($"player-leave-navigation destination={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
 
         TraceBackTransition($"show-page-enter from={_currentPage} to={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
-        if (_currentPage == ShellPage.Player && page != ShellPage.Player)
+        if (shouldStopPlayback)
         {
             FlushPendingVisits();
             TraceBackTransition("show-page-before-player-stop");
@@ -801,6 +967,8 @@ public sealed partial class MainWindow : Window
         if (page == ShellPage.Home)
             _ = _homePage.LoadAsync(_catalogLandingPage.Account, _catalogLandingPage.Connection, _catalogRepository);
         var isPlayer = page == ShellPage.Player;
+        var keepCompactVisible = _playerPresentation == PlayerPresentation.Compact &&
+            PlayerPresentationPolicy.CanCoexist(_playerPresentation, ToPlayerPageKind(page));
         if (isPlayer)
             _playbackUiTimer.Start();
         var isCatalog = page == ShellPage.Catalog;
@@ -810,9 +978,19 @@ public sealed partial class MainWindow : Window
         _homePage.Visibility = page == ShellPage.Home ? Visibility.Visible : Visibility.Collapsed;
         _providerSetupPage.Visibility = page == ShellPage.Setup ? Visibility.Visible : Visibility.Collapsed;
         _accountPage.Visibility = page == ShellPage.Account ? Visibility.Visible : Visibility.Collapsed;
-        PlayerPage.Visibility = isPlayer ? Visibility.Visible : Visibility.Collapsed;
+        PlayerPage.Visibility = isPlayer || keepCompactVisible ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-player-visibility-set page={page} player={PlayerPage.Visibility}");
-        SetPlaybackSurfaceVisibility(isPlayer);
+        SetPlaybackSurfaceVisibility(isPlayer || keepCompactVisible);
+        CompactChrome.Visibility = keepCompactVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (keepCompactVisible) ApplyCompactGeometryToLayout();
+        else if (!isPlayer)
+        {
+            PlayerPage.Width = double.NaN;
+            PlayerPage.Height = double.NaN;
+            PlayerPage.HorizontalAlignment = HorizontalAlignment.Stretch;
+            PlayerPage.VerticalAlignment = VerticalAlignment.Stretch;
+            PlayerPage.Margin = new Thickness(0);
+        }
         if (isPlayer && _nowPlayingChannel is { } selectedPlayerChannel)
             SetCurrentPlayerEntry(selectedPlayerChannel);
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
@@ -871,8 +1049,254 @@ public sealed partial class MainWindow : Window
         _backTransitionTraceActive = false;
     }
 
-    private void WindowRoot_SizeChanged(object sender, SizeChangedEventArgs args) =>
+    private void ContentSurfaceHost_Loaded(object sender, RoutedEventArgs args)
+    {
+        WindowRoot.XamlRoot.Changed += (_, _) =>
+        {
+            if (_compactGeometryLoaded) ClampAndApplyCompactGeometry();
+        };
+        if (_compactGeometryLoaded) return;
+        _compactGeometryLoaded = true;
+        try
+        {
+            var path = GetCompactGeometryPath();
+            if (File.Exists(path))
+                _compactGeometry = JsonSerializer.Deserialize<CompactPlayerGeometry>(File.ReadAllText(path));
+            else
+                _compactGeometryNeedsDefaultAnchor = true;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Compact player geometry could not be read; using defaults", exception);
+            _compactGeometry = CompactPlayerGeometry.Default;
+            _compactGeometryNeedsDefaultAnchor = true;
+        }
+        ClampAndApplyCompactGeometry();
+    }
+
+    private void WindowRoot_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
         TraceBackTransition($"xaml-size-changed old={args.PreviousSize.Width:0.0}x{args.PreviousSize.Height:0.0} new={args.NewSize.Width:0.0}x{args.NewSize.Height:0.0}");
+        if (_windowState.IsWindowMini && _windowState.GetWindowMiniInvalidStateReason() is { } invalidState)
+            ForceExitWindowMini($"xaml-size-changed:{invalidState}");
+        if (_compactGeometryLoaded) ClampAndApplyCompactGeometry();
+    }
+
+    private void ContentSurfaceHost_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (_compactGeometryLoaded) ClampAndApplyCompactGeometry();
+    }
+
+    private void ClampAndApplyCompactGeometry()
+    {
+        if (!_compactGeometry.TryClamp(ContentSurfaceHost.ActualWidth, ContentSurfaceHost.ActualHeight, out var displayed)) return;
+        if (_compactGeometryNeedsDefaultAnchor)
+        {
+            _compactGeometry = _compactGeometry with
+            {
+                Left = Math.Max(0, ContentSurfaceHost.ActualWidth - displayed.Width - 24),
+                Top = Math.Max(0, ContentSurfaceHost.ActualHeight - displayed.Height - 24),
+            };
+            _compactGeometryNeedsDefaultAnchor = false;
+            if (!_compactGeometry.TryClamp(ContentSurfaceHost.ActualWidth, ContentSurfaceHost.ActualHeight, out displayed)) return;
+        }
+        _compactDisplayedGeometry = displayed;
+        if (_playerPresentation == PlayerPresentation.Compact)
+            ApplyCompactGeometryToLayout();
+    }
+
+    private void ApplyCompactGeometryToLayout()
+    {
+        var host = _windowState.IsWindowMini ? PlayerPresentationHost.WindowMini : PlayerPresentationHost.MainWindow;
+        if (!PlayerPresentationPolicy.UsesInWindowCompactGeometry(host))
+        {
+            PlayerPage.Width = double.NaN;
+            PlayerPage.Height = double.NaN;
+            PlayerPage.HorizontalAlignment = HorizontalAlignment.Stretch;
+            PlayerPage.VerticalAlignment = VerticalAlignment.Stretch;
+            PlayerPage.Margin = new Thickness(0);
+            return;
+        }
+
+        PlayerPage.Width = _compactDisplayedGeometry.Width;
+        PlayerPage.Height = _compactDisplayedGeometry.Height;
+        PlayerPage.HorizontalAlignment = HorizontalAlignment.Left;
+        PlayerPage.VerticalAlignment = VerticalAlignment.Top;
+        PlayerPage.Margin = new Thickness(_compactDisplayedGeometry.Left, _compactDisplayedGeometry.Top, 0, 0);
+    }
+
+    private static string GetCompactGeometryPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "compact-player-geometry.json");
+
+    private void SaveCompactGeometry()
+    {
+        try
+        {
+            var path = GetCompactGeometryPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temporaryPath = path + ".tmp";
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(_compactGeometry));
+            File.Move(temporaryPath, path, overwrite: true);
+            _compactGeometryDirty = false;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Compact player geometry could not be saved", exception);
+        }
+    }
+
+    private void CompactChrome_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        var source = args.OriginalSource as DependencyObject;
+        if (FindCompactResizeZone(source) is { } resizeZone)
+        {
+            if (!_windowState.IsWindowMini) BeginCompactGeometryGesture(sender, args, resizeZone.Edges);
+        }
+        else if (_windowState.IsWindowMini && IsVisualDescendantOf(source, CompactDragRegion) &&
+                 !IsVisualDescendantOf(source, CompactExpandButton) &&
+                 !IsVisualDescendantOf(source, CompactCloseButton) &&
+                 !IsVisualDescendantOf(source, CompactMinimizeButton))
+        {
+            if (args.GetCurrentPoint(CompactChrome).Properties.IsLeftButtonPressed) _windowState.BeginWindowDrag();
+        }
+        else if (IsVisualDescendantOf(source, CompactTitleText))
+        {
+            BeginCompactGeometryGesture(sender, args, CompactResizeEdges.None);
+        }
+    }
+
+    private static CompactResizeZone? FindCompactResizeZone(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is CompactResizeZone zone) return zone;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return null;
+    }
+
+    private static bool IsVisualDescendantOf(DependencyObject? source, DependencyObject target)
+    {
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, target)) return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
+
+    private void CompactChrome_PointerReleased(object sender, PointerRoutedEventArgs args) => CompactGeometry_PointerReleased(sender, args);
+
+    private void CompactChrome_PointerCaptureLost(object sender, PointerRoutedEventArgs args) => CompactGeometry_PointerCaptureLost(sender, args);
+
+    private void CompactVideoClickTarget_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        if (_playerPresentation != PlayerPresentation.Compact || sender is not UIElement target ||
+            !args.GetCurrentPoint(target).Properties.IsLeftButtonPressed) return;
+        _compactVideoPointerStart = args.GetCurrentPoint(target).Position;
+        _compactVideoPointerId = args.Pointer.PointerId;
+        _compactVideoPointerDragged = false;
+        _compactVideoPointerActive = target.CapturePointer(args.Pointer);
+        ShowCompactControls();
+        args.Handled = _compactVideoPointerActive;
+    }
+
+    private void CompactVideoClickTarget_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_compactVideoPointerActive || args.Pointer.PointerId != _compactVideoPointerId || sender is not UIElement target) return;
+        var point = args.GetCurrentPoint(target).Position;
+        var dx = point.X - _compactVideoPointerStart.X;
+        var dy = point.Y - _compactVideoPointerStart.Y;
+        if (dx * dx + dy * dy > 4 * 4) _compactVideoPointerDragged = true;
+    }
+
+    private void CompactVideoClickTarget_PointerReleased(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_compactVideoPointerActive || args.Pointer.PointerId != _compactVideoPointerId || sender is not UIElement target) return;
+        var wasClick = !_compactVideoPointerDragged;
+        var point = args.GetCurrentPoint(target).Position;
+        _compactVideoPointerActive = false;
+        target.ReleasePointerCapture(args.Pointer);
+        if (wasClick) RegisterVideoClick(point, compact: true);
+        ShowCompactControls();
+        args.Handled = true;
+    }
+
+    private void CompactVideoClickTarget_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
+    {
+        if (args.Pointer.PointerId == _compactVideoPointerId) _compactVideoPointerActive = false;
+    }
+
+    private void BeginCompactGeometryGesture(object sender, PointerRoutedEventArgs args, CompactResizeEdges edges)
+    {
+        if (_playerPresentation != PlayerPresentation.Compact || sender is not UIElement element ||
+            !_compactGeometry.TryClamp(ContentSurfaceHost.ActualWidth, ContentSurfaceHost.ActualHeight, out var displayed)) return;
+        _compactResizeEdges = edges;
+        _compactGeometryResize = edges != CompactResizeEdges.None;
+        _compactGeometryStart = displayed;
+        _compactDisplayedGeometry = displayed;
+        _compactGeometryLogicalStart = _compactGeometry;
+        _compactPointerStart = args.GetCurrentPoint(ContentSurfaceHost).Position;
+        if (!element.CapturePointer(args.Pointer)) return;
+        _compactGeometryPointerId = args.Pointer.PointerId;
+        _compactGeometryGestureActive = true;
+        _compactGeometryDirty = false;
+        ShowCompactControls();
+        args.Handled = true;
+    }
+
+    private void CompactGeometry_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (_playerPresentation != PlayerPresentation.Compact || !_compactGeometryGestureActive ||
+            args.Pointer.PointerId != _compactGeometryPointerId || args.Pointer.IsInContact is false) return;
+        var point = args.GetCurrentPoint(ContentSurfaceHost).Position;
+        var deltaX = point.X - _compactPointerStart.X;
+        var deltaY = point.Y - _compactPointerStart.Y;
+        var candidate = _compactGeometryResize
+            ? _compactGeometryStart.ResizeFromEdges(_compactResizeEdges, deltaX, deltaY,
+                ContentSurfaceHost.ActualWidth, ContentSurfaceHost.ActualHeight)
+            : _compactGeometryStart with { Left = _compactGeometryStart.Left + deltaX, Top = _compactGeometryStart.Top + deltaY };
+        if (!candidate.TryClamp(ContentSurfaceHost.ActualWidth, ContentSurfaceHost.ActualHeight, out var clamped)) return;
+        _compactGeometry = clamped;
+        _compactDisplayedGeometry = clamped;
+        _compactGeometryDirty = clamped != _compactGeometryStart;
+        ApplyCompactGeometryToLayout();
+        args.Handled = true;
+    }
+
+    private void CompactGeometry_PointerReleased(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_compactGeometryGestureActive || args.Pointer.PointerId != _compactGeometryPointerId) return;
+        _compactGeometryGestureActive = false;
+        if (!_compactGeometryDirty)
+            _compactGeometry = _compactGeometryLogicalStart;
+        if (_compactGeometryDirty) SaveCompactGeometry();
+        _compactGeometryDirty = false;
+        if (sender is UIElement element) element.ReleasePointerCapture(args.Pointer);
+        ShowCompactControls();
+        args.Handled = true;
+    }
+
+    private void CompactGeometry_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_compactGeometryGestureActive || args.Pointer.PointerId != _compactGeometryPointerId) return;
+        _compactGeometryGestureActive = false;
+        _compactGeometry = _compactGeometryLogicalStart;
+        _compactGeometryDirty = false;
+        if (_playerPresentation == PlayerPresentation.Compact) ApplyCompactGeometryToLayout();
+        ShowCompactControls();
+    }
+
+    private bool IsPlaybackUiActive => _currentSource is not null &&
+        PlayerPresentationPolicy.CanCoexist(_playerPresentation, CurrentPageKind,
+            _windowState.IsWindowMini ? PlayerPresentationHost.WindowMini : PlayerPresentationHost.MainWindow);
+
+    private PlayerPageKind CurrentPageKind => _currentPage switch
+    {
+        ShellPage.Player => PlayerPageKind.Player,
+        ShellPage.Catalog => PlayerPageKind.Catalog,
+        _ => PlayerPageKind.Other,
+    };
 
     private string VideoSurfaceState() =>
         $"vlc={VideoView.Visibility}/loaded:{VideoView.IsLoaded}/size:{VideoView.ActualWidth:0.0}x{VideoView.ActualHeight:0.0}/host:WinUI-D3D11-swapchain/nativeHwnd:not-applicable,native={NativePlayerElement.Visibility}";
@@ -907,14 +1331,27 @@ public sealed partial class MainWindow : Window
 
     private void TopSearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
-        if (!_catalogLandingPage.IsReadyForInteraction)
+        if (_suppressTopSearchChanged || !_catalogLandingPage.IsReadyForInteraction)
             return;
         _catalogLandingPage.SetSearchText(TopSearchBox.Text);
     }
 
+    private void CatalogLandingPage_SearchTextChanged(string text)
+    {
+        _suppressTopSearchChanged = true;
+        try
+        {
+            TopSearchBox.Text = text;
+        }
+        finally
+        {
+            _suppressTopSearchChanged = false;
+        }
+    }
+
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
-        if (_currentPage == ShellPage.Player) SaveResumePosition(force: true);
+        if (IsPlaybackUiActive) SaveResumePosition(force: true);
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
         var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
         Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
@@ -946,7 +1383,6 @@ public sealed partial class MainWindow : Window
         _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
         PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
-        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         SeriesFavoriteButton.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
         if (_currentPage != ShellPage.Player)
@@ -1086,10 +1522,10 @@ public sealed partial class MainWindow : Window
             new Dictionary<string, string> { ["seriesId"] = seriesId, ["seasonId"] = episode.SeasonId });
     }
 
-    private void OpenSeriesEpisode(Channel episode)
+    private void OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
     {
         if (episode.Source.DirectUri is null) return;
-        if (_currentPage == ShellPage.Player) SaveResumePosition(force: true);
+        if (IsPlaybackUiActive) SaveResumePosition(force: true);
         if (_currentPage != ShellPage.Player)
             _playerReturnPage = _currentPage ?? ShellPage.Catalog;
         _currentSeriesId ??= episode.Metadata.TryGetValue("seriesId", out var seriesId) ? seriesId : null;
@@ -1127,8 +1563,8 @@ public sealed partial class MainWindow : Window
         _nextEpisodeAdvanceStarted = false;
         NextEpisodePrompt.Visibility = Visibility.Collapsed;
         UpdateEpisodeNavigationButtons();
-        ShowPage(ShellPage.Player);
-        _ = StartPlaybackAsync(episode.Source);
+        if (!preserveCompact) ShowPage(ShellPage.Player);
+        _ = StartPlaybackAsync(episode.Source, preserveCompact);
     }
 
     private Channel? GetAdjacentEpisode(int offset)
@@ -1405,7 +1841,6 @@ public sealed partial class MainWindow : Window
         PlayerSeasonWatchedCount.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
         PlayerSeasonWatchedCount.Text = hasMultipleSeasons && PlayerSeasonComboBox.SelectedItem is SeriesSeason selected
             ? SeasonWatchedCount(selected) : string.Empty;
-        ResumeEpisodeButton.Visibility = seasons.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -1426,14 +1861,6 @@ public sealed partial class MainWindow : Window
     {
         var watched = season.Episodes.Count(episode => _seriesEpisodeProgress.TryGetValue(episode.Id, out var progress) && progress.State == PlaybackProgressState.Finished);
         return $"{watched}/{season.Episodes.Count} watched";
-    }
-
-    private void ResumeEpisode_Click(object sender, RoutedEventArgs args)
-    {
-        if (_currentSeriesAccount is null || _currentSeriesId is null || _nowPlayingChannel is null) return;
-        var details = new SeriesDetails(_currentSeriesId, _currentSeriesTitle ?? string.Empty, _playerSeriesSeasons);
-        if (_catalogRepository.SelectResumeEpisode(_currentSeriesAccount, details) is not { } selected) return;
-        OpenSeriesEpisode(ToEpisodeChannel(_currentSeriesAccount, _currentSeriesId, selected));
     }
 
     private void RefreshSeasonProgressCount()
@@ -1461,9 +1888,10 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage.NotifyVisitRecorded();
     }
 
-    private async Task StartPlaybackAsync(StreamSource source)
+    private async Task StartPlaybackAsync(StreamSource source, bool preserveCompact = false)
     {
         StopHeldSeek(commit: true, released: false);
+        _engine.IsMuted = _playbackMuteState.IsMuted;
         var resumePosition = source.Kind switch
         {
             StreamKind.Movie when _catalogLandingPage.Account is { } account && _nowPlayingChannel is { } movie =>
@@ -1491,9 +1919,12 @@ public sealed partial class MainWindow : Window
         ClearPlayerNowNext();
         _playbackCompletionShown = false;
         if (_nowPlayingChannel is { } selectedChannel)
+        {
             PlayerTitleText.Text = selectedChannel.DisplayName;
+            CompactTitleText.Text = selectedChannel.DisplayName;
+        }
         PlayerVideoCurtain.Visibility = Visibility.Visible;
-        ShowPage(ShellPage.Player);
+        if (!preserveCompact) ShowPage(ShellPage.Player);
         if (source.Kind == StreamKind.Live)
         {
             StartPlayerEpgUpdates();
@@ -1586,7 +2017,7 @@ public sealed partial class MainWindow : Window
     private bool IsCurrentPlaybackStart(long generation, CancellationTokenSource sessionCts) =>
         generation == Volatile.Read(ref _playbackSessionGeneration) &&
         !sessionCts.IsCancellationRequested &&
-        _currentPage == ShellPage.Player;
+        IsPlaybackUiActive;
 
     private void TraceClickAway(long traceId, string message)
     {
@@ -1662,9 +2093,8 @@ public sealed partial class MainWindow : Window
         PlayerSeasonLabel.Visibility = Visibility.Collapsed;
         PlayerSeasonWatchedCount.Text = string.Empty;
         PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
-        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         _playerEntries.Clear();
-        SetCinemaMode(false);
+        SetCinemaMode(false, animate: false);
 
         _playbackStopTask = StopBothPlaybackEnginesAsync();
         TraceBackTransition($"player-stop-return asyncStopStarted={!_playbackStopTask.IsCompleted} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
@@ -1677,6 +2107,9 @@ public sealed partial class MainWindow : Window
         PauseButton.Content = label switch { "Pause" => "\uE769", "Retry" => "\uE72C", _ => "\uE768" };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PauseButton, label);
         ToolTipService.SetToolTip(PauseButton, label);
+        CompactPauseButton.Content = PauseButton.Content;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactPauseButton, label);
+        ToolTipService.SetToolTip(CompactPauseButton, label);
     }
 
     private async Task StopBothPlaybackEnginesAsync()
@@ -1765,7 +2198,7 @@ public sealed partial class MainWindow : Window
             }
 
             if (generation != Volatile.Read(ref _metadataGeneration) ||
-                _currentPage != ShellPage.Player ||
+                !IsPlaybackUiActive ||
                 _nowPlayingChannel?.Id != channel.Id)
             {
                 TraceClickAway(playerEntryTraceId, $"metadata-completion-discarded generation={generation} currentGeneration={Volatile.Read(ref _metadataGeneration)} page={_currentPage}");
@@ -1778,7 +2211,7 @@ public sealed partial class MainWindow : Window
         catch
         {
             if (generation == Volatile.Read(ref _metadataGeneration) &&
-                _currentPage == ShellPage.Player &&
+                IsPlaybackUiActive &&
                 _nowPlayingChannel?.Id == channel.Id)
                 SetPlayerMetadata(new CatalogMetadata(), type);
             else
@@ -1839,13 +2272,13 @@ public sealed partial class MainWindow : Window
             WindowRoot.DispatcherQueue.TryEnqueue(() => EpgCoordinator_EpgUpdated(sender, args));
             return;
         }
-        if (_currentPage == ShellPage.Player && _currentSource?.Kind == StreamKind.Live)
+        if (IsPlaybackUiActive && _currentSource?.Kind == StreamKind.Live)
             _ = RefreshPlayerNowNextAsync();
     }
 
     private void PlayerEpgTimer_Tick(object? sender, object args)
     {
-        if (_currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live)
+        if (!IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live)
         {
             StopPlayerEpgUpdates();
             return;
@@ -1856,7 +2289,7 @@ public sealed partial class MainWindow : Window
     private void StartPlayerEpgUpdates()
     {
         StopPlayerEpgUpdates();
-        if (_isClosing || _currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+        if (_isClosing || !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live ||
             _nowPlayingChannel?.Metadata.TryGetValue("epg_channel_id", out var epgChannelId) != true ||
             string.IsNullOrWhiteSpace(epgChannelId) || _catalogLandingPage.Account is null)
             return;
@@ -1881,7 +2314,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+        if (!IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live ||
             _nowPlayingChannel is not { } channel ||
             channel.Metadata.TryGetValue("epg_channel_id", out var epgChannelId) != true ||
             string.IsNullOrWhiteSpace(epgChannelId) || _catalogLandingPage.Account is not { } account)
@@ -1896,7 +2329,7 @@ public sealed partial class MainWindow : Window
         {
             var nowNext = await Task.Run(() => _epgCoordinator.GetNowNext(account, new[] { id }));
             if (_isClosing || generation != Volatile.Read(ref _playerEpgGeneration) ||
-                _currentPage != ShellPage.Player || _currentSource?.Kind != StreamKind.Live ||
+                !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live ||
                 _nowPlayingChannel?.Id != channel.Id)
                 return;
 
@@ -1973,12 +2406,12 @@ public sealed partial class MainWindow : Window
             SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
         }
         else
-            await StartPlaybackAsync(_currentSource);
+            await StartPlaybackAsync(_currentSource, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
     }
 
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
-        if (_currentPage != ShellPage.Player)
+        if (!IsPlaybackUiActive)
         {
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             return;
@@ -1994,6 +2427,20 @@ public sealed partial class MainWindow : Window
                     _cinemaCursorIdleTimer.Start();
             }
             else ShowCinemaControls(); // paused, ended or failed: keep the controls up
+        }
+        else if (_playerPresentation == PlayerPresentation.Compact)
+        {
+            if (!_engine.IsPlaying || _engine.IsBuffering)
+            {
+                _cinemaCursorIdleTimer.Stop();
+                SetCompactControlsVisible(true);
+            }
+            else if (CompactChrome.IsHitTestVisible && !_cinemaCursorIdleTimer.IsEnabled &&
+                     !_compactPointerOverControls && !HasCompactKeyboardNavigationFocus() &&
+                     !_compactGeometryGestureActive && !AudioSubtitlesFlyout.IsOpen && !VolumeFlyout.IsOpen)
+            {
+                _cinemaCursorIdleTimer.Start();
+            }
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
@@ -2018,9 +2465,15 @@ public sealed partial class MainWindow : Window
             _nextEpisodeAdvanceStarted = true;
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             if (endedNextItem.Source.Kind == StreamKind.Episode)
-                OpenSeriesEpisode(endedNextItem);
+                OpenSeriesEpisode(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
             else
-                PlayRelatedChannel(endedNextItem);
+                PlayRelatedChannel(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
+            return;
+        }
+        if (_windowState.IsWindowMini && (_engine.IsEnded ||
+            (_engine.IsStopped && Volatile.Read(ref _playbackSessionCts) is null)))
+        {
+            ExitWindowMiniPlayer(expandToPlayer: false);
             return;
         }
         if (sessionIsCurrent && !_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
@@ -2038,15 +2491,34 @@ public sealed partial class MainWindow : Window
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
         var time = timeline.PositionMilliseconds;
+        CompactElapsedText.Text = FormatTime(time);
+        CompactProgressBar.Value = duration is > 0 ? Math.Clamp(time / (double)duration.Value * 100, 0, 100) : 0;
+        CompactProgressBar.Visibility = _currentSource?.Kind == StreamKind.Live || duration is not > 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        var compactSeekEnabled = timeline.CanSeek && _currentSource?.Kind != StreamKind.Live;
+        var compactIsLive = _currentSource?.Kind == StreamKind.Live;
+        CompactRewindButton.IsEnabled = compactSeekEnabled;
+        CompactForwardButton.IsEnabled = compactSeekEnabled;
+        CompactRewindButton.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
+        CompactForwardButton.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
+        CompactElapsedText.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
         var playbackKind = _nowPlayingChannel?.Source.Kind;
         var nextItem = PlaybackModeLogic.ShouldShowNextPrompt(GetPlaybackMode(playbackKind)) && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted
             ? GetNextPlaylistItem()
             : null;
-        if ((playbackKind is StreamKind.Episode or StreamKind.Movie) && duration is > 0 && nextItem is not null &&
-            duration.Value - time <= 20_000 && !_engine.IsEnded)
+        var remainingMilliseconds = duration is > 0 ? duration.Value - time : long.MaxValue;
+        var promptLeadMilliseconds = playbackKind is { } kind && duration is > 0
+            ? NextPrompt.LeadMilliseconds(kind, duration.Value)
+            : 0;
+        if (promptLeadMilliseconds > 0 && nextItem is not null &&
+            remainingMilliseconds <= promptLeadMilliseconds && !_engine.IsEnded)
         {
             var label = playbackKind == StreamKind.Movie ? "Next movie" : "Next episode";
-            NextEpisodePromptTitle.Text = $"{label}: {nextItem.DisplayName}";
+            var countdown = remainingMilliseconds <= 10_000
+                ? $" · {Math.Max(1, (remainingMilliseconds + 999) / 1000)}s"
+                : string.Empty;
+            NextEpisodePromptTitle.Text = $"{label}: {nextItem.DisplayName}{countdown}";
             NextEpisodePrompt.Visibility = Visibility.Visible;
         }
         else
@@ -2112,15 +2584,19 @@ public sealed partial class MainWindow : Window
         }
         _stallRecoveryAttempted = true;
         LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=reconnecting");
-        await StartPlaybackAsync(source);
+        await StartPlaybackAsync(source, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
         if (ReferenceEquals(_currentSource, source) && (_engine.IsPlaying || _engine.IsBuffering))
             _pendingResumePosition = lastPositionMs > 0 ? lastPositionMs : null;
     }
 
     private void SaveResumePosition(bool force = false, long? positionOverride = null)
     {
-        if ((!force && _isHeldSeeking) || !_resumeReady || _activePlaybackSessionGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
-            _currentPage != ShellPage.Player || _nowPlayingChannel is not { } channel ||
+        var sessionReady = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
+        var resumeEligible = _nowPlayingChannel?.Source.Kind == StreamKind.Movie ||
+            (_nowPlayingChannel?.Source.Kind == StreamKind.Episode && _currentSeriesId is not null);
+        if ((!force && _isHeldSeeking) ||
+            !PlayerPresentationPolicy.ShouldSaveProgress(_playerPresentation, sessionReady, resumeEligible) ||
+            _nowPlayingChannel is not { } channel ||
             _catalogLandingPage.Account is not { } account || _currentSource is null)
             return;
 
@@ -2221,7 +2697,7 @@ public sealed partial class MainWindow : Window
         if (!timeline.CanSeek || _currentSource is null) return;
         _suppressHeldSeekClick = false;
         _heldSeekButton = button;
-        _heldSeekDirection = ReferenceEquals(button, RewindButton) ? -1 : 1;
+        _heldSeekDirection = ReferenceEquals(button, RewindButton) || ReferenceEquals(button, CompactRewindButton) ? -1 : 1;
         _heldSeekTarget = ClampHeldSeekTarget(timeline.PositionMilliseconds, timeline.DurationMilliseconds);
         _heldSeekStartedAt = DateTimeOffset.UtcNow;
         _heldSeekLastStepAt = _heldSeekStartedAt - TimeSpan.FromMilliseconds(250);
@@ -2252,13 +2728,31 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
+        // Activation must NOT leave window-mini: clicking the mini window to drag or resize it
+        // activates it. Leaving is explicit only (Expand, Close, Escape, double-click, playback end).
+        if (_windowState.IsWindowMini)
+            _windowState.EnsureWindowMiniTopmost();
         if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
             StopHeldSeek(commit: true, released: false);
+            if (_isCinemaMode) StopCinemaCursorIdleTimer(showCursor: true);
+        }
+        else if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
+            ShowCinemaControls();
+    }
+
+    private void VlcEngine_StateChanged(object? sender, VlcPlaybackStateChangedEventArgs args)
+    {
+        if (args.State != VlcPlaybackState.Failed) return;
+        WindowRoot.DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_windowState.IsWindowMini) ExitWindowMiniPlayer(expandToPlayer: false);
+        });
     }
 
     private void HeldSeekTimer_Tick(object? sender, object args)
     {
-        if (!_isClosing && _currentPage == ShellPage.Player && _currentSource is not null &&
+        if (!_isClosing && IsPlaybackUiActive && _currentSource is not null &&
             _engine.Timeline.CanSeek && !_engine.IsEnded && _heldSeekButton is not null)
         {
             var now = DateTimeOffset.UtcNow;
@@ -2309,7 +2803,7 @@ public sealed partial class MainWindow : Window
         _isHeldSeeking = false;
         if (didScrub)
             _suppressHeldSeekClick = true;
-        if (commit && didScrub && _currentPage == ShellPage.Player && _currentSource is not null)
+        if (commit && didScrub && IsPlaybackUiActive && _currentSource is not null)
         {
             if (SeekTo(target) is { } committedTarget)
                 SaveResumePosition(force: true, positionOverride: committedTarget);
@@ -2350,7 +2844,8 @@ public sealed partial class MainWindow : Window
         if (timeline.ClampSeekTarget(targetMilliseconds) is { } target)
         {
             _engine.Seek(target);
-            if (timeline.DurationMilliseconds is { } duration && duration - target > 20_000)
+            if (timeline.DurationMilliseconds is { } duration &&
+                duration - target > NextPrompt.LeadMilliseconds(_nowPlayingChannel?.Source.Kind ?? StreamKind.Live, duration))
                 NextEpisodePrompt.Visibility = Visibility.Collapsed;
             return target;
         }
@@ -2361,6 +2856,75 @@ public sealed partial class MainWindow : Window
     {
         if (!_isUpdatingVolume)
             _engine.Volume = (int)args.NewValue;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
+
+    private long _volumeFlyoutOpenedAtTick;
+
+    private void VolumeFlyout_Opened(object? sender, object args) => _volumeFlyoutOpenedAtTick = Environment.TickCount64;
+
+    // The first click of a double-click opens the flyout and its light-dismiss layer swallows the second
+    // click, so DoubleTapped never fires on the button. A flyout dismissed by a click on the button within
+    // the system double-click time of opening is that second click: toggle mute.
+    private void VolumeFlyout_Closed(object? sender, object args)
+    {
+        if (Environment.TickCount64 - _volumeFlyoutOpenedAtTick <= GetDoubleClickTime() && CursorIsOverVolumeButton())
+            ToggleMute();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern bool ScreenToClient(nint hwnd, ref NativePoint point);
+
+    // The pointer enter/exit flags can be stale right after a layout change, so ask the OS where the
+    // cursor is and hit-test the button's bounds directly.
+    private bool CursorIsOverVolumeButton()
+    {
+        if (!GetCursorPos(out var point)) return false;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        if (!ScreenToClient(hwnd, ref point)) return false;
+        var scale = VolumeButton.XamlRoot?.RasterizationScale ?? 1.0;
+        var bounds = VolumeButton.TransformToVisual(null).TransformBounds(
+            new Windows.Foundation.Rect(0, 0, VolumeButton.ActualWidth, VolumeButton.ActualHeight));
+        return bounds.Contains(new Windows.Foundation.Point(point.X / scale, point.Y / scale));
+    }
+
+    private void VolumeButton_DoubleTapped(object sender, DoubleTappedRoutedEventArgs args)
+    {
+        ToggleMute();
+        VolumeFlyout.Hide();
+        args.Handled = true;
+    }
+
+    private void ToggleMute_Click(object sender, RoutedEventArgs args) => ToggleMute();
+
+    private void ToggleMute()
+    {
+        _playbackMuteState = _playbackMuteState.Toggle();
+        _engine.IsMuted = _playbackMuteState.IsMuted;
+        SetMutePresentation();
+    }
+
+    private void SetMutePresentation()
+    {
+        var muted = _playbackMuteState.IsMuted;
+        var glyph = muted ? "\uE74F" : "\uE767";
+        VolumeButton.Content = glyph;
+        CompactMuteButton.Content = glyph;
+        VolumeStateText.Text = muted ? "Muted" : "";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(VolumeButton, muted ? "Unmute" : "Volume");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactMuteButton, muted ? "Unmute" : "Mute");
+        ToolTipService.SetToolTip(VolumeButton, muted ? "Unmute or adjust volume" : "Volume");
+        ToolTipService.SetToolTip(CompactMuteButton, muted ? "Unmute" : "Mute");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(VolumeSlider,
+            muted ? "Muted; the slider retains the selected volume." : "Volume level");
     }
 
     private void AdjustVolume(int deltaPercent) =>
@@ -2387,7 +2951,7 @@ public sealed partial class MainWindow : Window
             RestorePlayerListScrollOffset(pressOffset.Value);
     }
 
-    private void PlayRelatedChannel(Channel channel)
+    private void PlayRelatedChannel(Channel channel, bool preserveCompact = false)
     {
         if (channel.Source.DirectUri is null || channel.Source.Kind is not (StreamKind.Movie or StreamKind.Live)) return;
         SaveResumePosition(force: true);
@@ -2405,7 +2969,6 @@ public sealed partial class MainWindow : Window
         _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
         PlayerSeasonComboBox.Visibility = Visibility.Collapsed;
         PlayerSeasonWatchedCount.Visibility = Visibility.Collapsed;
-        ResumeEpisodeButton.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.ItemsSource = null;
         SeriesFavoriteButton.Visibility = Visibility.Collapsed;
 
@@ -2432,7 +2995,7 @@ public sealed partial class MainWindow : Window
         SetCurrentPlayerEntry(channel);
         _ = LoadPlayerMetadataAsync(channel,
             channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live);
-        _ = StartPlaybackAsync(channel.Source);
+        _ = StartPlaybackAsync(channel.Source, preserveCompact);
         if (channel.Source.Kind == StreamKind.Movie && _playerSiblings.Count <= 1)
             _ = LoadMovieCategorySiblingsAsync(channel, Volatile.Read(ref _itemSelectionGeneration));
     }
@@ -2452,6 +3015,266 @@ public sealed partial class MainWindow : Window
         else ShowPage(_playerReturnPage);
     }
 
+    private void MiniPlayerButton_Click(object sender, RoutedEventArgs args)
+    {
+        if (ReferenceEquals(_engine, _nativeEngine) || _currentSource is null) return;
+        if (_isCinemaMode)
+        {
+            EnterWindowMiniPlayer(explicitCinemaButton: true);
+            return;
+        }
+        _playerReturnPage = ShellPage.Catalog;
+        SetPlayerPresentation(PlayerPresentation.Compact);
+        ShowPage(ShellPage.Catalog);
+        CompactTitleText.Text = PlayerTitleText.Text;
+        CompactPauseButton.Focus(FocusState.Programmatic);
+    }
+
+    private void CompactExpandButton_Click(object sender, RoutedEventArgs args)
+    {
+        if (_windowState.IsWindowMini)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: true);
+            PauseButton.Focus(FocusState.Programmatic);
+            return;
+        }
+        SetPlayerPresentation(PlayerPresentation.Full);
+        ShowPage(ShellPage.Player);
+        PauseButton.Focus(FocusState.Programmatic);
+    }
+
+    private void CompactCloseButton_Click(object sender, RoutedEventArgs args)
+    {
+        if (_windowState.IsWindowMini)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: false, afterExit: () =>
+            {
+                SetPlayerPresentation(PlayerPresentation.Full);
+                StopHeldSeek(commit: false, released: false);
+                // Closing the mini player ends the session and leaves the player: going back through
+                // ShowPage stops playback once and lands on the page the user came from, instead of
+                // leaving an empty Player page behind.
+                if (_currentPage == ShellPage.Player) ReturnFromPlayer();
+                else StopPlaybackForNavigation();
+            });
+            return;
+        }
+        StopHeldSeek(commit: true, released: false);
+        SetPlayerPresentation(PlayerPresentation.Full);
+        ShowPage(ShellPage.Player);
+        PauseButton.Focus(FocusState.Programmatic);
+    }
+
+    private void CompactMinimizeButton_Click(object sender, RoutedEventArgs args) => _windowState.Minimize();
+
+    private void HandleWindowMiniModeRequest(WindowStateController.WindowMiniModeRequest request)
+    {
+        if (!_windowState.IsWindowMini) return;
+        if (request == WindowStateController.WindowMiniModeRequest.Expand)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: true);
+            return;
+        }
+
+        ExitWindowMiniPlayer(expandToPlayer: true, afterExit: () =>
+        {
+            switch (request)
+            {
+                case WindowStateController.WindowMiniModeRequest.Windowed:
+                    if (_windowState.Mode == WindowStateController.WindowMode.Fullscreen)
+                        _windowState.RequestWindowMode(WindowStateController.WindowMode.Windowed);
+                    else
+                        _windowState.RestoreWindow();
+                    break;
+                case WindowStateController.WindowMiniModeRequest.Fullscreen:
+                    _windowState.RequestWindowMode(WindowStateController.WindowMode.Fullscreen);
+                    break;
+                case WindowStateController.WindowMiniModeRequest.Maximize:
+                    _windowState.MaximizeWindow();
+                    break;
+                case WindowStateController.WindowMiniModeRequest.Restore:
+                    if (_windowState.Mode == WindowStateController.WindowMode.Fullscreen)
+                        _windowState.RequestWindowMode(WindowStateController.WindowMode.Windowed);
+                    else
+                        _windowState.RestoreWindow();
+                    break;
+            }
+            ApplyWindowChromeState();
+        });
+    }
+
+    private void ForceExitWindowMini(string reason)
+    {
+        if (!_windowState.IsWindowMini || _windowMiniTransitionInProgress) return;
+        LaunchDiagnostics.Write($"event=window-mini.forced-exit reason={reason}");
+        Action? applyDetectedMode = reason.EndsWith(":maximized", StringComparison.Ordinal)
+            ? () => _windowState.MaximizeWindow()
+            : reason.EndsWith(":fullscreen", StringComparison.Ordinal)
+                ? () => _windowState.RequestWindowMode(WindowStateController.WindowMode.Fullscreen)
+                : null;
+        ExitWindowMiniPlayer(expandToPlayer: true, afterExit: applyDetectedMode);
+    }
+
+    private void EnterWindowMiniPlayer(bool explicitCinemaButton = false)
+    {
+        var eligible = explicitCinemaButton && _isCinemaMode
+            ? ShouldExplicitCinemaMiniButtonBecomeWindowMini()
+            : ShouldMinimizeBecomeWindowMini();
+        if (!eligible || _windowState.IsWindowMini || _windowMiniTransitionInProgress) return;
+        StopHeldSeek(commit: true, released: false);
+        var leavingCinema = _isCinemaMode;
+        if (leavingCinema) StopCinemaCursorIdleTimer(showCursor: true);
+        _windowMiniPreviousPage = leavingCinema ? ShellPage.Player : _currentPage;
+        _windowMiniPreviousPresentation = leavingCinema ? PlayerPresentation.Full : _playerPresentation;
+        // Mini expands back to the normal player. Cinema is restored only when explicitly
+        // requested later (for example, by the mini title's double-click-to-cinema path).
+        _windowMiniPreviousCinema = false;
+        _windowMiniGeometryAtEntry = _windowState.ClampWindowMiniGeometry(_windowMiniGeometry);
+        RunWindowMiniTransition(() =>
+        {
+            if (leavingCinema) ApplyCinemaMode(false);
+            SetPlayerPresentation(PlayerPresentation.Compact);
+            _windowMiniGeometry = _windowState.EnterWindowMini(_windowMiniGeometryAtEntry);
+            _windowMiniGeometryDirty = false;
+            ApplyWindowMiniLayout();
+            LaunchDiagnostics.Write($"event=window-mini.enter kind={_currentSource?.Kind} engine=LibVLC bounds={_windowMiniGeometry}");
+        });
+    }
+
+    private void ApplyWindowMiniLayout()
+    {
+        WindowChrome.Visibility = Visibility.Collapsed;
+        MainHeader.Visibility = Visibility.Collapsed;
+        WindowRoot.RowDefinitions[0].Height = new GridLength(0);
+        WindowRoot.RowDefinitions[1].Height = new GridLength(0);
+        PageHost.Visibility = Visibility.Collapsed;
+        CatalogPageArea.Visibility = Visibility.Collapsed;
+        PlayerPage.Visibility = Visibility.Visible;
+        PlayerPage.Width = double.NaN;
+        PlayerPage.Height = double.NaN;
+        PlayerPage.HorizontalAlignment = HorizontalAlignment.Stretch;
+        PlayerPage.VerticalAlignment = VerticalAlignment.Stretch;
+        PlayerPage.Margin = new Thickness(0);
+        CompactChrome.Visibility = Visibility.Visible;
+        SetCompactResizeZonesVisible(false);
+        ApplyPlayerLayout();
+        ApplyCompactGeometryToLayout();
+        PlayerPage.UpdateLayout();
+    }
+
+    private void ExitWindowMiniPlayer(bool expandToPlayer, bool enterCinema = false, Action? afterExit = null)
+    {
+        if (!_windowState.IsWindowMini || _windowMiniTransitionInProgress) return;
+        RunWindowMiniTransition(() =>
+        {
+            _windowMiniGeometry = _windowState.GetCurrentWindowMiniGeometry();
+            _windowMiniGeometryDirty = _windowMiniGeometry != _windowMiniGeometryAtEntry;
+            _windowState.ExitWindowMini();
+            SaveWindowMiniGeometryIfChanged();
+            WindowChrome.Visibility = Visibility.Visible;
+            MainHeader.Visibility = Visibility.Visible;
+            WindowRoot.RowDefinitions[1].Height = new GridLength(72);
+            SetCompactResizeZonesVisible(true);
+            _currentPage = null;
+            if (expandToPlayer)
+            {
+                SetPlayerPresentation(PlayerPresentation.Full);
+                ShowPage(ShellPage.Player);
+                if (enterCinema || _windowMiniPreviousCinema) SetCinemaMode(true, animate: false);
+                else PauseButton.Focus(FocusState.Programmatic);
+            }
+            else
+            {
+                SetPlayerPresentation(_windowMiniPreviousPresentation);
+                ShowPage(_windowMiniPreviousPage ?? ShellPage.Player);
+                if (enterCinema || _windowMiniPreviousCinema) SetCinemaMode(true, animate: false);
+            }
+            _windowMiniPreviousPage = null;
+            ApplyWindowChromeState();
+            LaunchDiagnostics.Write($"event=window-mini.exit expand={expandToPlayer} page={_currentPage}");
+            afterExit?.Invoke();
+        });
+    }
+
+    private void SetCompactResizeZonesVisible(bool visible)
+    {
+        var visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        CompactResizeEdgeLeft.Visibility = visibility;
+        CompactResizeEdgeTop.Visibility = visibility;
+        CompactResizeEdgeRight.Visibility = visibility;
+        CompactResizeEdgeBottom.Visibility = visibility;
+        CompactResizeCornerTopLeft.Visibility = visibility;
+        CompactResizeCornerTopRight.Visibility = visibility;
+        CompactResizeCornerBottomLeft.Visibility = visibility;
+        CompactResizeCornerBottomRight.Visibility = visibility;
+    }
+
+    private void RunWindowMiniTransition(Action apply)
+    {
+        _windowMiniTransitionInProgress = true;
+        var visual = ElementCompositionPreview.GetElementVisual(PlayerPage);
+        var compositor = visual.Compositor;
+        var dispatcherQueue = WindowRoot.DispatcherQueue;
+        visual.StopAnimation(nameof(Visual.Opacity));
+        var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+        fadeOut.InsertKeyFrame(1f, 0f);
+        fadeOut.Duration = TimeSpan.FromMilliseconds(90);
+        var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+        batch.Completed += (_, _) => dispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                apply();
+                PlayerPage.Opacity = 1;
+                WindowRoot.UpdateLayout();
+                FadeIn(PlayerPage);
+            }
+            finally
+            {
+                _windowMiniTransitionInProgress = false;
+            }
+        });
+        visual.StartAnimation(nameof(Visual.Opacity), fadeOut);
+        batch.End();
+    }
+
+    private void SetPlayerPresentation(PlayerPresentation presentation)
+    {
+        if (presentation == PlayerPresentation.Compact && ReferenceEquals(_engine, _nativeEngine))
+            return;
+        _playerPresentation = presentation;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PlayerPage,
+            presentation == PlayerPresentation.Compact ? "Mini player card" : "Player");
+        CompactChrome.Visibility = presentation == PlayerPresentation.Compact ? Visibility.Visible : Visibility.Collapsed;
+        PlayerPage.Background = presentation == PlayerPresentation.Compact
+            ? (Brush)Application.Current.Resources["AppPanelSurfaceBrush"]
+            : null;
+        if (presentation == PlayerPresentation.Compact)
+        {
+            ClampAndApplyCompactGeometry();
+            CompactTitleText.Text = PlayerTitleText.Text;
+            ShowCompactControls();
+        }
+        else
+        {
+            _cinemaCursorIdleTimer.Stop();
+            SetCompactControlsVisible(true);
+            PlayerPage.Width = double.NaN;
+            PlayerPage.Height = double.NaN;
+            PlayerPage.HorizontalAlignment = HorizontalAlignment.Stretch;
+            PlayerPage.VerticalAlignment = VerticalAlignment.Stretch;
+            PlayerPage.Margin = new Thickness(0);
+        }
+        ApplyPlayerLayout();
+    }
+
+    private static PlayerPageKind ToPlayerPageKind(ShellPage page) => page switch
+    {
+        ShellPage.Player => PlayerPageKind.Player,
+        ShellPage.Catalog => PlayerPageKind.Catalog,
+        _ => PlayerPageKind.Other,
+    };
+
     private void CinemaButton_Click(object sender, RoutedEventArgs args) => SetCinemaMode(!_isCinemaMode);
 
     private void PlayerPage_KeyDown(object sender, KeyRoutedEventArgs args)
@@ -2465,27 +3288,48 @@ public sealed partial class MainWindow : Window
 
     private void VideoSurface_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
+        if (_playerPresentation == PlayerPresentation.Compact)
+        {
+            ShowCompactControls();
+            return;
+        }
         // Deliberately leave the event unhandled so a normal click reaches the playback surface.
         var currentPoint = args.GetCurrentPoint(sender as UIElement);
         if (!currentPoint.Properties.IsLeftButtonPressed)
             return;
-        var point = currentPoint.Position;
+        RegisterVideoClick(currentPoint.Position, compact: false);
+    }
+
+    private void RegisterVideoClick(Windows.Foundation.Point point, bool compact)
+    {
         var now = DateTimeOffset.UtcNow;
         var delta = point.X - _lastVideoTapPoint.X;
         var deltaY = point.Y - _lastVideoTapPoint.Y;
-        if (now - _lastVideoTapAt <= TimeSpan.FromMilliseconds(500) &&
+        if (_lastVideoTapWasCompact == compact &&
+            now - _lastVideoTapAt <= TimeSpan.FromMilliseconds(500) &&
             delta * delta + deltaY * deltaY <= 24 * 24)
         {
             // The first click of this double-click has a pending pause toggle; drop it so a
             // double-click does not pause and resume the video.
             _videoClickPauseTimer?.Stop();
-            SetCinemaMode(!_isCinemaMode);
+            if (_playerPresentation == PlayerPresentation.Compact)
+            {
+                if (_windowState.IsWindowMini) ExitWindowMiniPlayer(expandToPlayer: true, enterCinema: true);
+                else
+                {
+                    CompactExpandButton_Click(this, new RoutedEventArgs());
+                    SetCinemaMode(true);
+                }
+            }
+            else
+                SetCinemaMode(!_isCinemaMode);
             _lastVideoTapAt = default;
             return;
         }
 
         _lastVideoTapAt = now;
         _lastVideoTapPoint = point;
+        _lastVideoTapWasCompact = compact;
 
         // A single click pauses/resumes, but only once the double-click window has passed.
         _videoClickPauseTimer ??= CreateVideoClickPauseTimer();
@@ -2500,7 +3344,7 @@ public sealed partial class MainWindow : Window
         timer.IsRepeating = false;
         timer.Tick += (_, _) =>
         {
-            if (_currentPage == ShellPage.Player && _currentSource is not null)
+            if (IsPlaybackUiActive)
                 PauseButton_Click(this, new RoutedEventArgs());
         };
         return timer;
@@ -2511,21 +3355,70 @@ public sealed partial class MainWindow : Window
         // Keep pointer release available to the underlying playback implementation.
     }
 
-    private void SetCinemaMode(bool enabled)
+    private void SetCinemaMode(bool enabled, bool animate = true)
     {
-        if (_isCinemaMode == enabled)
+        if (_windowState.IsWindowMini)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: true, enterCinema: enabled);
+            return;
+        }
+        if (!animate)
+        {
+            _cinemaTransitionGeneration++;
+            _cinemaTransitionInProgress = false;
+            var playerVisual = ElementCompositionPreview.GetElementVisual(PlayerPage);
+            playerVisual.StopAnimation(nameof(Visual.Opacity));
+            playerVisual.Opacity = 1;
+            if (_isCinemaMode != enabled)
+                ApplyCinemaMode(enabled);
+            PlayerPage.UpdateLayout();
+            WindowRoot.UpdateLayout();
+            return;
+        }
+
+        if (_isCinemaMode == enabled || _cinemaTransitionInProgress)
             return;
 
-        TraceBackTransition($"cinema-layout-enter enabled={enabled} windowMode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
+        _cinemaTransitionInProgress = true;
+        var transitionGeneration = ++_cinemaTransitionGeneration;
+        BeginBackTransitionTrace($"cinema-layout-enter enabled={enabled} windowMode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0} {VideoSurfaceState()}");
+
+        var visual = ElementCompositionPreview.GetElementVisual(PlayerPage);
+        var compositor = visual.Compositor;
+        var dispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        visual.StopAnimation(nameof(Visual.Opacity));
+        var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+        fadeOut.InsertKeyFrame(1f, 0f);
+        fadeOut.Duration = TimeSpan.FromMilliseconds(90);
+        var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+        batch.Completed += (_, _) => dispatcherQueue.TryEnqueue(() =>
+        {
+            if (transitionGeneration != _cinemaTransitionGeneration)
+                return;
+            ApplyCinemaMode(enabled);
+            PlayerPage.UpdateLayout();
+            WindowRoot.UpdateLayout();
+            TraceBackTransition($"cinema-layout-ready enabled={enabled} windowMode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0} {VideoSurfaceState()}");
+            _cinemaTransitionInProgress = false;
+            FadeIn(PlayerPage);
+        });
+        visual.StartAnimation(nameof(Visual.Opacity), fadeOut);
+        batch.End();
+    }
+
+    private void ApplyCinemaMode(bool enabled)
+    {
+        TraceBackTransition($"cinema-layout-apply enabled={enabled} windowMode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
 
         if (enabled)
         {
-            _preCinemaWindowMode = _windowState.Mode;
+            _preCinemaWindowMode = _windowState.EffectiveMode;
             _preCinemaFocus = FocusManager.GetFocusedElement(WindowRoot.XamlRoot) as FrameworkElement;
-            _windowState.Apply(WindowStateController.WindowMode.Fullscreen);
+            _windowState.RequestWindowMode(WindowStateController.WindowMode.Fullscreen);
         }
 
         _isCinemaMode = enabled;
+        _playerPresentation = enabled ? PlayerPresentation.Cinema : PlayerPresentation.Full;
         _cinemaPointerOverControls = false;
         _cinemaPointerMoveDiagnosticWritten = false;
         ApplyWindowChromeState();
@@ -2547,7 +3440,7 @@ public sealed partial class MainWindow : Window
 
         if (!enabled)
         {
-            _windowState.Apply(_preCinemaWindowMode);
+            _windowState.RequestWindowMode(_preCinemaWindowMode);
             TraceBackTransition($"cinema-window-restored mode={_windowState.Mode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
             ApplyWindowChromeState();
             var focusTarget = _preCinemaFocus is { Visibility: Visibility.Visible, IsTabStop: true }
@@ -2561,6 +3454,11 @@ public sealed partial class MainWindow : Window
 
     private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
+        if (_playerPresentation == PlayerPresentation.Compact)
+        {
+            ShowCompactControls();
+            return;
+        }
         if (!_isCinemaMode) return;
         HandleCinemaPointerMoved("PlayerPage");
     }
@@ -2593,6 +3491,16 @@ public sealed partial class MainWindow : Window
     private void CinemaCursorIdleTimer_Tick(object? sender, object args)
     {
         _cinemaCursorIdleTimer.Stop();
+        if (_playerPresentation == PlayerPresentation.Compact)
+        {
+            var keepVisible = CompactOverlayPolicy.ShouldShow(
+                _engine.IsPlaying, _engine.IsBuffering, _compactPointerOverControls,
+                _compactGeometryGestureActive && !_compactGeometryResize,
+                _compactGeometryGestureActive && _compactGeometryResize,
+                idleElapsed: true) || HasCompactKeyboardNavigationFocus() || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen;
+            SetCompactControlsVisible(keepVisible);
+            return;
+        }
         if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
         // Keep the overlay while it is being used.
         if (_cinemaPointerOverControls || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen || _isDraggingProgress)
@@ -2611,6 +3519,59 @@ public sealed partial class MainWindow : Window
         SetCinemaCursorVisible(true);
         _cinemaCursorIdleTimer.Stop();
         if (_engine.IsPlaying || _engine.IsBuffering) _cinemaCursorIdleTimer.Start();
+    }
+
+    private void CompactChrome_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        CompactGeometry_PointerMoved(sender, args);
+        ShowCompactControls();
+    }
+
+    private void CompactControls_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        _compactPointerOverControls = true;
+        ShowCompactControls();
+    }
+
+    private void CompactControls_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _compactPointerOverControls = false;
+        ShowCompactControls();
+    }
+
+    private void CompactChrome_GotFocus(object sender, RoutedEventArgs args) => ShowCompactControls();
+
+    private void CompactChrome_LostFocus(object sender, RoutedEventArgs args) => ShowCompactControls();
+
+    private void ShowCompactControls()
+    {
+        if (_playerPresentation != PlayerPresentation.Compact) return;
+        SetCompactControlsVisible(true);
+        _cinemaCursorIdleTimer.Stop();
+        if (_engine.IsPlaying && !_engine.IsBuffering) _cinemaCursorIdleTimer.Start();
+    }
+
+    private void SetCompactControlsVisible(bool visible)
+    {
+        CompactControlsChrome.Opacity = visible ? 1 : 0;
+        CompactControlsChrome.IsHitTestVisible = visible;
+    }
+
+    // Only focus reached with the keyboard keeps the overlay up; focus left behind by a mouse click or by
+    // entering the mini player programmatically must not pin the controls on screen forever.
+    private bool HasCompactKeyboardNavigationFocus() =>
+        HasCompactKeyboardFocus() &&
+        FocusManager.GetFocusedElement(WindowRoot.XamlRoot) is Control { FocusState: FocusState.Keyboard };
+
+    private bool HasCompactKeyboardFocus()
+    {
+        var focused = FocusManager.GetFocusedElement(WindowRoot.XamlRoot) as DependencyObject;
+        while (focused is not null)
+        {
+            if (ReferenceEquals(focused, CompactChrome)) return true;
+            focused = VisualTreeHelper.GetParent(focused);
+        }
+        return false;
     }
 
     private void SetCinemaControlsVisible(bool visible)
@@ -2633,35 +3594,31 @@ public sealed partial class MainWindow : Window
     private void SetCinemaCursorVisible(bool visible)
     {
         if (_cinemaCursorHidden == !visible) return;
-        if (visible)
-        {
-            ShowCursor(true);
-            _cinemaCursorHidden = false;
-        }
-        else
-        {
-            ShowCursor(false);
-            _cinemaCursorHidden = true;
-        }
+        _cinemaCursorHidden = !visible;
+        _cinemaCursorController.SetHidden(_cinemaCursorHidden);
     }
 
     private void ApplyPlayerLayout()
     {
         var cinema = _isCinemaMode;
+        var compact = _playerPresentation == PlayerPresentation.Compact;
 
-        PlayerLayoutGrid.ColumnSpacing = cinema ? 0 : 18;
-        PlayerContentColumn.Width = new GridLength(cinema ? 1 : 2.35, GridUnitType.Star);
-        PlayerSideColumn.Width = new GridLength(cinema ? 0 : 0.9, GridUnitType.Star);
-        PlayerSidePanel.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
+        PlayerPage.Padding = cinema || compact ? new Thickness(0) : new Thickness(24);
+        PlayerNavigation.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
+        PlayerNavigationRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
+        PlayerLayoutGrid.ColumnSpacing = cinema || compact ? 0 : 18;
+        PlayerContentColumn.Width = new GridLength(cinema || compact ? 1 : 2.35, GridUnitType.Star);
+        PlayerSideColumn.Width = new GridLength(cinema || compact ? 0 : 0.9, GridUnitType.Star);
+        PlayerSidePanel.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
 
-        PlayerContentGrid.RowSpacing = cinema ? 0 : 10;
+        PlayerContentGrid.RowSpacing = cinema || compact ? 0 : 10;
         PlayerVideoRow.Height = new GridLength(1, GridUnitType.Star);
-        PlayerDetailsRow.Height = cinema ? new GridLength(0) : GridLength.Auto;
-        PlayerTransportRow.Height = cinema ? new GridLength(0) : GridLength.Auto;
-        PlayerDetailsPanel.Visibility = cinema ? Visibility.Collapsed : Visibility.Visible;
+        PlayerDetailsRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
+        PlayerTransportRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
+        PlayerDetailsPanel.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
         // Cinema: the same transport floats over the bottom of the video instead of sitting below it.
         Grid.SetRow(VlcTransportBar, cinema ? 0 : 2);
-        VlcTransportBar.Visibility = Visibility.Visible;
+        VlcTransportBar.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         VlcTransportBar.VerticalAlignment = cinema ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
         VlcTransportBar.HorizontalAlignment = HorizontalAlignment.Stretch;
         VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
@@ -2671,6 +3628,13 @@ public sealed partial class MainWindow : Window
             ? new SolidColorBrush(Windows.UI.Color.FromArgb(0xE0, solid.Color.R, solid.Color.G, solid.Color.B))
             : panelBrush;
         CinemaTitleStrip.Visibility = cinema ? Visibility.Visible : Visibility.Collapsed;
+        CompactChrome.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+        SetWindowMiniCompactControls(_windowState.IsWindowMini);
+        MiniPlayerButton.Visibility = compact || ReferenceEquals(_engine, _nativeEngine)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ToolTipService.SetToolTip(MiniPlayerButton, cinema ? "Mini player (always on top)" : "Mini player");
+        NextEpisodePrompt.VerticalAlignment = cinema ? VerticalAlignment.Center : VerticalAlignment.Bottom;
         if (!cinema)
         {
             VlcTransportBar.Opacity = 1;
@@ -2680,11 +3644,30 @@ public sealed partial class MainWindow : Window
         ApplyPlayerNowNextVisibility();
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         NativePlayerElement.AreTransportControlsEnabled = false;
+        if (compact)
+        {
+            CompactTitleText.Text = PlayerTitleText.Text;
+            CompactProgressBar.Visibility = _currentSource?.Kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    private void SetWindowMiniCompactControls(bool isWindowMini)
+    {
+        CompactMinimizeButton.Visibility = isWindowMini ? Visibility.Visible : Visibility.Collapsed;
+        var closeName = isWindowMini ? "Close (stop playback)" : "Return to player";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactCloseButton, closeName);
+        ToolTipService.SetToolTip(CompactCloseButton, closeName);
     }
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        if (_windowState.IsWindowMini)
+        {
+            _windowMiniGeometry = _windowState.GetCurrentWindowMiniGeometry();
+            _windowMiniGeometryDirty = _windowMiniGeometry != _windowMiniGeometryAtEntry;
+            SaveWindowMiniGeometryIfChanged();
+        }
         StopHeldSeek(commit: true, released: false);
         FlushPendingVisits();
         SaveResumePosition(force: true);
@@ -2695,12 +3678,17 @@ public sealed partial class MainWindow : Window
         _heldSeekTimer.Stop();
         _heldSeekTimer.Tick -= HeldSeekTimer_Tick;
         Activated -= MainWindow_Activated;
+        _vlcEngine.StateChanged -= VlcEngine_StateChanged;
+        _accountPage.MinimizeToMiniModeChanged -= AccountPage_MinimizeToMiniModeChanged;
+        _windowState.WindowMiniGeometryChanged -= WindowState_WindowMiniGeometryChanged;
+        _windowState.Dispose();
         StopPlayerEpgUpdates();
         _playerEpgTimer.Tick -= PlayerEpgTimer_Tick;
         _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
         _cinemaCursorIdleTimer.Stop();
         _cinemaCursorIdleTimer.Tick -= CinemaCursorIdleTimer_Tick;
         SetCinemaCursorVisible(true);
+        _cinemaCursorController.Dispose();
         _windowState.ClearFullscreenHint();
         _catalogLandingPage.Shutdown();
         SetTrackSelectingEngine(null);

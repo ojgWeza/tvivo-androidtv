@@ -20,8 +20,35 @@ public sealed partial class AccountPage : UserControl
     public event EventHandler? ChangeUserRequested;
     public event EventHandler? RefreshCatalogRequested;
     public event EventHandler<string>? PlaybackEngineChanged;
+    public event EventHandler<MinimizeToMiniMode>? MinimizeToMiniModeChanged;
 
     private bool _suppressEngineChanged;
+    private bool _suppressMinimizeToMiniModeChanged;
+
+    public void SetMinimizeToMiniMode(MinimizeToMiniMode mode)
+    {
+        _suppressMinimizeToMiniModeChanged = true;
+        MinimizeToMiniSelector.SelectedItem = MinimizeToMiniSelector.Items
+            .OfType<ComboBoxItem>()
+            .First(item => string.Equals(item.Tag as string, mode.ToString(), StringComparison.Ordinal));
+        _suppressMinimizeToMiniModeChanged = false;
+    }
+
+    public void SetMinimizeToMiniAvailable(bool available)
+    {
+        MinimizeToMiniSelector.IsEnabled = available;
+        MinimizeToMiniDescription.Text = available
+            ? "Choose whether minimizing keeps an active LibVLC video in a small always-on-top window."
+            : "Mini player needs the LibVLC engine. Switch the playback engine to LibVLC to use it.";
+    }
+
+    private void MinimizeToMiniSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!_suppressMinimizeToMiniModeChanged &&
+            MinimizeToMiniSelector.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            Enum.TryParse<MinimizeToMiniMode>(tag, out var mode))
+            MinimizeToMiniModeChanged?.Invoke(this, mode);
+    }
 
     public void SetPlaybackEngine(string tag)
     {

@@ -188,10 +188,12 @@ public interface IPlaybackEngine
     bool IsBuffering => false;
     bool IsPaused => false;
     bool IsEnded => false;
+    bool IsStopped => false;
     long Time { get; }
     long Length { get; }
     PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);
     int Volume { get; set; }
+    bool IsMuted { get; set; }
     void TogglePause();
     void Seek(long timeMilliseconds);
     Task<PlaybackAttemptResult> StartAsync(StreamSource source, PlaybackSessionToken session, CancellationToken cancellationToken = default);

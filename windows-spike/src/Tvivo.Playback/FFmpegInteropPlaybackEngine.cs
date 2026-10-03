@@ -39,6 +39,11 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         get => (int)Math.Round(_player.Volume * 100);
         set => _player.Volume = Math.Clamp(value, 0, 100) / 100d;
     }
+    public bool IsMuted
+    {
+        get => _player.IsMuted;
+        set => _player.IsMuted = value;
+    }
 
     public PlaybackTrackSnapshot GetTracks()
     {

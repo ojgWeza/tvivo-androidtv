@@ -104,6 +104,7 @@ public sealed class PlaybackSmokeTests
         public long Time => 0;
         public long Length => 0;
         public int Volume { get; set; } = 100;
+        public bool IsMuted { get; set; }
         public void TogglePause() { }
         public void Seek(long timeMilliseconds) { }
         public List<PlaybackSessionToken> Started { get; } = new();
@@ -128,6 +129,7 @@ public sealed class PlaybackSmokeTests
         public long Time => 0;
         public long Length => 0;
         public int Volume { get; set; } = 100;
+        public bool IsMuted { get; set; }
         public void TogglePause() { }
         public void Seek(long timeMilliseconds) { }
         public StreamSource? StartedSource { get; private set; }

@@ -10,6 +10,13 @@ public enum PlaybackMode
     Shuffle,
 }
 
+public enum MinimizeToMiniMode
+{
+    MiniPlayerWhilePlaying,
+    MiniPlayerWhilePlayingOrPaused,
+    AlwaysMinimizeNormally,
+}
+
 public static class PlaybackModeLogic
 {
     public static bool ShouldAutoAdvance(PlaybackMode mode) => mode is PlaybackMode.Next or PlaybackMode.Shuffle;
@@ -26,7 +33,10 @@ public static class PlaybackModeLogic
     };
 }
 
-public sealed record PlaybackModePreferences(PlaybackMode EpisodeMode, PlaybackMode MovieMode)
+public sealed record PlaybackModePreferences(
+    PlaybackMode EpisodeMode,
+    PlaybackMode MovieMode,
+    MinimizeToMiniMode MinimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -44,7 +54,8 @@ public sealed record PlaybackModePreferences(PlaybackMode EpisodeMode, PlaybackM
 
         return new PlaybackModePreferences(
             ReadMode(root, "EpisodeMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "EpisodeAutoplayNext"), isMovie: false),
-            ReadMode(root, "MovieMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "MovieAutoplayNext"), isMovie: true));
+            ReadMode(root, "MovieMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "MovieAutoplayNext"), isMovie: true),
+            ReadMinimizeMode(root));
     }
 
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
@@ -56,6 +67,20 @@ public sealed record PlaybackModePreferences(PlaybackMode EpisodeMode, PlaybackM
         return Enum.TryParse<PlaybackMode>(value.GetString(), ignoreCase: true, out var mode) && Enum.IsDefined(mode)
             ? mode
             : null;
+    }
+
+    private static MinimizeToMiniMode ReadMinimizeMode(JsonElement root)
+    {
+        if (TryGetProperty(root, nameof(MinimizeToMiniMode), out var modeValue) &&
+            modeValue.ValueKind == JsonValueKind.String &&
+            Enum.TryParse<MinimizeToMiniMode>(modeValue.GetString(), ignoreCase: true, out var mode) &&
+            Enum.IsDefined(mode))
+            return mode;
+
+        // Older playback-options.json files stored this choice as a boolean.
+        return ReadBoolean(root, "MinimizeToMiniPlayerWhilePlaying") == false
+            ? MinimizeToMiniMode.AlwaysMinimizeNormally
+            : MinimizeToMiniMode.MiniPlayerWhilePlaying;
     }
 
     private static bool? ReadBoolean(JsonElement root, string name) =>

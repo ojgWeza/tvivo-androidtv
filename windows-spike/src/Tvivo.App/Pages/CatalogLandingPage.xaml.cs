@@ -110,6 +110,7 @@ public sealed partial class CatalogLandingPage : UserControl
     public bool IsReadyForInteraction => _isReadyForInteraction;
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
     public event EventHandler? InteractionReadinessChanged;
+    public event Action<string>? SearchTextChanged;
     // Raised when the user changes what they are browsing (mode, category, sort, search), so
     // deferred visit ranking can be applied then and not while a returning list is on screen.
     public event EventHandler? BrowseContextChanging;
@@ -190,6 +191,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _offset = 0;
         _firstCatalogLoadCompleted = false;
         _modeStates.Clear();
+        SetSearchTextWithoutReload(string.Empty);
         _spotlightByMode.Clear();
         _lastRefreshAt.Clear();
         _recentSpotlightIds.Clear();
@@ -317,9 +319,16 @@ public sealed partial class CatalogLandingPage : UserControl
 
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         _suppressSearchChanged = true;
-        SearchBox.Text = text;
-        _suppressSearchChanged = false;
+        try
+        {
+            SearchBox.Text = text;
+        }
+        finally
+        {
+            _suppressSearchChanged = false;
+        }
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
+        SearchTextChanged?.Invoke(text);
         _offset = 0;
         _ = ShowCachedPageAsync(_activeMode, text, _selectedGroupId, 0);
     }
@@ -1501,9 +1510,16 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SetSearchTextWithoutReload(string value)
     {
         _suppressSearchChanged = true;
-        SearchBox.Text = value;
-        _suppressSearchChanged = false;
+        try
+        {
+            SearchBox.Text = value;
+        }
+        finally
+        {
+            _suppressSearchChanged = false;
+        }
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
+        SearchTextChanged?.Invoke(value);
     }
 
     private void ArtworkImage_Opened(object sender, RoutedEventArgs args)
@@ -2116,6 +2132,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_suppressSearchChanged || !_isReadyForInteraction) return;
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
+        SearchTextChanged?.Invoke(SearchBox.Text ?? string.Empty);
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (string.IsNullOrWhiteSpace(SearchBox.Text) && _openShelfId is null)
             _selectedGroupId = null;
@@ -2128,8 +2145,15 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (!_isReadyForInteraction) return;
         _suppressSearchChanged = true;
-        SearchBox.Text = string.Empty;
-        _suppressSearchChanged = false;
+        try
+        {
+            SearchBox.Text = string.Empty;
+        }
+        finally
+        {
+            _suppressSearchChanged = false;
+        }
+        SearchTextChanged?.Invoke(string.Empty);
         _selectedGroupId = null;
         ClearSearchButton.Visibility = Visibility.Collapsed;
         _offset = 0;

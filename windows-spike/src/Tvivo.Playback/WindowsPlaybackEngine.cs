@@ -46,6 +46,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private bool _defaultSubtitleApplied;
     private Task _abandonedCleanupTask = Task.CompletedTask;
     private int _volumePercent = 100;
+    private bool _isMuted;
     private bool _disposed;
 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
@@ -55,6 +56,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public bool IsBuffering => _player?.State == VLCState.Buffering;
     public bool IsPaused => _player?.State == VLCState.Paused;
     public bool IsEnded => _player?.State == VLCState.Ended;
+    public bool IsStopped => _player?.State == VLCState.Stopped;
     public long Time => _player?.Time ?? 0;
     public long Length => _player?.Length ?? 0;
     public PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);
@@ -68,6 +70,16 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _volumePercent = Math.Clamp(value, 0, 100);
             if (_player is { } player)
                 player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
+        }
+    }
+    public bool IsMuted
+    {
+        get => _player?.Mute ?? _isMuted;
+        set
+        {
+            _isMuted = value;
+            if (_player is { } player && player.Mute != value)
+                player.Mute = value;
         }
     }
 
@@ -178,7 +190,15 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 {
                     // Reapply once playback is active so the mmdevice backend
                     // writes this volume over a persisted Windows session scalar.
-                    player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
+                    // Never call libvlc setters on the event thread: a concurrent UI-thread call
+                    // (e.g. a stall restart setting Mute) deadlocks against the player lock held
+                    // while the Playing callback is delivered.
+                    ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        if (!ReferenceEquals(_player, player)) return;
+                        player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
+                        player.Mute = _isMuted;
+                    });
                     RefreshVlcTracks(session, player, resolvedWhenTracksPresent: false);
                     StartTrackProbe(session, player);
                 });
