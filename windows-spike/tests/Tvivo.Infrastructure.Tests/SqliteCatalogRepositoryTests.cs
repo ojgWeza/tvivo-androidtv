@@ -634,6 +634,54 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Episode_completion_can_be_reversed_and_restores_series_resume_fields()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(),
+                new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
+
+            repo.SaveProgress(account, "episode", "episode-1", "show", 590_000, 600_000, true);
+            repo.SaveProgress(account, "episode", "episode-1", "show", 275_000, 600_000, false);
+
+            var progress = Assert.Single(repo.GetEpisodeProgressForSeries(account, "show").Values);
+            Assert.Equal(PlaybackProgressState.InProgress, progress.State);
+            Assert.Equal(275_000L, repo.GetEpisodeResumePosition(account, "episode-1"));
+            Assert.Equal(275_000L, repo.GetResumePosition(account, CatalogItemType.Series, "show"));
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")};Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT finished FROM series_playback WHERE account_id=$a AND series_id='show'";
+            command.Parameters.AddWithValue("$a", account.AccountId);
+            Assert.Equal(0L, Convert.ToInt64(command.ExecuteScalar()));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Movie_completion_can_be_reversed_and_restores_movie_resume_fields()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
+                new[] { ChannelAdded(account, CatalogItemType.Movie, "movie", DateTimeOffset.UtcNow) });
+
+            repo.SaveProgress(account, "movie", "movie", null, 118_000, 120_000, true);
+            repo.SaveProgress(account, "movie", "movie", null, 45_000, 120_000, false);
+
+            var progress = repo.GetPlaybackProgress(account, "Movie", new[] { "movie" })["movie"];
+            Assert.Equal(PlaybackProgressState.InProgress, progress.State);
+            Assert.Equal(45_000L, progress.ResumeMs);
+            Assert.Equal(45_000L, repo.GetResumePosition(account, CatalogItemType.Movie, "movie"));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Movie_progress_batch_returns_saved_movies_and_omits_missing_ids()
     {
         var repo = Create(out var dir);

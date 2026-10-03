@@ -225,7 +225,7 @@ See `windows-spike/docs/PLAN-winui-moderate-features.md` for the full combined p
 **Explicitly flagged as probably not worth it right now (recorded only):** casting/DLNA, voice search, custom subtitle file import, light theme toggle — each is its own project and none closes a gap any actual user has hit yet.
 
 **WinUI top-bar/Settings polish (2026-10-02):** search + sort pills live in the top bar and hide off the catalog; the Account page is now **Settings** with Library / Player / Account tabs (Library selected by default). Open follow-ups:
-- [ ] **More Settings tabs** — Library is built (Diagnostics/About were built then removed by request); still open: Appearance (UI scale/density), Playback defaults (default audio/subtitle language, resume behaviour, auto-play next episode — needs track switching first), Profiles. Library could also gain a clear-artwork-cache action if a disk cache is ever added.
+- [ ] **More Settings tabs** — Library is built (Diagnostics/About were built then removed by request); still open: Appearance (UI scale/density), Playback defaults (default audio/subtitle language and resume behaviour; persistence still needs a format-by-engine matrix), Profiles. Playlist advance is a persisted per-kind Off / Next / Shuffle choice in the player. Library could also gain a clear-artwork-cache action if a disk cache is ever added.
 - [ ] **Dead `PageSearchPanel`** in `CatalogLandingPage.xaml` (permanently Collapsed; its `ClearSearchButton` has no Style) — delete, but `SearchBox` lives inside it and `SetSearchText` drives it, so move that first.
 
 ---

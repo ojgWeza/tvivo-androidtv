@@ -283,9 +283,8 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
@@ -293,8 +292,8 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
-                        <Button x:Name="RewindButton" Grid.Column="1" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
-                        <Grid Grid.Column="2" ColumnSpacing="10" VerticalAlignment="Center">
+                        <Button x:Name="RewindButton" Grid.Column="2" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                        <Grid Grid.Column="3" ColumnSpacing="10" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -304,8 +303,8 @@
                             <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
                             <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" Text="0:00" />
                         </Grid>
-                        <Button x:Name="ForwardButton" Grid.Column="3" Style="{StaticResource AppIconButtonStyle}" Click="ForwardButton_Click" AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds" Content="&#xEB9D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
-                        <Button x:Name="PreviousEpisodeButton" Grid.Column="4" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Previous episode"
+                        <Button x:Name="ForwardButton" Grid.Column="4" Style="{StaticResource AppIconButtonStyle}" Click="ForwardButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds" Content="&#xEB9D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                        <Button x:Name="PreviousEpisodeButton" Grid.Column="1" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Previous episode"
                                 Style="{StaticResource AppIconButtonStyle}" Click="PreviousEpisode_Click"
                                 AutomationProperties.Name="Previous episode" />
                         <Button x:Name="NextEpisodeButton" Grid.Column="5" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Next episode"
@@ -333,38 +332,53 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <Button x:Name="CinemaButton" Grid.Column="9" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
+                        <Button x:Name="CinemaButton" Grid.Column="8" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
                     </Grid>
                     </Border>
                     </Grid>
 
                     <Border x:Name="PlayerSidePanel" Grid.Column="1" MinWidth="290" Padding="18" Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="14">
-                        <Grid RowSpacing="12">
+                        <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="PlayerSideTitle" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AppTextBrush}" Text="More from this folder" TextWrapping="Wrap" />
-                                <Button x:Name="SeriesFavoriteButton" Grid.Column="1" Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
+                                <Button x:Name="SeriesFavoriteButton" Grid.Column="2" Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
                                         Content="☆" Width="40" Height="40" MinWidth="40" MinHeight="40"
                                         FontSize="22" Padding="0" HorizontalContentAlignment="Center"
                                         VerticalContentAlignment="Center" Background="Transparent"
                                         Foreground="{StaticResource AppMutedTextBrush}"
                                         AutomationProperties.Name="Toggle series favorite"
                                         Click="SeriesFavorite_Click" />
+                            <StackPanel x:Name="PlayerPlaylistOptionsRow" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <ToggleButton x:Name="AutoplayNextToggle" Content="&#xE893;"
+                                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              AutomationProperties.Name="Autoplay next"
+                                              ToolTipService.ToolTip="Autoplay next"
+                                              Checked="AutoplayNextToggle_Checked" Unchecked="AutoplayNextToggle_Unchecked" />
+                                <ToggleButton x:Name="ShuffleToggle" Content="&#xE8B1;"
+                                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              AutomationProperties.Name="Shuffle"
+                                              ToolTipService.ToolTip="Shuffle"
+                                              Checked="ShuffleToggle_Checked" Unchecked="ShuffleToggle_Unchecked" />
+                            </StackPanel>
                             </Grid>
-                            <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Foreground="{StaticResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
+                            <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Margin="0,4,0,0" Foreground="{StaticResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
                             <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Visibility="Collapsed" />
-                            <Grid Grid.Row="3" ColumnSpacing="8">
+                            <Grid Grid.Row="3" ColumnSpacing="8" Margin="0,10,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
@@ -377,10 +391,10 @@
                                 <TextBlock x:Name="PlayerSeasonWatchedCount" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
                                            Visibility="Collapsed" Foreground="{StaticResource AppMutedTextBrush}" FontSize="12" />
                             </Grid>
-                            <Button x:Name="ResumeEpisodeButton" Grid.Row="4" Visibility="Collapsed"
+                            <Button x:Name="ResumeEpisodeButton" Grid.Row="4" Margin="0,10,0,0" Visibility="Collapsed"
                                     Content="Resume episode" HorizontalAlignment="Stretch"
                                     Style="{StaticResource AppQuietButtonStyle}" Click="ResumeEpisode_Click" />
-                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
+                            <ListView x:Name="PlayerRelatedList" Grid.Row="5" Margin="0,10,0,0" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                                         <Setter Property="MinHeight" Value="0" />

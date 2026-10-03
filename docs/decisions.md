@@ -1409,8 +1409,13 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   indexed items surface even when the provider reports no add date.
 - **Previous/next episode** controls in the player bar plus PageUp/PageDown, and a next-episode overlay.
 - **Viewing map + progress (catalog schema v16, `media_progress`).** Per-episode state Unwatched/InProgress/
-  Finished. Completion is recorded before auto-advance, on engine end or at 90% of a positive measured
-  duration (seeking past 90% therefore counts as finished: open question). Home Continue Watching shows a
+  Finished. Completion is a fixed tail, never a share of the length (`EpisodeCompletion`/`MovieCompletion`
+  in Tvivo.Core; a percentage marked a 20-minute episode done with two minutes left): engine end, or for
+  episodes the last 15 s of a measured duration, or for films the last 4 minutes (never more than 5% of the
+  runtime; credits). Streams with no measured length finish only on engine end. Auto-advance still waits
+  for the engine to end. The finished mark follows the current position on each save: seeking back out of
+  the completion tail restores the resume position and clears the mark; engine-ended playback stays finished.
+  Home Continue Watching shows a
   progress track and "min left" only when a duration was measured. Movie cards and movie rows in the
   player list read `media_progress` in a batch and show a progress bar (full when finished); episode rows
   use the same presentation, with per-season counts and Resume episode remaining. Series cards stay clear
@@ -1467,7 +1472,16 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   episode starts from its own `media_progress` row (`GetEpisodeResumePosition`), never the series-wide resume value, which
   belongs to whichever episode was played last. Watched state is derived from playback only; there is no manual menu.
 
+- **WinUI held seeking (2026-10-03).** Rewind/forward buttons keep the 10-second click action and enter accelerated
+  scrubbing after 400 ms of hold. The pure `HeldSeekAccelerator` ramps 30-second steps to a five-minute cap; the
+  UI coalesces engine seeks to 250 ms, clamps away from the final second, and commits/saves the final target on release.
+
 ## WinUI LibVLC volume curve compensation (2026-10-03)
 
 **Decision:** Treat the player slider as a linear amplitude percentage and cube-root its percentage only when writing LibVLC volume; invert that mapping for readback. Reapply the mapped value when LibVLC raises its `Playing` event.
 **Why:** VLC 3.0.23 `mmdevice.c` cubes the requested volume before writing the Windows session scalar, and its worker only calls `ISimpleAudioVolume_SetMasterVolume` when `requested_volume` is nonnegative. Explicitly setting volume after playback starts requests a fresh scalar even when Windows restores an older per-app session value. The native FFmpegInterop engine stays linear.
+
+## WinUI playlist next mode
+
+**Decision:** The player’s Autoplay next and Shuffle ToggleButtons are two choices for one persisted mode per content kind: Off, Next (sequential), or Shuffle. Episodes default to Next; movies default to Shuffle. Existing `%LOCALAPPDATA%\\Tvivo\\playback-options.json` files migrate episodes from the old autoplay boolean (`true` → Next, `false` → Off, missing → Next) and movies (`true` → Next, `false` or missing → Shuffle). The visible playlist is the selected season for episodes and the visible category list for movies. Next and Shuffle both show the pre-end prompt and automatically advance when playback ends; Shuffle uses the same cached pick for prompt, manual Next, and advance. Its selector prefers unfinished items and avoids repeats within a round. Previous remains sequential. Live playback does not show these options.
+**Why:** Autoplay and shuffle are alternative advance strategies. A single mode prevents both buttons being active together while letting either mode be switched off. The new movie default makes finished movies continue to a random item from the current category, as requested.

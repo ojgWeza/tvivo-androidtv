@@ -227,6 +227,59 @@
                 <Setter Property="MinWidth" Value="36" />
                 <Setter Property="MinHeight" Value="36" />
             </Style>
+            <Style x:Key="AppIconToggleButtonStyle" TargetType="ToggleButton">
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="MinWidth" Value="36" />
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="FontSize" Value="16" />
+                <Setter Property="UseSystemFocusVisuals" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Grid>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="ToggleBackground.Background" Value="#33D97757" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="ToggleBackground.Background" Value="#66D97757" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled" />
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Unchecked" />
+                                        <VisualState x:Name="Checked">
+                                            <VisualState.Setters>
+                                                <Setter Target="ToggleBackground.Background" Value="{StaticResource AccentFillColorTertiaryBrush}" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Indeterminate" />
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Border x:Name="ToggleBackground" Background="{TemplateBinding Background}" CornerRadius="8" />
+                                <ContentPresenter x:Name="ToggleContent" Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                  Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
             <Style x:Key="AppCardButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="190" />
                 <Setter Property="Height" Value="205" />

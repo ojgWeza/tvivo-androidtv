@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
@@ -47,6 +48,15 @@ public sealed partial class MainWindow : Window
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
+    private readonly NextPlaybackSelector _nextPlaybackSelector = new();
+    private string[] _shufflePlaylistIds = Array.Empty<string>();
+    private string? _preparedNextItemId;
+    private string? _preparedNextForItemId;
+    private bool _preparedNextWasShuffle;
+    private PlaybackMode _episodePlaybackMode = PlaybackMode.Next;
+    private PlaybackMode _moviePlaybackMode = PlaybackMode.Shuffle;
+    private bool _initializingPlaybackOptions = true;
+    private bool _playerMovieProgressReady = true;
     private long _playerMovieProgressGeneration;
     private double? _playerListPointerPressOffset;
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
@@ -57,6 +67,7 @@ public sealed partial class MainWindow : Window
     private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
     private bool _seriesCompletionRecorded;
+    private bool _movieCompletionRecorded;
     private bool _playbackCompletionShown;
     private bool _nextEpisodeAutoPlaySuppressed;
     private bool _nextEpisodeAdvanceStarted;
@@ -87,6 +98,15 @@ public sealed partial class MainWindow : Window
     private Windows.Foundation.Point _lastVideoTapPoint;
     private readonly WindowStateController _windowState;
     private bool _isDraggingProgress;
+    private bool _isHeldSeeking;
+    private bool _heldSeekDidScrub;
+    private bool _suppressHeldSeekClick;
+    private Button? _heldSeekButton;
+    private int _heldSeekDirection;
+    private long _heldSeekTarget;
+    private DateTimeOffset _heldSeekStartedAt;
+    private DateTimeOffset _heldSeekLastStepAt;
+    private readonly DispatcherTimer _heldSeekTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private bool _isUpdatingProgress;
     private bool _isUpdatingVolume;
     private long? _resumePositionOnStart;
@@ -143,6 +163,17 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        var playbackOptions = ReadPlaybackOptions();
+        _episodePlaybackMode = playbackOptions.EpisodeMode;
+        _moviePlaybackMode = playbackOptions.MovieMode;
+        try
+        {
+            SyncPlaybackModeToggles(_episodePlaybackMode);
+        }
+        finally
+        {
+            _initializingPlaybackOptions = false;
+        }
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
         SetTrackSelectingEngine(_engine);
@@ -173,6 +204,8 @@ public sealed partial class MainWindow : Window
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
         _playbackUiTimer.Start();
+        _heldSeekTimer.Tick += HeldSeekTimer_Tick;
+        Activated += MainWindow_Activated;
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
@@ -314,6 +347,7 @@ public sealed partial class MainWindow : Window
         if (ReferenceEquals(selectedEngine, _engine))
             return;
 
+        StopHeldSeek(commit: true, released: false);
         StopCinemaCursorIdleTimer(showCursor: true);
 
         var restartCurrentPlayback = _currentPage == ShellPage.Player && _currentSource is not null;
@@ -552,6 +586,109 @@ public sealed partial class MainWindow : Window
         "Tvivo",
         "playback-engine.txt");
 
+    private static string GetPlaybackOptionsPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Tvivo",
+        "playback-options.json");
+
+    private static PlaybackModePreferences ReadPlaybackOptions()
+    {
+        try
+        {
+            var path = GetPlaybackOptionsPath();
+            return File.Exists(path)
+                ? PlaybackModePreferences.FromJson(File.ReadAllText(path))
+                : PlaybackModePreferences.Defaults;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Playback options could not be read; using defaults", exception);
+            return PlaybackModePreferences.Defaults;
+        }
+    }
+
+    private void WritePlaybackOptions()
+    {
+        try
+        {
+            var path = GetPlaybackOptionsPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, new PlaybackModePreferences(_episodePlaybackMode, _moviePlaybackMode).ToJson());
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Playback options could not be saved", exception);
+        }
+    }
+
+    private void AutoplayNextToggle_Checked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Next);
+
+    private void AutoplayNextToggle_Unchecked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Off);
+
+    private void ShuffleToggle_Checked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Shuffle);
+
+    private void ShuffleToggle_Unchecked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Off);
+
+    private void SetPlaybackMode(PlaybackMode mode)
+    {
+        if (_initializingPlaybackOptions) return;
+        var kind = _nowPlayingChannel?.Source.Kind;
+        if (kind == StreamKind.Episode)
+            _episodePlaybackMode = mode;
+        else if (kind == StreamKind.Movie)
+            _moviePlaybackMode = mode;
+        else return;
+
+        _initializingPlaybackOptions = true;
+        try
+        {
+            SyncPlaybackModeToggles(mode);
+        }
+        finally
+        {
+            _initializingPlaybackOptions = false;
+        }
+        _nextPlaybackSelector.Reset();
+        ClearPreparedNextItem();
+        WritePlaybackOptions();
+        if (mode == PlaybackMode.Off)
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        UpdateEpisodeNavigationButtons();
+    }
+
+    private PlaybackMode GetPlaybackMode(StreamKind? kind) => kind switch
+    {
+        StreamKind.Episode => _episodePlaybackMode,
+        StreamKind.Movie => _moviePlaybackMode,
+        _ => PlaybackMode.Off,
+    };
+
+    private void SyncPlaybackModeToggles(PlaybackMode mode)
+    {
+        AutoplayNextToggle.IsChecked = mode == PlaybackMode.Next;
+        ShuffleToggle.IsChecked = mode == PlaybackMode.Shuffle;
+    }
+
+    private void UpdatePlaylistOptionControls(StreamKind kind)
+    {
+        _initializingPlaybackOptions = true;
+        try
+        {
+            var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
+            PlayerPlaylistOptionsRow.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+            SyncPlaybackModeToggles(GetPlaybackMode(kind));
+            if (!hasPlaylist)
+            {
+                _nextPlaybackSelector.Reset();
+                ClearPreparedNextItem();
+            }
+        }
+        finally
+        {
+            _initializingPlaybackOptions = false;
+        }
+    }
+
     private void MyTvivoNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
@@ -642,6 +779,9 @@ public sealed partial class MainWindow : Window
     {
         if (_currentPage == page)
             return;
+
+        if (_currentPage == ShellPage.Player && page != ShellPage.Player)
+            StopHeldSeek(commit: true, released: false);
 
         var returningFromPlayer = page == ShellPage.Catalog && _currentPage == ShellPage.Player;
 
@@ -825,7 +965,7 @@ public sealed partial class MainWindow : Window
         _currentSource = args.Source;
         _resumePositionOnStart = null;
         _nowPlayingChannel = args.Channel;
-        UpdateEpisodeNavigationButtons();
+        UpdatePlaylistOptionControls(args.Source.Kind);
         PlayerTitleText.Text = args.Channel.DisplayName;
         PlayerSideTitle.Text = args.Source.Kind is StreamKind.Movie or StreamKind.Live
             ? "Loading category…"
@@ -841,6 +981,7 @@ public sealed partial class MainWindow : Window
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         _playbackCompletionShown = false;
         SetPlayerList(_playerSiblings, args.Channel);
+        UpdateEpisodeNavigationButtons();
         ShowPage(ShellPage.Player);
         if (args.Source.Kind == StreamKind.Movie)
             _ = LoadMovieCategorySiblingsAsync(args.Channel, selectionGeneration);
@@ -872,6 +1013,7 @@ public sealed partial class MainWindow : Window
             ? "No other movies are available."
             : "Other movies in this category";
         SetPlayerList(_playerSiblings, selected);
+        UpdateEpisodeNavigationButtons();
     }
 
     private async Task LoadPlayerCategoryTitleAsync(Channel selected, long selectionGeneration, string fallbackTitle)
@@ -914,6 +1056,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (!string.Equals(_currentSeriesId, series.Id, StringComparison.Ordinal))
+        {
+            _nextPlaybackSelector.Reset();
+            ClearPreparedNextItem();
+        }
         _playerReturnPage = _currentPage ?? ShellPage.Catalog;
         Interlocked.Increment(ref _metadataGeneration);
         _currentSeriesId = series.Id;
@@ -958,6 +1105,7 @@ public sealed partial class MainWindow : Window
         }
         _nowPlayingChannel = episode;
         _currentSource = episode.Source;
+        UpdatePlaylistOptionControls(StreamKind.Episode);
         _seriesCompletionRecorded = false;
         _playbackCompletionShown = false;
         PlayerTitleText.Text = episode.DisplayName;
@@ -1003,17 +1151,80 @@ public sealed partial class MainWindow : Window
 
     private void UpdateEpisodeNavigationButtons()
     {
-        var isEpisode = _nowPlayingChannel?.Source.Kind == StreamKind.Episode;
-        PreviousEpisodeButton.Visibility = isEpisode ? Visibility.Visible : Visibility.Collapsed;
-        NextEpisodeButton.Visibility = isEpisode ? Visibility.Visible : Visibility.Collapsed;
-        PreviousEpisodeButton.IsEnabled = GetAdjacentEpisode(-1) is not null;
-        NextEpisodeButton.IsEnabled = GetAdjacentEpisode(1) is not null;
+        var kind = _nowPlayingChannel?.Source.Kind;
+        var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
+        PreviousEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        NextEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        var previous = kind == StreamKind.Episode
+            ? GetAdjacentEpisode(-1)
+            : GetAdjacentVisiblePlaylistItem(-1);
+        PreviousEpisodeButton.IsEnabled = previous is not null;
+        NextEpisodeButton.IsEnabled = GetNextPlaylistItem() is not null;
+        var previousLabel = kind == StreamKind.Movie ? "Previous movie" : "Previous episode";
+        var nextLabel = kind == StreamKind.Movie ? "Next movie" : "Next episode";
+        ToolTipService.SetToolTip(PreviousEpisodeButton, previousLabel);
+        ToolTipService.SetToolTip(NextEpisodeButton, nextLabel);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PreviousEpisodeButton, previousLabel);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(NextEpisodeButton, nextLabel);
     }
 
     private void PlayAdjacentEpisode(int offset)
     {
-        if (GetAdjacentEpisode(offset) is { } episode)
-            OpenSeriesEpisode(episode);
+        var kind = _nowPlayingChannel?.Source.Kind;
+        var target = offset < 0
+            ? kind == StreamKind.Episode ? GetAdjacentEpisode(-1) : GetAdjacentVisiblePlaylistItem(-1)
+            : GetNextPlaylistItem();
+        if (target is null) return;
+        if (target.Source.Kind == StreamKind.Episode)
+            OpenSeriesEpisode(target);
+        else
+            PlayRelatedChannel(target);
+    }
+
+    private Channel? GetAdjacentVisiblePlaylistItem(int offset)
+    {
+        if (_nowPlayingChannel is not { } current || current.Source.Kind is not (StreamKind.Movie or StreamKind.Episode))
+            return null;
+        var entries = _playerEntries
+            .Where(entry => entry.Channel.Source.Kind == current.Source.Kind)
+            .Select(entry => entry.Channel)
+            .ToArray();
+        var index = Array.FindIndex(entries, channel => channel.Id == current.Id);
+        var target = index + offset;
+        return index >= 0 && target >= 0 && target < entries.Length ? entries[target] : null;
+    }
+
+    private Channel? GetNextPlaylistItem()
+    {
+        if (_nowPlayingChannel is not { } current) return null;
+        var shuffle = PlaybackModeLogic.ShouldShuffle(GetPlaybackMode(current.Source.Kind));
+        if (!shuffle)
+            return current.Source.Kind == StreamKind.Episode
+                ? GetAdjacentEpisode(1)
+                : current.Source.Kind == StreamKind.Movie ? GetAdjacentVisiblePlaylistItem(1) : null;
+
+        if (current.Source.Kind == StreamKind.Movie && !_playerMovieProgressReady)
+            return null;
+        if (_preparedNextForItemId == current.Id && _preparedNextWasShuffle)
+            return _playerEntries.FirstOrDefault(entry => entry.Channel.Id == _preparedNextItemId)?.Channel;
+
+        var entries = _playerEntries
+            .Where(entry => entry.Channel.Source.Kind == current.Source.Kind)
+            .ToArray();
+        var ids = entries.Select(entry => entry.Channel.Id).ToArray();
+        var finishedIds = entries.Where(entry => entry.IsFinished)
+            .Select(entry => entry.Channel.Id).ToHashSet(StringComparer.Ordinal);
+        _preparedNextForItemId = current.Id;
+        _preparedNextWasShuffle = true;
+        _preparedNextItemId = _nextPlaybackSelector.SelectNext(ids, current.Id, finishedIds, shuffle: true);
+        return entries.FirstOrDefault(entry => entry.Channel.Id == _preparedNextItemId)?.Channel;
+    }
+
+    private void ClearPreparedNextItem()
+    {
+        _preparedNextItemId = null;
+        _preparedNextForItemId = null;
+        _preparedNextWasShuffle = false;
     }
 
     private void PreviousEpisode_Click(object sender, RoutedEventArgs args) => PlayAdjacentEpisode(-1);
@@ -1034,6 +1245,16 @@ public sealed partial class MainWindow : Window
 
     private void SetPlayerList(IReadOnlyList<Channel> channels, Channel current)
     {
+        var playlistIds = channels.Select(channel => channel.Id).ToArray();
+        if (!_shufflePlaylistIds.SequenceEqual(playlistIds, StringComparer.Ordinal))
+        {
+            _shufflePlaylistIds = playlistIds;
+            _nextPlaybackSelector.Reset();
+            ClearPreparedNextItem();
+        }
+        _playerMovieProgressReady = !channels.Any(channel => channel.Source.Kind == StreamKind.Movie);
+        if (!_playerMovieProgressReady)
+            ClearPreparedNextItem();
         var movieProgressGeneration = Interlocked.Increment(ref _playerMovieProgressGeneration);
         var sameRows = _playerEntries.Count == channels.Count &&
             _playerEntries.Select((entry, index) => entry.Channel.Source.Kind == channels[index].Source.Kind && entry.Channel.Id == channels[index].Id).All(matches => matches);
@@ -1060,16 +1281,27 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshPlayerMovieProgressAsync(IReadOnlyList<Channel> channels, long generation)
     {
-        if (_catalogLandingPage.Account is not { } account) return;
         var movieIds = channels.Where(channel => channel.Source.Kind == StreamKind.Movie)
             .Select(channel => channel.Id).Distinct(StringComparer.Ordinal).ToArray();
-        if (movieIds.Length == 0) return;
+        if (movieIds.Length == 0)
+        {
+            _playerMovieProgressReady = true;
+            return;
+        }
+        if (_catalogLandingPage.Account is not { } account)
+        {
+            _playerMovieProgressReady = true;
+            UpdateEpisodeNavigationButtons();
+            return;
+        }
         var progress = await Task.Run(() => _catalogRepository.GetPlaybackProgress(account, "movie", movieIds));
         if (generation != Volatile.Read(ref _playerMovieProgressGeneration) ||
             _catalogLandingPage.Account?.AccountId != account.AccountId)
             return;
         foreach (var entry in _playerEntries.Where(entry => entry.Channel.Source.Kind == StreamKind.Movie))
             entry.SetProgress(progress.GetValueOrDefault(entry.Channel.Id));
+        _playerMovieProgressReady = true;
+        UpdateEpisodeNavigationButtons();
     }
 
     private bool IsChannelFavorite(Channel channel)
@@ -1183,6 +1415,7 @@ public sealed partial class MainWindow : Window
         if (account is null || _currentSeriesId is null) return;
         var episodes = season.Episodes.Select(episode => ToEpisodeChannel(account, _currentSeriesId, episode)).ToArray();
         SetPlayerList(episodes, _nowPlayingChannel);
+        UpdateEpisodeNavigationButtons();
         PlayerSeasonWatchedCount.Text = SeasonWatchedCount(season);
         if (_playerSeriesSeasons.Count == 1) PlayerSeasonLabel.Text = SeasonProgressLabel(season);
     }
@@ -1230,6 +1463,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StartPlaybackAsync(StreamSource source)
     {
+        StopHeldSeek(commit: true, released: false);
         var resumePosition = source.Kind switch
         {
             StreamKind.Movie when _catalogLandingPage.Account is { } account && _nowPlayingChannel is { } movie =>
@@ -1240,6 +1474,7 @@ public sealed partial class MainWindow : Window
             _ => 0,
         };
         _resumePositionOnStart = null;
+        _movieCompletionRecorded = false;
         _pendingResumePosition = null;
         _resumeReady = false;
         _lastStallCheckPositionMs = -1;
@@ -1748,6 +1983,8 @@ public sealed partial class MainWindow : Window
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             return;
         }
+        if (_engine.IsEnded)
+            StopHeldSeek(commit: true, released: false);
         if (_isCinemaMode)
         {
             if (_engine.IsPlaying || _engine.IsBuffering)
@@ -1760,26 +1997,31 @@ public sealed partial class MainWindow : Window
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
-        if (sessionIsCurrent && !_seriesCompletionRecorded && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
+        if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
             _currentSeriesId is not null && _currentSeriesAccount is not null)
         {
             var measuredDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
             var position = ClampPosition(timeline.PositionMilliseconds, measuredDuration);
-            if (_engine.IsEnded || measuredDuration is { } measuredLength && position >= measuredLength * 0.9)
-                RecordEpisodeCompletion(position, measuredDuration);
+            RecordEpisodeCompletion(position, measuredDuration);
         }
-        if (sessionIsCurrent && _engine.IsEnded && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
-            !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted && GetAdjacentEpisode(1) is { } endedNextEpisode)
+        else if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Movie &&
+            _catalogLandingPage.Account is not null)
+        {
+            var movieDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
+            var moviePosition = _engine.IsEnded ? 0 : ClampPosition(timeline.PositionMilliseconds, movieDuration);
+            if (MovieCompletion.IsFinished(moviePosition, movieDuration, _engine.IsEnded) != _movieCompletionRecorded)
+                SaveResumePosition(force: true);
+        }
+        if (sessionIsCurrent && _engine.IsEnded && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted &&
+            PlaybackModeLogic.ShouldAutoAdvance(GetPlaybackMode(_nowPlayingChannel?.Source.Kind)) && GetNextPlaylistItem() is { } endedNextItem)
         {
             _nextEpisodeAdvanceStarted = true;
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
-            OpenSeriesEpisode(endedNextEpisode);
+            if (endedNextItem.Source.Kind == StreamKind.Episode)
+                OpenSeriesEpisode(endedNextItem);
+            else
+                PlayRelatedChannel(endedNextItem);
             return;
-        }
-        if (!_seriesCompletionRecorded && _engine.IsEnded && _currentSeriesId is not null &&
-            _currentSeriesAccount is not null && _nowPlayingChannel?.Source.Kind == StreamKind.Episode)
-        {
-            if (sessionIsCurrent) RecordEpisodeCompletion(0, timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null);
         }
         if (sessionIsCurrent && !_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
         {
@@ -1796,16 +2038,20 @@ public sealed partial class MainWindow : Window
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
         var time = timeline.PositionMilliseconds;
-        var nextEpisode = GetAdjacentEpisode(1);
-        if (_nowPlayingChannel?.Source.Kind == StreamKind.Episode && duration is > 0 && nextEpisode is not null &&
-            !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted && duration.Value - time <= 20_000 && !_engine.IsEnded)
+        var playbackKind = _nowPlayingChannel?.Source.Kind;
+        var nextItem = PlaybackModeLogic.ShouldShowNextPrompt(GetPlaybackMode(playbackKind)) && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted
+            ? GetNextPlaylistItem()
+            : null;
+        if ((playbackKind is StreamKind.Episode or StreamKind.Movie) && duration is > 0 && nextItem is not null &&
+            duration.Value - time <= 20_000 && !_engine.IsEnded)
         {
-            NextEpisodePromptTitle.Text = $"Next episode: {nextEpisode.DisplayName}";
+            var label = playbackKind == StreamKind.Movie ? "Next movie" : "Next episode";
+            NextEpisodePromptTitle.Text = $"{label}: {nextItem.DisplayName}";
             NextEpisodePrompt.Visibility = Visibility.Visible;
         }
         else
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
-        if (_currentSource is not null && !_isDraggingProgress && !_engine.IsPaused && !_engine.IsEnded &&
+        if (_currentSource is not null && !_isDraggingProgress && !_isHeldSeeking && !_engine.IsPaused && !_engine.IsEnded &&
             (_engine.IsPlaying || _engine.IsBuffering))
         {
             if (time != _lastStallCheckPositionMs)
@@ -1830,9 +2076,16 @@ public sealed partial class MainWindow : Window
         ProgressSlider.IsEnabled = seekEnabled;
         RewindButton.IsEnabled = seekEnabled;
         ForwardButton.IsEnabled = seekEnabled;
-        if (!_isDraggingProgress)
+        if (_isHeldSeeking)
+        {
+            ProgressSlider.Value = Math.Clamp(_heldSeekTarget, 0, Math.Max(length, 1));
+            ElapsedText.Text = FormatTime(_heldSeekTarget);
+        }
+        else if (!_isDraggingProgress)
+        {
             ProgressSlider.Value = Math.Clamp(time, 0, Math.Max(length, 1));
-        ElapsedText.Text = FormatTime(time);
+            ElapsedText.Text = FormatTime(time);
+        }
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         _isUpdatingProgress = false;
         SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
@@ -1840,15 +2093,10 @@ public sealed partial class MainWindow : Window
 
     private void RecordEpisodeCompletion(long position, long? duration)
     {
-        if (_seriesCompletionRecorded || _currentSeriesAccount is null || _currentSeriesId is null ||
+        if (_currentSeriesAccount is null || _currentSeriesId is null ||
             _nowPlayingChannel?.Source.Kind != StreamKind.Episode) return;
-        _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", _nowPlayingChannel.Id, _currentSeriesId,
-            position, duration, finished: true);
-        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
-        foreach (var row in _playerEntries)
-            row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
-        RefreshSeasonProgressCount();
-        _seriesCompletionRecorded = true;
+        if (EpisodeCompletion.IsFinished(position, duration, _engine.IsEnded) != _seriesCompletionRecorded)
+            SaveResumePosition(force: true);
     }
 
     private async void HandleStall(long lastPositionMs)
@@ -1869,9 +2117,9 @@ public sealed partial class MainWindow : Window
             _pendingResumePosition = lastPositionMs > 0 ? lastPositionMs : null;
     }
 
-    private void SaveResumePosition(bool force = false)
+    private void SaveResumePosition(bool force = false, long? positionOverride = null)
     {
-        if (!_resumeReady || _activePlaybackSessionGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
+        if ((!force && _isHeldSeeking) || !_resumeReady || _activePlaybackSessionGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
             _currentPage != ShellPage.Player || _nowPlayingChannel is not { } channel ||
             _catalogLandingPage.Account is not { } account || _currentSource is null)
             return;
@@ -1894,28 +2142,32 @@ public sealed partial class MainWindow : Window
         if (!force && now - _lastResumeSavedAt < TimeSpan.FromSeconds(5)) return;
         var timeline = _engine.Timeline;
         var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
-        var position = _engine.IsEnded ? 0 : ClampPosition(timeline.PositionMilliseconds, duration);
+        var position = _engine.IsEnded ? 0 : ClampPosition(positionOverride ?? timeline.PositionMilliseconds, duration);
         if (type == CatalogItemType.Movie)
         {
-            _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, _engine.IsEnded);
+            var movieFinished = MovieCompletion.IsFinished(position, duration, _engine.IsEnded);
+            _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, movieFinished);
+            _movieCompletionRecorded = movieFinished;
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
                 playingMovieRow.SetProgress(new PlaybackProgress(id,
-                    _engine.IsEnded ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress,
-                    _engine.IsEnded ? 0 : position, duration));
+                    movieFinished ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress,
+                    movieFinished ? 0 : position, duration));
         }
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
-            var finished = _seriesCompletionRecorded || _engine.IsEnded || duration is { } measured && position >= measured * 0.9;
+            var finished = EpisodeCompletion.IsFinished(position, duration, _engine.IsEnded);
+            var completionChanged = finished != _seriesCompletionRecorded;
             _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
-            var newlyFinished = finished && !_seriesCompletionRecorded;
-            if (finished) _seriesCompletionRecorded = true;
+            _seriesCompletionRecorded = finished;
             // Keep the row bar in step with what was just saved, without re-reading the database.
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == channel.Id) is { } playingRow)
                 playingRow.SetProgress(new PlaybackProgress(channel.Id,
                     finished ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress, finished ? 0 : position, duration));
-            if (newlyFinished)
+            if (completionChanged)
             {
                 _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, _currentSeriesId);
+                foreach (var row in _playerEntries)
+                    row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
                 RefreshSeasonProgressCount();
             }
         }
@@ -1938,7 +2190,8 @@ public sealed partial class MainWindow : Window
     private void ProgressSlider_PointerReleased(object sender, PointerRoutedEventArgs args)
     {
         _isDraggingProgress = false;
-        SeekTo((long)ProgressSlider.Value);
+        if (SeekTo((long)ProgressSlider.Value) is { } target)
+            SaveResumePosition(force: true, positionOverride: target);
     }
 
     private void ProgressSlider_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
@@ -1946,7 +2199,8 @@ public sealed partial class MainWindow : Window
         if (_isDraggingProgress)
         {
             _isDraggingProgress = false;
-            SeekTo((long)ProgressSlider.Value);
+            if (SeekTo((long)ProgressSlider.Value) is { } target)
+                SaveResumePosition(force: true, positionOverride: target);
         }
     }
 
@@ -1956,9 +2210,124 @@ public sealed partial class MainWindow : Window
             SeekTo((long)args.NewValue);
     }
 
-    private void RewindButton_Click(object sender, RoutedEventArgs args) => SeekBy(-10_000);
+    private void RewindButton_Click(object sender, RoutedEventArgs args) => SeekButtonClick(-1);
 
-    private void ForwardButton_Click(object sender, RoutedEventArgs args) => SeekBy(10_000);
+    private void ForwardButton_Click(object sender, RoutedEventArgs args) => SeekButtonClick(1);
+
+    private void SeekButton_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        if (sender is not Button button) return;
+        var timeline = _engine.Timeline;
+        if (!timeline.CanSeek || _currentSource is null) return;
+        _suppressHeldSeekClick = false;
+        _heldSeekButton = button;
+        _heldSeekDirection = ReferenceEquals(button, RewindButton) ? -1 : 1;
+        _heldSeekTarget = ClampHeldSeekTarget(timeline.PositionMilliseconds, timeline.DurationMilliseconds);
+        _heldSeekStartedAt = DateTimeOffset.UtcNow;
+        _heldSeekLastStepAt = _heldSeekStartedAt - TimeSpan.FromMilliseconds(250);
+        _heldSeekDidScrub = false;
+        _heldSeekTimer.Start();
+    }
+
+    private void SeekButton_PointerReleased(object sender, PointerRoutedEventArgs args) =>
+        StopHeldSeek(commit: true, released: true);
+
+    private void SeekButton_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        if (ReferenceEquals(sender, _heldSeekButton))
+            StopHeldSeek(commit: true, released: false);
+    }
+
+    private void SeekButton_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
+    {
+        if (ReferenceEquals(sender, _heldSeekButton))
+            StopHeldSeek(commit: true, released: false);
+    }
+
+    private void SeekButton_LostFocus(object sender, RoutedEventArgs args)
+    {
+        if (ReferenceEquals(sender, _heldSeekButton))
+            StopHeldSeek(commit: true, released: false);
+    }
+
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
+            StopHeldSeek(commit: true, released: false);
+    }
+
+    private void HeldSeekTimer_Tick(object? sender, object args)
+    {
+        if (!_isClosing && _currentPage == ShellPage.Player && _currentSource is not null &&
+            _engine.Timeline.CanSeek && !_engine.IsEnded && _heldSeekButton is not null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var heldDuration = now - _heldSeekStartedAt;
+            var step = HeldSeekAccelerator.StepMilliseconds(heldDuration);
+            if (step > 0 && now - _heldSeekLastStepAt >= TimeSpan.FromMilliseconds(250))
+            {
+                var timeline = _engine.Timeline;
+                _heldSeekTarget = ClampHeldSeekTarget(
+                    _heldSeekTarget + _heldSeekDirection * step, timeline.DurationMilliseconds);
+                _heldSeekLastStepAt = now;
+                _heldSeekDidScrub = true;
+                _isHeldSeeking = true;
+                _engine.Seek(_heldSeekTarget);
+            }
+            if (_heldSeekDidScrub)
+                ShowHeldSeekTarget();
+            return;
+        }
+        StopHeldSeek(commit: true, released: false);
+    }
+
+    private void ShowHeldSeekTarget()
+    {
+        var duration = _engine.Timeline.DurationMilliseconds;
+        _isUpdatingProgress = true;
+        try
+        {
+            var maximum = Math.Max(duration ?? _heldSeekTarget, 1);
+            ProgressSlider.Maximum = maximum;
+            ProgressSlider.Value = Math.Clamp(_heldSeekTarget, 0, maximum);
+            ElapsedText.Text = FormatTime(_heldSeekTarget);
+        }
+        finally
+        {
+            _isUpdatingProgress = false;
+        }
+    }
+
+    private void StopHeldSeek(bool commit, bool released)
+    {
+        if (_heldSeekButton is null) return;
+        _heldSeekTimer.Stop();
+        var didScrub = _heldSeekDidScrub;
+        var target = _heldSeekTarget;
+        _heldSeekButton = null;
+        _heldSeekDidScrub = false;
+        _isHeldSeeking = false;
+        if (didScrub)
+            _suppressHeldSeekClick = true;
+        if (commit && didScrub && _currentPage == ShellPage.Player && _currentSource is not null)
+        {
+            if (SeekTo(target) is { } committedTarget)
+                SaveResumePosition(force: true, positionOverride: committedTarget);
+        }
+    }
+
+    private static long ClampHeldSeekTarget(long target, long? duration) =>
+        duration is > 0 ? Math.Clamp(target, 0, Math.Max(0, duration.Value - 1000)) : Math.Max(0, target);
+
+    private void SeekButtonClick(int direction)
+    {
+        if (_suppressHeldSeekClick)
+        {
+            _suppressHeldSeekClick = false;
+            return;
+        }
+        SeekBy(direction * 10_000L);
+    }
 
     private void SeekBy(long offsetMilliseconds)
     {
@@ -1967,22 +2336,25 @@ public sealed partial class MainWindow : Window
             !(_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused || _engine.IsEnded))
             return;
 
-        SeekTo(timeline.PositionMilliseconds + offsetMilliseconds);
+        if (SeekTo(timeline.PositionMilliseconds + offsetMilliseconds) is { } target)
+            SaveResumePosition(force: true, positionOverride: target);
     }
 
-    private void SeekTo(long targetMilliseconds)
+    private long? SeekTo(long targetMilliseconds)
     {
         var timeline = _engine.Timeline;
         if (!timeline.CanSeek || _currentSource is null ||
             !(_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused || _engine.IsEnded))
-            return;
+            return null;
 
         if (timeline.ClampSeekTarget(targetMilliseconds) is { } target)
         {
             _engine.Seek(target);
             if (timeline.DurationMilliseconds is { } duration && duration - target > 20_000)
                 NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            return target;
         }
+        return null;
     }
 
     private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
@@ -2047,6 +2419,7 @@ public sealed partial class MainWindow : Window
         _nowPlayingChannel = channel;
         _resumePositionOnStart = null;
         _currentSource = channel.Source;
+        UpdatePlaylistOptionControls(channel.Source.Kind);
         _nextEpisodeAutoPlaySuppressed = false;
         _nextEpisodeAdvanceStarted = false;
         NextEpisodePrompt.Visibility = Visibility.Collapsed;
@@ -2312,12 +2685,16 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        StopHeldSeek(commit: true, released: false);
         FlushPendingVisits();
         SaveResumePosition(force: true);
         if (_currentSource is { } closingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         _playbackUiTimer.Stop();
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
+        _heldSeekTimer.Stop();
+        _heldSeekTimer.Tick -= HeldSeekTimer_Tick;
+        Activated -= MainWindow_Activated;
         StopPlayerEpgUpdates();
         _playerEpgTimer.Tick -= PlayerEpgTimer_Tick;
         _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
@@ -2409,6 +2786,7 @@ public sealed partial class MainWindow : Window
         public double ProgressValue => ProgressPresentation.Value;
         public Brush ProgressBarBrush => _isCurrent ? SelectedTextBrush : AccentBrush;
         public string ProgressAutomationName => ProgressPresentation.AutomationName;
+        public bool IsFinished => _progress?.State == PlaybackProgressState.Finished;
         public bool IsFavorite
         {
             get => _isFavorite;
@@ -2442,6 +2820,7 @@ public sealed partial class MainWindow : Window
             OnPropertyChanged(nameof(ProgressVisibility));
             OnPropertyChanged(nameof(ProgressValue));
             OnPropertyChanged(nameof(ProgressAutomationName));
+            OnPropertyChanged(nameof(IsFinished));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
