@@ -255,7 +255,7 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
-    public void Recently_added_shows_a_title_listed_in_two_categories_once_and_keeps_the_limit_filled()
+    public void Recently_added_expands_past_duplicate_candidates_to_fill_the_limit()
     {
         using var repo = Create(out var dir); var account = Account();
         try
@@ -264,18 +264,15 @@ public sealed class SqliteCatalogRepositoryTests
             Channel Titled(string id, string title, DateTimeOffset added) =>
                 new(account.AccountId, id, id.StartsWith("dup") ? "cat-" + id : "cat", title, title, null, added, null,
                     new(id, StreamKind.Series, "mp4"), new Dictionary<string, string>());
-            var items = new List<Channel>
-            {
-                Titled("dup-a", "East of Eden", start.AddDays(5)),
-                Titled("dup-b", "East of Eden", start.AddDays(4)),
-                Titled("dup-c", "east of eden ", start.AddDays(3)),
-            };
+            var items = Enumerable.Range(0, 24)
+                .Select(index => Titled("dup-" + index, index == 0 ? "East of Eden" : "east of eden ", start.AddDays(30 - index)))
+                .ToList();
             for (var i = 0; i < 6; i++) items.Add(Titled("other-" + i, "Other " + i, start.AddDays(2).AddHours(-i)));
             repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), items);
 
             var recent = repo.GetRecentlyAdded(account, CatalogItemType.Series, limit: 5);
 
-            Assert.Equal(new[] { "dup-a", "other-0", "other-1", "other-2", "other-3" }, recent.Select(item => item.Id));
+            Assert.Equal(new[] { "dup-0", "other-0", "other-1", "other-2", "other-3" }, recent.Select(item => item.Id));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -632,6 +629,26 @@ public sealed class SqliteCatalogRepositoryTests
             var again = repo.GetEpisodeProgressForSeries(account, "show")["e1"];
             Assert.Equal(PlaybackProgressState.Finished, again.State);
             Assert.Equal(0L, again.ResumeMs);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Movie_progress_batch_returns_saved_movies_and_omits_missing_ids()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.SaveProgress(account, "movie", "movie-resumed", null, 42_000, 120_000, false);
+            repo.SaveProgress(account, "movie", "movie-finished", null, 120_000, 120_000, true);
+
+            var progress = repo.GetPlaybackProgress(account, "Movie", new[] { "movie-resumed", "movie-finished", "never-played" });
+
+            Assert.Equal(2, progress.Count);
+            Assert.Equal(new PlaybackProgress("movie-resumed", PlaybackProgressState.InProgress, 42_000, 120_000), progress["movie-resumed"]);
+            Assert.Equal(new PlaybackProgress("movie-finished", PlaybackProgressState.Finished, 0, 120_000), progress["movie-finished"]);
+            Assert.DoesNotContain("never-played", progress.Keys);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }

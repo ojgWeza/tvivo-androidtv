@@ -53,6 +53,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<(string AccountId, CatalogMode Mode), DateTimeOffset> _lastRefreshAt = new();
     private readonly Dictionary<CatalogMode, ModeInteractionState> _modeStates = new();
     private readonly Dictionary<(CatalogMode Mode, string ShelfId), BrowsePosition> _browsePositions = new();
+    private IReadOnlyDictionary<string, PlaybackProgress> _movieProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private readonly HashSet<string> _recentSpotlightIds = new(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
     private readonly object _spotlightShelvesLock = new();
@@ -983,10 +984,10 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private static CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null, string? subtitleOverride = null)
+    private CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null, string? subtitleOverride = null)
     {
         var (title, qualityBadge) = SplitQualityBadge(channel.DisplayName);
-        return new CatalogCard(
+        var card = new CatalogCard(
             $"{channel.ProviderAccountId}:{channel.Source.Kind}:{channel.Id}",
             title,
             subtitleOverride ?? SubtitleFor(type),
@@ -994,7 +995,11 @@ public sealed partial class CatalogLandingPage : UserControl
             190,
             type == CatalogItemType.Live ? 138 : 250,
             channel,
-            qualityBadge ?? categoryQuality);
+            qualityBadge ?? categoryQuality,
+            type);
+        if (type == CatalogItemType.Movie)
+            card.ApplyWatchProgress(_movieProgressById.GetValueOrDefault(channel.Id));
+        return card;
     }
 
     private static int QualityRank(string badge) => badge switch { "SD" => 1, "HD" => 2, "FHD" => 3, _ => 4 };
@@ -1139,6 +1144,11 @@ public sealed partial class CatalogLandingPage : UserControl
                 transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
 
+            await RefreshMovieProgressAsync(snapshot);
+            if ((isCurrent is not null && !isCurrent()) || snapshot.Mode != _activeMode ||
+                transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
+                return;
+
             Interlocked.Increment(ref _pageQueryGeneration);
             _activeMode = snapshot.Mode;
             _groups = snapshot.Groups;
@@ -1207,6 +1217,32 @@ public sealed partial class CatalogLandingPage : UserControl
         if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration)) return;
         visual.StopAnimation(nameof(Visual.Opacity));
         visual.Opacity = end;
+    }
+
+    private async Task RefreshMovieProgressAsync(CatalogSnapshot snapshot)
+    {
+        if (_account is not { } account)
+            return;
+
+        IEnumerable<CatalogCard> cards = snapshot.Shelves.SelectMany(shelf => shelf.Cards)
+            .Concat(snapshot.SpotlightShelves.SelectMany(shelf => shelf.Cards));
+        if (_spotlightCard is { } spotlightCard)
+            cards = cards.Append(spotlightCard);
+        if (OpenShelfGrid.ItemsSource is IEnumerable<CatalogCard> visibleCards)
+            cards = cards.Concat(visibleCards);
+        cards = cards.Distinct();
+        var cardsToRefresh = cards.ToArray();
+        var ids = snapshot.Page.Items.Where(channel => channel.Source.Kind == StreamKind.Movie)
+            .Select(channel => channel.Id)
+            .Concat(cardsToRefresh.Where(card => card.Type == CatalogItemType.Movie && card.Channel is not null)
+                .Select(card => card.Channel!.Id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var progress = await Task.Run(() => _repository.GetPlaybackProgress(account, "movie", ids));
+        _movieProgressById = progress;
+
+        foreach (var card in cardsToRefresh.Where(card => card.Type == CatalogItemType.Movie && card.Channel is not null))
+            card.ApplyWatchProgress(progress.GetValueOrDefault(card.Channel!.Id));
     }
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
@@ -2519,9 +2555,10 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
-        double width, double height, Channel? channel, string? qualityBadge) : INotifyPropertyChanged
+        double width, double height, Channel? channel, string? qualityBadge, CatalogItemType type) : INotifyPropertyChanged
     {
         private EpgNowNext? _nowNext;
+        private PlaybackProgress? _watchProgress;
 
         public string Id { get; } = id;
         public string Title { get; } = title;
@@ -2531,6 +2568,11 @@ public sealed partial class CatalogLandingPage : UserControl
         public double Height { get; } = height;
         public Channel? Channel { get; } = channel;
         public string? QualityBadge { get; } = qualityBadge;
+        public CatalogItemType Type { get; } = type;
+        private PlaybackProgressPresentation WatchProgress => PlaybackProgressPresentation.For(_watchProgress);
+        public double WatchProgressValue => WatchProgress.Value;
+        public Visibility WatchProgressVisibility => WatchProgress.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        public string WatchProgressAutomationName => WatchProgress.AutomationName;
         public Visibility QualityBadgeVisibility => string.IsNullOrWhiteSpace(QualityBadge) ? Visibility.Collapsed : Visibility.Visible;
         public string NowText => _nowNext?.Now is { } now ? $"Now: {now.Title}" : string.Empty;
         public Visibility NowVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
@@ -2582,6 +2624,15 @@ public sealed partial class CatalogLandingPage : UserControl
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
+        public void ApplyWatchProgress(PlaybackProgress? progress)
+        {
+            if (_watchProgress == progress) return;
+            _watchProgress = progress;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressValue)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressAutomationName)));
+        }
+
         public void ApplyNowNext(EpgNowNext? nowNext)
         {
             _nowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;

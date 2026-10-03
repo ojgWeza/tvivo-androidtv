@@ -8,6 +8,22 @@ public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount, D
 public sealed record CatalogCategoryMatchCount(string CategoryId, int MatchCount);
 public enum PlaybackProgressState { Unwatched, InProgress, Finished }
 public sealed record PlaybackProgress(string ItemId, PlaybackProgressState State, long ResumeMs, long? DurationMs);
+public sealed record PlaybackProgressPresentation(bool IsVisible, double Value, string AutomationName)
+{
+    public static PlaybackProgressPresentation For(PlaybackProgress? progress)
+    {
+        if (progress?.State == PlaybackProgressState.Finished)
+            return new(true, 100, "Watched");
+
+        if (progress is { State: PlaybackProgressState.InProgress, ResumeMs: > 0, DurationMs: > 0 } inProgress)
+        {
+            var value = Math.Clamp(inProgress.ResumeMs * 100.0 / inProgress.DurationMs!.Value, 0, 100);
+            return new(true, value, $"Watched {value:0}%");
+        }
+
+        return new(false, 0, "");
+    }
+}
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
@@ -439,14 +455,28 @@ public sealed class SqliteCatalogRepository : IDisposable
     public IReadOnlyList<Channel> GetRecentlyAdded(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 200, string? filter = null)
     {
         var capped = Math.Clamp(limit, 0, 200);
+        if (capped == 0) return Array.Empty<Channel>();
         // Providers often list one title under several categories with different ids. A "recently
-        // added" shelf should show it once (the newest entry wins), so over-fetch before collapsing.
-        var candidates = GetOrderedItems(account, type, connection,
-            "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
-            "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC, id ASC",
-            capped * 4, filter, useRecentlyAddedSortKey: true);
+        // added shelf should show it once (the newest entry wins). Expand the candidate window
+        // until deduplication fills the shelf or the query has reached the end of the results.
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        return candidates.Where(item => seen.Add(DuplicateTitleKey(item))).Take(capped).ToArray();
+        var distinct = new List<Channel>(capped);
+        var fetchLimit = capped * 4;
+        while (true)
+        {
+            var candidates = GetOrderedItems(account, type, connection,
+                "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
+                "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC, id ASC",
+                fetchLimit, filter, useRecentlyAddedSortKey: true);
+            foreach (var item in candidates)
+            {
+                if (!seen.Add(DuplicateTitleKey(item))) continue;
+                distinct.Add(item);
+                if (distinct.Count == capped) return distinct;
+            }
+            if (candidates.Count < fetchLimit || fetchLimit > int.MaxValue / 2) return distinct;
+            fetchLimit *= 2;
+        }
     }
 
     private static string DuplicateTitleKey(Channel item) =>

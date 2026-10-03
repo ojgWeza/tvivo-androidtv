@@ -171,6 +171,7 @@
                                    Background="{StaticResource AppPanelSurfaceBrush}"
                                    PointerPressed="VideoSurface_PointerPressed"
                                    PointerReleased="VideoSurface_PointerReleased"
+                                   PointerMoved="VideoSurface_PointerMoved"
                                    Initialized="VideoView_Initialized" />
                     <MediaPlayerElement x:Name="NativePlayerElement"
                                         Grid.Row="0"
@@ -178,6 +179,7 @@
                                         Visibility="Collapsed"
                                         PointerPressed="VideoSurface_PointerPressed"
                                         PointerReleased="VideoSurface_PointerReleased"
+                                        PointerMoved="VideoSurface_PointerMoved"
                                         Background="{StaticResource AppPanelSurfaceBrush}" />
                     <Border x:Name="PlayerVideoCurtain" Grid.Row="0" Background="{StaticResource AppPanelSurfaceBrush}"
                             Visibility="Collapsed" IsHitTestVisible="False" />
@@ -316,8 +318,21 @@
                                 <MenuFlyout x:Name="AudioSubtitlesFlyout" />
                             </Button.Flyout>
                         </Button>
-                        <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="{StaticResource AppMutedTextBrush}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16" Text="&#xE767;" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" />
-                        <Slider x:Name="VolumeSlider" Grid.Column="8" Width="112" Minimum="0" Maximum="100" Value="100" VerticalAlignment="Center" ValueChanged="VolumeSlider_ValueChanged" />
+                        <Button x:Name="VolumeButton" Grid.Column="7" Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppIconButtonStyle}">
+                            <Button.Flyout>
+                                <Flyout x:Name="VolumeFlyout" Placement="Top">
+                                    <Flyout.FlyoutPresenterStyle>
+                                        <Style TargetType="FlyoutPresenter">
+                                            <Setter Property="Padding" Value="0" />
+                                            <Setter Property="MinWidth" Value="0" />
+                                            <Setter Property="MinHeight" Value="0" />
+                                            <Setter Property="CornerRadius" Value="8" />
+                                        </Style>
+                                    </Flyout.FlyoutPresenterStyle>
+                                    <Slider x:Name="VolumeSlider" Orientation="Vertical" Height="110" Margin="9,10" Minimum="0" Maximum="100" Value="100" AutomationProperties.Name="Volume" ValueChanged="VolumeSlider_ValueChanged" />
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
                         <Button x:Name="CinemaButton" Grid.Column="9" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
                     </Grid>
                     </Border>
@@ -366,19 +381,26 @@
                                     Content="Resume episode" HorizontalAlignment="Stretch"
                                     Style="{StaticResource AppQuietButtonStyle}" Click="ResumeEpisode_Click" />
                             <ListView x:Name="PlayerRelatedList" Grid.Row="5" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                        <Setter Property="MinHeight" Value="0" />
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="Margin" Value="0,1" />
+                                    </Style>
+                                </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="0" CornerRadius="8" Background="{Binding BackgroundBrush}">
                                           <Grid>
-                                            <Grid ColumnSpacing="8" Margin="10,12">
+                                            <Grid ColumnSpacing="8" Margin="10,6">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
                                                 <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Style="{StaticResource AppIconButtonStyle}"
-                                                        Width="40" Height="40" MinWidth="40" MinHeight="40"
-                                                        FontSize="22" Padding="0" HorizontalContentAlignment="Center"
+                                                        Width="32" Height="32" MinWidth="32" MinHeight="32"
+                                                        FontSize="18" Padding="0" HorizontalContentAlignment="Center"
                                                         VerticalContentAlignment="Center"
                                                         Foreground="{Binding FavoriteBrush}" Background="Transparent"
                                                         Visibility="{Binding FavoriteVisibility}"

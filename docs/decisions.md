@@ -1380,8 +1380,18 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   the taskbar; after force-kills/crashes it could stay hidden. `WindowStateController` now calls
   `ITaskbarList2.MarkFullscreenWindow` on every enter/leave fullscreen and `ClearFullscreenHint()` from
   `MainWindow.OnClosed`. Unverified fix - the stuck state was only ever observed, not reproduced.
-- **Cinema cursor**: hidden for the whole of cinema playback (no longer re-shown on pointer move); shown again
-  when playback pauses/stops or cinema mode closes.
+- **Cinema controls and cursor**: pointer movement reveals the transport and title overlay; both playback
+  surfaces now handle `PointerMoved` directly in addition to the `PlayerPage` routed handler, so reveal does
+  not depend solely on bubbling through the page. The per-event 3-DIP filter was removed because it delayed
+  reveal for small movements. `ShowCursor` is now adjusted once per visibility transition and
+  balanced on cursor restoration instead of normalizing the process display counter with loops. The first
+  received move per cinema entry logs `event=cinema.pointer-move source=...`. WinUI routed events bubble from
+  child XAML elements; LibVLCSharp's Windows VideoView is initialized with a swap-chain target, and its
+  documented detached-window/airspace behavior is specific to WPF, so source and vendor documentation do not
+  support assuming that this WinUI video surface is a separate HWND swallowing input. The 3-second idle fade,
+  click/double-click video handling, paused/hover/seek/flyout retention, and cursor restoration on cinema exit,
+  player exit, Escape, engine change, and close remain in code. Pointer delivery and the combined interaction
+  still need live verification; see the open TODO. There is no always-visible progress line in cinema mode.
 - **Refresh status bar** (`RefreshInfoBar`) moved from the top of the catalog list header to a bottom overlay.
 - **Quality pill** (`HD/FHD/4K/SD`): the badge was parsed only from a *trailing* title token, which missed
   `Name FHD (2023)`, `4K - Name`, `Name FHD H265`, `1080p`/`BluRay` forms (about 1 in 10 live titles with a
@@ -1401,8 +1411,12 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
 - **Viewing map + progress (catalog schema v16, `media_progress`).** Per-episode state Unwatched/InProgress/
   Finished. Completion is recorded before auto-advance, on engine end or at 90% of a positive measured
   duration (seeking past 90% therefore counts as finished: open question). Home Continue Watching shows a
-  progress track and "min left" only when a duration was measured. Episode list: watched marks, per-season
-  counts, Resume episode, Mark watched/unwatched. Back up `winui-catalog.sqlite` before the first v16 run.
+  progress track and "min left" only when a duration was measured. Movie cards and movie rows in the
+  player list read `media_progress` in a batch and show a progress bar (full when finished); episode rows
+  use the same presentation, with per-season counts and Resume episode remaining. Series cards stay clear
+  because progress belongs to individual episodes. There is no manual watched/unwatched menu.
+  Episode resume comes from that episode's `media_progress` row, not the series-wide `items.resume_ms`.
+  Back up `winui-catalog.sqlite` before the first v16 run.
 - **Audio and subtitle picker.** `ITrackSelectingEngine` on both engines; control-bar flyout with Audio and
   Subtitles (Off first). Default subtitle policy: explicit Off, then preferred language, then UI-culture
   match, then first track; applied once per playback session. Nothing is persisted yet (Off/language
@@ -1447,7 +1461,13 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   provider mapping now uses `added`, falling back to `last_modified` for series (it means "last updated", e.g. a new episode).
   The provider also lists one show under several categories with different ids (East of Eden: 20794 in ENGLISH SERIES NEW,
   20796 in NETFILX SERIES NEW; ~78 titles in this account), so the Recently added shelf now collapses entries with the same
-  title and year, newest first, and refills to the limit. Categories and All series still list every provider entry.
+  title and year, newest first. It expands its candidate window until the requested limit is filled or results are
+  exhausted; Categories and All series still list every provider entry.
 - **Replaying a finished episode (2026-10-02).** `SaveProgress` is last-write-wins (it used to keep `finished=1` forever), and an
   episode starts from its own `media_progress` row (`GetEpisodeResumePosition`), never the series-wide resume value, which
   belongs to whichever episode was played last. Watched state is derived from playback only; there is no manual menu.
+
+## WinUI LibVLC volume curve compensation (2026-10-03)
+
+**Decision:** Treat the player slider as a linear amplitude percentage and cube-root its percentage only when writing LibVLC volume; invert that mapping for readback. Reapply the mapped value when LibVLC raises its `Playing` event.
+**Why:** VLC 3.0.23 `mmdevice.c` cubes the requested volume before writing the Windows session scalar, and its worker only calls `ISimpleAudioVolume_SetMasterVolume` when `requested_volume` is nonnegative. Explicitly setting volume after playback starts requests a fresh scalar even when Windows restores an older per-app session value. The native FFmpegInterop engine stays linear.

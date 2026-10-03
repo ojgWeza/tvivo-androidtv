@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     private ShellPage _playerReturnPage = ShellPage.Catalog;
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
+    private long _playerMovieProgressGeneration;
     private double? _playerListPointerPressOffset;
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
@@ -78,7 +79,7 @@ public sealed partial class MainWindow : Window
     // Cinema mode shows the transport as an overlay that fades out while playing and the mouse is idle.
     private bool _cinemaControlsVisible = true;
     private bool _cinemaPointerOverControls;
-    private Windows.Foundation.Point _lastCinemaPointer;
+    private bool _cinemaPointerMoveDiagnosticWritten;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
@@ -87,6 +88,7 @@ public sealed partial class MainWindow : Window
     private readonly WindowStateController _windowState;
     private bool _isDraggingProgress;
     private bool _isUpdatingProgress;
+    private bool _isUpdatingVolume;
     private long? _resumePositionOnStart;
     private long? _pendingResumePosition;
     private bool _resumeReady;
@@ -224,7 +226,7 @@ public sealed partial class MainWindow : Window
 
     private void WindowRoot_KeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Handled || AudioSubtitlesFlyout.IsOpen)
+        if (args.Handled || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen)
             return;
 
         if (_isCinemaMode && _currentPage == ShellPage.Player)
@@ -311,6 +313,8 @@ public sealed partial class MainWindow : Window
         var selectedEngine = engineTag == "LibVLC" ? (IPlaybackEngine)_vlcEngine : _nativeEngine;
         if (ReferenceEquals(selectedEngine, _engine))
             return;
+
+        StopCinemaCursorIdleTimer(showCursor: true);
 
         var restartCurrentPlayback = _currentPage == ShellPage.Player && _currentSource is not null;
         if (restartCurrentPlayback) SaveResumePosition(force: true);
@@ -647,6 +651,7 @@ public sealed partial class MainWindow : Window
         TraceBackTransition($"show-page-enter from={_currentPage} to={page} cinema={_isCinemaMode} root={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_currentPage == ShellPage.Player && page != ShellPage.Player)
         {
+            FlushPendingVisits();
             TraceBackTransition("show-page-before-player-stop");
             StopPlaybackForNavigation();
             TraceBackTransition("show-page-after-player-stop");
@@ -1029,6 +1034,7 @@ public sealed partial class MainWindow : Window
 
     private void SetPlayerList(IReadOnlyList<Channel> channels, Channel current)
     {
+        var movieProgressGeneration = Interlocked.Increment(ref _playerMovieProgressGeneration);
         var sameRows = _playerEntries.Count == channels.Count &&
             _playerEntries.Select((entry, index) => entry.Channel.Source.Kind == channels[index].Source.Kind && entry.Channel.Id == channels[index].Id).All(matches => matches);
         var scrollOffset = FindPlayerListScrollViewer()?.VerticalOffset;
@@ -1049,6 +1055,21 @@ public sealed partial class MainWindow : Window
         SetCurrentPlayerEntry(current);
         if (!sameRows && scrollOffset.HasValue)
             RestorePlayerListScrollOffset(scrollOffset.Value);
+        _ = RefreshPlayerMovieProgressAsync(channels, movieProgressGeneration);
+    }
+
+    private async Task RefreshPlayerMovieProgressAsync(IReadOnlyList<Channel> channels, long generation)
+    {
+        if (_catalogLandingPage.Account is not { } account) return;
+        var movieIds = channels.Where(channel => channel.Source.Kind == StreamKind.Movie)
+            .Select(channel => channel.Id).Distinct(StringComparer.Ordinal).ToArray();
+        if (movieIds.Length == 0) return;
+        var progress = await Task.Run(() => _catalogRepository.GetPlaybackProgress(account, "movie", movieIds));
+        if (generation != Volatile.Read(ref _playerMovieProgressGeneration) ||
+            _catalogLandingPage.Account?.AccountId != account.AccountId)
+            return;
+        foreach (var entry in _playerEntries.Where(entry => entry.Channel.Source.Kind == StreamKind.Movie))
+            entry.SetProgress(progress.GetValueOrDefault(entry.Channel.Id));
     }
 
     private bool IsChannelFavorite(Channel channel)
@@ -1316,7 +1337,15 @@ public sealed partial class MainWindow : Window
         SetPauseButtonState(result == PlaybackAttemptResult.FirstFrame
             ? "Pause"
             : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry");
-        VolumeSlider.Value = _engine.Volume;
+        _isUpdatingVolume = true;
+        try
+        {
+            VolumeSlider.Value = _engine.Volume;
+        }
+        finally
+        {
+            _isUpdatingVolume = false;
+        }
     }
 
     private bool IsCurrentPlaybackStart(long generation, CancellationTokenSource sessionCts) =>
@@ -1867,7 +1896,13 @@ public sealed partial class MainWindow : Window
         var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
         var position = _engine.IsEnded ? 0 : ClampPosition(timeline.PositionMilliseconds, duration);
         if (type == CatalogItemType.Movie)
+        {
             _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, _engine.IsEnded);
+            if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
+                playingMovieRow.SetProgress(new PlaybackProgress(id,
+                    _engine.IsEnded ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress,
+                    _engine.IsEnded ? 0 : position, duration));
+        }
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
             var finished = _seriesCompletionRecorded || _engine.IsEnded || duration is { } measured && position >= measured * 0.9;
@@ -1950,8 +1985,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args) =>
-        _engine.Volume = (int)args.NewValue;
+    private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
+    {
+        if (!_isUpdatingVolume)
+            _engine.Volume = (int)args.NewValue;
+    }
 
     private void AdjustVolume(int deltaPercent) =>
         VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + deltaPercent, VolumeSlider.Minimum, VolumeSlider.Maximum);
@@ -2055,7 +2093,10 @@ public sealed partial class MainWindow : Window
     private void VideoSurface_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
         // Deliberately leave the event unhandled so a normal click reaches the playback surface.
-        var point = args.GetCurrentPoint(sender as UIElement).Position;
+        var currentPoint = args.GetCurrentPoint(sender as UIElement);
+        if (!currentPoint.Properties.IsLeftButtonPressed)
+            return;
+        var point = currentPoint.Position;
         var now = DateTimeOffset.UtcNow;
         var delta = point.X - _lastVideoTapPoint.X;
         var deltaY = point.Y - _lastVideoTapPoint.Y;
@@ -2073,8 +2114,6 @@ public sealed partial class MainWindow : Window
         _lastVideoTapAt = now;
         _lastVideoTapPoint = point;
 
-        if (!args.GetCurrentPoint(sender as UIElement).Properties.IsLeftButtonPressed)
-            return;
         // A single click pauses/resumes, but only once the double-click window has passed.
         _videoClickPauseTimer ??= CreateVideoClickPauseTimer();
         _videoClickPauseTimer.Stop();
@@ -2115,6 +2154,7 @@ public sealed partial class MainWindow : Window
 
         _isCinemaMode = enabled;
         _cinemaPointerOverControls = false;
+        _cinemaPointerMoveDiagnosticWritten = false;
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 72);
@@ -2149,10 +2189,22 @@ public sealed partial class MainWindow : Window
     private void PlayerPage_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
         if (!_isCinemaMode) return;
-        var point = args.GetCurrentPoint(PlayerPage).Position;
-        // Hiding the cursor can raise a move event without real motion; ignore tiny jitter.
-        if (Math.Abs(point.X - _lastCinemaPointer.X) < 3 && Math.Abs(point.Y - _lastCinemaPointer.Y) < 3) return;
-        _lastCinemaPointer = point;
+        HandleCinemaPointerMoved("PlayerPage");
+    }
+
+    private void VideoSurface_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_isCinemaMode) return;
+        HandleCinemaPointerMoved(sender is FrameworkElement element ? element.Name : "VideoSurface");
+    }
+
+    private void HandleCinemaPointerMoved(string source)
+    {
+        if (!_cinemaPointerMoveDiagnosticWritten)
+        {
+            _cinemaPointerMoveDiagnosticWritten = true;
+            LaunchDiagnostics.Write($"event=cinema.pointer-move source={source}");
+        }
         ShowCinemaControls();
     }
 
@@ -2170,7 +2222,7 @@ public sealed partial class MainWindow : Window
         _cinemaCursorIdleTimer.Stop();
         if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
         // Keep the overlay while it is being used.
-        if (_cinemaPointerOverControls || AudioSubtitlesFlyout.IsOpen || _isDraggingProgress)
+        if (_cinemaPointerOverControls || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen || _isDraggingProgress)
         {
             _cinemaCursorIdleTimer.Start();
             return;
@@ -2210,12 +2262,12 @@ public sealed partial class MainWindow : Window
         if (_cinemaCursorHidden == !visible) return;
         if (visible)
         {
-            while (ShowCursor(true) < 0) { }
+            ShowCursor(true);
             _cinemaCursorHidden = false;
         }
         else
         {
-            while (ShowCursor(false) >= 0) { }
+            ShowCursor(false);
             _cinemaCursorHidden = true;
         }
     }
@@ -2238,7 +2290,7 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(VlcTransportBar, cinema ? 0 : 2);
         VlcTransportBar.Visibility = Visibility.Visible;
         VlcTransportBar.VerticalAlignment = cinema ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
-        VlcTransportBar.HorizontalAlignment = cinema ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        VlcTransportBar.HorizontalAlignment = HorizontalAlignment.Stretch;
         VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
         VlcTransportBar.Margin = cinema ? new Thickness(24, 0, 24, 28) : new Thickness(0);
         var panelBrush = (Brush)Application.Current.Resources["AppPanelSurfaceBrush"];
@@ -2352,16 +2404,11 @@ public sealed partial class MainWindow : Window
             : MutedBrush;
         public string FavoriteGlyph => _isFavorite ? "★" : "☆";
         // Row bar: full once watched, otherwise how far playback got (hidden until a duration is known).
-        public Visibility ProgressVisibility => ProgressState == PlaybackProgressState.Finished ||
-            ProgressState == PlaybackProgressState.InProgress && _progress is { ResumeMs: > 0, DurationMs: > 0 }
-            ? Visibility.Visible : Visibility.Collapsed;
-        public double ProgressValue => ProgressState == PlaybackProgressState.Finished
-            ? 100
-            : _progress is { DurationMs: > 0 } p ? Math.Clamp(p.ResumeMs * 100.0 / p.DurationMs.Value, 0, 100) : 0;
+        private PlaybackProgressPresentation ProgressPresentation => PlaybackProgressPresentation.For(_progress);
+        public Visibility ProgressVisibility => ProgressPresentation.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        public double ProgressValue => ProgressPresentation.Value;
         public Brush ProgressBarBrush => _isCurrent ? SelectedTextBrush : AccentBrush;
-        public string ProgressAutomationName => ProgressState == PlaybackProgressState.Finished
-            ? "Watched" : $"Watched {ProgressValue:0}%";
-        private PlaybackProgressState ProgressState => _progress?.State ?? PlaybackProgressState.Unwatched;
+        public string ProgressAutomationName => ProgressPresentation.AutomationName;
         public bool IsFavorite
         {
             get => _isFavorite;

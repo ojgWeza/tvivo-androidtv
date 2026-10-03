@@ -22,39 +22,41 @@
 
 | Route (`SqliteCatalogRepository.<Method>()`) | Verb | Called from | Backend method | Procs | Writes | Reads |
 |---|---|---|---|---|---|---|
-| [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L558) | CALL | — ⚠️ | [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L558) | — | — | — |
+| [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L588) | CALL | — ⚠️ | [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L588) | — | — | — |
 | [`CatalogCategoryMatchCount`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L8) | CALL | — ⚠️ | [`CatalogCategoryMatchCount`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L8) | — | — | — |
 | [`CatalogPage`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L7) | CALL | — ⚠️ | [`CatalogPage`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L7) | — | — | — |
-| [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L827) | CALL | `EpgCoordinator.cs` | [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L827) | — | — | — |
-| [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | — | — | — |
-| [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L345) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L345) | `GetCategoryMatchCounts` | _direct SQL, see §7_ | `items` |
-| [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L309) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L309) | `GetChannels` | _direct SQL, see §7_ | `items` |
-| [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L380) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L380) | `GetChannelsGroupedByCategory` | — | `items` |
-| [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L477) | CALL | — ⚠️ | [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L477) | — | — | — |
-| [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L594) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L594) | `GetEpisodeProgressForSeries` | _direct SQL, see §7_ | `media_progress` |
-| [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L487) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L487) | `GetEpisodeResumePosition` | _direct SQL, see §7_ | `media_progress` |
-| [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L463) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L463) | `GetFavorites` | _direct SQL, see §7_ | `favorites` |
-| [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L300) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L300) | `GetGroups` | _direct SQL, see §7_ | `categories` |
-| [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L136) | CALL | `MainWindow.xaml.cs` | [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L136) | `GetMetadata` | _direct SQL, see §7_ | `items` |
-| [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L613) | CALL | — ⚠️ | [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L613) | `GetPlaybackProgress` | _direct SQL, see §7_ | `items`<br>`media_progress`<br>`series_playback` |
-| [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L439) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L439) | `GetRecentlyAdded` | _direct SQL, see §7_ | `items` |
-| [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L466) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L466) | — | — | — |
-| [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L497) | CALL | `MainWindow.xaml.cs` | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L497) | `GetResumePosition` | _direct SQL, see §7_ | `items` |
-| [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L508) | CALL | — ⚠️ | [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L508) | `GetSuggestions` | _direct SQL, see §7_ | `items` |
-| [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L562) | CALL | `MainWindow.xaml.cs` | [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L562) | `IsFavorite` | _direct SQL, see §7_ | `favorites` |
-| [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L684) | CALL | — ⚠️ | [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L684) | `MarkEpisodeUnwatched` | `items`<br>`media_progress`<br>`series_playback` | `media_progress`<br>`series_playback` |
-| [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L683) | CALL | — ⚠️ | [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L683) | — | — | — |
-| [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | CALL | — ⚠️ | [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | `PlaybackProgress` | `favorites`<br>`media_progress` | `items`<br>`series_playback` |
-| [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L706) | CALL | `MainWindow.xaml.cs` | [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L706) | `RecordVisit` | `items` | — |
-| [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L560) | CALL | — ⚠️ | [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L560) | — | — | — |
-| [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L281) | CALL | — ⚠️ | [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L281) | `ReplaceSnapshot` | `categories`<br>`incoming_item_ids`<br>`items` | `incoming_item_ids` |
-| [`SaveMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L120) | CALL | `MainWindow.xaml.cs` | [`SaveMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L120) | `SaveMetadata` | `items` | — |
-| [`SaveProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | CALL | `MainWindow.xaml.cs` | [`SaveProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L661) | `SaveProgress` | `items`<br>`media_progress`<br>`series_playback` | — |
-| [`SelectResumeEpisode`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L641) | CALL | `MainWindow.xaml.cs` | [`SelectResumeEpisode`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L641) | — | — | — |
-| [`SetFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L541) | CALL | — ⚠️ | [`SetFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L541) | `SetFavorite` | `favorites`<br>`items` | — |
-| [`ToggleFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L573) | CALL | `MainWindow.xaml.cs` | [`ToggleFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L573) | — | — | — |
-| [`UpdateResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L581) | CALL | — ⚠️ | [`UpdateResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L581) | `UpdateResumePosition` | `items` | — |
-| [`UpdateSeriesPlayback`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L729) | CALL | — ⚠️ | [`UpdateSeriesPlayback`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L729) | — | — | — |
+| [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L857) | CALL | `EpgCoordinator.cs` | [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L857) | — | — | — |
+| [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L13) | CALL | — ⚠️ | [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L13) | — | — | — |
+| [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L377) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L377) | — | — | — |
+| [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | `GetCategoryMatchCounts` | _direct SQL, see §7_ | `items` |
+| [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L325) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L325) | `GetChannels` | _direct SQL, see §7_ | `items` |
+| [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L396) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L396) | `GetChannelsGroupedByCategory` | — | `items` |
+| [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | CALL | — ⚠️ | [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | — | — | — |
+| [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L624) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L624) | `GetEpisodeProgressForSeries` | _direct SQL, see §7_ | `media_progress` |
+| [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L517) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L517) | `GetEpisodeResumePosition` | _direct SQL, see §7_ | `media_progress` |
+| [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L493) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L493) | `GetFavorites` | _direct SQL, see §7_ | `favorites` |
+| [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L316) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L316) | `GetGroups` | _direct SQL, see §7_ | `categories` |
+| [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L152) | CALL | `MainWindow.xaml.cs` | [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L152) | `GetMetadata` | _direct SQL, see §7_ | `items` |
+| [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L643) | CALL | `MainWindow.xaml.cs`<br>`Pages/CatalogLandingPage.xaml.cs` | [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L643) | `GetPlaybackProgress` | _direct SQL, see §7_ | `items`<br>`media_progress`<br>`series_playback` |
+| [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L455) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L455) | `GetRecentlyAdded` | _direct SQL, see §7_ | `items` |
+| [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L496) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L496) | — | — | — |
+| [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L527) | CALL | `MainWindow.xaml.cs` | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L527) | `GetResumePosition` | _direct SQL, see §7_ | `items` |
+| [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L538) | CALL | — ⚠️ | [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L538) | `GetSuggestions` | _direct SQL, see §7_ | `items` |
+| [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L592) | CALL | `MainWindow.xaml.cs` | [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L592) | `IsFavorite` | _direct SQL, see §7_ | `favorites` |
+| [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L714) | CALL | — ⚠️ | [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L714) | `MarkEpisodeUnwatched` | `items`<br>`media_progress`<br>`series_playback` | `media_progress`<br>`series_playback` |
+| [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L713) | CALL | — ⚠️ | [`MarkEpisodeWatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L713) | — | — | — |
+| [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | CALL | — ⚠️ | [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) | — | — | — |
+| [`PlaybackProgressPresentation`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L11) | CALL | — ⚠️ | [`PlaybackProgressPresentation`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L11) | — | — | — |
+| [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L736) | CALL | `MainWindow.xaml.cs` | [`RecordVisit`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L736) | `RecordVisit` | `items` | — |
+| [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L590) | CALL | — ⚠️ | [`RemoveFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L590) | — | — | — |
+| [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L297) | CALL | — ⚠️ | [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L297) | `ReplaceSnapshot` | `categories`<br>`incoming_item_ids`<br>`items` | `incoming_item_ids` |
+| [`SaveMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L136) | CALL | `MainWindow.xaml.cs` | [`SaveMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L136) | `SaveMetadata` | `items` | — |
+| [`SaveProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L691) | CALL | `MainWindow.xaml.cs` | [`SaveProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L691) | `SaveProgress` | `items`<br>`media_progress`<br>`series_playback` | — |
+| [`SelectResumeEpisode`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L671) | CALL | `MainWindow.xaml.cs` | [`SelectResumeEpisode`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L671) | — | — | — |
+| [`SetFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L571) | CALL | — ⚠️ | [`SetFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L571) | `SetFavorite` | `favorites`<br>`items` | — |
+| [`ToggleFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L603) | CALL | `MainWindow.xaml.cs` | [`ToggleFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L603) | — | — | — |
+| [`UpdateResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L611) | CALL | — ⚠️ | [`UpdateResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L611) | `UpdateResumePosition` | `items` | — |
+| [`UpdateSeriesPlayback`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L759) | CALL | — ⚠️ | [`UpdateSeriesPlayback`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L759) | — | — | — |
 
 ## 2. Frontend calls a route the controllers do not define
 
@@ -69,12 +71,13 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `AddFavorite` (CALL)
 - `CatalogCategoryMatchCount` (CALL)
 - `CatalogPage` (CALL)
+- `For` (CALL)
 - `GetContinueWatching` (CALL)
-- `GetPlaybackProgress` (CALL)
 - `GetSuggestions` (CALL)
 - `MarkEpisodeUnwatched` (CALL)
 - `MarkEpisodeWatched` (CALL)
 - `PlaybackProgress` (CALL)
+- `PlaybackProgressPresentation` (CALL)
 - `RemoveFavorite` (CALL)
 - `ReplaceSnapshot` (CALL)
 - `SetFavorite` (CALL)
@@ -103,21 +106,20 @@ _Not applicable — no `sql` layer configured._
 
 No separate proc/`.sql` layer in this repo — each method's own tables are already in sections 1 and 8.
 
-- [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L463) — 3 inline statement(s)
-- [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L613) — 3 inline statement(s)
-- [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L309) — 2 inline statement(s)
-- [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L439) — 2 inline statement(s)
-- [`PlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L10) — 2 inline statement(s)
-- [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L345) — 1 inline statement(s)
-- [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L594) — 1 inline statement(s)
-- [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L487) — 1 inline statement(s)
-- [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L300) — 1 inline statement(s)
-- [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L136) — 1 inline statement(s)
-- [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L497) — 1 inline statement(s)
-- [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L508) — 1 inline statement(s)
-- [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L562) — 1 inline statement(s)
-- [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L684) — 1 inline statement(s)
-- [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L281) — 1 inline statement(s)
+- [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L493) — 3 inline statement(s)
+- [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L643) — 3 inline statement(s)
+- [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L325) — 2 inline statement(s)
+- [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L455) — 2 inline statement(s)
+- [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) — 1 inline statement(s)
+- [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L624) — 1 inline statement(s)
+- [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L517) — 1 inline statement(s)
+- [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L316) — 1 inline statement(s)
+- [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L152) — 1 inline statement(s)
+- [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L527) — 1 inline statement(s)
+- [`GetSuggestions`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L538) — 1 inline statement(s)
+- [`IsFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L592) — 1 inline statement(s)
+- [`MarkEpisodeUnwatched`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L714) — 1 inline statement(s)
+- [`ReplaceSnapshot`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L297) — 1 inline statement(s)
 
 ## 8. Table → which procs touch it
 
@@ -126,12 +128,12 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 | Table | Written by | Read by |
 |---|---|---|
 | `categories` | `ReplaceSnapshot` | `GetGroups` |
-| `favorites` | `PlaybackProgress`<br>`SetFavorite` | `GetFavorites`<br>`IsFavorite` |
+| `favorites` | `SetFavorite` | `GetFavorites`<br>`IsFavorite` |
 | `incoming_item_ids` | `ReplaceSnapshot` | `ReplaceSnapshot` |
-| `items` | `MarkEpisodeUnwatched`<br>`RecordVisit`<br>`ReplaceSnapshot`<br>`SaveMetadata`<br>`SaveProgress`<br>`SetFavorite`<br>`UpdateResumePosition` | `GetCategoryMatchCounts`<br>`GetChannels`<br>`GetChannelsGroupedByCategory`<br>`GetMetadata`<br>`GetPlaybackProgress`<br>`GetRecentlyAdded`<br>`GetResumePosition`<br>`GetSuggestions`<br>`PlaybackProgress` |
-| `media_progress` _(external)_ | `MarkEpisodeUnwatched`<br>`PlaybackProgress`<br>`SaveProgress` | `GetEpisodeProgressForSeries`<br>`GetEpisodeResumePosition`<br>`GetPlaybackProgress`<br>`MarkEpisodeUnwatched` |
-| `series_playback` | `MarkEpisodeUnwatched`<br>`SaveProgress` | `GetPlaybackProgress`<br>`MarkEpisodeUnwatched`<br>`PlaybackProgress` |
+| `items` | `MarkEpisodeUnwatched`<br>`RecordVisit`<br>`ReplaceSnapshot`<br>`SaveMetadata`<br>`SaveProgress`<br>`SetFavorite`<br>`UpdateResumePosition` | `GetCategoryMatchCounts`<br>`GetChannels`<br>`GetChannelsGroupedByCategory`<br>`GetMetadata`<br>`GetPlaybackProgress`<br>`GetRecentlyAdded`<br>`GetResumePosition`<br>`GetSuggestions` |
+| `media_progress` _(external)_ | `MarkEpisodeUnwatched`<br>`SaveProgress` | `GetEpisodeProgressForSeries`<br>`GetEpisodeResumePosition`<br>`GetPlaybackProgress`<br>`MarkEpisodeUnwatched` |
+| `series_playback` | `MarkEpisodeUnwatched`<br>`SaveProgress` | `GetPlaybackProgress`<br>`MarkEpisodeUnwatched` |
 
 ---
 
-Indexed 33 routes · 33 backend methods · 21 procs · 6 tables · 11 frontend files · 0 SQL files.
+Indexed 35 routes · 35 backend methods · 20 procs · 6 tables · 11 frontend files · 0 SQL files.

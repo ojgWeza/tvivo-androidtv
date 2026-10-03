@@ -95,6 +95,18 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <ProgressBar Value="{Binding WatchProgressValue}"
+                                     Maximum="100"
+                                     Height="3"
+                                     MinHeight="3"
+                                     Padding="0"
+                                     VerticalAlignment="Bottom"
+                                     Margin="10,0,10,5"
+                                     IsHitTestVisible="False"
+                                     Visibility="{Binding WatchProgressVisibility}"
+                                     Foreground="{StaticResource AppAccentBrush}"
+                                     Background="{StaticResource AppLineBrush}"
+                                     AutomationProperties.Name="{Binding WatchProgressAutomationName}" />
                         <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8,8,8,0"
                                 Padding="7,3" CornerRadius="8"
                                 Background="{StaticResource AppAccentBrush}"

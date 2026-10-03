@@ -45,6 +45,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private PlaybackTrackSnapshot _tracks = PlaybackTrackSnapshot.Unresolved;
     private bool _defaultSubtitleApplied;
     private Task _abandonedCleanupTask = Task.CompletedTask;
+    private int _volumePercent = 100;
     private bool _disposed;
 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
@@ -59,11 +60,14 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);
     public int Volume
     {
-        get => _player?.Volume ?? 100;
+        get => _player is { } player
+            ? VlcVolumeCurve.ToSliderPercent(player.Volume)
+            : _volumePercent;
         set
         {
+            _volumePercent = Math.Clamp(value, 0, 100);
             if (_player is { } player)
-                player.Volume = Math.Clamp(value, 0, 100);
+                player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
         }
     }
 
@@ -172,6 +176,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 resolved => RefreshVlcTracks(session, player, resolved),
                 () =>
                 {
+                    // Reapply once playback is active so the mmdevice backend
+                    // writes this volume over a persisted Windows session scalar.
+                    player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
                     RefreshVlcTracks(session, player, resolvedWhenTracksPresent: false);
                     StartTrackProbe(session, player);
                 });

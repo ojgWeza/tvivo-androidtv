@@ -5,9 +5,9 @@
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
       "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
-      "src/Tvivo.App/MainWindow.xaml.cs": "972cd5e7c848d8ca",
+      "src/Tvivo.App/MainWindow.xaml.cs": "01cae2f115734e49",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "118a897bd8fa6bd2",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "88ca62493dc58b6b",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
@@ -20,10 +20,11 @@
       "src/Tvivo.Infrastructure/EpgRefreshService.cs": "4f1047a6afc8b570",
       "src/Tvivo.Infrastructure/EpgRepository.cs": "604a83b042960a32",
       "src/Tvivo.Infrastructure/EpgXmltvParser.cs": "90d0fdbd931f3d1d",
-      "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "3768be584c5f5fc8",
-      "src/Tvivo.Infrastructure/XtreamInfrastructure.cs": "52abe608282d9869",
+      "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "48a02f84511d7564",
+      "src/Tvivo.Infrastructure/XtreamInfrastructure.cs": "ed568dba69534249",
       "src/Tvivo.Playback/FFmpegInteropPlaybackEngine.cs": "0fce455c80b70bc5",
-      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "c32173ff9a726836"
+      "src/Tvivo.Playback/VlcVolumeCurve.cs": "530d5d50f4776a7e",
+      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "034538b2207cba08"
     }
   },
   "../docs/decisions.md": {
@@ -32,9 +33,9 @@
       "src/Tvivo.App/CatalogUiPolicies.cs": "1060072d12a74493",
       "src/Tvivo.App/Controls/ShellNavigationButton.xaml.cs": "9ecdd6370568822f",
       "src/Tvivo.App/EpgCoordinator.cs": "8d3007d6873049a5",
-      "src/Tvivo.App/MainWindow.xaml.cs": "a0019586bf755d5a",
+      "src/Tvivo.App/MainWindow.xaml.cs": "01cae2f115734e49",
       "src/Tvivo.App/Pages/AccountPage.xaml.cs": "27461ec2ade32c7e",
-      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "118a897bd8fa6bd2",
+      "src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs": "88ca62493dc58b6b",
       "src/Tvivo.App/Pages/HomePage.xaml.cs": "39c1fe24ac5bcb72",
       "src/Tvivo.App/Pages/MyTvivoShelfDefinitions.cs": "9c73f6921c4dace5",
       "src/Tvivo.App/Pages/ProviderSetupPage.xaml.cs": "822de1eeba8c361d",
@@ -47,10 +48,11 @@
       "src/Tvivo.Infrastructure/EpgRefreshService.cs": "4f1047a6afc8b570",
       "src/Tvivo.Infrastructure/EpgRepository.cs": "604a83b042960a32",
       "src/Tvivo.Infrastructure/EpgXmltvParser.cs": "90d0fdbd931f3d1d",
-      "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "095a15725f1df941",
+      "src/Tvivo.Infrastructure/SqliteCatalogRepository.cs": "48a02f84511d7564",
       "src/Tvivo.Infrastructure/XtreamInfrastructure.cs": "ed568dba69534249",
       "src/Tvivo.Playback/FFmpegInteropPlaybackEngine.cs": "0fce455c80b70bc5",
-      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "21a2640700280231"
+      "src/Tvivo.Playback/VlcVolumeCurve.cs": "530d5d50f4776a7e",
+      "src/Tvivo.Playback/WindowsPlaybackEngine.cs": "034538b2207cba08"
     }
   }
 }
