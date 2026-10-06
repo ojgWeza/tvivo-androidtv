@@ -71,6 +71,11 @@
                                            Foreground="{StaticResource AppMutedTextBrush}"
                                            FontSize="11"
                                            TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding TimeLeft}"
+                                           Visibility="{Binding ContinueProgressVisibility}"
+                                           Foreground="{StaticResource AppMutedTextBrush}"
+                                           FontSize="11"
+                                           TextTrimming="CharacterEllipsis" />
                                 <StackPanel Visibility="{Binding EpgVisibility}"
                                             Spacing="1"
                                             AutomationProperties.Name="{Binding EpgAutomationName}">

@@ -17,10 +17,22 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
     private readonly Action<string>? _epgLog;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly SemaphoreSlim _paceGate = new(1, 1);
+    private long _lastApiRequestTicks;
 
-    public XtreamCatalogProvider(HttpClient? httpClient = null, HttpClient? epgHttpClient = null, Action<string>? epgLog = null)
+    // Providers rate-limit bursts with HTTP 429. Space API calls out and retry a throttled call a few
+    // times, honouring Retry-After, before surfacing a failure.
+    private static readonly TimeSpan MinApiRequestSpacing = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(20);
+    private const int MaxThrottleRetries = 3;
+
+    public XtreamCatalogProvider(HttpClient? httpClient = null, HttpClient? epgHttpClient = null, Action<string>? epgLog = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
-        _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        _delay = delay ?? Task.Delay;
+        // Catalog dumps are tens of MB of JSON; the default client asks for gzip/brotli/deflate.
+        _http = httpClient ?? NetworkTally.CreateClient("catalog", TimeSpan.FromMinutes(5));
         _epgHttp = epgHttpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
         {
             Timeout = Timeout.InfiniteTimeSpan,
@@ -32,7 +44,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     {
         try
         {
-            using var response = await _http.GetAsync(XtreamRequest.Uri(connection, "player_api.php"), cancellationToken);
+            using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php"), cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure, "http_failure");
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -92,6 +104,48 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         }
     }
 
+    private async Task<HttpResponseMessage> SendApiAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            await WaitForApiSlotAsync(cancellationToken).ConfigureAwait(false);
+            var response = await _http.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode != HttpStatusCode.TooManyRequests || attempt >= MaxThrottleRetries)
+                return response;
+
+            var wait = response.Headers.RetryAfter switch
+            {
+                { Delta: { } delta } => delta,
+                { Date: { } date } => date - DateTimeOffset.UtcNow,
+                _ => TimeSpan.FromSeconds(2 << attempt) + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 500)),
+            };
+            response.Dispose();
+            if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
+            if (wait > MaxRetryAfter) wait = MaxRetryAfter;
+            await _delay(wait, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WaitForApiSlotAsync(CancellationToken cancellationToken)
+    {
+        await _paceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var last = Volatile.Read(ref _lastApiRequestTicks);
+            if (last != 0)
+            {
+                var remaining = MinApiRequestSpacing - TimeSpan.FromTicks(Environment.TickCount64 * TimeSpan.TicksPerMillisecond - last);
+                if (remaining > TimeSpan.Zero)
+                    await _delay(remaining, cancellationToken).ConfigureAwait(false);
+            }
+            Volatile.Write(ref _lastApiRequestTicks, Environment.TickCount64 * TimeSpan.TicksPerMillisecond);
+        }
+        finally
+        {
+            _paceGate.Release();
+        }
+    }
+
     public int? GetHttpsPort(ProviderAccount account) =>
         _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
 
@@ -99,7 +153,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
-        using var response = await _http.GetAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken);
+        using var response = await SendApiAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -112,7 +166,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
         var uri = XtreamRequest.SeriesInfoUri(connection, seriesId);
-        using var response = await _http.GetAsync(uri, cancellationToken);
+        using var response = await SendApiAsync(uri, cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -200,7 +254,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
-        using var response = await _http.GetAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
+        using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -605,10 +659,7 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
     public DpapiCredentialStore(string? filePath = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Tvivo",
-            "provider-connection.bin");
+        _filePath = filePath ?? TvivoDataPaths.For("provider-connection.bin");
     }
 
     public async Task<ProviderConnection?> LoadAsync(CancellationToken cancellationToken = default)

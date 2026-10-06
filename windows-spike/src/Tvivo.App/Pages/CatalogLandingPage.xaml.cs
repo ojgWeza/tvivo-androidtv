@@ -10,6 +10,7 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using Windows.Storage.Streams;
 using System.ComponentModel;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -39,6 +40,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private CategorySort _categorySort = CategorySort.Visited;
     private int _offset;
     private long _loadGeneration;
+    private int _silentRefreshRetries;
     private long _pageQueryGeneration;
     private bool _suppressSearchChanged;
     private bool _isReadyForInteraction;
@@ -50,10 +52,14 @@ public sealed partial class CatalogLandingPage : UserControl
     private CatalogCard? _spotlightCard;
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
+    private readonly ObservableCollection<CatalogShelf> _renderedShelves = new();
     private readonly Dictionary<(string AccountId, CatalogMode Mode), DateTimeOffset> _lastRefreshAt = new();
+    private bool _activityDataDirty;
+    private bool _favoriteDataDirty;
     private readonly Dictionary<CatalogMode, ModeInteractionState> _modeStates = new();
     private readonly Dictionary<(CatalogMode Mode, string ShelfId), BrowsePosition> _browsePositions = new();
     private IReadOnlyDictionary<string, PlaybackProgress> _movieProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, PlaybackProgress> _seriesProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private readonly HashSet<string> _recentSpotlightIds = new(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
     private readonly object _spotlightShelvesLock = new();
@@ -73,7 +79,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
-    private static readonly HttpClient ArtworkClient = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly HttpClient ArtworkClient = NetworkTally.CreateClient("artwork", TimeSpan.FromSeconds(30));
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly Dictionary<Image, AppliedArtwork> _appliedArtwork = new();
     private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
@@ -110,6 +116,7 @@ public sealed partial class CatalogLandingPage : UserControl
     public bool IsReadyForInteraction => _isReadyForInteraction;
     public event EventHandler<ChannelSelectedEventArgs>? ChannelSelected;
     public event EventHandler? InteractionReadinessChanged;
+    public event EventHandler? VisibleCatalogDataChanged;
     public event Action<string>? SearchTextChanged;
     // Raised when the user changes what they are browsing (mode, category, sort, search), so
     // deferred visit ranking can be applied then and not while a returning list is on screen.
@@ -194,9 +201,12 @@ public sealed partial class CatalogLandingPage : UserControl
         SetSearchTextWithoutReload(string.Empty);
         _spotlightByMode.Clear();
         _lastRefreshAt.Clear();
+        _activityDataDirty = false;
+        _favoriteDataDirty = false;
         _recentSpotlightIds.Clear();
         InvalidateCatalogSnapshots();
         ShelvesItems.ItemsSource = null;
+        _renderedShelves.Clear();
         CancelArtworkLoads();
         RefreshInfoBar.IsOpen = false;
         ShowError("No saved provider connection. Choose Account in the top navigation to connect a provider.");
@@ -205,14 +215,14 @@ public sealed partial class CatalogLandingPage : UserControl
     public void NotifyVisitRecorded()
     {
         if (_account is null) return;
-        foreach (var key in _snapshotCache.Keys.Where(key =>
-                     key.AccountId == _account.AccountId).ToArray())
-            _snapshotCache.Remove(key);
-        _snapshotCacheOrder.Clear();
-        foreach (var key in _snapshotCache.Keys) _snapshotCacheOrder.Enqueue(key);
+        _activityDataDirty = true;
     }
 
-    public void NotifyFavoriteChanged() => NotifyVisitRecorded();
+    public void NotifyFavoriteChanged()
+    {
+        if (_account is null) return;
+        _favoriteDataDirty = true;
+    }
 
     public void Shutdown()
     {
@@ -236,7 +246,9 @@ public sealed partial class CatalogLandingPage : UserControl
             // Same-mode navigation still starts a fresh cache-first load. Keep a
             // ready snapshot interactive, but don't leave an empty/error surface
             // looking ready while that load is about to retry.
-            if (ContentState.Visibility != Visibility.Visible && LoadingState.Visibility != Visibility.Visible)
+            if (_renderedSnapshot is not null)
+                SetState(content: true);
+            else if (ContentState.Visibility != Visibility.Visible && LoadingState.Visibility != Visibility.Visible)
                 SetState(loading: true);
             return;
         }
@@ -289,6 +301,7 @@ public sealed partial class CatalogLandingPage : UserControl
         else
         {
             ShelvesItems.ItemsSource = null;
+            _renderedShelves.Clear();
             _renderedSnapshot = null;
             CancelArtworkLoads();
             OpenShelfGrid.ItemsSource = null;
@@ -333,8 +346,20 @@ public sealed partial class CatalogLandingPage : UserControl
         _ = ShowCachedPageAsync(_activeMode, text, _selectedGroupId, 0);
     }
 
-    public async Task LoadAsync(ProviderAccount account, ProviderConnection? connection = null, bool forceRefresh = false)
+    public async Task LoadAsync(ProviderAccount account, ProviderConnection? connection = null,
+        bool forceRefresh = false, string reason = "navigation")
     {
+        var returningFromPlayer = reason == "player-return";
+        var canReuseRenderedSnapshot = returningFromPlayer && _account?.AccountId == account.AccountId &&
+            _renderedSnapshot?.Mode == _activeMode && HasCatalogData(_renderedSnapshot);
+        LaunchDiagnostics.Write($"event=catalog.load reason={reason} reused={canReuseRenderedSnapshot} mode={_activeMode}");
+        if (canReuseRenderedSnapshot)
+        {
+            RestoreBrowseStateIfMatching(_activeMode);
+            if (_activityDataDirty || _favoriteDataDirty)
+                _ = RefreshDirtySnapshotAsync(account);
+            return;
+        }
         var generation = Interlocked.Increment(ref _loadGeneration);
         Interlocked.Increment(ref _pageQueryGeneration);
         var accountChanged = _account?.AccountId != account.AccountId;
@@ -344,6 +369,8 @@ public sealed partial class CatalogLandingPage : UserControl
             _connection = connection;
         if (accountChanged)
         {
+            _activityDataDirty = false;
+            _favoriteDataDirty = false;
             if (previousAccountId is not null) InvalidateAccountSnapshots(previousAccountId);
             ShelvesItems.ItemsSource = null;
             _renderedSnapshot = null;
@@ -363,11 +390,13 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public async Task LoadSavedAsync()
     {
+        LaunchDiagnostics.Write("event=catalog.load reason=saved-account-startup reused=false");
         var previousAccountId = _account?.AccountId;
         var generation = Interlocked.Increment(ref _loadGeneration);
         Interlocked.Increment(ref _pageQueryGeneration);
         _account = null;
         ShelvesItems.ItemsSource = null;
+        _renderedShelves.Clear();
         _renderedSnapshot = null;
         CancelArtworkLoads();
         _connection = null;
@@ -423,7 +452,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 await Task.Delay(32);
                 if (!IsCurrentLoad(generation)) return;
             }
-            var cached = TryGetCachedSnapshot(account);
+            var cacheDirty = _activityDataDirty || _favoriteDataDirty;
+            var cached = cacheDirty ? null : TryGetCachedSnapshot(account);
             cached ??= await ReadCurrentCatalogSnapshotAsync(account, generation);
             cacheCompleted = true;
             LaunchDiagnostics.Write($"event=catalog.cache.load.complete outcome={(cached is null ? "failure" : "success")} durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(cacheStarted).TotalMilliseconds:0} mode={_activeMode}");
@@ -433,6 +463,8 @@ public sealed partial class CatalogLandingPage : UserControl
             if (HasCatalogData(cached))
             {
                 await ApplySnapshotAsync(cached, () => IsCurrentLoad(generation));
+                _activityDataDirty = false;
+                _favoriteDataDirty = false;
                 _firstCatalogLoadCompleted = true;
                 ShowRefreshingStatus();
             }
@@ -443,7 +475,7 @@ public sealed partial class CatalogLandingPage : UserControl
                     ShowFirstLoadTakeover();
             }
 
-            var shouldRefresh = forceRefresh || !HasCatalogData(cached) || IsSnapshotStale(account);
+            var shouldRefresh = forceRefresh || !HasCatalogData(cached) || (!cacheDirty && IsSnapshotStale(account));
             if (!shouldRefresh)
             {
                 StartEpgIfVisible();
@@ -464,6 +496,9 @@ public sealed partial class CatalogLandingPage : UserControl
                 LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome=failure durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
                 throw;
             }
+            // The refresh already downloaded the full live list, which fills the provider's EPG channel map;
+            // skip the second full download the EPG warm-up would otherwise make.
+            lock (_epgMapLoadedAccounts) _epgMapLoadedAccounts.Add(account.AccountId);
             if (!IsCurrentLoad(generation)) return;
             InvalidateAccountSnapshots(account.AccountId);
             var refreshedAt = DateTimeOffset.UtcNow;
@@ -480,13 +515,14 @@ public sealed partial class CatalogLandingPage : UserControl
             _firstCatalogLoadCompleted = true;
             DismissFirstLoadTakeover();
             RefreshInfoBar.IsOpen = false;
+            _silentRefreshRetries = 0;
         }
         catch (Exception exception)
         {
             if (!cacheCompleted)
                 LaunchDiagnostics.Write($"event=catalog.cache.load.complete outcome=failure durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(cacheStarted).TotalMilliseconds:0} mode={_activeMode}");
             if (!IsCurrentLoad(generation)) return;
-            LaunchDiagnostics.Write($"Catalog load failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
+            LaunchDiagnostics.Write($"Catalog load failed: {DescribeForLog(exception)} (HRESULT 0x{exception.HResult:X8})");
             if (ContentState.Visibility == Visibility.Visible)
             {
                 ShowRefreshFailure(exception);
@@ -495,8 +531,60 @@ public sealed partial class CatalogLandingPage : UserControl
                     await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: Volatile.Read(ref _modeTransitionGeneration));
             }
             else
-                ShowError($"{GenericLoadError} {FormatRefreshError(exception)}");
+                ShowError(GenericLoadError);
         }
+    }
+
+    private async Task RefreshDirtySnapshotAsync(ProviderAccount account)
+    {
+        var generation = Volatile.Read(ref _loadGeneration);
+        var mode = _activeMode;
+        try
+        {
+            var refreshed = await ReadCurrentCatalogSnapshotAsync(account, generation);
+            if (refreshed is null || !IsCurrentLoad(generation) || _account?.AccountId != account.AccountId ||
+                _activeMode != mode)
+                return;
+            var current = _renderedSnapshot;
+            if (current is null) return;
+            var activityDirty = _activityDataDirty;
+            var favoriteDirty = _favoriteDataDirty;
+            bool ShouldReplace(string id) =>
+                (activityDirty && (id is "__continue" or "__recent_played" || id.StartsWith("__my_continue_", StringComparison.Ordinal) || id.StartsWith("__my_played_", StringComparison.Ordinal))) ||
+                (favoriteDirty && (id == "__favorites" || id.StartsWith("__my_favorites_", StringComparison.Ordinal)));
+            var shelves = MergeDirtyShelves(current.Shelves, refreshed.Shelves, ShouldReplace);
+            var spotlight = MergeDirtyShelves(current.SpotlightShelves, refreshed.SpotlightShelves, ShouldReplace);
+            var pageIsDirtyShelf = _openShelfId is { } openShelfId && ShouldReplace(openShelfId);
+            var updated = current with
+            {
+                Groups = activityDirty ? refreshed.Groups : current.Groups,
+                Page = pageIsDirtyShelf ? refreshed.Page : current.Page,
+                Shelves = shelves,
+                SpotlightSource = spotlight,
+            };
+            CacheSnapshot(account, updated);
+            await ApplySnapshotAsync(updated, () => IsCurrentLoad(generation));
+            _activityDataDirty = false;
+            _favoriteDataDirty = false;
+            LaunchDiagnostics.Write($"event=catalog.activity-refresh outcome=success mode={mode}");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"event=catalog.activity-refresh outcome=failure error={exception.GetType().Name} mode={mode}");
+        }
+    }
+
+    private static IReadOnlyList<CatalogShelf> MergeDirtyShelves(
+        IReadOnlyList<CatalogShelf> current,
+        IReadOnlyList<CatalogShelf> refreshed,
+        Func<string, bool> shouldReplace)
+    {
+        var currentById = current.ToDictionary(shelf => shelf.Id, StringComparer.Ordinal);
+        return refreshed
+            .Where(shelf => shouldReplace(shelf.Id) || currentById.ContainsKey(shelf.Id))
+            .Select(shelf => !shouldReplace(shelf.Id) && currentById.TryGetValue(shelf.Id, out var unchanged)
+                ? unchanged : shelf)
+            .ToArray();
     }
 
     private async Task<CatalogSnapshot> ReadCatalogSnapshotAsync(
@@ -554,10 +642,12 @@ public sealed partial class CatalogLandingPage : UserControl
                         groupNames.GetValueOrDefault(match.CategoryId, match.CategoryId), match.MatchCount)).ToArray(),
                     IsFlatSearch: true, SearchFilter: filter);
             }
-            if (openShelfId is "__recent_added" or "__recent_played" or "__favorites")
+            if (openShelfId is "__continue" or "__recent_added" or "__recent_played" or "__favorites")
             {
                 var allItems = openShelfId switch
                 {
+                    "__continue" when type == CatalogItemType.Live => _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter),
+                    "__continue" => _repository.GetContinueWatching(account, type, _connection, int.MaxValue, filter),
                     "__recent_added" => _repository.GetRecentlyAdded(account, type, _connection, int.MaxValue, filter),
                     "__recent_played" => _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter),
                     _ => _repository.GetFavorites(account, type, _connection, int.MaxValue, filter),
@@ -791,10 +881,13 @@ public sealed partial class CatalogLandingPage : UserControl
         var type = TypeForMode(mode);
         var noun = NounFor(type);
         var shelves = new List<CatalogShelf>();
+        AddActivityShelf(account, shelves, "__continue", "Continue watching", type,
+            type == CatalogItemType.Live
+                ? _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter)
+                : _repository.GetContinueWatching(account, type, _connection, int.MaxValue, filter),
+            isContinueWatching: type != CatalogItemType.Live);
         AddActivityShelf(account, shelves, "__recent_added", "Recently added", type,
             _repository.GetRecentlyAdded(account, type, _connection, int.MaxValue, filter));
-        AddActivityShelf(account, shelves, "__recent_played", "Recently played", type,
-            _repository.GetRecentlyPlayed(account, type, _connection, int.MaxValue, filter));
         AddActivityShelf(account, shelves, "__favorites", "Favorites", type,
             _repository.GetFavorites(account, type, _connection, int.MaxValue, filter));
 
@@ -892,6 +985,7 @@ public sealed partial class CatalogLandingPage : UserControl
         MyTvivoShelfDefinition definition,
         string? filter) => definition.Kind switch
     {
+        MyTvivoShelfKind.ContinueWatching => _repository.GetContinueWatching(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.RecentlyAdded => _repository.GetRecentlyAdded(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.RecentlyPlayed => _repository.GetRecentlyPlayed(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.Favorites => _repository.GetFavorites(account, definition.Type, _connection, int.MaxValue, filter),
@@ -904,18 +998,20 @@ public sealed partial class CatalogLandingPage : UserControl
         string id,
         string title,
         CatalogItemType type,
-        IReadOnlyList<Channel> channels)
+        IReadOnlyList<Channel> channels,
+        bool isContinueWatching = false)
     {
         if (channels.Count == 0) return;
         shelves.Add(CreateShelf(account, id, title, CountLabel(channels.Count, NounFor(type)),
-            channels.Take(ShelfPreviewSize).Select(channel => ToCard(channel, type)).ToArray(), type, null, false,
+            channels.Take(ShelfPreviewSize).Select(channel => ToCard(channel, type, isContinueWatching: isContinueWatching)).ToArray(), type, null, false,
             channels.Where(channel => channel.AddedAt.HasValue).Select(channel => channel.AddedAt).Max()));
     }
 
     private CatalogShelf CreateMyTvivoShelf(ProviderAccount account, MyTvivoShelfDefinition definition, IReadOnlyList<Channel> channels)
     {
         var preview = channels.Take(ShelfPreviewSize)
-            .Select(channel => ToCard(channel, definition.Type))
+            .Select(channel => ToCard(channel, definition.Type,
+                isContinueWatching: definition.Kind == MyTvivoShelfKind.ContinueWatching))
             .ToArray();
         return CreateShelf(account, definition.Id, definition.Title, CountLabel(channels.Count, NounFor(definition.Type)), preview,
             definition.Type, null, false,
@@ -942,8 +1038,7 @@ public sealed partial class CatalogLandingPage : UserControl
     // does not have -- it throws InvalidOperationException at runtime (confirmed live: it broke
     // catalog loading entirely). Match the existing plain-file settings convention used elsewhere
     // in this file (see GetPlaybackEnginePreferencePath in MainWindow.xaml.cs) instead.
-    private static readonly string ShelfVisitsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "shelf-visits.json");
+    private static readonly string ShelfVisitsPath = TvivoDataPaths.For("shelf-visits.json");
     private static readonly object ShelfVisitsLock = new();
 
     private static string ShelfVisitSettingKey(ProviderAccount account, CatalogItemType type, string shelfId) =>
@@ -993,7 +1088,8 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null, string? subtitleOverride = null)
+    private CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null,
+        string? subtitleOverride = null, bool isContinueWatching = false)
     {
         var (title, qualityBadge) = SplitQualityBadge(channel.DisplayName);
         var card = new CatalogCard(
@@ -1005,9 +1101,12 @@ public sealed partial class CatalogLandingPage : UserControl
             type == CatalogItemType.Live ? 138 : 250,
             channel,
             qualityBadge ?? categoryQuality,
-            type);
+            type,
+            isContinueWatching);
         if (type == CatalogItemType.Movie)
             card.ApplyWatchProgress(_movieProgressById.GetValueOrDefault(channel.Id));
+        else if (type == CatalogItemType.Series)
+            card.ApplyWatchProgress(_seriesProgressById.GetValueOrDefault(channel.Id));
         return card;
     }
 
@@ -1117,6 +1216,30 @@ public sealed partial class CatalogLandingPage : UserControl
     private static bool HasCatalogData(CatalogSnapshot snapshot) =>
         snapshot.IsFlatSearch || snapshot.Groups.Count > 0 || snapshot.Page.TotalCount > 0 || snapshot.Shelves.Count > 0;
 
+    private static bool HasSameRenderedContent(CatalogSnapshot left, CatalogSnapshot right) =>
+        left.Mode == right.Mode && left.SelectedGroupId == right.SelectedGroupId && left.Offset == right.Offset &&
+        left.Page.TotalCount == right.Page.TotalCount && left.IsFlatSearch == right.IsFlatSearch &&
+        left.SearchFilter == right.SearchFilter && left.Groups.SequenceEqual(right.Groups) &&
+        left.Page.Items.Count == right.Page.Items.Count &&
+        left.Page.Items.Zip(right.Page.Items).All(pair => SameVisibleChannel(pair.First, pair.Second)) &&
+        left.Shelves.Count == right.Shelves.Count &&
+        left.Shelves.Zip(right.Shelves).All(pair => SameVisibleShelf(pair.First, pair.Second)) &&
+        left.SpotlightShelves.Count == right.SpotlightShelves.Count &&
+        left.SpotlightShelves.Zip(right.SpotlightShelves).All(pair => SameVisibleShelf(pair.First, pair.Second));
+
+    private static bool SameVisibleShelf(CatalogShelf left, CatalogShelf right) =>
+        left.Id == right.Id && left.Title == right.Title && left.CountLabel == right.CountLabel &&
+        left.Type == right.Type && left.GroupId == right.GroupId && left.OpensPagedGrid == right.OpensPagedGrid &&
+        left.LatestAddedAt == right.LatestAddedAt && left.HasNewItems == right.HasNewItems &&
+        left.Cards.Count == right.Cards.Count && left.Cards.Zip(right.Cards).All(pair =>
+            pair.First.Id == pair.Second.Id && pair.First.Title == pair.Second.Title &&
+            pair.First.Subtitle == pair.Second.Subtitle && pair.First.ArtworkUrl == pair.Second.ArtworkUrl &&
+            pair.First.QualityBadge == pair.Second.QualityBadge && pair.First.Type == pair.Second.Type);
+
+    private static bool SameVisibleChannel(Channel left, Channel right) =>
+        left.Id == right.Id && left.DisplayName == right.DisplayName && left.GroupId == right.GroupId &&
+        left.LogoUri == right.LogoUri && left.Source == right.Source;
+
     private async Task ApplySnapshotAsync(CatalogSnapshot snapshot, Func<bool>? isCurrent = null)
     {
         var transitionGeneration = Volatile.Read(ref _modeTransitionGeneration);
@@ -1153,7 +1276,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
 
-            await RefreshMovieProgressAsync(snapshot);
+            await RefreshWatchProgressAsync(snapshot);
             if ((isCurrent is not null && !isCurrent()) || snapshot.Mode != _activeMode ||
                 transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
@@ -1178,13 +1301,23 @@ public sealed partial class CatalogLandingPage : UserControl
                 }
             }
             var snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
-            if (snapshotChanged || _renderedOpenShelfId != _openShelfId)
+            var contentChanged = previousSnapshot is null || !HasSameRenderedContent(previousSnapshot, snapshot);
+            var spotlightChanged = previousSnapshot is null ||
+                previousSnapshot.SpotlightShelves.Count != snapshot.SpotlightShelves.Count ||
+                !previousSnapshot.SpotlightShelves.Zip(snapshot.SpotlightShelves)
+                    .All(pair => SameVisibleShelf(pair.First, pair.Second));
+            var shouldRender = (snapshotChanged && contentChanged) ||
+                _renderedOpenShelfId != _openShelfId;
+            LaunchDiagnostics.Write($"event=catalog.render reused={!shouldRender} mode={snapshot.Mode}");
+            if (previousSnapshot is not null && contentChanged)
+                VisibleCatalogDataChanged?.Invoke(this, EventArgs.Empty);
+            if (shouldRender)
             {
-                if (snapshotChanged) RenderSpotlight(snapshot.SpotlightShelves);
+                if (snapshotChanged && spotlightChanged) RenderSpotlight(snapshot.SpotlightShelves);
                 RenderShelfSurface(snapshot);
-                _renderedSnapshot = snapshot;
                 _renderedOpenShelfId = _openShelfId;
             }
+            _renderedSnapshot = snapshot;
             UpdatePaging(snapshot.Page.TotalCount);
 
             if ((snapshot.IsFlatSearch && snapshot.Page.TotalCount == 0) || (!snapshot.IsFlatSearch && snapshot.Shelves.Count == 0))
@@ -1228,7 +1361,7 @@ public sealed partial class CatalogLandingPage : UserControl
         visual.Opacity = end;
     }
 
-    private async Task RefreshMovieProgressAsync(CatalogSnapshot snapshot)
+    private async Task RefreshWatchProgressAsync(CatalogSnapshot snapshot)
     {
         if (_account is not { } account)
             return;
@@ -1241,17 +1374,34 @@ public sealed partial class CatalogLandingPage : UserControl
             cards = cards.Concat(visibleCards);
         cards = cards.Distinct();
         var cardsToRefresh = cards.ToArray();
-        var ids = snapshot.Page.Items.Where(channel => channel.Source.Kind == StreamKind.Movie)
+        var movieIds = snapshot.Page.Items.Where(channel => channel.Source.Kind == StreamKind.Movie)
             .Select(channel => channel.Id)
             .Concat(cardsToRefresh.Where(card => card.Type == CatalogItemType.Movie && card.Channel is not null)
                 .Select(card => card.Channel!.Id))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var progress = await Task.Run(() => _repository.GetPlaybackProgress(account, "movie", ids));
-        _movieProgressById = progress;
+        var seriesIds = snapshot.Page.Items.Where(channel => channel.Source.Kind == StreamKind.Series)
+            .Select(channel => channel.Id)
+            .Concat(cardsToRefresh.Where(card => card.Type == CatalogItemType.Series && card.Channel is not null)
+                .Select(card => card.Channel!.Id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var (movieProgress, seriesProgress) = await Task.Run(() =>
+            (_repository.GetPlaybackProgress(account, "movie", movieIds),
+             _repository.GetPlaybackProgress(account, "series", seriesIds)));
+        _movieProgressById = movieProgress;
+        _seriesProgressById = seriesProgress;
 
-        foreach (var card in cardsToRefresh.Where(card => card.Type == CatalogItemType.Movie && card.Channel is not null))
-            card.ApplyWatchProgress(progress.GetValueOrDefault(card.Channel!.Id));
+        foreach (var card in cardsToRefresh.Where(card => card.Channel is not null))
+        {
+            var progress = card.Type switch
+            {
+                CatalogItemType.Movie => movieProgress.GetValueOrDefault(card.Channel!.Id),
+                CatalogItemType.Series => seriesProgress.GetValueOrDefault(card.Channel!.Id),
+                _ => null,
+            };
+            card.ApplyWatchProgress(progress);
+        }
     }
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
@@ -1449,9 +1599,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var key = (mode, _openShelfId ?? string.Empty);
         if (!_browsePositions.TryGetValue(key, out var position)) return;
-        // Deliberately not removed here: a background catalog refresh can re-render this same
-        // shelf again shortly after we return (e.g. NotifyVisitRecorded invalidates the snapshot
-        // cache on every play), and that second render needs the same remembered position too.
+        // Deliberately not removed here: a background activity refresh can re-render this same
+        // shelf shortly after we return, and that render needs the same remembered position too.
         // It's only replaced by the next real CaptureBrowseState call (a fresh navigation away).
         var openShelfId = _openShelfId;
 
@@ -1903,13 +2052,42 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!ReferenceEquals(_renderedSnapshot, snapshot) || _renderedOpenShelfId != _openShelfId)
                 OpenShelfGrid.ItemsSource = snapshot.Page.Items.Select(channel => ToCard(channel,
                     snapshot.Mode == CatalogMode.MyTvivo ? TypeForSource(channel.Source.Kind) : type,
-                    QualityFromText(openShelf!.Title))).ToArray();
+                    QualityFromText(openShelf!.Title),
+                    isContinueWatching: openShelf.Id is "__continue" or "__my_continue_movie" or "__my_continue_series")).ToArray();
         }
         else
         {
             OpenShelfGrid.ItemsSource = null;
-            if (!ReferenceEquals(ShelvesItems.ItemsSource, snapshot.Shelves))
-                ShelvesItems.ItemsSource = snapshot.Shelves;
+            SynchronizeRenderedShelves(snapshot.Shelves);
+        }
+    }
+
+    private void SynchronizeRenderedShelves(IReadOnlyList<CatalogShelf> shelves)
+    {
+        if (!ReferenceEquals(ShelvesItems.ItemsSource, _renderedShelves))
+            ShelvesItems.ItemsSource = _renderedShelves;
+        for (var index = _renderedShelves.Count - 1; index >= shelves.Count; index--)
+            _renderedShelves.RemoveAt(index);
+        for (var index = 0; index < shelves.Count; index++)
+        {
+            if (index < _renderedShelves.Count)
+            {
+                if (_renderedShelves[index].Id == shelves[index].Id)
+                {
+                    if (!SameVisibleShelf(_renderedShelves[index], shelves[index]))
+                        _renderedShelves[index] = shelves[index];
+                    continue;
+                }
+                var existingIndex = -1;
+                for (var candidate = index + 1; candidate < _renderedShelves.Count; candidate++)
+                    if (_renderedShelves[candidate].Id == shelves[index].Id) { existingIndex = candidate; break; }
+                if (existingIndex >= 0) _renderedShelves.Move(existingIndex, index);
+                else _renderedShelves.Insert(index, shelves[index]);
+                if (!SameVisibleShelf(_renderedShelves[index], shelves[index]))
+                    _renderedShelves[index] = shelves[index];
+                continue;
+            }
+            _renderedShelves.Add(shelves[index]);
         }
     }
 
@@ -2216,7 +2394,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     public Task RefreshNowAsync() => _account is { } account
-        ? LoadAsync(account, forceRefresh: true)
+        ? LoadAsync(account, forceRefresh: true, reason: "manual-refresh")
         : LoadSavedAsync();
 
     public async void SetCategorySort(string? tag)
@@ -2271,10 +2449,9 @@ public sealed partial class CatalogLandingPage : UserControl
         catch (Exception exception)
         {
             if (!IsCurrentPageRequest(requestGeneration, account)) return;
-            RefreshInfoBar.Message = $"Couldn't update this page. Showing previously loaded channels. {FormatRefreshError(exception)}";
-            RefreshInfoBar.Severity = InfoBarSeverity.Warning;
-            RefreshRetryButton.Visibility = Visibility.Visible;
-            RefreshInfoBar.IsOpen = true;
+            // Saved channels stay on screen; a failed page refresh is not worth interrupting the user.
+            LaunchDiagnostics.Write($"Page update failed: {DescribeForLog(exception)}");
+            RefreshInfoBar.IsOpen = false;
         }
     }
 
@@ -2290,21 +2467,44 @@ public sealed partial class CatalogLandingPage : UserControl
         RefreshInfoBar.IsOpen = true;
     }
 
+    // A failed background refresh is not user-facing: the saved channels are already on screen, so the
+    // failure is logged and the refresh is retried quietly a couple of times.
     private void ShowRefreshFailure(Exception exception)
     {
-        RefreshInfoBar.Message = $"Couldn't refresh. Showing saved channels. {FormatRefreshError(exception)}";
-        RefreshInfoBar.Severity = InfoBarSeverity.Warning;
-        RefreshRetryButton.Visibility = Visibility.Visible;
-        RefreshInfoBar.IsOpen = true;
+        LaunchDiagnostics.Write($"Catalog refresh failed, showing saved channels: {DescribeForLog(exception)}");
+        RefreshInfoBar.IsOpen = false;
+        DismissFirstLoadTakeover();
         SetState(content: true);
+        if (_silentRefreshRetries >= SilentRefreshRetryDelays.Length || _account is not { } account) return;
+        var delay = SilentRefreshRetryDelays[_silentRefreshRetries++];
+        var generation = Volatile.Read(ref _loadGeneration);
+        _ = RetryRefreshQuietlyAsync(account, generation, delay);
     }
 
-    private static string FormatRefreshError(Exception exception)
+    private static readonly TimeSpan[] SilentRefreshRetryDelays = { TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(60) };
+
+    private async Task RetryRefreshQuietlyAsync(ProviderAccount account, long generation, TimeSpan delay)
     {
-        var message = exception.Message;
-        // Provider request URLs can contain credentials. Keep actionable error text without logging URLs.
-        message = System.Text.RegularExpressions.Regex.Replace(message, @"https?://\S+", "[provider URL]");
-        return $"{exception.GetType().Name}: {message}";
+        try
+        {
+            await Task.Delay(delay);
+            if (!_isActive || !IsCurrentLoad(generation) || _account?.AccountId != account.AccountId) return;
+            await LoadAsync(account, forceRefresh: true, reason: "auto-retry");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"Quiet refresh retry failed: {DescribeForLog(exception)}");
+        }
+    }
+
+    // Exception type and HTTP status only. Messages can embed provider URLs (which carry credentials).
+    private static string DescribeForLog(Exception exception)
+    {
+        var inner = exception;
+        while (inner.InnerException is not null && inner is not HttpRequestException) inner = inner.InnerException;
+        return inner is HttpRequestException { StatusCode: { } status }
+            ? $"{exception.GetType().Name} (HTTP {(int)status})"
+            : exception.GetType().Name;
     }
 
     private bool IsCurrentLoad(long generation) =>
@@ -2455,7 +2655,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async void Retry_Click(object sender, RoutedEventArgs args)
     {
-        if (_account is not null) await LoadAsync(_account, forceRefresh: true);
+        if (_account is not null) await LoadAsync(_account, forceRefresh: true, reason: "manual-refresh");
         else await LoadSavedAsync();
     }
 
@@ -2579,7 +2779,8 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
-        double width, double height, Channel? channel, string? qualityBadge, CatalogItemType type) : INotifyPropertyChanged
+        double width, double height, Channel? channel, string? qualityBadge, CatalogItemType type,
+        bool isContinueWatching) : INotifyPropertyChanged
     {
         private EpgNowNext? _nowNext;
         private PlaybackProgress? _watchProgress;
@@ -2593,10 +2794,16 @@ public sealed partial class CatalogLandingPage : UserControl
         public Channel? Channel { get; } = channel;
         public string? QualityBadge { get; } = qualityBadge;
         public CatalogItemType Type { get; } = type;
+        public bool IsContinueWatching { get; } = isContinueWatching;
         private PlaybackProgressPresentation WatchProgress => PlaybackProgressPresentation.For(_watchProgress);
+        private ContinueWatchingProgress ContinueProgress => ContinueWatchingProgress.For(Channel!, _watchProgress);
         public double WatchProgressValue => WatchProgress.Value;
         public Visibility WatchProgressVisibility => WatchProgress.IsVisible ? Visibility.Visible : Visibility.Collapsed;
         public string WatchProgressAutomationName => WatchProgress.AutomationName;
+        public string TimeLeft => IsContinueWatching ? ContinueProgress.TimeLeft : string.Empty;
+        public Visibility ContinueProgressVisibility => IsContinueWatching && ContinueProgress.HasMeasuredProgress
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         public Visibility QualityBadgeVisibility => string.IsNullOrWhiteSpace(QualityBadge) ? Visibility.Collapsed : Visibility.Visible;
         public string NowText => _nowNext?.Now is { } now ? $"Now: {now.Title}" : string.Empty;
         public Visibility NowVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
@@ -2655,6 +2862,8 @@ public sealed partial class CatalogLandingPage : UserControl
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressValue)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WatchProgressAutomationName)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TimeLeft)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ContinueProgressVisibility)));
         }
 
         public void ApplyNowNext(EpgNowNext? nowNext)

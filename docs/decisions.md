@@ -1420,8 +1420,11 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
   Home Continue Watching shows a
   progress track and "min left" only when a duration was measured. Movie cards and movie rows in the
   player list read `media_progress` in a batch and show a progress bar (full when finished); episode rows
-  use the same presentation, with per-season counts and Resume episode remaining. Series cards stay clear
-  because progress belongs to individual episodes. There is no manual watched/unwatched menu.
+  use the same presentation, with per-season counts and Resume episode remaining. Ordinary Series catalog
+  cards stay clear; Home and the explicit Continue watching activity shelves may show the last episode's
+  progress and remaining minutes when its duration is measured. Live TV's Continue watching shelf is
+  backed by recent tuning history because live channels have no resume position. There is no manual
+  watched/unwatched menu.
   Episode resume comes from that episode's `media_progress` row, not the series-wide `items.resume_ms`.
   Back up `winui-catalog.sqlite` before the first v16 run.
 - **Audio and subtitle picker.** `ITrackSelectingEngine` on both engines; control-bar flyout with Audio and

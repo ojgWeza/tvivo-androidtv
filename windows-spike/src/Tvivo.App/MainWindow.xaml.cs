@@ -208,6 +208,8 @@ public sealed partial class MainWindow : Window
         }
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
+        CompactAudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
+        CompactAudioSubtitlesFlyout.Closed += CompactAudioSubtitlesFlyout_Closed;
         SetMutePresentation();
         SetTrackSelectingEngine(_engine);
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
@@ -256,6 +258,7 @@ public sealed partial class MainWindow : Window
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
+        _catalogLandingPage.VisibleCatalogDataChanged += (_, _) => _homePage.MarkDataChanged();
         _homePage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
@@ -307,7 +310,7 @@ public sealed partial class MainWindow : Window
 
     private void WindowRoot_KeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Handled || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen)
+        if (args.Handled || IsTrackFlyoutOpen || VolumeFlyout.IsOpen)
             return;
 
         if (_isCinemaMode && _currentPage == ShellPage.Player)
@@ -523,6 +526,14 @@ public sealed partial class MainWindow : Window
         RefreshAudioSubtitlesButton();
     }
 
+    private bool IsTrackFlyoutOpen => AudioSubtitlesFlyout.IsOpen || CompactAudioSubtitlesFlyout.IsOpen;
+
+    private void CompactAudioSubtitlesFlyout_Closed(object? sender, object args)
+    {
+        if (_currentPage == ShellPage.Player && _playerPresentation == PlayerPresentation.Compact)
+            CompactAudioSubtitlesButton.Focus(FocusState.Programmatic);
+    }
+
     private void AudioSubtitlesFlyout_Closed(object? sender, object args)
     {
         if (_currentPage == ShellPage.Player)
@@ -543,17 +554,24 @@ public sealed partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         AudioSubtitlesButton.IsEnabled = inPlayer && hasTracks && _trackSelectingEngine is not null;
+        var inCompact = _playerPresentation == PlayerPresentation.Compact && _currentSource is not null;
+        CompactAudioSubtitlesButton.Visibility = inCompact && !isLiveWithoutTracks
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CompactAudioSubtitlesButton.IsEnabled = inCompact && hasTracks && _trackSelectingEngine is not null;
         if (AudioSubtitlesFlyout.IsOpen)
-            RebuildAudioSubtitlesFlyout();
+            RebuildAudioSubtitlesFlyout(AudioSubtitlesFlyout);
+        if (CompactAudioSubtitlesFlyout.IsOpen)
+            RebuildAudioSubtitlesFlyout(CompactAudioSubtitlesFlyout);
     }
 
-    private void RebuildAudioSubtitlesFlyout()
+    private void RebuildAudioSubtitlesFlyout(MenuFlyout flyout)
     {
-        AudioSubtitlesFlyout.Items.Clear();
+        flyout.Items.Clear();
         var snapshot = _trackSnapshot;
         if (snapshot.Audio.Count == 0 && snapshot.Subtitles.Count == 0)
         {
-            AudioSubtitlesFlyout.Items.Add(new MenuFlyoutItem
+            flyout.Items.Add(new MenuFlyoutItem
             {
                 Text = "No alternate tracks",
                 IsEnabled = false,
@@ -564,7 +582,7 @@ public sealed partial class MainWindow : Window
 
         if (snapshot.Audio.Count > 0)
         {
-            AudioSubtitlesFlyout.Items.Add(CreateTrackSectionHeader("Audio"));
+            flyout.Items.Add(CreateTrackSectionHeader("Audio"));
             foreach (var track in snapshot.Audio)
             {
                 var item = new RadioMenuFlyoutItem
@@ -579,14 +597,14 @@ public sealed partial class MainWindow : Window
                 };
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Audio: {track.DisplayName}");
                 item.Click += AudioTrackMenuItem_Click;
-                AudioSubtitlesFlyout.Items.Add(item);
+                flyout.Items.Add(item);
             }
         }
 
         if (snapshot.Audio.Count > 0)
-            AudioSubtitlesFlyout.Items.Add(new MenuFlyoutSeparator());
+            flyout.Items.Add(new MenuFlyoutSeparator());
 
-        AudioSubtitlesFlyout.Items.Add(CreateTrackSectionHeader("Subtitles"));
+        flyout.Items.Add(CreateTrackSectionHeader("Subtitles"));
         var subtitleOff = new RadioMenuFlyoutItem
         {
             Text = "Off",
@@ -598,7 +616,7 @@ public sealed partial class MainWindow : Window
         };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(subtitleOff, "Subtitles off");
         subtitleOff.Click += SubtitleTrackMenuItem_Click;
-        AudioSubtitlesFlyout.Items.Add(subtitleOff);
+        flyout.Items.Add(subtitleOff);
         foreach (var track in snapshot.Subtitles)
         {
             var item = new RadioMenuFlyoutItem
@@ -613,7 +631,7 @@ public sealed partial class MainWindow : Window
             };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Subtitle: {track.DisplayName}");
             item.Click += SubtitleTrackMenuItem_Click;
-            AudioSubtitlesFlyout.Items.Add(item);
+            flyout.Items.Add(item);
         }
     }
 
@@ -660,20 +678,11 @@ public sealed partial class MainWindow : Window
         File.WriteAllText(path, engine);
     }
 
-    private static string GetPlaybackEnginePreferencePath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Tvivo",
-        "playback-engine.txt");
+    private static string GetPlaybackEnginePreferencePath() => TvivoDataPaths.For("playback-engine.txt");
 
-    private static string GetPlaybackOptionsPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Tvivo",
-        "playback-options.json");
+    private static string GetPlaybackOptionsPath() => TvivoDataPaths.For("playback-options.json");
 
-    private static string GetWindowMiniGeometryPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Tvivo",
-        "window-mini-geometry.json");
+    private static string GetWindowMiniGeometryPath() => TvivoDataPaths.For("window-mini-geometry.json");
 
     private static WindowMiniGeometry? ReadWindowMiniGeometry()
     {
@@ -874,6 +883,7 @@ public sealed partial class MainWindow : Window
     private async void AccountPage_RefreshCatalogRequested(object? sender, EventArgs args)
     {
         var generation = Interlocked.Increment(ref _catalogRequestGeneration);
+        _homePage.MarkDataChanged();
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
         await _catalogLandingPage.RefreshNowAsync();
         if (generation == Volatile.Read(ref _catalogRequestGeneration))
@@ -904,8 +914,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
     {
-        var returningFromPlayer = CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(
-            mode, _currentPage == ShellPage.Player);
+        var returningFromPlayer = _currentPage == ShellPage.Player;
         var generation = Interlocked.Increment(ref _catalogRequestGeneration);
         TraceBackTransition($"show-catalog-start mode={mode} fromPlayer={returningFromPlayer} generation={generation}");
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
@@ -917,7 +926,8 @@ public sealed partial class MainWindow : Window
         if (_catalogLandingPage.Account is null)
             await _catalogLandingPage.LoadSavedAsync();
         else
-            await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account);
+            await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account,
+                reason: returningFromPlayer ? "player-return" : "navigation");
         if (generation == Volatile.Read(ref _catalogRequestGeneration))
             UpdateTopNavigationState();
         TraceBackTransition($"show-catalog-complete generation={generation}");
@@ -925,9 +935,10 @@ public sealed partial class MainWindow : Window
 
     private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
     {
+        _homePage.MarkDataChanged();
         Interlocked.Increment(ref _catalogRequestGeneration);
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
-        await _catalogLandingPage.LoadAsync(args.Account, args.Connection);
+        await _catalogLandingPage.LoadAsync(args.Account, args.Connection, reason: "account-change");
         UpdateTopNavigationState();
     }
 
@@ -995,18 +1006,9 @@ public sealed partial class MainWindow : Window
             SetCurrentPlayerEntry(selectedPlayerChannel);
         CatalogPageArea.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-catalog-visibility-set page={page} catalog={CatalogPageArea.Visibility}");
-        if (isCatalog && returningFromPlayer)
-        {
-            var catalogVisual = ElementCompositionPreview.GetElementVisual(CatalogPageArea);
-            catalogVisual.StopAnimation(nameof(Visual.Opacity));
-            catalogVisual.Opacity = 0;
-            CatalogPageArea.UpdateLayout();
-            WindowRoot.UpdateLayout();
-            TraceBackTransition("show-page-player-return-layout-barrier catalogOpacity=0 forcedLayout=true");
-        }
         if (isStaticPage) FadeIn(PageHost);
         else if (isPlayer) FadeIn(PlayerPage);
-        else if (isCatalog) FadeIn(CatalogPageArea);
+        else if (isCatalog && !returningFromPlayer) FadeIn(CatalogPageArea);
         _catalogLandingPage.SetActive(isCatalog);
         TraceBackTransition($"show-page-visibility page={page} host={PageHost.Visibility} catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility} cinema={_isCinemaMode}");
         CatalogSearchBar.Visibility = isCatalog ? Visibility.Visible : Visibility.Collapsed;
@@ -1125,8 +1127,7 @@ public sealed partial class MainWindow : Window
         PlayerPage.Margin = new Thickness(_compactDisplayedGeometry.Left, _compactDisplayedGeometry.Top, 0, 0);
     }
 
-    private static string GetCompactGeometryPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "compact-player-geometry.json");
+    private static string GetCompactGeometryPath() => TvivoDataPaths.For("compact-player-geometry.json");
 
     private void SaveCompactGeometry()
     {
@@ -1591,17 +1592,25 @@ public sealed partial class MainWindow : Window
         var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
         PreviousEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
         NextEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        CompactPreviousButton.Visibility = PreviousEpisodeButton.Visibility;
+        CompactNextButton.Visibility = NextEpisodeButton.Visibility;
         var previous = kind == StreamKind.Episode
             ? GetAdjacentEpisode(-1)
             : GetAdjacentVisiblePlaylistItem(-1);
         PreviousEpisodeButton.IsEnabled = previous is not null;
         NextEpisodeButton.IsEnabled = GetNextPlaylistItem() is not null;
+        CompactPreviousButton.IsEnabled = PreviousEpisodeButton.IsEnabled;
+        CompactNextButton.IsEnabled = NextEpisodeButton.IsEnabled;
         var previousLabel = kind == StreamKind.Movie ? "Previous movie" : "Previous episode";
         var nextLabel = kind == StreamKind.Movie ? "Next movie" : "Next episode";
         ToolTipService.SetToolTip(PreviousEpisodeButton, previousLabel);
         ToolTipService.SetToolTip(NextEpisodeButton, nextLabel);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PreviousEpisodeButton, previousLabel);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(NextEpisodeButton, nextLabel);
+        ToolTipService.SetToolTip(CompactPreviousButton, previousLabel);
+        ToolTipService.SetToolTip(CompactNextButton, nextLabel);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactPreviousButton, previousLabel);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactNextButton, nextLabel);
     }
 
     private void PlayAdjacentEpisode(int offset)
@@ -1754,6 +1763,7 @@ public sealed partial class MainWindow : Window
         entry.IsFavorite = _catalogRepository.ToggleFavorite(account, type, id);
         if (entry.Channel.Source.Kind == StreamKind.Episode)
             UpdateSeriesFavoriteButton(entry.IsFavorite);
+        _homePage.MarkDataChanged();
         _catalogLandingPage.NotifyFavoriteChanged();
     }
 
@@ -1762,6 +1772,7 @@ public sealed partial class MainWindow : Window
         if (_currentSeriesId is null || _currentSeriesAccount is null) return;
         var isFavorite = _catalogRepository.ToggleFavorite(_currentSeriesAccount, CatalogItemType.Series, _currentSeriesId);
         UpdateSeriesFavoriteButton(isFavorite);
+        _homePage.MarkDataChanged();
         _catalogLandingPage.NotifyFavoriteChanged();
     }
 
@@ -1885,6 +1896,7 @@ public sealed partial class MainWindow : Window
         foreach (var visit in _pendingVisits)
             _catalogRepository.RecordVisit(visit.Account, visit.Type, visit.Id);
         _pendingVisits.Clear();
+        _homePage.MarkDataChanged();
         _catalogLandingPage.NotifyVisitRecorded();
     }
 
@@ -2007,6 +2019,7 @@ public sealed partial class MainWindow : Window
         try
         {
             VolumeSlider.Value = _engine.Volume;
+            CompactVolumeSlider.Value = VolumeSlider.Value;
         }
         finally
         {
@@ -2066,6 +2079,8 @@ public sealed partial class MainWindow : Window
         NextEpisodePrompt.Visibility = Visibility.Collapsed;
         PreviousEpisodeButton.Visibility = Visibility.Collapsed;
         NextEpisodeButton.Visibility = Visibility.Collapsed;
+        CompactPreviousButton.Visibility = Visibility.Collapsed;
+        CompactNextButton.Visibility = Visibility.Collapsed;
         _playbackUiTimer.Stop();
         _isDraggingProgress = false;
         _isUpdatingProgress = false;
@@ -2076,6 +2091,12 @@ public sealed partial class MainWindow : Window
         ProgressSlider.Maximum = 1;
         ProgressSlider.Value = 0;
         ProgressSlider.IsEnabled = false;
+        CompactProgressSlider.Minimum = 0;
+        CompactProgressSlider.Maximum = 1;
+        CompactProgressSlider.Value = 0;
+        CompactProgressSlider.IsEnabled = false;
+        CompactElapsedText.Text = FormatTime(0);
+        CompactDurationText.Text = FormatTime(0);
         RewindButton.IsEnabled = false;
         ForwardButton.IsEnabled = false;
         SetPauseButtonState("Play");
@@ -2437,7 +2458,7 @@ public sealed partial class MainWindow : Window
             }
             else if (CompactChrome.IsHitTestVisible && !_cinemaCursorIdleTimer.IsEnabled &&
                      !_compactPointerOverControls && !HasCompactKeyboardNavigationFocus() &&
-                     !_compactGeometryGestureActive && !AudioSubtitlesFlyout.IsOpen && !VolumeFlyout.IsOpen)
+                     !_compactGeometryGestureActive && !IsTrackFlyoutOpen && !VolumeFlyout.IsOpen)
             {
                 _cinemaCursorIdleTimer.Start();
             }
@@ -2491,18 +2512,13 @@ public sealed partial class MainWindow : Window
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
         var time = timeline.PositionMilliseconds;
-        CompactElapsedText.Text = FormatTime(time);
-        CompactProgressBar.Value = duration is > 0 ? Math.Clamp(time / (double)duration.Value * 100, 0, 100) : 0;
-        CompactProgressBar.Visibility = _currentSource?.Kind == StreamKind.Live || duration is not > 0
-            ? Visibility.Collapsed
-            : Visibility.Visible;
         var compactSeekEnabled = timeline.CanSeek && _currentSource?.Kind != StreamKind.Live;
         var compactIsLive = _currentSource?.Kind == StreamKind.Live;
         CompactRewindButton.IsEnabled = compactSeekEnabled;
         CompactForwardButton.IsEnabled = compactSeekEnabled;
         CompactRewindButton.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
         CompactForwardButton.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
-        CompactElapsedText.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
+        CompactSeekRow.Visibility = compactIsLive || duration is not > 0 ? Visibility.Collapsed : Visibility.Visible;
         var playbackKind = _nowPlayingChannel?.Source.Kind;
         var nextItem = PlaybackModeLogic.ShouldShowNextPrompt(GetPlaybackMode(playbackKind)) && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted
             ? GetNextPlaylistItem()
@@ -2546,19 +2562,26 @@ public sealed partial class MainWindow : Window
         _isUpdatingProgress = true;
         ProgressSlider.Maximum = Math.Max(length, 1);
         ProgressSlider.IsEnabled = seekEnabled;
+        CompactProgressSlider.Maximum = Math.Max(length, 1);
+        CompactProgressSlider.IsEnabled = seekEnabled;
         RewindButton.IsEnabled = seekEnabled;
         ForwardButton.IsEnabled = seekEnabled;
         if (_isHeldSeeking)
         {
             ProgressSlider.Value = Math.Clamp(_heldSeekTarget, 0, Math.Max(length, 1));
+            CompactProgressSlider.Value = ProgressSlider.Value;
             ElapsedText.Text = FormatTime(_heldSeekTarget);
+            CompactElapsedText.Text = ElapsedText.Text;
         }
         else if (!_isDraggingProgress)
         {
             ProgressSlider.Value = Math.Clamp(time, 0, Math.Max(length, 1));
+            CompactProgressSlider.Value = ProgressSlider.Value;
             ElapsedText.Text = FormatTime(time);
+            CompactElapsedText.Text = ElapsedText.Text;
         }
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
+        CompactDurationText.Text = DurationText.Text;
         _isUpdatingProgress = false;
         SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
     }
@@ -2686,6 +2709,32 @@ public sealed partial class MainWindow : Window
             SeekTo((long)args.NewValue);
     }
 
+    private void CompactProgressSlider_PointerPressed(object sender, PointerRoutedEventArgs args) => _isDraggingProgress = true;
+
+    private void CompactProgressSlider_PointerReleased(object sender, PointerRoutedEventArgs args)
+    {
+        _isDraggingProgress = false;
+        if (SeekTo((long)CompactProgressSlider.Value) is { } target)
+            SaveResumePosition(force: true, positionOverride: target);
+    }
+
+    private void CompactProgressSlider_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
+    {
+        if (!_isDraggingProgress) return;
+        _isDraggingProgress = false;
+        if (SeekTo((long)CompactProgressSlider.Value) is { } target)
+            SaveResumePosition(force: true, positionOverride: target);
+    }
+
+    private void CompactProgressSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
+    {
+        if (_isUpdatingProgress || CompactElapsedText is null) return;
+        if (_isDraggingProgress)
+            CompactElapsedText.Text = FormatTime((long)args.NewValue);
+        else
+            SeekTo((long)args.NewValue);
+    }
+
     private void RewindButton_Click(object sender, RoutedEventArgs args) => SeekButtonClick(-1);
 
     private void ForwardButton_Click(object sender, RoutedEventArgs args) => SeekButtonClick(1);
@@ -2784,6 +2833,8 @@ public sealed partial class MainWindow : Window
             var maximum = Math.Max(duration ?? _heldSeekTarget, 1);
             ProgressSlider.Maximum = maximum;
             ProgressSlider.Value = Math.Clamp(_heldSeekTarget, 0, maximum);
+            CompactProgressSlider.Maximum = maximum;
+            CompactProgressSlider.Value = ProgressSlider.Value;
             ElapsedText.Text = FormatTime(_heldSeekTarget);
         }
         finally
@@ -2854,8 +2905,18 @@ public sealed partial class MainWindow : Window
 
     private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
     {
-        if (!_isUpdatingVolume)
-            _engine.Volume = (int)args.NewValue;
+        if (_isUpdatingVolume) return;
+        _engine.Volume = (int)args.NewValue;
+        if (CompactVolumeSlider is null) return;
+        _isUpdatingVolume = true;
+        try { CompactVolumeSlider.Value = args.NewValue; }
+        finally { _isUpdatingVolume = false; }
+    }
+
+    private void CompactVolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
+    {
+        if (!_isUpdatingVolume && VolumeSlider is not null)
+            VolumeSlider.Value = args.NewValue;
     }
 
     [DllImport("user32.dll")]
@@ -3253,6 +3314,7 @@ public sealed partial class MainWindow : Window
         {
             ClampAndApplyCompactGeometry();
             CompactTitleText.Text = PlayerTitleText.Text;
+            RefreshAudioSubtitlesButton();
             ShowCompactControls();
         }
         else
@@ -3497,13 +3559,13 @@ public sealed partial class MainWindow : Window
                 _engine.IsPlaying, _engine.IsBuffering, _compactPointerOverControls,
                 _compactGeometryGestureActive && !_compactGeometryResize,
                 _compactGeometryGestureActive && _compactGeometryResize,
-                idleElapsed: true) || HasCompactKeyboardNavigationFocus() || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen;
+                idleElapsed: true) || HasCompactKeyboardNavigationFocus() || IsTrackFlyoutOpen || VolumeFlyout.IsOpen;
             SetCompactControlsVisible(keepVisible);
             return;
         }
         if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
         // Keep the overlay while it is being used.
-        if (_cinemaPointerOverControls || AudioSubtitlesFlyout.IsOpen || VolumeFlyout.IsOpen || _isDraggingProgress)
+        if (_cinemaPointerOverControls || IsTrackFlyoutOpen || VolumeFlyout.IsOpen || _isDraggingProgress)
         {
             _cinemaCursorIdleTimer.Start();
             return;
@@ -3647,7 +3709,7 @@ public sealed partial class MainWindow : Window
         if (compact)
         {
             CompactTitleText.Text = PlayerTitleText.Text;
-            CompactProgressBar.Visibility = _currentSource?.Kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
+            CompactSeekRow.Visibility = _currentSource?.Kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
         }
     }
 

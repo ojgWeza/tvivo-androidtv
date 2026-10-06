@@ -12,7 +12,7 @@ public sealed class EpgRepository : IDisposable
 
     public EpgRepository(string? databasePath = null)
     {
-        databasePath ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "winui-epg.sqlite");
+        databasePath ??= TvivoDataPaths.For("winui-epg.sqlite");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
         using var connection = Open();

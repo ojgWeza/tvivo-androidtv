@@ -1,6 +1,9 @@
 using LibVLCSharp.Shared;using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("Tvivo.Playback.Tests")]
 
 namespace Tvivo.Playback;
 
@@ -30,6 +33,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan TrackProbeDeadline = TimeSpan.FromSeconds(10);
 
+    private readonly bool _enableLiveTimeshift;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _lifecycleLock = new();
     private readonly object _trackSync = new();
@@ -48,6 +52,12 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private int _volumePercent = 100;
     private bool _isMuted;
     private bool _disposed;
+    private bool _liveTimeshiftConfigured;
+
+    public VlcPlaybackEngine(bool enableLiveTimeshift = false)
+    {
+        _enableLiveTimeshift = enableLiveTimeshift;
+    }
 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
 
@@ -85,8 +95,13 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
 
     public void TogglePause()
     {
-        if (IsPlaying || IsBuffering || IsPaused)
-            _player?.Pause();
+        if (_player is not { } player || !(IsPlaying || IsBuffering || IsPaused))
+            return;
+
+        var phase = IsPaused ? "resume" : "pause";
+        player.Pause();
+        if (_liveTimeshiftConfigured)
+            _ = SampleAfterTransitionAsync(player, phase);
     }
 
     public void Seek(long timeMilliseconds)
@@ -94,6 +109,35 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         if (_player is { } player && Timeline.ClampSeekTarget(timeMilliseconds) is { } target)
             player.Time = target;
     }
+
+    // Diagnostic-only escape hatch. A live input has no finite Timeline, so Seek remains gated.
+    // This submits one backward seek while paused; true means submitted, not that VLC honored it.
+    public Task<bool> ProbePausedLiveSeekAsync(long timeMilliseconds) => Task.Run(async () =>
+    {
+        MediaPlayer? player;
+        lock (_trackSync)
+            player = _liveTimeshiftConfigured ? _player : null;
+        if (player is null)
+            return false;
+
+        try
+        {
+            if (!IsCurrentPlayer(player) || player.State != VLCState.Paused ||
+                timeMilliseconds < 0 || timeMilliseconds >= player.Time)
+                return false;
+
+            player.Time = timeMilliseconds;
+            await Task.Delay(250).ConfigureAwait(false);
+            if (IsCurrentPlayer(player))
+                EmitPlaybackSample("seek_back_paused", player);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Log($"event=playback.timeshift.probe_seek engine=LibVLC result=error error={exception.GetType().Name}");
+            return false;
+        }
+    });
 
     public event EventHandler<VlcPlaybackStateChangedEventArgs>? StateChanged;
     public event EventHandler? TracksChanged;
@@ -174,7 +218,16 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             if (source.DirectUri is null)
                 return PlaybackAttemptResult.HostFailure;
 
+            var timeshiftPath = PrepareLiveTimeshift(source.Kind);
             var media = new Media(libVlc, source.DirectUri, Array.Empty<string>());
+            var timeshiftOptions = LiveTimeshiftOptions.ForMedia(source.Kind, _enableLiveTimeshift && timeshiftPath is not null, timeshiftPath);
+            foreach (var option in timeshiftOptions)
+                media.AddOption(option);
+            if (timeshiftOptions.Count > 0)
+            {
+                var message = $"event=playback.timeshift.config engine=LibVLC scope=media granularity_bytes={LiveTimeshiftOptions.GranularityBytes}";
+                EmitTimeshiftDiagnostic(message);
+            }
             var player = new MediaPlayer(libVlc)
             {
                 Media = media,
@@ -198,6 +251,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                         if (!ReferenceEquals(_player, player)) return;
                         player.Volume = VlcVolumeCurve.ToPlayerVolume(_volumePercent);
                         player.Mute = _isMuted;
+                        if (_liveTimeshiftConfigured)
+                            EmitPlaybackSample("playing", player);
                     });
                     RefreshVlcTracks(session, player, resolvedWhenTracksPresent: false);
                     StartTrackProbe(session, player);
@@ -211,6 +266,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 _currentSession = session;
                 _tracks = PlaybackTrackSnapshot.Unresolved;
                 _defaultSubtitleApplied = false;
+                _liveTimeshiftConfigured = timeshiftPath is not null;
             }
             View.MediaPlayer = player;
 
@@ -454,6 +510,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 catch (Exception exception) { Log($"Timed-out player dispose failed during deferred cleanup. {exception.GetType().Name}"); }
                 try { media.Dispose(); }
                 catch (Exception exception) { Log($"Timed-out media dispose failed during deferred cleanup. {exception.GetType().Name}"); }
+                CleanupTimeshiftFiles();
                 LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=deferred callbacks=detached surface=detach-requested player=dispose-attempted media=dispose-attempted");
             }
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -482,6 +539,86 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         Path.GetTempPath(),
         "tvivo-playback-engine.log");
     private static readonly object LogSync = new();
+
+    private string? PrepareLiveTimeshift(StreamKind kind)
+    {
+        if (!_enableLiveTimeshift || kind != StreamKind.Live)
+            return null;
+
+        try
+        {
+            var path = LiveTimeshiftOptions.DirectoryPath(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            LiveTimeshiftOptions.ThrowIfReparseDirectory(Path.GetDirectoryName(path)!);
+            Directory.CreateDirectory(path);
+            LiveTimeshiftOptions.ThrowIfReparseDirectory(path);
+            CleanupTimeshiftFiles();
+            return path;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            Log($"event=playback.timeshift.setup engine=LibVLC result=error error={exception.GetType().Name}");
+            return null;
+        }
+    }
+
+    private void CleanupTimeshiftFiles()
+    {
+        if (!_enableLiveTimeshift)
+            return;
+
+        try
+        {
+            var path = LiveTimeshiftOptions.DirectoryPath(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            var removed = LiveTimeshiftOptions.CleanupStaleFiles(path);
+            if (removed > 0)
+                Log($"event=playback.timeshift.cleanup engine=LibVLC removed={removed}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            Log($"event=playback.timeshift.cleanup engine=LibVLC result=error error={exception.GetType().Name}");
+        }
+    }
+
+    private async Task SampleAfterTransitionAsync(MediaPlayer player, string phase)
+    {
+        await Task.Delay(250).ConfigureAwait(false);
+        if (IsCurrentPlayer(player))
+            EmitPlaybackSample(phase, player);
+    }
+
+    private bool IsCurrentPlayer(MediaPlayer player)
+    {
+        lock (_trackSync)
+            return ReferenceEquals(_player, player) && !_disposed;
+    }
+
+    private void EmitPlaybackSample(string phase, MediaPlayer player)
+    {
+        try
+        {
+            var message = $"event=playback.timeshift.sample engine=LibVLC phase={phase} " +
+                $"time_ms={player.Time} length_ms={player.Length} " +
+                $"position={player.Position.ToString("R", CultureInfo.InvariantCulture)} " +
+                $"is_seekable={player.IsSeekable} can_pause={player.CanPause} state={player.State}";
+            EmitTimeshiftDiagnostic(message);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A queued sample may race normal StopCore disposal.
+        }
+    }
+
+    private void EmitTimeshiftDiagnostic(string message)
+    {
+        Log(message);
+        try { LifecycleEvent?.Invoke(message); }
+        catch (Exception exception)
+        {
+            Log($"event=playback.timeshift.diagnostic engine=LibVLC result=listener-error error={exception.GetType().Name}");
+        }
+    }
 
     private static void Log(string message)
     {
@@ -522,16 +659,19 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         Media? media;
         EventHandlers? handlers;
         PlaybackSessionToken? currentSession;
+        bool hadLiveTimeshift;
         lock (_trackSync)
         {
             player = _player;
             media = _media;
             handlers = _handlers;
             currentSession = _currentSession;
+            hadLiveTimeshift = _liveTimeshiftConfigured;
             _player = null;
             _media = null;
             _handlers = null;
             _currentSession = null;
+            _liveTimeshiftConfigured = false;
         }
         CancelTrackProbe();
         lock (_trackSync)
@@ -541,7 +681,10 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         }
 
         if (player is null)
+        {
+            CleanupTimeshiftFiles();
             return;
+        }
         reason ??= player.State == VLCState.Ended ? "completed" : "user-cancelled";
 
         if (currentSession is { } token)
@@ -554,9 +697,23 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         }
 
         DetachPlayerFromView();
-        player.Stop();
-        player.Dispose();
-        media?.Dispose();
+        if (hadLiveTimeshift)
+            EmitPlaybackSample("stop_before", player);
+        try
+        {
+            player.Stop();
+            if (hadLiveTimeshift)
+                EmitPlaybackSample("stop", player);
+        }
+        finally
+        {
+            try { player.Dispose(); }
+            finally
+            {
+                try { media?.Dispose(); }
+                finally { CleanupTimeshiftFiles(); }
+            }
+        }
         LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=immediate callbacks=detached surface=detach-requested player=released media=released");
     }
 
@@ -872,5 +1029,59 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         private bool IsCurrent => Volatile.Read(ref _invalidated) == 0;
 
         public void Invalidate() => Interlocked.Exchange(ref _invalidated, 1);
+    }
+}
+
+internal static class LiveTimeshiftOptions
+{
+    // VLC 3 treats granularity as a per-file limit, not a cap on the whole paused backlog.
+    internal const int GranularityBytes = 50 * 1024 * 1024;
+    internal const int MaxCleanupFiles = 256;
+
+    internal static string DirectoryPath(string localAppData) =>
+        Path.IsPathFullyQualified(localAppData)
+            ? Path.Combine(localAppData, "Tvivo", "timeshift")
+            : throw new ArgumentException("Local app data path must be absolute.", nameof(localAppData));
+
+    internal static IReadOnlyList<string> ForMedia(StreamKind kind, bool enabled, string? path) =>
+        enabled && kind == StreamKind.Live && !string.IsNullOrWhiteSpace(path)
+            ? [$":input-timeshift-path={path}", $":input-timeshift-granularity={GranularityBytes}"]
+            : [];
+
+    internal static int CleanupStaleFiles(string directory)
+    {
+        if (!Directory.Exists(directory))
+            return 0;
+        ThrowIfReparseDirectory(Path.GetDirectoryName(directory)!);
+        ThrowIfReparseDirectory(directory);
+
+        var removed = 0;
+        foreach (var file in Directory.EnumerateFiles(directory, "vlc-timeshift.*", SearchOption.TopDirectoryOnly)
+                     .Take(MaxCleanupFiles))
+        {
+            var name = Path.GetFileName(file);
+            if (name.Length != "vlc-timeshift.".Length + 6 ||
+                !name.StartsWith("vlc-timeshift.", StringComparison.Ordinal) ||
+                !name["vlc-timeshift.".Length..].All(char.IsAsciiLetterOrDigit))
+                continue;
+
+            try
+            {
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                    continue;
+                File.Delete(file);
+                removed++;
+            }
+            catch (IOException) { } // Active files can still be held by native VLC.
+            catch (UnauthorizedAccessException) { }
+        }
+        return removed;
+    }
+
+    internal static void ThrowIfReparseDirectory(string directory)
+    {
+        if (Directory.Exists(directory) &&
+            (new DirectoryInfo(directory).Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Timeshift directory is a reparse point.");
     }
 }

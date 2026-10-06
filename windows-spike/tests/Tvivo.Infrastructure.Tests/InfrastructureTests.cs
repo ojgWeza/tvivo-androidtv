@@ -280,6 +280,51 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task Provider_retries_throttled_catalog_requests_and_honours_retry_after()
+    {
+        var calls = 0;
+        var waits = new List<TimeSpan>();
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            if (!request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (++calls <= 2)
+            {
+                var throttled = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                if (calls == 1) throttled.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(7));
+                return throttled;
+            }
+            return JsonResponse("live_streams.json");
+        })), delay: (wait, _) => { waits.Add(wait); return Task.CompletedTask; });
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+
+        var channels = await provider.GetChannelsAsync(account);
+
+        Assert.Equal(2, channels.Count);
+        Assert.Equal(3, calls);
+        Assert.Contains(TimeSpan.FromSeconds(7), waits);
+    }
+
+    [Fact]
+    public async Task Provider_gives_up_after_repeated_throttling()
+    {
+        var calls = 0;
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            if (!request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        })), delay: (_, _) => Task.CompletedTask);
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
+        var account = Assert.IsType<ProviderAccount>(authentication.Account);
+
+        var failure = await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetChannelsAsync(account));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, failure.StatusCode);
+        Assert.Equal(4, calls);
+    }
+
+    [Fact]
     public async Task Provider_requests_selected_group_channels()
     {
         string? catalogQuery = null;

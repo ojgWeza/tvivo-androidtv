@@ -31,7 +31,7 @@
 | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L361) | `GetCategoryMatchCounts` | _direct SQL, see §7_ | `items` |
 | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L325) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L325) | `GetChannels` | _direct SQL, see §7_ | `items` |
 | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L396) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L396) | `GetChannelsGroupedByCategory` | — | `items` |
-| [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | CALL | — ⚠️ | [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | — | — | — |
+| [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetContinueWatching`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L507) | — | — | — |
 | [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L624) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeProgressForSeries`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L624) | `GetEpisodeProgressForSeries` | _direct SQL, see §7_ | `media_progress` |
 | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L517) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L517) | `GetEpisodeResumePosition` | _direct SQL, see §7_ | `media_progress` |
 | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L493) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L493) | `GetFavorites` | _direct SQL, see §7_ | `favorites` |
@@ -72,7 +72,6 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `CatalogCategoryMatchCount` (CALL)
 - `CatalogPage` (CALL)
 - `For` (CALL)
-- `GetContinueWatching` (CALL)
 - `GetSuggestions` (CALL)
 - `MarkEpisodeUnwatched` (CALL)
 - `MarkEpisodeWatched` (CALL)
@@ -136,4 +135,4 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 
 ---
 
-Indexed 35 routes · 35 backend methods · 20 procs · 6 tables · 13 frontend files · 0 SQL files.
+Indexed 35 routes · 35 backend methods · 20 procs · 6 tables · 14 frontend files · 0 SQL files.

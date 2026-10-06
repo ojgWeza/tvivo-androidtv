@@ -11,6 +11,11 @@ public sealed partial class HomePage : UserControl
     private IReadOnlyList<Channel> _suggestions = Array.Empty<Channel>();
     private long _loadGeneration;
     private CatalogLandingPage? _artworkOwner;
+    private long _dataVersion;
+    private long _loadedDataVersion = -1;
+    private string? _loadedAccountId;
+
+    public void MarkDataChanged() => Interlocked.Increment(ref _dataVersion);
 
     public HomePage() => InitializeComponent();
 
@@ -37,6 +42,15 @@ public sealed partial class HomePage : UserControl
     public async Task LoadAsync(ProviderAccount? account, ProviderConnection? connection,
         SqliteCatalogRepository repository)
     {
+        var version = Volatile.Read(ref _dataVersion);
+        var sameAccount = _loadedAccountId == account?.AccountId;
+        if (CatalogReloadPolicy.ShouldReuseHome(_loadedDataVersion >= 0, sameAccount,
+                _loadedDataVersion == version))
+        {
+            LaunchDiagnostics.Write("event=home.load reason=navigation reused=true");
+            return;
+        }
+        LaunchDiagnostics.Write($"event=home.load reason={(sameAccount ? "data-changed" : "account-changed")} reused=false");
         var generation = Interlocked.Increment(ref _loadGeneration);
         SetupPanel.Visibility = account is null ? Visibility.Visible : Visibility.Collapsed;
         ShelvesPanel.Visibility = account is null ? Visibility.Collapsed : Visibility.Visible;
@@ -44,6 +58,8 @@ public sealed partial class HomePage : UserControl
         {
             _suggestionsAccountId = null;
             _suggestions = Array.Empty<Channel>();
+            _loadedAccountId = null;
+            _loadedDataVersion = version;
             ContinueGrid.ItemsSource = null;
             SuggestionsGrid.ItemsSource = null;
             return;
@@ -82,6 +98,8 @@ public sealed partial class HomePage : UserControl
             if (generation != Volatile.Read(ref _loadGeneration)) return;
             _suggestionsAccountId = account.AccountId;
             _suggestions = suggestions;
+            _loadedAccountId = account.AccountId;
+            _loadedDataVersion = version;
             ContinueGrid.ItemsSource = continueWatching.Select(channel => ToCard(channel, isContinueWatching: true,
                 progress.TryGetValue(channel.Id, out var itemProgress) ? itemProgress : null)).ToArray();
             ContinueSection.Visibility = continueWatching.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -91,31 +109,27 @@ public sealed partial class HomePage : UserControl
         {
             if (generation == Volatile.Read(ref _loadGeneration))
             {
-                ContinueGrid.ItemsSource = null;
-                SuggestionsGrid.ItemsSource = null;
-                ContinueSection.Visibility = Visibility.Collapsed;
+                LaunchDiagnostics.Write("event=home.load outcome=failure keptPrevious=true");
             }
         }
     }
 
     private static HomeShelfCard ToCard(Channel channel, bool isContinueWatching, PlaybackProgress? progress = null)
     {
-        var durationMs = progress?.DurationMs;
-        var hasMeasuredProgress = isContinueWatching && (channel.Source.Kind is StreamKind.Movie or StreamKind.Series) && durationMs is > 0;
-        var percent = hasMeasuredProgress ? Math.Clamp(progress!.ResumeMs * 100d / durationMs!.Value, 0, 100) : 0;
-        var minutesLeft = hasMeasuredProgress && durationMs!.Value > progress!.ResumeMs
-            ? (int?)Math.Ceiling((durationMs.Value - progress.ResumeMs) / 60_000d) : null;
-        var spoken = hasMeasuredProgress
-            ? $"{Math.Round(percent, MidpointRounding.AwayFromZero)} percent watched" + (minutesLeft is { } minutes ? $", {minutes} minute{(minutes == 1 ? "" : "s")} left" : string.Empty)
+        var resume = isContinueWatching
+            ? ContinueWatchingProgress.For(channel, progress)
+            : new ContinueWatchingProgress(false, 0, null);
+        var spoken = resume.HasMeasuredProgress
+            ? $"{Math.Round(resume.Percent, MidpointRounding.AwayFromZero)} percent watched" + (resume.MinutesLeft is { } minutes ? $", {minutes} minute{(minutes == 1 ? "" : "s")} left" : string.Empty)
             : string.Empty;
         return new(channel, channel.DisplayName, channel.LogoUri?.ToString(), channel.Source.Kind switch
         {
             StreamKind.Movie => "Movie",
             StreamKind.Series => isContinueWatching ? "Series · resume episode" : "Series",
             _ => "Live TV",
-        }, minutesLeft is { } remaining ? $"{remaining} min left" : string.Empty, hasMeasuredProgress,
-            percent, Math.Clamp(160 * percent / 100, 0, 160), spoken,
-            hasMeasuredProgress ? Visibility.Visible : Visibility.Collapsed);
+        }, resume.TimeLeft, resume.HasMeasuredProgress,
+            resume.Percent, Math.Clamp(160 * resume.Percent / 100, 0, 160), spoken,
+            resume.HasMeasuredProgress ? Visibility.Visible : Visibility.Collapsed);
     }
 
     private void Shelf_ItemClick(object sender, ItemClickEventArgs args)

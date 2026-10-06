@@ -661,6 +661,33 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Typed_continue_watching_is_filtered_and_ordered_by_latest_resume()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "movie-old", "", "Needle old"),
+                ChannelFor(account, "movie-new", "", "Needle new"),
+                ChannelFor(account, "movie-other", "", "Other title"),
+                ChannelFor(account, "movie-never", "", "Needle never resumed"),
+            });
+            repo.SaveProgress(account, "movie", "movie-old", null, 10_000, 100_000, false);
+            Thread.Sleep(15);
+            repo.SaveProgress(account, "movie", "movie-new", null, 20_000, 100_000, false);
+            repo.SaveProgress(account, "movie", "movie-other", null, 30_000, 100_000, false);
+
+            Assert.Equal(new[] { "movie-new", "movie-old" },
+                repo.GetContinueWatching(account, CatalogItemType.Movie, limit: 10, filter: "Needle")
+                    .Select(item => item.Id));
+            Assert.Empty(repo.GetContinueWatching(account, CatalogItemType.Movie, limit: 10, filter: "missing"));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Movie_completion_can_be_reversed_and_restores_movie_resume_fields()
     {
         var repo = Create(out var dir);

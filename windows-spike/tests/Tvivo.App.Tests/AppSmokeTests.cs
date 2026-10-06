@@ -8,6 +8,17 @@ namespace Tvivo.App.Tests;
 public sealed class AppSmokeTests
 {
     [Fact]
+    public void Tvivo_data_root_uses_override_and_preserves_default_path_shape()
+    {
+        Assert.Equal(Path.GetFullPath("D:/Scratch/msi-slice3/data"),
+            TvivoDataPaths.ResolveRoot("D:/Scratch/msi-slice3/data", "C:/Users/test/AppData/Local"));
+        Assert.Equal(Path.Combine("C:/Users/test/AppData/Local", "Tvivo"),
+            TvivoDataPaths.ResolveRoot(null, "C:/Users/test/AppData/Local"));
+        Assert.Equal(Path.Combine("C:/Users/test/AppData/Local", "Tvivo"),
+            TvivoDataPaths.ResolveRoot("  ", "C:/Users/test/AppData/Local"));
+    }
+
+    [Fact]
     public void Connection_error_copy_does_not_display_exception_details()
     {
         var sensitive = "https://private.example/account C:\\Users\\Someone\\secret.txt";
@@ -66,6 +77,8 @@ public sealed class AppSmokeTests
     {
         Assert.Equal(new[]
         {
+            "Continue watching Movies",
+            "Continue watching Series",
             "Recently added Movies",
             "Recently added Series",
             "Recently added Live TV",
@@ -78,6 +91,7 @@ public sealed class AppSmokeTests
         }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Title));
         Assert.Equal(new[]
         {
+            CatalogItemType.Movie, CatalogItemType.Series,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
@@ -105,13 +119,12 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
-    public void Player_return_layout_barrier_uses_current_page_for_every_catalog_mode()
+    public void Home_snapshot_is_reused_only_after_a_successful_load_for_same_account_and_data_version()
     {
-        foreach (var mode in Enum.GetValues<CatalogLandingPage.CatalogMode>())
-        {
-            Assert.True(CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(mode, currentPageIsPlayer: true));
-            Assert.False(CatalogTransitionPolicy.ShouldUsePlayerReturnLayoutBarrier(mode, currentPageIsPlayer: false));
-        }
+        Assert.True(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: true, sameAccount: true, dataVersionMatches: true));
+        Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: false, sameAccount: true, dataVersionMatches: true));
+        Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: true, sameAccount: false, dataVersionMatches: true));
+        Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: true, sameAccount: true, dataVersionMatches: false));
     }
 
     [Fact]

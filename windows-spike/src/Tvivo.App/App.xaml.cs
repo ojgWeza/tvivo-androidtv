@@ -62,6 +62,11 @@ public partial class App : Application
         try
         {
             LaunchDiagnostics.Write("OnLaunched entered");
+            if (Environment.GetEnvironmentVariable("TVIVO_NET_LOG") == "1")
+            {
+                NetworkTally.Log = LaunchDiagnostics.Write;
+                NetworkTally.StartPeriodicLog(TimeSpan.FromSeconds(30));
+            }
             _window ??= new MainWindow();
             ((MainWindow)_window).PrepareForActivation();
             LaunchDiagnostics.Write("MainWindow constructed; startup window state applied; activating");
@@ -108,10 +113,7 @@ internal static class LaunchDiagnostics
     private static readonly object Sync = new();
     private static readonly string SessionId = Guid.NewGuid().ToString("N");
     private const long MaxLogBytes = 1024 * 1024;
-    internal static string LogPath { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Tvivo",
-        "tvivo-launch.log");
+    internal static string LogPath { get; set; } = Tvivo.Core.TvivoDataPaths.For("tvivo-launch.log");
 
     public static void Write(string message)
     {

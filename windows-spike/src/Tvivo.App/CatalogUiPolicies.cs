@@ -19,18 +19,12 @@ public static class CatalogTransitionPolicy
 {
     public static bool ShouldAnimateIncomingContent(bool hasRenderedSnapshot, bool modeChanged) =>
         modeChanged || !hasRenderedSnapshot;
+}
 
-    public static bool ShouldUsePlayerReturnLayoutBarrier(
-        CatalogLandingPage.CatalogMode mode,
-        bool currentPageIsPlayer) =>
-        mode switch
-        {
-            CatalogLandingPage.CatalogMode.MyTvivo or
-            CatalogLandingPage.CatalogMode.Movies or
-            CatalogLandingPage.CatalogMode.Series or
-            CatalogLandingPage.CatalogMode.LiveTv => currentPageIsPlayer,
-            _ => false,
-        };
+public static class CatalogReloadPolicy
+{
+    public static bool ShouldReuseHome(bool hasSuccessfulLoad, bool sameAccount, bool dataVersionMatches) =>
+        hasSuccessfulLoad && sameAccount && dataVersionMatches;
 }
 
 public static class SpotlightIndicatorPolicy

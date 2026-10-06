@@ -270,42 +270,86 @@
                                         ToolTipService.ToolTip="Minimize" Click="CompactMinimizeButton_Click" />
                             </Grid>
                         </Border>
-                        <Border Grid.Row="2" Padding="10" Background="#CC000000"
+                        <Border Grid.Row="2" Padding="10,6,10,8" Background="#CC000000"
                                 PointerEntered="CompactControls_PointerEntered" PointerExited="CompactControls_PointerExited">
-                            <Grid ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                                <Button x:Name="CompactPauseButton" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                        Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Pause"
-                                        AutomationProperties.AutomationId="CompactPlayPauseButton" Click="PauseButton_Click" />
-                                <Button x:Name="CompactRewindButton" Grid.Column="1" Content="&#xEB9E;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Rewind 10 seconds" Click="RewindButton_Click"
-                                        PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
-                                        PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
-                                        LostFocus="SeekButton_LostFocus" />
-                                <ProgressBar x:Name="CompactProgressBar" Grid.Column="2" Height="3" MinHeight="3"
-                                             VerticalAlignment="Center" Minimum="0" Maximum="100" IsHitTestVisible="False"
-                                             Foreground="{StaticResource AppAccentBrush}" Background="#55FFFFFF"
-                                             AutomationProperties.Name="Mini player progress" />
-                                <TextBlock x:Name="CompactElapsedText" Grid.Column="4" VerticalAlignment="Center"
-                                           Foreground="White" FontSize="11" Text="0:00" />
-                                <Button x:Name="CompactForwardButton" Grid.Column="3" Content="&#xEB9D;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Forward 10 seconds" Click="ForwardButton_Click"
-                                        PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
-                                        PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
-                                        LostFocus="SeekButton_LostFocus" />
-                                <Button x:Name="CompactMuteButton" Grid.Column="5" Content="&#xE767;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Mute" AutomationProperties.AutomationId="CompactMuteButton"
-                                        ToolTipService.ToolTip="Mute" Click="ToggleMute_Click" />
+                            <Grid RowSpacing="2">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid x:Name="CompactSeekRow" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="CompactElapsedText" VerticalAlignment="Center"
+                                               Foreground="White" FontSize="11" Text="0:00" />
+                                    <Slider x:Name="CompactProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" IsEnabled="False"
+                                            VerticalAlignment="Center" IsThumbToolTipEnabled="False"
+                                            ValueChanged="CompactProgressSlider_ValueChanged"
+                                            PointerPressed="CompactProgressSlider_PointerPressed"
+                                            PointerReleased="CompactProgressSlider_PointerReleased"
+                                            PointerCaptureLost="CompactProgressSlider_PointerCaptureLost"
+                                            AutomationProperties.Name="Seek" AutomationProperties.AutomationId="CompactProgressSlider" />
+                                    <TextBlock x:Name="CompactDurationText" Grid.Column="2" VerticalAlignment="Center"
+                                               Foreground="White" FontSize="11" Text="0:00" />
+                                </Grid>
+                                <Grid Grid.Row="1" ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="CompactPreviousButton" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                            Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
+                                            AutomationProperties.Name="Previous episode" AutomationProperties.AutomationId="CompactPreviousButton"
+                                            ToolTipService.ToolTip="Previous episode" Click="PreviousEpisode_Click" />
+                                    <Button x:Name="CompactRewindButton" Grid.Column="1" Content="&#xEB9E;"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds"
+                                            Click="RewindButton_Click"
+                                            PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
+                                            PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
+                                            LostFocus="SeekButton_LostFocus" />
+                                    <Button x:Name="CompactPauseButton" Grid.Column="2" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                            Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Pause"
+                                            AutomationProperties.AutomationId="CompactPlayPauseButton" Click="PauseButton_Click" />
+                                    <Button x:Name="CompactForwardButton" Grid.Column="3" Content="&#xEB9D;"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds"
+                                            Click="ForwardButton_Click"
+                                            PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
+                                            PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
+                                            LostFocus="SeekButton_LostFocus" />
+                                    <Button x:Name="CompactNextButton" Grid.Column="4" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                            Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
+                                            AutomationProperties.Name="Next episode" AutomationProperties.AutomationId="CompactNextButton"
+                                            ToolTipService.ToolTip="Next episode" Click="NextEpisode_Click" />
+                                    <Button x:Name="CompactAudioSubtitlesButton" Grid.Column="6" Content="&#xED1E;"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            Visibility="Collapsed" AutomationProperties.Name="Audio and subtitles"
+                                            AutomationProperties.AutomationId="CompactAudioSubtitlesButton"
+                                            ToolTipService.ToolTip="Audio &amp; subtitles">
+                                        <Button.Flyout>
+                                            <MenuFlyout x:Name="CompactAudioSubtitlesFlyout" />
+                                        </Button.Flyout>
+                                    </Button>
+                                    <Button x:Name="CompactMuteButton" Grid.Column="7" Content="&#xE767;"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            AutomationProperties.Name="Mute" AutomationProperties.AutomationId="CompactMuteButton"
+                                            ToolTipService.ToolTip="Mute" Click="ToggleMute_Click" />
+                                    <Slider x:Name="CompactVolumeSlider" Grid.Column="8" Width="80" Minimum="0" Maximum="100" Value="100"
+                                            VerticalAlignment="Center" IsThumbToolTipEnabled="False"
+                                            ValueChanged="CompactVolumeSlider_ValueChanged"
+                                            AutomationProperties.Name="Volume" AutomationProperties.AutomationId="CompactVolumeSlider" />
+                                </Grid>
                             </Grid>
                         </Border>
                         </Grid>

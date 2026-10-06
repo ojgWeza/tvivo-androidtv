@@ -34,7 +34,7 @@ public sealed class SqliteCatalogRepository : IDisposable
 
     public SqliteCatalogRepository(string? databasePath = null)
     {
-        databasePath ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tvivo", "winui-catalog.sqlite");
+        databasePath ??= TvivoDataPaths.For("winui-catalog.sqlite");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
         using var connection = Open();
@@ -504,8 +504,8 @@ public sealed class SqliteCatalogRepository : IDisposable
             "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)",
             "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, items.type, items.id", limit, filter);
 
-    public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100)
-        => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit);
+    public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+        => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit, filter);
 
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, ProviderConnection? connection = null, int limit = 50)
         => GetOrderedItemsAcrossTypes(account, connection,

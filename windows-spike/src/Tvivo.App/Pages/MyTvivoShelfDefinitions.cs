@@ -4,6 +4,7 @@ namespace Tvivo.App.Pages;
 
 public enum MyTvivoShelfKind
 {
+    ContinueWatching,
     RecentlyAdded,
     RecentlyPlayed,
     Favorites,
@@ -19,6 +20,8 @@ public static class MyTvivoShelfDefinitions
 {
     public static IReadOnlyList<MyTvivoShelfDefinition> All { get; } = Array.AsReadOnly(new[]
     {
+        new MyTvivoShelfDefinition("__my_continue_movie", "Continue watching Movies", CatalogItemType.Movie, MyTvivoShelfKind.ContinueWatching),
+        new MyTvivoShelfDefinition("__my_continue_series", "Continue watching Series", CatalogItemType.Series, MyTvivoShelfKind.ContinueWatching),
         new MyTvivoShelfDefinition("__my_added_movie", "Recently added Movies", CatalogItemType.Movie, MyTvivoShelfKind.RecentlyAdded),
         new MyTvivoShelfDefinition("__my_added_series", "Recently added Series", CatalogItemType.Series, MyTvivoShelfKind.RecentlyAdded),
         new MyTvivoShelfDefinition("__my_added_live", "Recently added Live TV", CatalogItemType.Live, MyTvivoShelfKind.RecentlyAdded),
