@@ -18,7 +18,7 @@
                         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <TextBox x:Name="HostBox" Header="Server host" PlaceholderText="panel.example.com" />
-                    <TextBox x:Name="PortBox" Grid.Column="1" Header="Port" PlaceholderText="8080" />
+                    <TextBox x:Name="PortBox" Grid.Column="1" Header="Port (optional)" PlaceholderText="leave empty" />
                     <ComboBox x:Name="SchemeBox" Grid.Row="1" Header="Connection" SelectedIndex="0" Width="180">
                         <ComboBoxItem Content="http" /><ComboBoxItem Content="https" />
                     </ComboBox>

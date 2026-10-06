@@ -1,5 +1,7 @@
 namespace Tvivo.Core;
 
+// Port 0 means "no port": the provider is reached on the scheme default (80 / 443) and no port is
+// written into any URL.
 public sealed record ProviderEndpoint(string Scheme, string Host, int Port);
 
 public sealed record ProviderAccount(

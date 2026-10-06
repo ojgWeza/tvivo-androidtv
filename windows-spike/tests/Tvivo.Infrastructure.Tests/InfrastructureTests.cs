@@ -325,6 +325,55 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task Empty_port_uses_the_default_port_everywhere_and_ignores_the_port_the_panel_reports()
+    {
+        var requested = new List<Uri>();
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            requested.Add(request.RequestUri!);
+            return request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
+                ? JsonResponse("live_streams.json")
+                : JsonResponse("auth_success.json"); // reports "port":"8080"
+        })), delay: (_, _) => Task.CompletedTask);
+
+        foreach (var scheme in new[] { "http", "https" })
+        {
+            requested.Clear();
+            var connection = new ProviderConnection(Endpoint(port: 0, scheme: scheme), "u", "p");
+            var authentication = await provider.AuthenticateAsync(connection);
+            var account = Assert.IsType<ProviderAccount>(authentication.Account);
+            Assert.Equal(0, account.Endpoint.Port);
+            await provider.GetChannelsAsync(account);
+
+            Assert.Equal(2, requested.Count);
+            Assert.All(requested, uri =>
+            {
+                Assert.True(uri.IsDefaultPort, uri.Scheme + " request carried a port");
+                Assert.DoesNotContain(":0", uri.Authority);
+                Assert.DoesNotContain("8080", uri.Authority);
+            });
+        }
+    }
+
+    [Fact]
+    public void Stream_urls_omit_the_port_when_it_is_empty_and_keep_an_explicit_one()
+    {
+        var none = Endpoint(port: 0);
+        Assert.Equal("http://panel.example.com/live/u/p/1.ts", StreamUrlBuilder.Live(none, "u", "p", "1", null));
+        Assert.Equal("http://panel.example.com/movie/u/p/2.mkv", StreamUrlBuilder.Vod(none, "u", "p", "2", "mkv"));
+        Assert.Equal("http://panel.example.com/series/u/p/3.mp4", StreamUrlBuilder.Series(none, "u", "p", "3", "mp4"));
+        Assert.Equal("http://panel.example.com:8080/live/u/p/1.ts", StreamUrlBuilder.Live(Endpoint(), "u", "p", "1", null));
+    }
+
+    [Fact]
+    public async Task Explicit_port_still_follows_the_port_the_panel_reports()
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((_, _) => JsonResponse("auth_success.json"))));
+        var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(port: 80), "u", "p"));
+        Assert.Equal(8080, Assert.IsType<ProviderAccount>(authentication.Account).Endpoint.Port);
+    }
+
+    [Fact]
     public async Task Provider_requests_selected_group_channels()
     {
         string? catalogQuery = null;

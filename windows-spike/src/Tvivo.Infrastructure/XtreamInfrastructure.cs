@@ -68,7 +68,11 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
 
             var server = root.TryGetProperty("server_info", out var serverInfo) && serverInfo.ValueKind == JsonValueKind.Object
                 ? serverInfo : default;
-            var port = JsonValue.Int(server, "port") ?? connection.Endpoint.Port;
+            // An empty port means the provider is reached on its default port; the port the panel reports
+            // for itself (often an internal one) must not replace that.
+            var port = connection.Endpoint.Port > 0
+                ? JsonValue.Int(server, "port") ?? connection.Endpoint.Port
+                : 0;
             var endpoint = connection.Endpoint with { Port = port };
             var accountId = AccountIdentity.For(endpoint, connection.Username);
             var account = new ProviderAccount(
@@ -506,9 +510,13 @@ public sealed record ServerAddress(string Host, int? Port, bool UseHttps)
 
 internal static class XtreamRequest
 {
+    // UriBuilder treats -1 as "scheme default port"; 0 would produce ":0".
+    private static UriBuilder Builder(ProviderConnection connection, string path) =>
+        new(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port > 0 ? connection.Endpoint.Port : -1, path);
+
     public static Uri Uri(ProviderConnection connection, string path, string? action = null, string? groupId = null)
     {
-        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, path);
+        var builder = Builder(connection, path);
         var query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}";
         if (action is not null) query += $"&action={WebUtility.UrlEncode(action)}";
         if (groupId is not null) query += $"&category_id={WebUtility.UrlEncode(groupId)}";
@@ -518,14 +526,14 @@ internal static class XtreamRequest
 
     public static Uri SeriesInfoUri(ProviderConnection connection, string seriesId)
     {
-        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "player_api.php");
+        var builder = Builder(connection, "player_api.php");
         builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_series_info&series_id={WebUtility.UrlEncode(seriesId)}";
         return builder.Uri;
     }
 
     public static Uri VodInfoUri(ProviderConnection connection, string movieId)
     {
-        var builder = new UriBuilder($"{connection.Endpoint.Scheme}://{connection.Endpoint.Host}:{connection.Endpoint.Port}/player_api.php")
+        var builder = new UriBuilder(Builder(connection, "player_api.php").Uri)
         {
             Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_vod_info&vod_id={WebUtility.UrlEncode(movieId)}"
         };
@@ -534,14 +542,14 @@ internal static class XtreamRequest
 
     public static Uri ShortEpgUri(ProviderConnection connection, string streamId)
     {
-        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "player_api.php");
+        var builder = Builder(connection, "player_api.php");
         builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}&action=get_short_epg&stream_id={WebUtility.UrlEncode(streamId)}&limit=20";
         return builder.Uri;
     }
 
     public static Uri XmltvUri(ProviderConnection connection)
     {
-        var builder = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host, connection.Endpoint.Port, "xmltv.php");
+        var builder = Builder(connection, "xmltv.php");
         builder.Query = $"username={WebUtility.UrlEncode(connection.Username)}&password={WebUtility.UrlEncode(connection.Password)}";
         return builder.Uri;
     }

@@ -100,7 +100,9 @@ public sealed partial class AccountPage : UserControl
 
         DisplayNameText.Text = string.IsNullOrWhiteSpace(account.DisplayName) ? account.Username : account.DisplayName;
         UsernameText.Text = account.Username;
-        ServerText.Text = $"{account.Endpoint.Scheme}://{account.Endpoint.Host}:{account.Endpoint.Port}";
+        ServerText.Text = account.Endpoint.Port > 0
+            ? $"{account.Endpoint.Scheme}://{account.Endpoint.Host}:{account.Endpoint.Port}"
+            : $"{account.Endpoint.Scheme}://{account.Endpoint.Host}";
         MaxConnectionsText.Text = account.MaxConnections is { } max ? max.ToString() : "Unknown";
 
         if (account.ExpiresAt is not { } expiresAt)

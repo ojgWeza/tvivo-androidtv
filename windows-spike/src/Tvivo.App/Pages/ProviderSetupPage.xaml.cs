@@ -40,7 +40,7 @@ public sealed partial class ProviderSetupPage : UserControl
             if (saved is null) return;
             if (generation != _credentialGeneration) return;
             HostBox.Text = saved.Endpoint.Host;
-            PortBox.Text = saved.Endpoint.Port.ToString();
+            PortBox.Text = saved.Endpoint.Port > 0 ? saved.Endpoint.Port.ToString() : string.Empty;
             SchemeBox.SelectedIndex = saved.Endpoint.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
             UsernameBox.Text = saved.Username;
             PasswordBox.Password = saved.Password;
@@ -59,9 +59,12 @@ public sealed partial class ProviderSetupPage : UserControl
             ShowError("Enter the server host, username, and password.");
             return;
         }
-        if (!int.TryParse(PortBox.Text, out var port) || port is < 1 or > 65535)
+        // The port is optional: empty means the provider's default port (nothing is added to the address).
+        var port = 0;
+        if (!string.IsNullOrWhiteSpace(PortBox.Text) &&
+            (!int.TryParse(PortBox.Text.Trim(), out port) || port is < 1 or > 65535))
         {
-            ShowError("Enter a port from 1 to 65535.");
+            ShowError("Enter a port from 1 to 65535, or leave it empty.");
             return;
         }
 
