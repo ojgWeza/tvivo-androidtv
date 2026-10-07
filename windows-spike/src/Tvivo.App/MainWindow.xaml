@@ -154,6 +154,10 @@
                             Click="PlayerBackButton_Click" AutomationProperties.Name="Back to catalog" />
                     <Button x:Name="PlayerHomeButton" Content="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Go home"
                             Click="PlayerHomeButton_Click" AutomationProperties.Name="Go home" />
+                    <Button Content="Copy diagnostics" Click="CopyDiagnostics_Click"
+                            AutomationProperties.Name="Copy diagnostics" />
+                    <TextBlock x:Name="CopyDiagnosticsStatus" VerticalAlignment="Center"
+                               Foreground="{StaticResource AppMutedTextBrush}" />
                 </StackPanel>
                 <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
                     <Grid.ColumnDefinitions>

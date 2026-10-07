@@ -15,6 +15,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Windows.ApplicationModel.DataTransfer;
 using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
@@ -895,6 +896,7 @@ public sealed partial class MainWindow : Window
 
     private void AccountPage_SignOutCompleted(object? sender, EventArgs args)
     {
+        LaunchDiagnostics.ClearActiveSecrets();
         Interlocked.Increment(ref _catalogRequestGeneration);
         _catalogLandingPage.ClearAccountState();
         _providerSetupPage.ClearCredentials();
@@ -906,6 +908,7 @@ public sealed partial class MainWindow : Window
         // Same UI reset as sign-out, but intentionally does not touch the credential store:
         // if the user backs out of setup without connecting, the previous account's saved
         // credentials are still there next launch.
+        LaunchDiagnostics.ClearActiveSecrets();
         Interlocked.Increment(ref _catalogRequestGeneration);
         _catalogLandingPage.ClearAccountState();
         _providerSetupPage.ClearCredentials();
@@ -931,6 +934,8 @@ public sealed partial class MainWindow : Window
         else
             await _catalogLandingPage.LoadAsync(_catalogLandingPage.Account,
                 reason: returningFromPlayer ? "player-return" : "navigation");
+        if (_catalogLandingPage.Connection is { } activeConnection && _catalogLandingPage.Account is not null)
+            LaunchDiagnostics.SetActiveSecrets(activeConnection);
         if (generation == Volatile.Read(ref _catalogRequestGeneration))
             UpdateTopNavigationState();
         TraceBackTransition($"show-catalog-complete generation={generation}");
@@ -938,11 +943,20 @@ public sealed partial class MainWindow : Window
 
     private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
     {
+        LaunchDiagnostics.SetActiveSecrets(args.Connection);
         _homePage.MarkDataChanged();
         Interlocked.Increment(ref _catalogRequestGeneration);
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
         await _catalogLandingPage.LoadAsync(args.Account, args.Connection, reason: "account-change");
         UpdateTopNavigationState();
+    }
+
+    private void CopyDiagnostics_Click(object sender, RoutedEventArgs args)
+    {
+        var package = new DataPackage();
+        package.SetText(LaunchDiagnostics.ExportRecent());
+        Clipboard.SetContent(package);
+        CopyDiagnosticsStatus.Text = "Diagnostics copied";
     }
 
     private void ShowPage(ShellPage page, bool updateTopNavigation = true)
@@ -1988,7 +2002,6 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             LaunchDiagnostics.Write($"Playback start failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
-            LaunchDiagnostics.Write("Playback start failure stack: " + (exception.StackTrace ?? string.Empty).Replace("\r", string.Empty).Replace("\n", " | "));
             result = PlaybackAttemptResult.HostFailure;
         }
         finally

@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 using Tvivo.Playback;
@@ -45,10 +47,10 @@ public partial class App : Application
         var debugSettings = DebugSettings;
         debugSettings.IsXamlResourceReferenceTracingEnabled = true;
         debugSettings.IsBindingTracingEnabled = true;
-        debugSettings.XamlResourceReferenceFailed += (_, args) =>
-            LaunchDiagnostics.Write($"XAML resource reference failed: {args.Message}");
-        debugSettings.BindingFailed += (_, args) =>
-            LaunchDiagnostics.Write($"XAML binding failed: {args.Message}");
+        debugSettings.XamlResourceReferenceFailed += (_, _) =>
+            LaunchDiagnostics.Write("XAML resource reference failed");
+        debugSettings.BindingFailed += (_, _) =>
+            LaunchDiagnostics.Write("XAML binding failed");
 #if TVIVO_XAML_DIAGNOSTICS
         debugSettings.FailFastOnErrors = true;
         LaunchDiagnostics.Write("XAML diagnostics enabled: FailFastOnErrors=true");
@@ -111,18 +113,38 @@ public partial class App : Application
 internal static class LaunchDiagnostics
 {
     private static readonly object Sync = new();
+    private static readonly SecretScrubber Scrubber = new();
     private static readonly string SessionId = Guid.NewGuid().ToString("N");
     private const long MaxLogBytes = 1024 * 1024;
+    private const int MaxExportLines = 200;
+    private const int MaxExportChars = 32768;
     internal static string LogPath { get; set; } = Tvivo.Core.TvivoDataPaths.For("tvivo-launch.log");
+
+    public static void SetActiveSecrets(ProviderConnection connection) =>
+        Scrubber.SetActiveSecrets(connection.Endpoint.Host, connection.Username, connection.Password);
+
+    public static void ClearActiveSecrets() => Scrubber.Clear();
+
+    private static string Sanitize(string message)
+    {
+        // Values are replaced first: a bare media path, quoted MRL or exception message
+        // may contain credentials without a URL scheme or named field.
+        var safeMessage = Scrubber.Scrub(message);
+        safeMessage = Regex.Replace(safeMessage,
+            @"(?i)\b(?:https?|rtsp)://[^\s\]\)\}""']+", "[redacted-url]");
+        safeMessage = Regex.Replace(safeMessage,
+            @"(?i)/(?:series|movie|live)/[^/\s""']+/[^/\s""']+/[^\s\)\}""']+", "[redacted-path]");
+        safeMessage = Regex.Replace(safeMessage,
+            @"(?i)\b(?:username|password|accountid|account_id|itemid|item_id|streamid|stream_id|episodeid|episode_id)\s*[=:]\s*[^\s;,]+", "[redacted-field]");
+        safeMessage = Regex.Replace(safeMessage,
+            @"(?i)\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+", "[redacted-cookie]");
+        if (safeMessage.Length > 4096) safeMessage = safeMessage[..4096] + "[truncated]";
+        return safeMessage;
+    }
 
     public static void Write(string message)
     {
-        // Exception messages can contain a provider URI; never persist its authority or query.
-        var safeMessage = System.Text.RegularExpressions.Regex.Replace(
-            message, @"(?i)\b(?:https?|rtsp)://[^\s\]\)\}""']+", "[redacted-url]");
-        safeMessage = System.Text.RegularExpressions.Regex.Replace(
-            safeMessage, @"(?i)\b(?:username|password|accountid|account_id)\s*[=:]\s*[^\s;,]+", "[redacted-field]");
-        if (safeMessage.Length > 4096) safeMessage = safeMessage[..4096] + "[truncated]";
+        var safeMessage = Sanitize(message);
         var line = $"{DateTimeOffset.Now:O} session={SessionId} {safeMessage}{Environment.NewLine}";
         Debug.Write(line);
         try
@@ -130,28 +152,55 @@ internal static class LaunchDiagnostics
             lock (Sync)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-                if (File.Exists(LogPath) && new FileInfo(LogPath).Length + System.Text.Encoding.UTF8.GetByteCount(line) > MaxLogBytes)
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length + Encoding.UTF8.GetByteCount(line) > MaxLogBytes)
                     File.Move(LogPath, LogPath + ".1", overwrite: true);
                 File.AppendAllText(LogPath, line);
             }
         }
-        catch (Exception exception)
+        catch
         {
-            Debug.WriteLine($"Unable to write tvivo-launch.log: {exception}");
+            Debug.WriteLine("Unable to write tvivo-launch.log");
+        }
+    }
+
+    public static string ExportRecent()
+    {
+        lock (Sync)
+        {
+            try
+            {
+                if (!File.Exists(LogPath)) return "No diagnostics available.";
+                var lines = new Queue<string>();
+                foreach (var line in File.ReadLines(LogPath))
+                {
+                    if (!line.Contains($"session={SessionId} ", StringComparison.Ordinal)) continue;
+                    lines.Enqueue(Sanitize(line));
+                    if (lines.Count > MaxExportLines) lines.Dequeue();
+                }
+                var output = string.Join(Environment.NewLine, lines);
+                return output.Length > MaxExportChars ? output[^MaxExportChars..] : output;
+            }
+            catch
+            {
+                return "Diagnostics could not be read.";
+            }
         }
     }
 
     public static void WriteException(string message, Exception exception) =>
-        Write($"{message}: {exception}");
+        Write(Scrubber.HasActiveSecrets
+            ? $"{message}: {exception.GetType().Name}: {exception.Message}"
+            : $"Exception before account registration: {exception.GetType().Name} (message omitted)");
 
     public static void WriteExceptionDetails(string message, Exception exception)
     {
+        var label = Scrubber.HasActiveSecrets ? message : "Exception before account registration";
         WriteException(message, exception);
-        Write($"{message} hresult: 0x{exception.HResult:X8}");
+        Write($"{label} hresult: 0x{exception.HResult:X8}");
         for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
         {
-            Write($"{message} inner: {inner.GetType().Name}");
-            Write($"{message} inner hresult: 0x{inner.HResult:X8}");
+            Write($"{label} inner: {inner.GetType().Name}");
+            Write($"{label} inner hresult: 0x{inner.HResult:X8}");
         }
     }
 }
