@@ -13,6 +13,52 @@ public sealed class InfrastructureTests
     private static ProviderEndpoint Endpoint(string host = "panel.example.com", int port = 8080, string scheme = "http") => new(scheme, host, port);
 
     [Fact]
+    public void Catalog_refresh_policy_survives_restart_and_failed_atomic_replacement()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-options-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "catalog-options.json");
+        try
+        {
+            Assert.Equal(CatalogRefreshPolicy.OlderThanOneDay, new CatalogRefreshPolicyStore(path).Read());
+            foreach (var policy in Enum.GetValues<CatalogRefreshPolicy>())
+            {
+                new CatalogRefreshPolicyStore(path).Write(policy);
+                Assert.Equal(policy, new CatalogRefreshPolicyStore(path).Read());
+            }
+            var failed = new CatalogRefreshPolicyStore(path, (_, _) => throw new IOException("fixture replacement failure"));
+            Assert.Throws<IOException>(() => failed.Write(CatalogRefreshPolicy.OnDemandOnly));
+            Assert.Equal(CatalogRefreshPolicy.EveryStart, new CatalogRefreshPolicyStore(path).Read());
+            Assert.Single(Directory.GetFiles(directory));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Refresh_due_and_retry_primitives_are_per_type()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        Assert.True(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OnDemandOnly, null, now));
+        Assert.False(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OnDemandOnly, now.AddDays(-30), now));
+        Assert.False(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OlderThanOneDay, now.AddHours(-23), now));
+        Assert.True(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OlderThanOneDay, now.AddDays(-1), now));
+        Assert.False(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OlderThanSevenDays, now.AddDays(-6), now));
+        Assert.True(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.OlderThanSevenDays, now.AddDays(-7), now));
+        Assert.True(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.EveryStart, now, now));
+        Assert.False(CatalogRefreshPolicyStore.IsDue(CatalogRefreshPolicy.EveryStart, now, now, refreshedThisStart: true));
+
+        var retry = new CatalogRefreshRetry();
+        Assert.Equal(now.AddSeconds(20), retry.RecordFailure("account-a", CatalogItemType.Live, now));
+        Assert.True(retry.CanAttempt("account-a", CatalogItemType.Movie, now));
+        Assert.True(retry.CanAttempt("account-b", CatalogItemType.Live, now));
+        Assert.False(retry.CanAttempt("account-a", CatalogItemType.Live, now.AddSeconds(19)));
+        Assert.Equal(now.AddSeconds(60), retry.RecordFailure("account-a", CatalogItemType.Live, now));
+        Assert.Equal(now.AddHours(1), retry.RecordFailure("account-a", CatalogItemType.Live, now));
+        retry.RecordSuccess("account-a", CatalogItemType.Live);
+        Assert.True(retry.CanAttempt("account-a", CatalogItemType.Live, now));
+    }
+
+    [Fact]
     public void LiveUrl_encodes_credentials_and_defaults_extension()
     {
         var uri = StreamUrlBuilder.Live(Endpoint(), "user name", "p@ss/word", "opaque/id", "");

@@ -824,10 +824,12 @@ public sealed class SqliteCatalogRepositoryTests
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account,"g","News") }, new[] { ChannelFor(account,"old","g","Old") });
+            var stamped = repo.GetLastRefreshSuccess(account, CatalogItemType.Live);
             Assert.Throws<Microsoft.Data.Sqlite.SqliteException>(() => repo.ReplaceSnapshot(account, CatalogItemType.Live,
                 new[] { Group(account,"new","New") }, new[] { ChannelFor(account,"dup","new","First"), ChannelFor(account,"dup","new","Duplicate") }));
             Assert.Equal("News", Assert.Single(repo.GetGroups(account, CatalogItemType.Live)).Name);
             Assert.Equal("old", Assert.Single(repo.GetChannels(account, CatalogItemType.Live).Items).Id);
+            Assert.Equal(stamped, repo.GetLastRefreshSuccess(account, CatalogItemType.Live));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
@@ -871,6 +873,7 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Empty(repo.GetGroups(account, CatalogItemType.Live));
             Assert.Empty(repo.GetChannels(account, CatalogItemType.Live).Items);
             Assert.Equal(0, repo.GetChannels(account, CatalogItemType.Live).TotalCount);
+            Assert.NotNull(repo.GetLastRefreshSuccess(account, CatalogItemType.Live));
             // CatalogLandingPage selects EmptyState when both these cache-backed reads are empty.
             Assert.True(repo.GetGroups(account, CatalogItemType.Live).Count == 0 && repo.GetChannels(account, CatalogItemType.Live).TotalCount == 0);
         }
@@ -904,6 +907,66 @@ public sealed class SqliteCatalogRepositoryTests
         finally { repo.Dispose(); Directory.Delete(dir, true); }
     }
 
+    [Fact]
+    public void Refresh_state_is_additive_and_a_schema_16_reader_keeps_user_data()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var at = DateTimeOffset.FromUnixTimeMilliseconds(1_800_000_000_000);
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
+                new[] { ChannelAdded(account, CatalogItemType.Movie, "movie", at) }, at);
+            repo.AddFavorite(account, CatalogItemType.Movie, "movie");
+            repo.UpdateResumePosition(account, CatalogItemType.Movie, "movie", 42_000);
+            repo.RecordVisit(account, CatalogItemType.Movie, "movie");
+
+            using var legacyReader = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")};Pooling=False");
+            legacyReader.Open();
+            using var command = legacyReader.CreateCommand();
+            command.CommandText = "PRAGMA user_version";
+            Assert.Equal(16, Convert.ToInt32(command.ExecuteScalar()));
+            command.CommandText = "SELECT favourite,resume_ms,visit_count FROM items WHERE account_id='account-a' AND type='Movie' AND id='movie'";
+            using (var oldRow = command.ExecuteReader())
+            {
+                Assert.True(oldRow.Read());
+                Assert.Equal(1, oldRow.GetInt32(0));
+                Assert.Equal(42_000L, oldRow.GetInt64(1));
+                Assert.Equal(1, oldRow.GetInt32(2));
+            }
+            command.CommandText = "SELECT COUNT(*) FROM favorites WHERE account_id='account-a' AND type='Movie' AND item_id='movie'";
+            Assert.Equal(1, Convert.ToInt32(command.ExecuteScalar()));
+            Assert.Equal(at, repo.GetLastRefreshSuccess(account, CatalogItemType.Movie));
+            Assert.Null(repo.GetLastRefreshSuccess(account, CatalogItemType.Live));
+        }
+        finally { repo.Dispose(); SqliteConnection.ClearAllPools(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task Live_commit_survives_movie_failure_and_empty_response_preserves_stamp()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var old = DateTimeOffset.FromUnixTimeMilliseconds(1_800_000_000_000);
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
+                new[] { ChannelAdded(account, CatalogItemType.Movie, "old-movie", old) }, old);
+            var provider = new FailMovieProvider();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new CatalogRefreshService(provider, repo).RefreshAsync(account));
+            Assert.Equal(1, provider.LiveCalls);
+            Assert.Equal(1, provider.MovieCalls);
+            Assert.NotNull(repo.GetLastRefreshSuccess(account, CatalogItemType.Live));
+            Assert.Equal(old, repo.GetLastRefreshSuccess(account, CatalogItemType.Movie));
+            Assert.Null(repo.GetLastRefreshSuccess(account, CatalogItemType.Series));
+            Assert.Equal("old-movie", Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items).Id);
+
+            Assert.False(await new CatalogRefreshService(new EmptyProvider(), repo).RefreshTypeAsync(account, CatalogItemType.Movie));
+            Assert.False(repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "new", "New") }, Array.Empty<Channel>()));
+            Assert.Equal(old, repo.GetLastRefreshSuccess(account, CatalogItemType.Movie));
+            Assert.Equal("old-movie", Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items).Id);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
     private abstract class ProviderBase : ICatalogProvider
     {
         public Task<AuthenticationResult> AuthenticateAsync(ProviderConnection c, CancellationToken t = default) => Task.FromResult(AuthenticationResult.Succeeded(Account()));
@@ -931,6 +994,19 @@ public sealed class SqliteCatalogRepositoryTests
     {
         public override Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, CancellationToken t = default) => Task.FromResult<IReadOnlyList<ChannelGroup>>(Array.Empty<ChannelGroup>());
         public override Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken t = default) => Task.FromResult<IReadOnlyList<Channel>>(Array.Empty<Channel>());
+    }
+    private sealed class FailMovieProvider : ProviderBase
+    {
+        public int LiveCalls { get; private set; }
+        public int MovieCalls { get; private set; }
+        public override Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, CancellationToken t = default) =>
+            Task.FromResult<IReadOnlyList<ChannelGroup>>(Array.Empty<ChannelGroup>());
+        public override Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount a, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken t = default)
+        {
+            if (type == CatalogItemType.Movie) { MovieCalls++; throw new InvalidOperationException("fixture movie failure"); }
+            if (type == CatalogItemType.Live) LiveCalls++;
+            return Task.FromResult<IReadOnlyList<Channel>>(new[] { ChannelAdded(a, type, type.ToString(), DateTimeOffset.UtcNow) });
+        }
     }
     private sealed class FixtureHandler(Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> responder) : HttpMessageHandler
     {

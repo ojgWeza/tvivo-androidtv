@@ -104,6 +104,9 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 15)
                 MigrateMediaProgress(connection);
         }
+        using var refreshState = connection.CreateCommand();
+        refreshState.CommandText = "CREATE TABLE IF NOT EXISTS catalog_refresh_state(account_id TEXT NOT NULL,type TEXT NOT NULL,last_success_utc_ms INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
+        refreshState.ExecuteNonQuery();
     }
 
     private static void MigrateMediaProgress(SqliteConnection connection)
@@ -294,11 +297,20 @@ public sealed class SqliteCatalogRepository : IDisposable
         return $"{bucket}{cleaned}";
     }
 
-    public void ReplaceSnapshot(ProviderAccount account, CatalogItemType type, IReadOnlyList<ChannelGroup> groups, IReadOnlyList<Channel> channels)
+    public bool ReplaceSnapshot(ProviderAccount account, CatalogItemType type, IReadOnlyList<ChannelGroup> groups, IReadOnlyList<Channel> channels, DateTimeOffset? successAt = null)
     {
         var typeName = TypeName(type);
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        if (channels.Count == 0)
+        {
+            using var existing = connection.CreateCommand();
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT (SELECT COUNT(*) FROM categories WHERE account_id=$a AND type=$type) + (SELECT COUNT(*) FROM items WHERE account_id=$a AND type=$type)";
+            existing.Parameters.AddWithValue("$a", account.AccountId);
+            existing.Parameters.AddWithValue("$type", typeName);
+            if (Convert.ToInt64(existing.ExecuteScalar()) > 0) return false;
+        }
         Execute(connection, transaction, "DELETE FROM categories WHERE account_id=$account AND type=$type; DROP TABLE IF EXISTS temp.incoming_item_ids; CREATE TEMP TABLE incoming_item_ids(id TEXT PRIMARY KEY);", ("$account", account.AccountId), ("$type", typeName));
         for (var i = 0; i < groups.Count; i++)
             Execute(connection, transaction, "INSERT INTO categories(account_id,type,id,name,position) VALUES($a,$type,$id,$name,$pos)", ("$a", account.AccountId), ("$type", typeName), ("$id", groups[i].Id), ("$name", groups[i].Name), ("$pos", groups[i].SortOrder ?? i));
@@ -310,7 +322,21 @@ public sealed class SqliteCatalogRepository : IDisposable
         }
         Execute(connection, transaction, "DELETE FROM items WHERE account_id=$a AND type=$type AND id NOT IN (SELECT id FROM incoming_item_ids)",
             ("$a", account.AccountId), ("$type", typeName));
+        Execute(connection, transaction, "INSERT INTO catalog_refresh_state(account_id,type,last_success_utc_ms) VALUES($a,$type,$at) ON CONFLICT(account_id,type) DO UPDATE SET last_success_utc_ms=excluded.last_success_utc_ms",
+            ("$a", account.AccountId), ("$type", typeName), ("$at", (successAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds()));
         transaction.Commit();
+        return true;
+    }
+
+    public DateTimeOffset? GetLastRefreshSuccess(ProviderAccount account, CatalogItemType type)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT last_success_utc_ms FROM catalog_refresh_state WHERE account_id=$a AND type=$type";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        var value = command.ExecuteScalar();
+        return value is null ? null : DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(value));
     }
 
     public IReadOnlyList<ChannelGroup> GetGroups(ProviderAccount account, CatalogItemType type)
