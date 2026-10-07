@@ -11,8 +11,10 @@ public static class EpisodeCompletion
     private const long MinimumDurationForTailMilliseconds = 60_000;
 
     public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended) =>
-        ended || durationMilliseconds is { } duration && duration >= MinimumDurationForTailMilliseconds &&
-        duration - Math.Clamp(positionMilliseconds, 0, duration) <= TailMilliseconds;
+        ended
+            ? PlaybackEndPolicy.IsGenuineEnd(positionMilliseconds, durationMilliseconds, ended)
+            : durationMilliseconds is { } duration && duration >= MinimumDurationForTailMilliseconds &&
+              duration - Math.Clamp(positionMilliseconds, 0, duration) <= TailMilliseconds;
 }
 
 /// <summary>
@@ -31,7 +33,7 @@ public static class MovieCompletion
 
     public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended)
     {
-        if (ended) return true;
+        if (ended) return PlaybackEndPolicy.IsGenuineEnd(positionMilliseconds, durationMilliseconds, ended);
         if (durationMilliseconds is not { } duration || duration < MinimumDurationMilliseconds) return false;
         var tail = CreditsTailMilliseconds(duration);
         return duration - Math.Clamp(positionMilliseconds, 0, duration) <= tail;

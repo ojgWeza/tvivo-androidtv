@@ -53,6 +53,19 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public void Unverified_end_keeps_app_progress_unfinished()
+    {
+        const long duration = 20 * 60_000;
+        var earlyEnd = duration - 35_000;
+
+        Assert.False(PlaybackEndPolicy.IsGenuineEnd(earlyEnd, duration, ended: true));
+        Assert.False(EpisodeCompletion.IsFinished(earlyEnd, duration, ended: true));
+        Assert.False(MovieCompletion.IsFinished(earlyEnd, duration, ended: true));
+        Assert.True(PlaybackEndPolicy.IsGenuineEnd(duration - 30_000, duration, ended: true));
+        Assert.False(PlaybackEndPolicy.IsGenuineEnd(0, null, ended: true));
+    }
+
+    [Fact]
     public void Artwork_reuse_requires_the_same_item_url_and_current_source()
     {
         Assert.True(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/item-1", true));

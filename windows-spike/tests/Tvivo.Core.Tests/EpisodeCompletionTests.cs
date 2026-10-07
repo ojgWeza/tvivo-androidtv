@@ -20,8 +20,11 @@ public sealed class EpisodeCompletionTests
     }
 
     [Fact]
-    public void An_ended_stream_is_finished_even_without_a_known_length()
-        => Assert.True(EpisodeCompletion.IsFinished(0, null, ended: true));
+    public void An_end_without_a_known_length_is_not_verified_as_finished()
+    {
+        Assert.False(EpisodeCompletion.IsFinished(0, null, ended: true));
+        Assert.False(MovieCompletion.IsFinished(0, null, ended: true));
+    }
 
     [Fact]
     public void Without_a_length_or_an_end_it_is_never_finished()
@@ -50,9 +53,25 @@ public sealed class EpisodeCompletionTests
     }
 
     [Fact]
-    public void A_film_without_a_length_finishes_only_when_it_ends()
+    public void A_film_without_a_length_remains_unverified_when_it_ends()
     {
         Assert.False(MovieCompletion.IsFinished(Film, null, false));
-        Assert.True(MovieCompletion.IsFinished(0, null, true));
+        Assert.False(MovieCompletion.IsFinished(0, null, true));
+    }
+
+    [Fact]
+    public void A_known_duration_end_is_genuine_only_within_thirty_seconds_of_the_end()
+    {
+        Assert.False(PlaybackEndPolicy.IsGenuineEnd(Twenty - 30_001, Twenty, ended: true));
+        Assert.True(PlaybackEndPolicy.IsGenuineEnd(Twenty - 30_000, Twenty, ended: true));
+        Assert.False(PlaybackEndPolicy.IsGenuineEnd(Twenty, Twenty, ended: false));
+    }
+
+    [Fact]
+    public void An_early_end_overrides_episode_tail_and_movie_credits_thresholds()
+    {
+        Assert.False(MovieCompletion.IsFinished(Film - 2 * 60_000, Film, ended: true));
+        Assert.True(EpisodeCompletion.IsFinished(Twenty - 15_000, Twenty, ended: false));
+        Assert.True(MovieCompletion.IsFinished(Film - 2 * 60_000, Film, ended: false));
     }
 }

@@ -91,6 +91,7 @@ public sealed partial class MainWindow : Window
     private bool _seriesCompletionRecorded;
     private bool _movieCompletionRecorded;
     private bool _playbackCompletionShown;
+    private bool _unverifiedPlaybackEndHandled;
     private bool _nextEpisodeAutoPlaySuppressed;
     private bool _nextEpisodeAdvanceStarted;
     private long _catalogRequestGeneration;
@@ -143,12 +144,12 @@ public sealed partial class MainWindow : Window
     private PlaybackMuteState _playbackMuteState;
     private long? _resumePositionOnStart;
     private long? _pendingResumePosition;
+    private long _lastGoodPlaybackPositionMilliseconds;
     private bool _resumeReady;
     private DateTimeOffset _lastResumeSavedAt;
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(12);
-    private long _lastStallCheckPositionMs = -1;
-    private DateTimeOffset _lastStallProgressAt;
-    private bool _stallRecoveryAttempted;
+    private readonly StallRecoveryPolicy _stallPolicy = new(StallTimeout);
+    private readonly long _stallClockStart = Stopwatch.GetTimestamp();
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool _backTransitionTraceActive;
@@ -1900,7 +1901,11 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage.NotifyVisitRecorded();
     }
 
-    private async Task StartPlaybackAsync(StreamSource source, bool preserveCompact = false)
+    private async Task StartPlaybackAsync(
+        StreamSource source,
+        bool preserveCompact = false,
+        bool isRecovery = false,
+        long? recoveryPositionMs = null)
     {
         StopHeldSeek(commit: true, released: false);
         _engine.IsMuted = _playbackMuteState.IsMuted;
@@ -1917,10 +1922,12 @@ public sealed partial class MainWindow : Window
         _movieCompletionRecorded = false;
         _pendingResumePosition = null;
         _resumeReady = false;
-        _lastStallCheckPositionMs = -1;
-        _lastStallProgressAt = DateTimeOffset.UtcNow;
-        _stallRecoveryAttempted = false;
+        _unverifiedPlaybackEndHandled = false;
+        _lastGoodPlaybackPositionMilliseconds = Math.Max(0, isRecovery
+            ? recoveryPositionMs ?? resumePosition
+            : resumePosition);
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
+        _stallPolicy.BeginSession(generation, isRecovery);
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
         var previousCts = Interlocked.Exchange(ref _playbackSessionCts, sessionCts);
@@ -2008,7 +2015,9 @@ public sealed partial class MainWindow : Window
         if (result == PlaybackAttemptResult.FirstFrame)
         {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
-            _pendingResumePosition = resumePosition > 0 ? resumePosition : null;
+            _pendingResumePosition = isRecovery && recoveryPositionMs is > 0
+                ? recoveryPositionMs
+                : resumePosition > 0 ? resumePosition : null;
             _activePlaybackSessionGeneration = generation;
             _resumeReady = true;
         }
@@ -2465,22 +2474,36 @@ public sealed partial class MainWindow : Window
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
+        var ended = _engine.IsEnded;
+        var endDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
+        var endPosition = ended ? _lastGoodPlaybackPositionMilliseconds : timeline.PositionMilliseconds;
+        var genuineEnd = PlaybackEndPolicy.IsGenuineEnd(endPosition, endDuration, ended);
+        if (sessionIsCurrent && !ended && !_isHeldSeeking)
+        {
+            var lastObservedPosition = ClampPosition(timeline.PositionMilliseconds, endDuration);
+            if (lastObservedPosition > 0 || _lastGoodPlaybackPositionMilliseconds == 0)
+                _lastGoodPlaybackPositionMilliseconds = lastObservedPosition;
+        }
         if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
             _currentSeriesId is not null && _currentSeriesAccount is not null)
         {
             var measuredDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
-            var position = ClampPosition(timeline.PositionMilliseconds, measuredDuration);
+            var position = ended
+                ? _lastGoodPlaybackPositionMilliseconds
+                : ClampPosition(timeline.PositionMilliseconds, measuredDuration);
             RecordEpisodeCompletion(position, measuredDuration);
         }
         else if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Movie &&
             _catalogLandingPage.Account is not null)
         {
             var movieDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
-            var moviePosition = _engine.IsEnded ? 0 : ClampPosition(timeline.PositionMilliseconds, movieDuration);
-            if (MovieCompletion.IsFinished(moviePosition, movieDuration, _engine.IsEnded) != _movieCompletionRecorded)
+            var moviePosition = ended ? _lastGoodPlaybackPositionMilliseconds : ClampPosition(timeline.PositionMilliseconds, movieDuration);
+            if (MovieCompletion.IsFinished(moviePosition, movieDuration, ended) != _movieCompletionRecorded)
                 SaveResumePosition(force: true);
         }
-        if (sessionIsCurrent && _engine.IsEnded && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted &&
+        if (sessionIsCurrent && ended &&
+            (_nowPlayingChannel?.Source.Kind == StreamKind.Live || genuineEnd) &&
+            !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted &&
             PlaybackModeLogic.ShouldAutoAdvance(GetPlaybackMode(_nowPlayingChannel?.Source.Kind)) && GetNextPlaylistItem() is { } endedNextItem)
         {
             _nextEpisodeAdvanceStarted = true;
@@ -2497,7 +2520,15 @@ public sealed partial class MainWindow : Window
             ExitWindowMiniPlayer(expandToPlayer: false);
             return;
         }
-        if (sessionIsCurrent && !_playbackCompletionShown && _engine.IsEnded && _nowPlayingChannel is { } finishedChannel)
+        if (sessionIsCurrent && ended && !genuineEnd && !_unverifiedPlaybackEndHandled &&
+            _nowPlayingChannel?.Source.Kind is StreamKind.Movie or StreamKind.Episode)
+        {
+            SaveResumePosition(force: true);
+            StatusText.Text = "Playback ended before completion could be verified. Select Retry to resume.";
+            SetPauseButtonState("Retry");
+            _unverifiedPlaybackEndHandled = true;
+        }
+        if (sessionIsCurrent && !_playbackCompletionShown && ended && genuineEnd && _nowPlayingChannel is { } finishedChannel)
         {
             SetCurrentPlayerEntry(finishedChannel);
             _playbackCompletionShown = true;
@@ -2539,24 +2570,18 @@ public sealed partial class MainWindow : Window
         }
         else
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
-        if (_currentSource is not null && !_isDraggingProgress && !_isHeldSeeking && !_engine.IsPaused && !_engine.IsEnded &&
-            (_engine.IsPlaying || _engine.IsBuffering))
-        {
-            if (time != _lastStallCheckPositionMs)
-            {
-                _lastStallCheckPositionMs = time;
-                _lastStallProgressAt = DateTimeOffset.UtcNow;
-            }
-            else if (DateTimeOffset.UtcNow - _lastStallProgressAt > StallTimeout)
-            {
-                _lastStallProgressAt = DateTimeOffset.UtcNow;
-                HandleStall(time);
-            }
-        }
-        else
-        {
-            _lastStallCheckPositionMs = -1;
-        }
+        var stallEligible = _currentSource is not null && !_isDraggingProgress && !_isHeldSeeking &&
+            !_engine.IsPaused && !_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering);
+        var stallDecision = _stallPolicy.Observe(
+            Volatile.Read(ref _playbackSessionGeneration),
+            sessionIsCurrent,
+            stallEligible,
+            time,
+            Stopwatch.GetElapsedTime(_stallClockStart));
+        if (stallDecision == StallDecision.Recover)
+            HandleStall(time);
+        else if (stallDecision == StallDecision.GiveUp)
+            ShowStallRetry(time);
         var seekEnabled = timeline.CanSeek && _currentSource is not null &&
             (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused || _engine.IsEnded);
         _isUpdatingProgress = true;
@@ -2583,7 +2608,9 @@ public sealed partial class MainWindow : Window
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         CompactDurationText.Text = DurationText.Text;
         _isUpdatingProgress = false;
-        SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
+        SetPauseButtonState(_unverifiedPlaybackEndHandled
+            ? "Retry"
+            : _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
     }
 
     private void RecordEpisodeCompletion(long position, long? duration)
@@ -2598,18 +2625,21 @@ public sealed partial class MainWindow : Window
     {
         if (_currentSource is not { } source) return;
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
-        if (_stallRecoveryAttempted)
-        {
-            LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
-            StatusText.Text = "Playback stalled. Select Retry to resume.";
-            SetPauseButtonState("Retry");
-            return;
-        }
-        _stallRecoveryAttempted = true;
         LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=reconnecting");
-        await StartPlaybackAsync(source, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
-        if (ReferenceEquals(_currentSource, source) && (_engine.IsPlaying || _engine.IsBuffering))
-            _pendingResumePosition = lastPositionMs > 0 ? lastPositionMs : null;
+        await StartPlaybackAsync(
+            source,
+            preserveCompact: _playerPresentation == PlayerPresentation.Compact,
+            isRecovery: true,
+            recoveryPositionMs: source.Kind == StreamKind.Live ? null : lastPositionMs);
+    }
+
+    private void ShowStallRetry(long lastPositionMs)
+    {
+        if (_currentSource is not { } source) return;
+        var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
+        StatusText.Text = "Playback stalled. Select Retry to resume.";
+        SetPauseButtonState("Retry");
     }
 
     private void SaveResumePosition(bool force = false, long? positionOverride = null)
@@ -2641,10 +2671,17 @@ public sealed partial class MainWindow : Window
         if (!force && now - _lastResumeSavedAt < TimeSpan.FromSeconds(5)) return;
         var timeline = _engine.Timeline;
         var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
-        var position = _engine.IsEnded ? 0 : ClampPosition(positionOverride ?? timeline.PositionMilliseconds, duration);
+        var ended = _engine.IsEnded;
+        var position = ended
+            ? positionOverride is { } endPosition
+                ? ClampPosition(endPosition, duration)
+                : _lastGoodPlaybackPositionMilliseconds
+            : ClampPosition(positionOverride ?? timeline.PositionMilliseconds, duration);
+        if (!ended || positionOverride.HasValue)
+            _lastGoodPlaybackPositionMilliseconds = position;
         if (type == CatalogItemType.Movie)
         {
-            var movieFinished = MovieCompletion.IsFinished(position, duration, _engine.IsEnded);
+            var movieFinished = MovieCompletion.IsFinished(position, duration, ended);
             _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, movieFinished);
             _movieCompletionRecorded = movieFinished;
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
@@ -2654,7 +2691,7 @@ public sealed partial class MainWindow : Window
         }
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
-            var finished = EpisodeCompletion.IsFinished(position, duration, _engine.IsEnded);
+            var finished = EpisodeCompletion.IsFinished(position, duration, ended);
             var completionChanged = finished != _seriesCompletionRecorded;
             _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
             _seriesCompletionRecorded = finished;
