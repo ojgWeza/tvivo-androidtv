@@ -169,6 +169,23 @@ public sealed class LaunchDiagnosticsTests : IDisposable
         Assert.InRange(export.Split(Environment.NewLine).Length, 1, 200);
     }
 
+    [Fact]
+    public void Engine_warning_callback_output_is_scrubbed_before_disk_and_copy()
+    {
+        LaunchDiagnostics.SetActiveSecrets(new ProviderConnection(
+            new ProviderEndpoint("http", "private.example", 8080), "alice", "p@ss"));
+        Action<string> engineLifecycle = LaunchDiagnostics.Write;
+        engineLifecycle("event=playback.native.warning level=Warning message=Location: /series/alice/p%40ss/42.mkv");
+
+        foreach (var output in new[] { File.ReadAllText(LaunchDiagnostics.LogPath), LaunchDiagnostics.ExportRecent() })
+        {
+            Assert.DoesNotContain("alice", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("p%40ss", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("42.mkv", output, StringComparison.Ordinal);
+            Assert.Contains("event=playback.native.warning", output, StringComparison.Ordinal);
+        }
+    }
+
     private static void ThrowDiagnosticFailure() =>
         throw new InvalidOperationException("Decoder failed at https://private.example/watch?password=secret");
 

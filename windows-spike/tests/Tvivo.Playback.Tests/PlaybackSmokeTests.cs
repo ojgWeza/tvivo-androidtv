@@ -8,6 +8,73 @@ namespace Tvivo.Playback.Tests;
 public sealed class PlaybackSmokeTests
 {
     [Fact]
+    public async Task Timed_out_open_returns_but_blocks_replacement_until_late_source_is_disposed()
+    {
+        var gate = new DeferredOpenGate<FakeSource>();
+        var pending = new TaskCompletionSource<FakeSource>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var trace = new List<string>();
+        var result = await gate.OpenAsync(pending.Task, () => trace.Add("cancel"),
+            source => { source.Dispose(); trace.Add("dispose"); }, Task.Delay(20), CancellationToken.None);
+
+        Assert.Equal(PlaybackAttemptResult.Timeout, result.Result);
+        Assert.Equal(new[] { "cancel" }, trace);
+        var replacement = gate.WaitForReleaseAsync();
+        await Task.Delay(50);
+        Assert.False(replacement.IsCompleted);
+        pending.SetResult(new FakeSource());
+        await replacement;
+        Assert.Equal(new[] { "cancel", "dispose" }, trace);
+    }
+
+    [Fact]
+    public async Task Cancelled_open_waits_for_late_disposal_before_replacement()
+    {
+        var gate = new DeferredOpenGate<FakeSource>();
+        var pending = new TaskCompletionSource<FakeSource>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        var disposed = false;
+        var open = gate.OpenAsync(pending.Task, () => { }, _ => disposed = true,
+            Task.Delay(TimeSpan.FromSeconds(5)), cancellation.Token);
+        cancellation.Cancel();
+        Assert.Equal(PlaybackAttemptResult.Cancelled, (await open).Result);
+        Assert.False(gate.IsReleased);
+        pending.SetResult(new FakeSource());
+        await gate.WaitForReleaseAsync();
+        Assert.True(disposed);
+    }
+
+    [Fact]
+    public async Task Never_completing_open_keeps_replacement_gate_closed_after_budget_signal()
+    {
+        var gate = new DeferredOpenGate<FakeSource>();
+        var neverCompletes = new TaskCompletionSource<FakeSource>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var budget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationCount = 0;
+        var open = gate.OpenAsync(neverCompletes.Task, () => cancellationCount++, _ => { },
+            deadline.Task, CancellationToken.None);
+        deadline.SetResult();
+        Assert.Equal(PlaybackAttemptResult.Timeout, (await open).Result);
+
+        var replacementGate = gate.WaitForReleaseAsync();
+        budget.SetResult(); // Simulates the coordinator's later 90-second budget expiring.
+        Assert.Same(budget.Task, await Task.WhenAny(replacementGate, budget.Task));
+        Assert.False(replacementGate.IsCompleted);
+        Assert.Equal(1, cancellationCount);
+    }
+
+    [Fact]
+    public void Warning_ring_keeps_only_twenty_recent_lines()
+    {
+        var ring = new AttemptWarningRing();
+        for (var i = 0; i < 25; i++) ring.Enqueue($"warning-{i}");
+        var lines = ring.Drain();
+        Assert.Equal(20, lines.Count);
+        Assert.Equal("warning-5", lines[0]);
+        Assert.Equal("warning-24", lines[^1]);
+    }
+
+    [Fact]
     public void PlaybackEnginesImplementEngineContract()
     {
         Assert.IsAssignableFrom<IPlaybackEngine>(new VlcPlaybackEngine());
@@ -139,6 +206,11 @@ public sealed class PlaybackSmokeTests
             Stopped.Add(session);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FakeSource : IDisposable
+    {
+        public void Dispose() { }
     }
 
     private sealed class RecordingSourceEngine : IPlaybackEngine

@@ -1,4 +1,6 @@
 using FFmpegInteropX;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using Tvivo.Core;
 using Windows.Foundation.Collections;
@@ -7,10 +9,14 @@ using Windows.Media.Playback;
 
 namespace Tvivo.Playback;
 
-public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable
+public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
+    private static readonly NativeLogProvider NativeLog = new();
+    private static int _loggingRegistered;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly DeferredOpenGate<FFmpegMediaSource> _openGate = new();
+    private Task _nativeReleaseTask = Task.CompletedTask;
     private readonly MediaPlayer _player = new();
     private FFmpegMediaSource? _source;
     private MediaPlaybackItem? _playbackItem;
@@ -21,11 +27,18 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     private readonly object _trackSync = new();
     private PlaybackTrackSnapshot _tracks = PlaybackTrackSnapshot.Unresolved;
     private bool _defaultSubtitleApplied;
+    private Stopwatch? _attemptClock;
+    private AttemptWarningRing? _warnings;
     public event Action<string>? LifecycleEvent;
     public event Action<PlaybackSessionToken>? PlaybackFailed;
     public event EventHandler? TracksChanged;
 
     public MediaPlayer Player => _player;
+    public void PublishPendingWarnings()
+    {
+        if (_warnings is { } warnings)
+            foreach (var line in warnings.Drain()) LifecycleEvent?.Invoke($"event=playback.native.warning {line}");
+    }
     public bool IsPlaying => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Playing;
     public bool IsBuffering => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Buffering;
     public bool IsPaused => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Paused;
@@ -143,6 +156,11 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
     public FFmpegInteropPlaybackEngine()
     {
+        if (Interlocked.Exchange(ref _loggingRegistered, 1) == 0)
+        {
+            FFmpegInteropLogging.SetLogProvider(NativeLog);
+            FFmpegInteropLogging.SetLogLevel(LogLevel.Warning);
+        }
         _player.MediaOpened += OnMediaOpened;
         _player.MediaFailed += OnMediaFailed;
         _player.MediaEnded += OnMediaEnded;
@@ -169,37 +187,56 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            await _nativeReleaseTask.WaitAsync(cancellationToken).ConfigureAwait(true);
             StopCore();
             if (source.DirectUri is null)
                 return PlaybackAttemptResult.HostFailure;
 
             _currentSession = session;
             _ended = false;
+            _attemptClock = Stopwatch.StartNew();
+            _warnings = new AttemptWarningRing();
+            NativeLog.Current = _warnings;
+            EmitPhase("open-start");
             _startup = new TaskCompletionSource<PlaybackAttemptResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var registration = linked.Token.Register(() => _startup.TrySetResult(PlaybackAttemptResult.Cancelled));
+            var deadline = Task.Delay(StartupDeadline);
 
             try
             {
-                _source = await FFmpegMediaSource.CreateFromUriAsync(source.DirectUri.AbsoluteUri);
+                var config = new MediaSourceConfig();
+                config.FFmpegOptions["rw_timeout"] = "15000000";
+                config.FFmpegOptions["timeout"] = "15000000";
+                var operation = FFmpegMediaSource.CreateFromUriAsync(source.DirectUri.AbsoluteUri, config);
+                var open = await _openGate.OpenAsync(
+                    AwaitSourceAsync(operation), operation.Cancel,
+                    lateSource => lateSource.Dispose(), deadline, cancellationToken).ConfigureAwait(true);
+                if (open.Result != PlaybackAttemptResult.Started)
+                {
+                    EmitPhase(open.Result == PlaybackAttemptResult.Timeout ? "source-timeout-still-closing" : "source-cancelled-still-closing");
+                    StopCore(open.Result == PlaybackAttemptResult.Timeout ? "timeout" : "user-cancelled");
+                    return open.Result;
+                }
+                _source = open.Source!;
+                EmitPhase("source-created");
                 cancellationToken.ThrowIfCancellationRequested();
                 _playbackItem = _source.CreateMediaPlaybackItem();
                 _playbackItem.AudioTracksChanged += OnAudioTracksChanged;
                 _playbackItem.TimedMetadataTracksChanged += OnTimedMetadataTracksChanged;
                 _player.Source = _playbackItem;
                 _player.Play();
-                var timeout = Task.Delay(StartupDeadline, linked.Token);
-                var completed = await Task.WhenAny(_startup.Task, timeout).ConfigureAwait(true);
+                var completed = await Task.WhenAny(_startup.Task, deadline).ConfigureAwait(true);
                 // A MediaOpened callback can win the race just after WhenAny
                 // schedules this continuation. Prefer readiness already recorded
                 // by that callback before treating the deadline as a failure.
-                if (completed == timeout && !_startup.Task.IsCompleted && IsPlaying)
+                if (completed == deadline && !_startup.Task.IsCompleted && IsPlaying)
                 {
                     _startup.TrySetResult(PlaybackAttemptResult.FirstFrame);
                     return PlaybackAttemptResult.FirstFrame;
                 }
 
-                if (completed == timeout && !_startup.Task.IsCompleted)
+                if (completed == deadline && !_startup.Task.IsCompleted)
                 {
                     StopCore(cancellationToken.IsCancellationRequested ? "user-cancelled" : "timeout");
                     return cancellationToken.IsCancellationRequested
@@ -217,8 +254,9 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
                 StopCore("user-cancelled");
                 return PlaybackAttemptResult.Cancelled;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                EmitException("source-or-playback", exception);
                 StopCore("error");
                 return PlaybackAttemptResult.DecodeFailure;
             }
@@ -237,6 +275,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_currentSession == session)
                 StopCore();
+            await _nativeReleaseTask.WaitAsync(cancellationToken).ConfigureAwait(true);
         }
         finally
         {
@@ -247,6 +286,20 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public void Dispose()
     {
         if (_disposed) return;
+        if (!_nativeReleaseTask.IsCompletedSuccessfully)
+            throw new InvalidOperationException("DisposeAsync must be used while a Native source open is still closing.");
+        DisposeCore();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        await _nativeReleaseTask.ConfigureAwait(true);
+        DisposeCore();
+    }
+
+    private void DisposeCore()
+    {
         StopCore();
         _player.MediaOpened -= OnMediaOpened;
         _player.MediaFailed -= OnMediaFailed;
@@ -259,6 +312,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
     private void OnMediaOpened(MediaPlayer sender, object args)
     {
+        EmitPhase("MediaOpened");
         if (_playbackItem is { } item)
             RefreshNativeTracks(item, resolved: true);
         _startup?.TrySetResult(PlaybackAttemptResult.FirstFrame);
@@ -266,6 +320,8 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
     private void OnMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
     {
+        LifecycleEvent?.Invoke($"event=playback.native.failure error={args.Error} extendedHResult=0x{args.ExtendedErrorCode.HResult:X8} message={args.ErrorMessage}");
+        EmitPhase("MediaFailed");
         var startup = _startup;
         var wasReady = startup is not null &&
             startup.Task.IsCompletedSuccessfully &&
@@ -287,6 +343,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     {
         var hadSource = _source is not null || _player.Source is not null;
         reason ??= _ended ? "completed" : "user-cancelled";
+        if (_attemptClock is not null) EmitPhase("stop");
         _startup?.TrySetResult(PlaybackAttemptResult.Cancelled);
         _startup = null;
         _currentSession = null;
@@ -306,9 +363,39 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         _player.Source = null;
         _source?.Dispose();
         _source = null;
+        if (!_openGate.IsReleased)
+            _nativeReleaseTask = FinishDeferredReleaseAsync(_warnings, _attemptClock);
+        else
+            FlushWarnings(_warnings, _attemptClock);
         if (hadSource)
             LifecycleEvent?.Invoke($"event=playback.engine.release engine=Native reason={reason} source=released playerSource=cleared callbacks=retained-until-dispose");
     }
+
+    private static async Task<FFmpegMediaSource> AwaitSourceAsync(Windows.Foundation.IAsyncOperation<FFmpegMediaSource> operation) =>
+        await operation;
+
+    private async Task FinishDeferredReleaseAsync(AttemptWarningRing? warnings, Stopwatch? clock)
+    {
+        await _openGate.WaitForReleaseAsync().ConfigureAwait(false);
+        FlushWarnings(warnings, clock);
+    }
+
+    private void FlushWarnings(AttemptWarningRing? warnings, Stopwatch? clock)
+    {
+        if (ReferenceEquals(NativeLog.Current, warnings)) NativeLog.Current = null;
+        if (warnings is not null)
+            foreach (var line in warnings.Drain()) LifecycleEvent?.Invoke($"event=playback.native.warning {line}");
+        if (clock is not null)
+            LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase=release-complete elapsedMs={clock.ElapsedMilliseconds} httpStatus=unknown redirect=unknown");
+        _warnings = null;
+        _attemptClock = null;
+    }
+
+    private void EmitPhase(string phase) =>
+        LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus=unknown redirect=unknown");
+
+    private void EmitException(string phase, Exception exception) =>
+        LifecycleEvent?.Invoke($"event=playback.native.exception phase={phase} type={exception.GetType().Name} hresult=0x{exception.HResult:X8} message={exception.Message}");
 
     private void RefreshNativeTracks(MediaPlaybackItem item, bool resolved)
     {
@@ -392,4 +479,76 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
     private static bool IsSubtitleTrack(TimedMetadataTrack track) =>
         track.TimedMetadataKind is TimedMetadataKind.Caption or TimedMetadataKind.Subtitle or TimedMetadataKind.ImageSubtitle;
+}
+
+internal readonly record struct OpenOutcome<T>(PlaybackAttemptResult Result, T? Source) where T : class;
+
+internal sealed class DeferredOpenGate<T> where T : class
+{
+    private Task _release = Task.CompletedTask;
+    internal bool IsReleased => _release.IsCompletedSuccessfully;
+
+    internal Task WaitForReleaseAsync(CancellationToken cancellationToken = default) =>
+        _release.WaitAsync(cancellationToken);
+
+    internal async Task<OpenOutcome<T>> OpenAsync(
+        Task<T> openTask, Action cancel, Action<T> disposeLateSource,
+        Task deadline, CancellationToken cancellationToken)
+    {
+        await WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = cancellationToken.Register(() => cancelled.TrySetResult());
+        var completed = await Task.WhenAny(openTask, deadline, cancelled.Task).ConfigureAwait(false);
+        if (completed == openTask && !deadline.IsCompleted && !cancellationToken.IsCancellationRequested)
+            return new OpenOutcome<T>(PlaybackAttemptResult.Started, await openTask.ConfigureAwait(false));
+
+        try { cancel(); }
+        catch { /* Native cancellation is advisory; cleanup still gates the next open. */ }
+        _release = ReleaseLateAsync(openTask, disposeLateSource);
+        return new OpenOutcome<T>(cancellationToken.IsCancellationRequested
+            ? PlaybackAttemptResult.Cancelled : PlaybackAttemptResult.Timeout, null);
+    }
+
+    private static async Task ReleaseLateAsync(Task<T> openTask, Action<T> disposeLateSource)
+    {
+        T source;
+        try { source = await openTask.ConfigureAwait(false); }
+        catch { return; }
+        disposeLateSource(source);
+    }
+}
+
+internal sealed class AttemptWarningRing
+{
+    private readonly ConcurrentQueue<string> _lines = new();
+    private int _count;
+
+    internal void Enqueue(string line)
+    {
+        _lines.Enqueue(line.Length > 1024 ? line[..1024] + "[truncated]" : line);
+        if (Interlocked.Increment(ref _count) > 20 && _lines.TryDequeue(out _))
+            Interlocked.Decrement(ref _count);
+    }
+
+    internal IReadOnlyList<string> Drain()
+    {
+        var lines = new List<string>();
+        while (_lines.TryDequeue(out var line))
+        {
+            lines.Add(line);
+            Interlocked.Decrement(ref _count);
+        }
+        return lines;
+    }
+}
+
+internal sealed partial class NativeLogProvider : ILogProvider
+{
+    internal AttemptWarningRing? Current;
+
+    public void Log(LogLevel level, string message)
+    {
+        if (level <= LogLevel.Warning)
+            Volatile.Read(ref Current)?.Enqueue($"level={level} message={message}");
+    }
 }

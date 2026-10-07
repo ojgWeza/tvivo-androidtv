@@ -1,6 +1,7 @@
 using LibVLCSharp.Shared;using LibVLCSharp.Platforms.Windows;
 using Tvivo.Core;
 using System.Globalization;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Tvivo.Playback.Tests")]
@@ -53,6 +54,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private bool _isMuted;
     private bool _disposed;
     private bool _liveTimeshiftConfigured;
+    private Stopwatch? _attemptClock;
+    private AttemptWarningRing? _warnings;
 
     public VlcPlaybackEngine(bool enableLiveTimeshift = false)
     {
@@ -62,6 +65,11 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
 
     public bool HasPlayer => _player is not null;
+    public void PublishPendingWarnings()
+    {
+        if (_warnings is { } warnings)
+            foreach (var line in warnings.Drain()) LifecycleEvent?.Invoke($"event=playback.vlc.warning {line}");
+    }
     public bool IsPlaying => _player?.IsPlaying == true;
     public bool IsBuffering => _player?.State == VLCState.Buffering;
     public bool IsPaused => _player?.State == VLCState.Paused;
@@ -218,8 +226,19 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             if (source.DirectUri is null)
                 return PlaybackAttemptResult.HostFailure;
 
+            _attemptClock = Stopwatch.StartNew();
+            _warnings = new AttemptWarningRing();
+            EmitPhase("open-start");
             var timeshiftPath = PrepareLiveTimeshift(source.Kind);
-            var media = new Media(libVlc, source.DirectUri, Array.Empty<string>());
+            Media media;
+            try { media = new Media(libVlc, source.DirectUri, Array.Empty<string>()); }
+            catch (Exception exception)
+            {
+                LifecycleEvent?.Invoke($"event=playback.vlc.exception phase=source-open type={exception.GetType().Name} hresult=0x{exception.HResult:X8} message={exception.Message}");
+                FlushWarnings();
+                return PlaybackAttemptResult.HostFailure;
+            }
+            EmitPhase("source-created");
             var timeshiftOptions = LiveTimeshiftOptions.ForMedia(source.Kind, _enableLiveTimeshift && timeshiftPath is not null, timeshiftPath);
             foreach (var option in timeshiftOptions)
                 media.AddOption(option);
@@ -256,7 +275,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                     });
                     RefreshVlcTracks(session, player, resolvedWhenTracksPresent: false);
                     StartTrackProbe(session, player);
-                });
+                }, phase => _warnings?.Enqueue($"phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0}"));
 
             lock (_trackSync)
             {
@@ -387,6 +406,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _abandonedCleanupTask.GetAwaiter().GetResult();
             lock (_lifecycleLock)
             {
+                if (_libVlc is { } libVlc) libVlc.Log -= OnLibVlcLog;
                 _libVlc?.Dispose();
                 _libVlc = null;
                 _disposed = true;
@@ -413,6 +433,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _abandonedCleanupTask = Task.CompletedTask;
             lock (_lifecycleLock)
             {
+                if (_libVlc is { } libVlc) libVlc.Log -= OnLibVlcLog;
                 _libVlc?.Dispose();
                 _libVlc = null;
                 _disposed = true;
@@ -462,6 +483,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 }
 
                 _libVlc = libVlc;
+                libVlc.Log += OnLibVlcLog;
             }
 
             Log("LibVLC construction succeeded.");
@@ -499,6 +521,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         handlers.Invalidate();
         DetachPlayerHandlers(player, handlers);
         DetachPlayerFromView();
+        EmitPhase("stop");
 
         _abandonedCleanupTask = playTask.ContinueWith(_ =>
         {
@@ -511,6 +534,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 try { media.Dispose(); }
                 catch (Exception exception) { Log($"Timed-out media dispose failed during deferred cleanup. {exception.GetType().Name}"); }
                 CleanupTimeshiftFiles();
+                FlushWarnings();
                 LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=deferred callbacks=detached surface=detach-requested player=dispose-attempted media=dispose-attempted");
             }
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -539,6 +563,24 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         Path.GetTempPath(),
         "tvivo-playback-engine.log");
     private static readonly object LogSync = new();
+
+    private void OnLibVlcLog(object? sender, LogEventArgs args)
+    {
+        if (args.Level >= LibVLCSharp.Shared.LogLevel.Warning)
+            Volatile.Read(ref _warnings)?.Enqueue($"level={args.Level} module={args.Module} message={args.Message}");
+    }
+
+    private void EmitPhase(string phase) =>
+        LifecycleEvent?.Invoke($"event=playback.phase engine=LibVLC phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus=unknown redirect=unknown");
+
+    private void FlushWarnings()
+    {
+        var ring = Interlocked.Exchange(ref _warnings, null);
+        if (ring is not null)
+            foreach (var line in ring.Drain()) LifecycleEvent?.Invoke($"event=playback.vlc.warning {line}");
+        if (_attemptClock is not null) EmitPhase("release-complete");
+        _attemptClock = null;
+    }
 
     private string? PrepareLiveTimeshift(StreamKind kind)
     {
@@ -683,9 +725,11 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         if (player is null)
         {
             CleanupTimeshiftFiles();
+            FlushWarnings();
             return;
         }
         reason ??= player.State == VLCState.Ended ? "completed" : "user-cancelled";
+        EmitPhase("stop");
 
         if (currentSession is { } token)
             PublishState(token, VlcPlaybackState.Stopping);
@@ -715,6 +759,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             }
         }
         LifecycleEvent?.Invoke($"event=playback.engine.release engine=LibVLC reason={reason} path=immediate callbacks=detached surface=detach-requested player=released media=released");
+        FlushWarnings();
     }
 
     private static void DetachPlayerHandlers(MediaPlayer player, EventHandlers handlers)
@@ -957,6 +1002,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         private readonly Action<VlcPlaybackState> _publishState;
         private readonly Action<bool> _refreshTracks;
         private readonly Action _onPlaying;
+        private readonly Action<string> _enqueuePhase;
         private int _invalidated;
         private int _firstFrameReported;
 
@@ -964,15 +1010,18 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             MediaPlayer player,
             Action<VlcPlaybackState> publishState,
             Action<bool> refreshTracks,
-            Action onPlaying)
+            Action onPlaying,
+            Action<string> enqueuePhase)
         {
             _publishState = publishState;
             _refreshTracks = refreshTracks;
             _onPlaying = onPlaying;
+            _enqueuePhase = enqueuePhase;
             Playing = (_, _) =>
             {
                 if (IsCurrent)
                 {
+                    _enqueuePhase("Playing");
                     _publishState(VlcPlaybackState.Playing);
                     _onPlaying();
                 }
@@ -980,7 +1029,10 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             Vout = (_, _) =>
             {
                 if (IsCurrent && player.VoutCount > 0 && Interlocked.Exchange(ref _firstFrameReported, 1) == 0)
+                {
+                    _enqueuePhase("Vout");
                     Completion.TrySetResult(PlaybackAttemptResult.FirstFrame);
+                }
             };
             EncounteredError = (_, _) =>
             {

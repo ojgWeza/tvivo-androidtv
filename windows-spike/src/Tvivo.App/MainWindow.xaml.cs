@@ -148,6 +148,9 @@ public sealed partial class MainWindow : Window
     private long? _pendingResumePosition;
     private long _lastGoodPlaybackPositionMilliseconds;
     private bool _resumeReady;
+    private long _diagnosticOpenStartedAt;
+    private long _diagnosticLastPosition;
+    private bool _diagnosticFirstProgressReported;
     private DateTimeOffset _lastResumeSavedAt;
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(12);
     private readonly StallRecoveryPolicy _stallPolicy = new(StallTimeout);
@@ -953,6 +956,8 @@ public sealed partial class MainWindow : Window
 
     private void CopyDiagnostics_Click(object sender, RoutedEventArgs args)
     {
+        _nativeEngine.PublishPendingWarnings();
+        _vlcEngine.PublishPendingWarnings();
         var package = new DataPackage();
         package.SetText(LaunchDiagnostics.ExportRecent());
         Clipboard.SetContent(package);
@@ -1943,6 +1948,9 @@ public sealed partial class MainWindow : Window
             ? recoveryPositionMs ?? resumePosition
             : resumePosition);
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
+        _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
+        _diagnosticLastPosition = 0;
+        _diagnosticFirstProgressReported = false;
         _stallPolicy.BeginSession(generation, isRecovery);
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
@@ -1968,7 +1976,7 @@ public sealed partial class MainWindow : Window
         StatusText.Text = "Starting playback…";
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
         LaunchDiagnostics.Write($"event=playback.start engine={engineName} kind={source.Kind}");
-        LaunchDiagnostics.Write($"Playback start: engine={engineName}, kind={source.Kind}, extension={source.ContainerExtension ?? "unspecified"}");
+        LaunchDiagnostics.Write($"event=playback.attempt generation={generation} engine={engineName} kind={source.Kind} extensionPresent={(string.IsNullOrWhiteSpace(source.ContainerExtension) ? "no" : "yes")} resume={(resumePosition > 0 || isRecovery && recoveryPositionMs > 0 ? "yes" : "no")} httpStatus=unknown redirect=unknown");
         PlaybackAttemptResult result;
         try
         {
@@ -1989,9 +1997,13 @@ public sealed partial class MainWindow : Window
                     if (IsCurrentPlaybackStart(generation, sessionCts))
                         PlayerPage.UpdateLayout();
                 }),
-                token => OnUiAsync(() => generation == Volatile.Read(ref _playbackSessionGeneration) && !sessionCts.IsCancellationRequested
-                    ? _playback.PlayAsync(source, token)
-                    : Task.FromResult(PlaybackAttemptResult.Cancelled)),
+                token => OnUiAsync(() =>
+                {
+                    if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
+                        return Task.FromResult(PlaybackAttemptResult.Cancelled);
+                    _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
+                    return _playback.PlayAsync(source, token);
+                }),
                 sessionCts.Token);
         }
         catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
@@ -2552,10 +2564,21 @@ public sealed partial class MainWindow : Window
         }
         if (_pendingResumePosition is { } resume && timeline.CanSeek)
         {
-            _engine.Seek(Math.Min(resume, Math.Max(0, timeline.DurationMilliseconds!.Value - 1000)));
+            var target = Math.Min(resume, Math.Max(0, timeline.DurationMilliseconds!.Value - 1000));
+            _engine.Seek(target);
+            _diagnosticLastPosition = target;
+            LaunchDiagnostics.Write($"event=playback.resume_seek generation={_activePlaybackSessionGeneration} positionMs={target} elapsedMs={Stopwatch.GetElapsedTime(_diagnosticOpenStartedAt).TotalMilliseconds:0}");
             _pendingResumePosition = null;
             timeline = _engine.Timeline;
         }
+        if (sessionIsCurrent && !_diagnosticFirstProgressReported && timeline.PositionMilliseconds > _diagnosticLastPosition &&
+            !_isHeldSeeking && _pendingResumePosition is null)
+        {
+            _diagnosticFirstProgressReported = true;
+            LaunchDiagnostics.Write($"event=playback.first_progress generation={_activePlaybackSessionGeneration} positionMs={timeline.PositionMilliseconds} elapsedMs={Stopwatch.GetElapsedTime(_diagnosticOpenStartedAt).TotalMilliseconds:0} qualification=positive-position-advance visibleFrame=unverified");
+        }
+        if (sessionIsCurrent && timeline.PositionMilliseconds > _diagnosticLastPosition)
+            _diagnosticLastPosition = timeline.PositionMilliseconds;
         SaveResumePosition();
         var duration = timeline.DurationMilliseconds;
         var length = duration ?? 0;
@@ -3873,7 +3896,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            _nativeEngine.Dispose();
+            await _nativeEngine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            LaunchDiagnostics.Write("Native playback engine is still closing during window close");
         }
         catch (Exception exception)
         {
