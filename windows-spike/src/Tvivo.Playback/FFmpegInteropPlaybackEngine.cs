@@ -22,6 +22,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     private PlaybackTrackSnapshot _tracks = PlaybackTrackSnapshot.Unresolved;
     private bool _defaultSubtitleApplied;
     public event Action<string>? LifecycleEvent;
+    public event Action<PlaybackSessionToken>? PlaybackFailed;
     public event EventHandler? TracksChanged;
 
     public MediaPlayer Player => _player;
@@ -263,8 +264,16 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         _startup?.TrySetResult(PlaybackAttemptResult.FirstFrame);
     }
 
-    private void OnMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) =>
-        _startup?.TrySetResult(PlaybackAttemptResult.DecodeFailure);
+    private void OnMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
+    {
+        var startup = _startup;
+        var wasReady = startup is not null &&
+            startup.Task.IsCompletedSuccessfully &&
+            startup.Task.Result == PlaybackAttemptResult.FirstFrame;
+        var startupFailureWasRecorded = startup?.TrySetResult(PlaybackAttemptResult.DecodeFailure) == true;
+        if (wasReady && !startupFailureWasRecorded && _currentSession is { } session)
+            PlaybackFailed?.Invoke(session);
+    }
 
     private void OnMediaEnded(MediaPlayer sender, object args) => _ended = true;
 

@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<Channel> _playerSiblings = Array.Empty<Channel>();
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private readonly NextPlaybackSelector _nextPlaybackSelector = new();
+    private readonly PlaybackFailurePolicy _playbackFailurePolicy = new();
     private string[] _shufflePlaylistIds = Array.Empty<string>();
     private string? _preparedNextItemId;
     private string? _preparedNextForItemId;
@@ -166,6 +167,7 @@ public sealed partial class MainWindow : Window
         _vlcEngine = App.Services.GetRequiredService<VlcPlaybackEngine>();
         _vlcEngine.StateChanged += VlcEngine_StateChanged;
         _nativeEngine = App.Services.GetRequiredService<FFmpegInteropPlaybackEngine>();
+        _nativeEngine.PlaybackFailed += NativeEngine_PlaybackFailed;
         _vlcEngine.LifecycleEvent += LaunchDiagnostics.Write;
         _nativeEngine.LifecycleEvent += LaunchDiagnostics.Write;
         _vlcPlayback = new PlaybackService(_vlcEngine);
@@ -2474,6 +2476,7 @@ public sealed partial class MainWindow : Window
         }
         var timeline = _engine.Timeline;
         var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
+        var playbackFailed = sessionIsCurrent && _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
         var ended = _engine.IsEnded;
         var endDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
         var endPosition = ended ? _lastGoodPlaybackPositionMilliseconds : timeline.PositionMilliseconds;
@@ -2484,7 +2487,7 @@ public sealed partial class MainWindow : Window
             if (lastObservedPosition > 0 || _lastGoodPlaybackPositionMilliseconds == 0)
                 _lastGoodPlaybackPositionMilliseconds = lastObservedPosition;
         }
-        if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
+        if (sessionIsCurrent && !playbackFailed && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
             _currentSeriesId is not null && _currentSeriesAccount is not null)
         {
             var measuredDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
@@ -2493,7 +2496,7 @@ public sealed partial class MainWindow : Window
                 : ClampPosition(timeline.PositionMilliseconds, measuredDuration);
             RecordEpisodeCompletion(position, measuredDuration);
         }
-        else if (sessionIsCurrent && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Movie &&
+        else if (sessionIsCurrent && !playbackFailed && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Movie &&
             _catalogLandingPage.Account is not null)
         {
             var movieDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
@@ -2503,6 +2506,7 @@ public sealed partial class MainWindow : Window
         }
         if (sessionIsCurrent && ended &&
             (_nowPlayingChannel?.Source.Kind == StreamKind.Live || genuineEnd) &&
+            _playbackFailurePolicy.ShouldAutoAdvance(_activePlaybackSessionGeneration) &&
             !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted &&
             PlaybackModeLogic.ShouldAutoAdvance(GetPlaybackMode(_nowPlayingChannel?.Source.Kind)) && GetNextPlaylistItem() is { } endedNextItem)
         {
@@ -2520,7 +2524,7 @@ public sealed partial class MainWindow : Window
             ExitWindowMiniPlayer(expandToPlayer: false);
             return;
         }
-        if (sessionIsCurrent && ended && !genuineEnd && !_unverifiedPlaybackEndHandled &&
+        if (sessionIsCurrent && !playbackFailed && ended && !genuineEnd && !_unverifiedPlaybackEndHandled &&
             _nowPlayingChannel?.Source.Kind is StreamKind.Movie or StreamKind.Episode)
         {
             SaveResumePosition(force: true);
@@ -2528,7 +2532,7 @@ public sealed partial class MainWindow : Window
             SetPauseButtonState("Retry");
             _unverifiedPlaybackEndHandled = true;
         }
-        if (sessionIsCurrent && !_playbackCompletionShown && ended && genuineEnd && _nowPlayingChannel is { } finishedChannel)
+        if (sessionIsCurrent && !playbackFailed && !_playbackCompletionShown && ended && genuineEnd && _nowPlayingChannel is { } finishedChannel)
         {
             SetCurrentPlayerEntry(finishedChannel);
             _playbackCompletionShown = true;
@@ -2551,7 +2555,7 @@ public sealed partial class MainWindow : Window
         CompactForwardButton.Visibility = compactIsLive ? Visibility.Collapsed : Visibility.Visible;
         CompactSeekRow.Visibility = compactIsLive || duration is not > 0 ? Visibility.Collapsed : Visibility.Visible;
         var playbackKind = _nowPlayingChannel?.Source.Kind;
-        var nextItem = PlaybackModeLogic.ShouldShowNextPrompt(GetPlaybackMode(playbackKind)) && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted
+        var nextItem = !playbackFailed && PlaybackModeLogic.ShouldShowNextPrompt(GetPlaybackMode(playbackKind)) && !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted
             ? GetNextPlaylistItem()
             : null;
         var remainingMilliseconds = duration is > 0 ? duration.Value - time : long.MaxValue;
@@ -2570,7 +2574,7 @@ public sealed partial class MainWindow : Window
         }
         else
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
-        var stallEligible = _currentSource is not null && !_isDraggingProgress && !_isHeldSeeking &&
+        var stallEligible = !playbackFailed && _currentSource is not null && !_isDraggingProgress && !_isHeldSeeking &&
             !_engine.IsPaused && !_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering);
         var stallDecision = _stallPolicy.Observe(
             Volatile.Read(ref _playbackSessionGeneration),
@@ -2608,7 +2612,7 @@ public sealed partial class MainWindow : Window
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         CompactDurationText.Text = DurationText.Text;
         _isUpdatingProgress = false;
-        SetPauseButtonState(_unverifiedPlaybackEndHandled
+        SetPauseButtonState(playbackFailed || _unverifiedPlaybackEndHandled
             ? "Retry"
             : _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
     }
@@ -2681,7 +2685,8 @@ public sealed partial class MainWindow : Window
             _lastGoodPlaybackPositionMilliseconds = position;
         if (type == CatalogItemType.Movie)
         {
-            var movieFinished = MovieCompletion.IsFinished(position, duration, ended);
+            var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
+            var movieFinished = !failed && MovieCompletion.IsFinished(position, duration, ended);
             _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, movieFinished);
             _movieCompletionRecorded = movieFinished;
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
@@ -2691,7 +2696,8 @@ public sealed partial class MainWindow : Window
         }
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
-            var finished = EpisodeCompletion.IsFinished(position, duration, ended);
+            var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
+            var finished = !failed && EpisodeCompletion.IsFinished(position, duration, ended);
             var completionChanged = finished != _seriesCompletionRecorded;
             _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
             _seriesCompletionRecorded = finished;
@@ -2829,11 +2835,41 @@ public sealed partial class MainWindow : Window
 
     private void VlcEngine_StateChanged(object? sender, VlcPlaybackStateChangedEventArgs args)
     {
-        if (args.State != VlcPlaybackState.Failed) return;
+        if (args.State != VlcPlaybackState.Failed || !ReferenceEquals(sender, _vlcEngine) ||
+            !ReferenceEquals(_engine, _vlcEngine)) return;
+        var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
         WindowRoot.DispatcherQueue.TryEnqueue(() =>
         {
+            HandleLatePlaybackFailure(callbackGeneration);
             if (_windowState.IsWindowMini) ExitWindowMiniPlayer(expandToPlayer: false);
         });
+    }
+
+    private void NativeEngine_PlaybackFailed(PlaybackSessionToken session)
+    {
+        if (!ReferenceEquals(_engine, _nativeEngine)) return;
+        var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
+        WindowRoot.DispatcherQueue.TryEnqueue(() => HandleLatePlaybackFailure(callbackGeneration));
+    }
+
+    private void HandleLatePlaybackFailure(long callbackGeneration)
+    {
+        var currentGeneration = Volatile.Read(ref _playbackSessionGeneration);
+        if (!_playbackFailurePolicy.TryHandle(
+                callbackGeneration, currentGeneration, _activePlaybackSessionGeneration, _resumeReady))
+            return;
+
+        var timeline = _engine.Timeline;
+        var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
+        var position = ClampPosition(timeline.PositionMilliseconds, duration);
+        if (position > _lastGoodPlaybackPositionMilliseconds)
+            _lastGoodPlaybackPositionMilliseconds = position;
+        _nextEpisodeAutoPlaySuppressed = true;
+        _nextEpisodeAdvanceStarted = true;
+        SaveResumePosition(force: true, positionOverride: _lastGoodPlaybackPositionMilliseconds);
+        StatusText.Text = "Playback failed. Select Retry to resume.";
+        SetPauseButtonState("Retry");
+        LaunchDiagnostics.Write($"event=playback.failure engine={(_engine == _vlcEngine ? "LibVLC" : "Native")} generation={currentGeneration} positionMs={_lastGoodPlaybackPositionMilliseconds} outcome=retry");
     }
 
     private void HeldSeekTimer_Tick(object? sender, object args)
@@ -3778,6 +3814,7 @@ public sealed partial class MainWindow : Window
         _heldSeekTimer.Tick -= HeldSeekTimer_Tick;
         Activated -= MainWindow_Activated;
         _vlcEngine.StateChanged -= VlcEngine_StateChanged;
+        _nativeEngine.PlaybackFailed -= NativeEngine_PlaybackFailed;
         _accountPage.MinimizeToMiniModeChanged -= AccountPage_MinimizeToMiniModeChanged;
         _windowState.WindowMiniGeometryChanged -= WindowState_WindowMiniGeometryChanged;
         _windowState.Dispose();

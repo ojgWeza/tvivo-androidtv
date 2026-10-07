@@ -66,6 +66,19 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public void Failed_playback_generation_keeps_retry_and_blocks_completion_advance()
+    {
+        var policy = new PlaybackFailurePolicy();
+
+        Assert.True(policy.TryHandle(callbackGeneration: 8, currentGeneration: 8, activeGeneration: 8, ready: true));
+        Assert.False(policy.TryHandle(callbackGeneration: 8, currentGeneration: 8, activeGeneration: 8, ready: true));
+        Assert.False(policy.TryHandle(callbackGeneration: 8, currentGeneration: 9, activeGeneration: 9, ready: true));
+        Assert.False(policy.ShouldAutoAdvance(8));
+        Assert.True(policy.ShouldAutoAdvance(9));
+        Assert.False(policy.TryHandle(callbackGeneration: 10, currentGeneration: 10, activeGeneration: 9, ready: false));
+    }
+
+    [Fact]
     public void Artwork_reuse_requires_the_same_item_url_and_current_source()
     {
         Assert.True(ArtworkReusePolicy.ShouldReuse("item-1", "https://art/item-1", "item-1", "https://art/item-1", true));

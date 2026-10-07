@@ -14,6 +14,24 @@ public sealed class PlaybackSmokeTests
     }
 
     [Fact]
+    public void Late_failure_signal_is_handled_once_for_its_ready_generation()
+    {
+        var policy = new PlaybackFailurePolicy();
+        var handled = new List<string>();
+
+        if (policy.TryHandle(callbackGeneration: 4, currentGeneration: 4, activeGeneration: 4, ready: true))
+            handled.Add("failure:g4");
+        if (policy.TryHandle(callbackGeneration: 4, currentGeneration: 4, activeGeneration: 4, ready: true))
+            handled.Add("failure:g4-duplicate");
+        if (policy.TryHandle(callbackGeneration: 4, currentGeneration: 5, activeGeneration: 5, ready: true))
+            handled.Add("failure:g4-stale");
+
+        Assert.Equal(new[] { "failure:g4" }, handled);
+        Assert.True(policy.HasFailed(4));
+        Assert.False(policy.HasFailed(5));
+    }
+
+    [Fact]
     public async Task PlaybackServiceStopsThePreviousGenerationBeforeStartingTheNext()
     {
         var engine = new RecordingEngine();
