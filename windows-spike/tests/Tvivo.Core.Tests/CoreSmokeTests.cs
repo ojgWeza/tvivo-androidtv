@@ -16,6 +16,17 @@ public sealed class CoreSmokeTests
     }
 
     [Fact]
+    public void Epg_feature_is_disabled_by_default_and_options_are_instance_scoped()
+    {
+        var disabled = new EpgFeature();
+        var enabled = disabled with { Enabled = true };
+
+        Assert.False(disabled.Enabled);
+        Assert.True(enabled.Enabled);
+        Assert.False(new EpgFeature().Enabled);
+    }
+
+    [Fact]
     public void Series_resolution_uses_first_then_last_opened_then_next_after_finish()
     {
         static SeriesEpisode Episode(string id, int season, int number) => new(id, id, season.ToString(), $"Season {season}", season,

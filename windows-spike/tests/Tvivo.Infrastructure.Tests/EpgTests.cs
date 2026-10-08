@@ -105,7 +105,7 @@ public sealed class EpgTests
     {
         using var fixture = RepositoryFixture.Create();
         var provider = new CountingEpgProvider();
-        var service = new EpgRefreshService(provider, fixture.Repository, () => true);
+        var service = new EpgRefreshService(provider, fixture.Repository, () => true, new EpgFeature(Enabled: true));
 
         var result = await service.RefreshIfDueAsync(Account(), new ProviderConnection(new("http", "fixture.invalid", 80), "u", "p"));
 
@@ -114,12 +114,27 @@ public sealed class EpgTests
     }
 
     [Fact]
+    public async Task Refresh_service_is_disabled_without_provider_calls_or_epg_state_writes()
+    {
+        using var fixture = RepositoryFixture.Create();
+        var provider = new CountingEpgProvider();
+        var service = new EpgRefreshService(provider, fixture.Repository);
+
+        var result = await service.StartAsync(Account(), new ProviderConnection(new("http", "fixture.invalid", 80), "u", "p"));
+
+        Assert.Equal(EpgRefreshResult.Disabled, result);
+        Assert.Equal(0, provider.MapCalls);
+        Assert.Equal(0, provider.OpenCalls);
+        Assert.Null(fixture.Repository.GetSyncState(Account()));
+    }
+
+    [Fact]
     public async Task Provider_captures_trimmed_live_epg_ids_and_allows_many_streams_to_one_id()
     {
         var handler = new FixtureHandler((request, _) => request.RequestUri!.Query.Contains("action=get_live_streams", StringComparison.Ordinal)
             ? Json("[{\"stream_id\":\"stream-1\",\"name\":\"One\",\"epg_channel_id\":\" epg-shared \"},{\"stream_id\":\"stream-2\",\"name\":\"Two\",\"epg_channel_id\":\"epg-shared\"}]")
             : Json("{\"user_info\":{\"auth\":1,\"status\":\"Active\"},\"server_info\":{\"port\":8080}}"));
-        var provider = new XtreamCatalogProvider(new HttpClient(handler), new HttpClient(handler));
+        var provider = new XtreamCatalogProvider(new HttpClient(handler), new HttpClient(handler), epgFeature: new EpgFeature(Enabled: true));
         var auth = await provider.AuthenticateAsync(new ProviderConnection(new("http", "fixture.invalid", 8080), "u", "p"));
         var account = Assert.IsType<ProviderAccount>(auth.Account);
 
@@ -129,6 +144,42 @@ public sealed class EpgTests
         Assert.Equal("epg-shared", channels[0].Metadata["epg_channel_id"]);
         Assert.Equal(2, maps.Count);
         Assert.All(maps, map => Assert.Equal("epg-shared", map.EpgChannelId));
+    }
+
+    [Fact]
+    public async Task Disabled_provider_skips_epg_requests_and_keeps_live_catalog_available()
+    {
+        var catalogRequests = new List<string>();
+        var epgRequests = 0;
+        var catalog = new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            catalogRequests.Add(query);
+            return query.Contains("action=get_live_streams", StringComparison.Ordinal)
+                ? Json("[{\"stream_id\":\"live-1\",\"name\":\"Live\",\"epg_channel_id\":\"epg-1\"}]")
+                : Json("{\"user_info\":{\"auth\":1,\"status\":\"Active\"},\"server_info\":{\"port\":8080}}");
+        });
+        var epg = new FixtureHandler((_, _) =>
+        {
+            epgRequests++;
+            return Json("{}");
+        });
+        var provider = new XtreamCatalogProvider(new HttpClient(catalog), new HttpClient(epg));
+        var connection = new ProviderConnection(new("http", "fixture.invalid", 8080), "u", "p");
+        var auth = await provider.AuthenticateAsync(connection);
+        var account = Assert.IsType<ProviderAccount>(auth.Account);
+
+        var probe = await provider.ProbeAsync(account, connection, "live-1");
+        var programmeStream = await provider.OpenProgrammeStreamAsync(account, connection);
+        var maps = await provider.GetEpgChannelMapAsync(account);
+        var channels = await provider.GetChannelsAsync(account);
+
+        Assert.Equal(EpgCapability.Empty, probe.Capability);
+        Assert.Same(Stream.Null, programmeStream);
+        Assert.Empty(maps);
+        Assert.Single(channels);
+        Assert.Contains(catalogRequests, query => query.Contains("action=get_live_streams", StringComparison.Ordinal));
+        Assert.Equal(0, epgRequests);
     }
 
     private static ProviderAccount Account(string id = "account-a") => new(id, new("http", "fixture.invalid", 8080), "fixture");
@@ -175,6 +226,7 @@ public sealed class EpgTests
     private sealed class CountingEpgProvider : IEpgProvider
     {
         public int OpenCalls { get; private set; }
+        public int MapCalls { get; private set; }
         public Task<EpgProbeResult> ProbeAsync(ProviderAccount account, ProviderConnection connection, string streamId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new EpgProbeResult(EpgCapability.Empty));
         public Task<Stream> OpenProgrammeStreamAsync(ProviderAccount account, ProviderConnection connection, CancellationToken cancellationToken = default)
@@ -183,7 +235,13 @@ public sealed class EpgTests
             return Task.FromResult<Stream>(new MemoryStream());
         }
         public Task<IReadOnlyList<EpgChannelMap>> GetEpgChannelMapAsync(ProviderAccount account, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<EpgChannelMap>>(Array.Empty<EpgChannelMap>());
+            CountMapCall();
+
+        private Task<IReadOnlyList<EpgChannelMap>> CountMapCall()
+        {
+            MapCalls++;
+            return Task.FromResult<IReadOnlyList<EpgChannelMap>>(Array.Empty<EpgChannelMap>());
+        }
     }
 
     private sealed class FixtureHandler(Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> responder) : HttpMessageHandler

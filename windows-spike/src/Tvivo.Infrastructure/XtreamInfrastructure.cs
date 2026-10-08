@@ -17,6 +17,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
     private readonly Action<string>? _epgLog;
+    private readonly EpgFeature _epgFeature;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly SemaphoreSlim _paceGate = new(1, 1);
     private long _lastApiRequestTicks;
@@ -28,9 +29,10 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private const int MaxThrottleRetries = 3;
 
     public XtreamCatalogProvider(HttpClient? httpClient = null, HttpClient? epgHttpClient = null, Action<string>? epgLog = null,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null, EpgFeature? epgFeature = null)
     {
         _delay = delay ?? Task.Delay;
+        _epgFeature = epgFeature ?? new EpgFeature();
         // Catalog dumps are tens of MB of JSON; the default client asks for gzip/brotli/deflate.
         _http = httpClient ?? NetworkTally.CreateClient("catalog", TimeSpan.FromMinutes(5));
         _epgHttp = epgHttpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
@@ -230,7 +232,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public async Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default)
     {
         var channels = await GetArrayAsync(account, ItemAction(type), groupId, (value, accountId) => MapChannel(value, accountId, type), cancellationToken).ConfigureAwait(false);
-        if (type == CatalogItemType.Live)
+        if (type == CatalogItemType.Live && _epgFeature.Enabled)
         {
             var incoming = channels
                 .Select(channel => channel.Metadata.TryGetValue("epg_channel_id", out var epgId)
@@ -327,6 +329,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public Task<IReadOnlyList<EpgChannelMap>> GetEpgChannelMapAsync(ProviderAccount account, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (!_epgFeature.Enabled) return Task.FromResult<IReadOnlyList<EpgChannelMap>>(Array.Empty<EpgChannelMap>());
         return Task.FromResult(_epgMaps.TryGetValue(account.AccountId, out var maps)
             ? maps
             : (IReadOnlyList<EpgChannelMap>)Array.Empty<EpgChannelMap>());
@@ -338,6 +341,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         string streamId,
         CancellationToken cancellationToken = default)
     {
+        if (!_epgFeature.Enabled) return new EpgProbeResult(EpgCapability.Empty);
+
         try
         {
             using var response = await _epgHttp.GetAsync(XtreamRequest.ShortEpgUri(connection, streamId), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
@@ -366,6 +371,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         ProviderConnection connection,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_epgFeature.Enabled) return Stream.Null;
+
         HttpResponseMessage? response = null;
         try
         {

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
@@ -6,17 +7,22 @@ namespace Tvivo.App;
 
 public sealed class EpgCoordinator : IDisposable
 {
-    private readonly EpgRepository _repository;
-    private readonly EpgRefreshService _refreshService;
+    private readonly EpgRepository? _repository;
+    private readonly EpgRefreshService? _refreshService;
+    private readonly EpgFeature _feature;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly DispatcherQueue? _dispatcherQueue;
     private Func<bool> _playbackBusy = static () => false;
 
-    public EpgCoordinator(IEpgProvider provider)
+    public EpgCoordinator(IEpgProvider provider, EpgFeature? feature = null)
     {
-        _repository = new EpgRepository();
-        _refreshService = new EpgRefreshService(provider, _repository, () => PlaybackBusy());
-        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        _feature = feature ?? new EpgFeature();
+        if (_feature.Enabled)
+        {
+            _repository = new EpgRepository();
+            _refreshService = new EpgRefreshService(provider, _repository, () => PlaybackBusy(), _feature);
+        }
+        _dispatcherQueue = GetDispatcherQueue();
     }
 
     public Func<bool> PlaybackBusy
@@ -31,12 +37,15 @@ public sealed class EpgCoordinator : IDisposable
         ProviderAccount account,
         ProviderConnection connection,
         CancellationToken cancellationToken = default) =>
-        Task.Run(() => RefreshCoreAsync(account, connection, cancellationToken), CancellationToken.None);
+        _feature.Enabled
+            ? Task.Run(() => RefreshCoreAsync(account, connection, cancellationToken), CancellationToken.None)
+            : Task.CompletedTask;
 
     public IReadOnlyDictionary<string, EpgNowNext> GetNowNext(
         ProviderAccount account,
         IEnumerable<string> epgChannelIds) =>
-        _repository.GetNowNext(account, epgChannelIds.ToArray(), DateTimeOffset.UtcNow);
+        _repository?.GetNowNext(account, epgChannelIds.ToArray(), DateTimeOffset.UtcNow)
+        ?? new Dictionary<string, EpgNowNext>(StringComparer.Ordinal);
 
     private async Task RefreshCoreAsync(
         ProviderAccount account,
@@ -49,7 +58,7 @@ public sealed class EpgCoordinator : IDisposable
             acquired = _refreshGate.Wait(0);
             if (!acquired) return;
 
-            var result = await _refreshService.StartAsync(account, connection, cancellationToken).ConfigureAwait(false);
+            var result = await _refreshService!.StartAsync(account, connection, cancellationToken).ConfigureAwait(false);
             LaunchDiagnostics.Write($"EPG refresh result: {result}");
             if (result == EpgRefreshResult.Refreshed)
                 RaiseEpgUpdated();
@@ -91,9 +100,21 @@ public sealed class EpgCoordinator : IDisposable
         Raise();
     }
 
+    private static DispatcherQueue? GetDispatcherQueue()
+    {
+        try
+        {
+            return DispatcherQueue.GetForCurrentThread();
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         _refreshGate.Dispose();
-        _repository.Dispose();
+        _repository?.Dispose();
     }
 }

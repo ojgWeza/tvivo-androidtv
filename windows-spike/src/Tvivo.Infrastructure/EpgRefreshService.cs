@@ -4,6 +4,7 @@ namespace Tvivo.Infrastructure;
 
 public enum EpgRefreshResult
 {
+    Disabled,
     Refreshed,
     NotDue,
     PlaybackBusy,
@@ -21,12 +22,14 @@ public sealed class EpgRefreshService
     private readonly IEpgProvider _provider;
     private readonly EpgRepository _repository;
     private readonly Func<bool> _isPlaybackBusy;
+    private readonly EpgFeature _feature;
 
-    public EpgRefreshService(IEpgProvider provider, EpgRepository repository, Func<bool>? isPlaybackBusy = null)
+    public EpgRefreshService(IEpgProvider provider, EpgRepository repository, Func<bool>? isPlaybackBusy = null, EpgFeature? feature = null)
     {
         _provider = provider;
         _repository = repository;
         _isPlaybackBusy = isPlaybackBusy ?? (() => false);
+        _feature = feature ?? new EpgFeature();
     }
 
     public Task<EpgRefreshResult> StartAsync(
@@ -40,6 +43,8 @@ public sealed class EpgRefreshService
         ProviderConnection connection,
         CancellationToken cancellationToken = default)
     {
+        if (!_feature.Enabled) return EpgRefreshResult.Disabled;
+
         try
         {
             if (_isPlaybackBusy()) return EpgRefreshResult.PlaybackBusy;

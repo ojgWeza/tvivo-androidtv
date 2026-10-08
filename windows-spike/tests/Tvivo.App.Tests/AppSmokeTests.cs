@@ -56,6 +56,46 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
+    public async Task Epg_coordinator_default_does_not_call_provider_or_read_epg_rows()
+    {
+        var provider = new NoCallEpgProvider();
+        using var coordinator = new EpgCoordinator(provider);
+        var account = new ProviderAccount("account", new ProviderEndpoint("http", "example.invalid", 80), "user");
+        var connection = new ProviderConnection(new ProviderEndpoint("http", "example.invalid", 80), "user", "password");
+
+        await coordinator.StartIfDueAsync(account, connection);
+
+        Assert.Empty(coordinator.GetNowNext(account, new[] { "epg-channel" }));
+        Assert.Equal(0, provider.Calls);
+    }
+
+    private sealed class NoCallEpgProvider : IEpgProvider
+    {
+        public int Calls { get; private set; }
+
+        public Task<EpgProbeResult> ProbeAsync(ProviderAccount account, ProviderConnection connection, string streamId,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new EpgProbeResult(EpgCapability.Empty));
+        }
+
+        public Task<Stream> OpenProgrammeStreamAsync(ProviderAccount account, ProviderConnection connection,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<Stream>(Stream.Null);
+        }
+
+        public Task<IReadOnlyList<EpgChannelMap>> GetEpgChannelMapAsync(ProviderAccount account,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<IReadOnlyList<EpgChannelMap>>(Array.Empty<EpgChannelMap>());
+        }
+    }
+
+    [Fact]
     public void Unverified_end_keeps_app_progress_unfinished()
     {
         const long duration = 20 * 60_000;
