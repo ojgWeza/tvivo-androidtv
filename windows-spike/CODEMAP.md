@@ -25,7 +25,7 @@
 | [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L614) | CALL | — ⚠️ | [`AddFavorite`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L614) | — | — | — |
 | [`CatalogCategoryMatchCount`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L8) | CALL | — ⚠️ | [`CatalogCategoryMatchCount`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L8) | — | — | — |
 | [`CatalogPage`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L7) | CALL | — ⚠️ | [`CatalogPage`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L7) | — | — | — |
-| [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L883) | CALL | `EpgCoordinator.cs` | [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L883) | — | — | — |
+| [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L883) | CALL | — ⚠️ | [`Dispose`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L883) | — | — | — |
 | [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L13) | CALL | — ⚠️ | [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L13) | — | — | — |
 | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L403) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L403) | — | — | — |
 | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L387) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L387) | `GetCategoryMatchCounts` | _direct SQL, see §7_ | `items` |
@@ -63,7 +63,7 @@
 
 Broken at runtime, or a route renamed on one side only.
 
-- `GetNowNext` — called from `EpgCoordinator.cs`
+_None._
 
 ## 3. Route defined but never called from the frontend
 
@@ -72,6 +72,7 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `AddFavorite` (CALL)
 - `CatalogCategoryMatchCount` (CALL)
 - `CatalogPage` (CALL)
+- `Dispose` (CALL)
 - `For` (CALL)
 - `GetSuggestions` (CALL)
 - `MarkEpisodeUnwatched` (CALL)

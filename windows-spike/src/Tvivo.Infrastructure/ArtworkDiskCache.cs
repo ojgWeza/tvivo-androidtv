@@ -109,12 +109,15 @@ public sealed class ArtworkDiskCache
 
     private async Task RunAsync(string key, Uri url, TaskCompletionSource<byte[]?> completion)
     {
-        try { completion.SetResult(await LoadOrFetchAsync(key, url)); }
-        catch (Exception error) { completion.SetException(error); }
-        finally
-        {
-            lock (_flightGate) _flights.Remove(key);
-        }
+        byte[]? result = null;
+        Exception? failure = null;
+        try { result = await LoadOrFetchAsync(key, url); }
+        catch (Exception error) { failure = error; }
+        // Leave the flight table before completing it: a caller that resumes from this result and asks again
+        // must start a new lookup, not join the finished one.
+        lock (_flightGate) _flights.Remove(key);
+        if (failure is not null) completion.SetException(failure);
+        else completion.SetResult(result);
     }
 
     private async Task<byte[]?> LoadOrFetchAsync(string key, Uri url)
