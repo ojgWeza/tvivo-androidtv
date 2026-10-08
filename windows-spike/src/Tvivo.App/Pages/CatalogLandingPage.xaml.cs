@@ -81,7 +81,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
-    private static readonly HttpClient ArtworkClient = NetworkTally.CreateClient("artwork", TimeSpan.FromSeconds(30));
+    private static readonly HttpClient ArtworkClient = CreateArtworkClient();
+    private static readonly ArtworkDiskCache ArtworkBytes = new(ArtworkClient);
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly Dictionary<Image, AppliedArtwork> _appliedArtwork = new();
     private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
@@ -90,6 +91,14 @@ public sealed partial class CatalogLandingPage : UserControl
     // Decoded BGRA pixels dominate retained memory; 96 MiB holds roughly 120 poster-sized cards.
     private const long ArtworkBitmapCacheByteLimit = 96L * 1024 * 1024;
     private const int ArtworkBitmapCacheCountLimit = 128;
+
+    private static HttpClient CreateArtworkClient()
+    {
+        var client = NetworkTally.CreateClient("artwork", ArtworkRequestTimeout);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Tvivo/1.0");
+        client.DefaultRequestHeaders.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
+        return client;
+    }
     private readonly HashSet<string> _artworkDiagnosticsLogged = new(StringComparer.Ordinal);
     private readonly HashSet<string> _artworkFailuresLogged = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
@@ -1872,33 +1881,24 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         LaunchDiagnostics.Write($"Artwork cache miss: item={itemKey}; url={SanitizeArtworkUri(uri)}; decode={decodeWidth}x{decodeHeight}; cacheEntries={_artworkBitmapCache.Count}");
 
-        var stage = "permit-wait";
+        var stage = "disk-or-http";
         try
         {
+            load.Stage = stage;
+            var bytes = await ArtworkBytes.GetAsync(uri, load.Cancellation.Token);
+            if (bytes is null)
+                throw new InvalidDataException("Artwork image was unavailable or exceeded the decode limit.");
+            if (!IsCurrentArtworkLoad(image, load, stage)) return;
+
+            stage = "decode-permit-wait";
             load.Stage = stage;
             LaunchDiagnostics.Write($"Artwork request queued: id={load.Id}; item={itemKey}; permitsAvailable={_artworkSlots.CurrentCount}");
             await _artworkSlots.WaitAsync(load.Cancellation.Token);
             load.SlotAcquired = true;
-            stage = "http";
+            stage = "decode";
             load.Stage = stage;
             LaunchDiagnostics.Write($"Artwork permit acquired: id={load.Id}; item={itemKey}; permitsAvailable={_artworkSlots.CurrentCount}");
             if (!IsCurrentArtworkLoad(image, load, "permit-acquired")) return;
-
-            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(load.Cancellation.Token);
-            requestCancellation.CancelAfter(ArtworkRequestTimeout);
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Tvivo/1.0");
-            request.Headers.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
-            using var response = await ArtworkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCancellation.Token);
-            stage = "response-body";
-            load.Stage = stage;
-            var responseStatus = $"{(int)response.StatusCode} {response.StatusCode}";
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
-            response.EnsureSuccessStatusCode();
-            var bytes = await response.Content.ReadAsByteArrayAsync(requestCancellation.Token);
-            if (bytes.Length == 0 || bytes.Length > 20 * 1024 * 1024)
-                throw new InvalidDataException("Artwork image was empty or exceeded the decode limit.");
-            if (!IsCurrentArtworkLoad(image, load, "response-body")) return;
 
             var bitmap = new BitmapImage
             {
@@ -1921,7 +1921,7 @@ public sealed partial class CatalogLandingPage : UserControl
             CacheArtworkBitmap(cacheKey, bitmap);
             _ = ExpireArtworkAsync(image, load);
             ApplyArtworkToLiveImage(image, load, bitmap, "decoded");
-            LaunchDiagnostics.Write($"Artwork downloaded and decoded: id={load.Id}; item={itemKey}; status={responseStatus}; type={contentType}; bytes={bytes.Length}; source=BitmapImage; cacheEntries={_artworkBitmapCache.Count}");
+            LaunchDiagnostics.Write($"Artwork bytes decoded: id={load.Id}; item={itemKey}; bytes={bytes.Length}; source=BitmapImage; cacheEntries={_artworkBitmapCache.Count}");
         }
         catch (OperationCanceledException exception)
         {

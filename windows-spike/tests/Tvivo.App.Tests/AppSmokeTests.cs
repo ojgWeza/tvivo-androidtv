@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using Tvivo.Core;
 using Tvivo.App.Pages;
 using Tvivo.App;
@@ -97,6 +99,62 @@ public sealed class AppSmokeTests
         Assert.True(ArtworkMemoryBudget.ShouldEvict(limit + 1, limit, 2, 128));
         Assert.True(ArtworkMemoryBudget.ShouldEvict(limit, limit, 129, 128));
         Assert.False(ArtworkMemoryBudget.ShouldEvict(limit + 1, limit, 1, 128));
+    }
+
+    [Fact]
+    public async Task Artwork_bytes_survive_view_cancellation_and_restart_for_two_decode_sizes()
+    {
+        var root = Path.Combine("D:/Scratch", $"tvivo-app-artwork-{Guid.NewGuid():N}", "artwork-cache");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var gets = 0;
+            using var client = new HttpClient(new ArtworkHandler(async () =>
+            {
+                Interlocked.Increment(ref gets);
+                started.TrySetResult();
+                await release.Task;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(Encoding.UTF8.GetBytes("original image bytes"))
+                };
+            }));
+            var url = new Uri("https://images.example.test/shared-poster");
+            var firstView = new ArtworkDiskCache(client, root);
+            using var canceledView = new CancellationTokenSource();
+            var canceled = firstView.GetAsync(url, canceledView.Token);
+            var surviving = firstView.GetAsync(url);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            canceledView.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+            release.SetResult();
+
+            var decodedSizes = new List<(int Width, int Height)>();
+            void Decode(byte[]? bytes, int width, int height)
+            {
+                Assert.Equal("original image bytes", Encoding.UTF8.GetString(Assert.IsType<byte[]>(bytes)));
+                decodedSizes.Add((width, height));
+            }
+            Decode(await surviving, 380, 500);
+            Decode(await firstView.GetAsync(url), 600, 336);
+            var laterView = new ArtworkDiskCache(client, root);
+            Decode(await laterView.GetAsync(url), 320, 450);
+
+            Assert.Equal(1, gets);
+            Assert.Equal(new[] { (380, 500), (600, 336), (320, 450) }, decodedSizes);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(root)!, recursive: true);
+        }
+    }
+
+    private sealed class ArtworkHandler(Func<Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            respond();
     }
 
     [Fact]
