@@ -97,6 +97,11 @@
                         <Button x:Name="RefreshCatalogButton" Style="{StaticResource AppQuietButtonStyle}"
                                 HorizontalAlignment="Left" Content="Refresh all"
                                 Click="RefreshCatalogButton_Click" />
+                        <Button x:Name="ClearArtworkCacheButton" Style="{StaticResource AppQuietButtonStyle}"
+                                HorizontalAlignment="Left" Content="Clear artwork cache"
+                                Click="ClearArtworkCacheButton_Click" />
+                        <TextBlock x:Name="ArtworkCacheStatusText" Foreground="{StaticResource AppMutedTextBrush}"
+                                   FontSize="13" Visibility="Collapsed" />
                         <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" TextWrapping="Wrap"
                                    Text="Re-downloads your provider's catalog. Favorites, resume positions and visit history are kept. Large catalogs can take a few minutes." />
                     </StackPanel>

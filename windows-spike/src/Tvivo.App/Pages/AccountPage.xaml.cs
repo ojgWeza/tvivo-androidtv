@@ -12,10 +12,12 @@ public sealed partial class AccountPage : UserControl
 {
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private readonly CatalogRefreshPolicyStore _catalogRefreshPolicyStore = new();
+    private readonly DispatcherTimer _artworkCacheStatusTimer = new() { Interval = TimeSpan.FromSeconds(3) };
 
     public AccountPage()
     {
         InitializeComponent();
+        _artworkCacheStatusTimer.Tick += ArtworkCacheStatusTimer_Tick;
     }
 
     public event EventHandler? SignOutCompleted;
@@ -156,6 +158,29 @@ public sealed partial class AccountPage : UserControl
         RefreshCatalogButton.IsEnabled = false;
         LastRefreshText.Text = "Refreshing... returning to your catalog";
         RefreshCatalogRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ClearArtworkCacheButton_Click(object sender, RoutedEventArgs args)
+    {
+        try
+        {
+            CatalogLandingPage.ClearArtworkCache();
+            ErrorText.Visibility = Visibility.Collapsed;
+            ArtworkCacheStatusText.Text = "Artwork cache cleared.";
+            ArtworkCacheStatusText.Visibility = Visibility.Visible;
+            _artworkCacheStatusTimer.Stop();
+            _artworkCacheStatusTimer.Start();
+        }
+        catch
+        {
+            ShowError("Couldn't clear the artwork cache. Please try again.");
+        }
+    }
+
+    private void ArtworkCacheStatusTimer_Tick(object? sender, object args)
+    {
+        _artworkCacheStatusTimer.Stop();
+        ArtworkCacheStatusText.Visibility = Visibility.Collapsed;
     }
 
     private void CatalogRefreshPolicySelector_SelectionChanged(object sender, SelectionChangedEventArgs args)

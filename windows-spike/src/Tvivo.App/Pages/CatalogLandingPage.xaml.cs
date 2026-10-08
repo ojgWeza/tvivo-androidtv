@@ -66,10 +66,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private readonly HashSet<string> _recentSpotlightIds = new(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
+    private readonly HashSet<string> _spotlightWarmUrls = new(StringComparer.Ordinal);
     private readonly object _spotlightShelvesLock = new();
     private readonly Dictionary<(string AccountId, CatalogMode Mode), IReadOnlyList<CatalogShelf>> _spotlightShelvesCache = new();
     private static readonly string SpotlightSessionId = Guid.NewGuid().ToString("N");
     private const int SnapshotCacheCapacity = 16;
+    private const int SpotlightWarmCandidateLimit = 6;
     private static readonly Regex QualityToken = new(
         @"(?i)(?<![\p{L}\p{N}])(?<quality>FULL[\s_\-]?HD|FHD|UHD|4K|2160p|1080[pi]|720p|576p|480p|HD|SD)(?![\p{L}\p{N}])",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -83,6 +85,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient ArtworkClient = CreateArtworkClient();
     private static readonly ArtworkDiskCache ArtworkBytes = new(ArtworkClient);
+    private static readonly object ArtworkPagesLock = new();
+    private static readonly List<WeakReference<CatalogLandingPage>> ArtworkPages = new();
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly Dictionary<Image, AppliedArtwork> _appliedArtwork = new();
     private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
@@ -160,6 +164,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         _refreshTasks = new CatalogRefreshTasks((account, type) =>
             Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
+        lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
         InitializeComponent();
         _spotlightTimer.Tick += SpotlightTimer_Tick;
         _epgTimer.Tick += EpgTimer_Tick;
@@ -245,6 +250,45 @@ public sealed partial class CatalogLandingPage : UserControl
         _epgTimer.Tick -= EpgTimer_Tick;
         _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
         CancelArtworkLoads();
+    }
+
+    internal static void ClearArtworkCache()
+    {
+        lock (ArtworkPagesLock)
+            ArtworkPages.RemoveAll(reference => !reference.TryGetTarget(out _));
+        ArtworkBytes.Clear();
+        lock (ArtworkPagesLock)
+        {
+            foreach (var reference in ArtworkPages)
+                if (reference.TryGetTarget(out var page)) page.ClearDecodedArtworkCache();
+        }
+    }
+
+    private void ClearDecodedArtworkCache()
+    {
+        var images = _artworkLoads.Keys.Concat(_appliedArtwork.Keys).Distinct().ToArray();
+        CancelArtworkLoads();
+        _spotlightWarmUrls.Clear();
+        _artworkBitmapCache.Clear();
+        _artworkBitmapLru.Clear();
+        _artworkBitmapCacheBytes = 0;
+        foreach (var image in images)
+        {
+            var item = image.DataContext;
+            var url = ReferenceEquals(image, SpotlightArtwork)
+                ? _spotlightCard?.ArtworkUrl
+                : item switch
+                {
+                    CatalogCard card => card.ArtworkUrl,
+                    HomePage.HomeShelfCard homeCard => homeCard.ArtworkUrl,
+                    _ => null,
+                };
+            _appliedArtwork.Remove(image);
+            image.Source = null;
+            image.Opacity = 0;
+            if (FindArtworkFallback(image) is { } fallback) fallback.Visibility = Visibility.Visible;
+            if (image.IsLoaded && !string.IsNullOrWhiteSpace(url)) StartArtwork(image, url);
+        }
     }
 
     public async Task PrepareModeAsync(CatalogMode mode)
@@ -1501,16 +1545,18 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var previousCard = _spotlightCard;
         var candidates = GetSpotlightCandidates(shelves);
+        WarmSpotlightCandidates(candidates.Take(SpotlightWarmCandidateLimit));
         SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         var card = candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id);
         if (card is null && candidates.Length > 0)
         {
             var seed = $"{SpotlightSessionId}:{DateTime.UtcNow:yyyy-MM-dd}:{_account?.AccountId}:{_activeMode}";
-            var candidateIndex = (int)((uint)StringComparer.Ordinal.GetHashCode(seed) % (uint)candidates.Length);
+            var warmCount = SpotlightWarmCount(candidates.Length);
+            var candidateIndex = (int)((uint)StringComparer.Ordinal.GetHashCode(seed) % (uint)warmCount);
             card = candidates[candidateIndex];
             if (_recentSpotlightIds.Contains(card.Id) && candidates.Length > 1)
-                card = candidates[(candidateIndex + 1) % candidates.Length];
+                card = candidates[(candidateIndex + 1) % warmCount];
             _recentSpotlightIds.Add(card.Id);
             _spotlightByMode[_activeMode] = card;
             if (_recentSpotlightIds.Count > 64) _recentSpotlightIds.Clear();
@@ -1551,24 +1597,77 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_openShelfId is not null || _renderedSnapshot is not { } snapshot ||
             ContentState.Visibility != Visibility.Visible) return;
-        AdvanceSpotlight(1, snapshot);
+        AdvanceSpotlight(1, snapshot, automatic: true);
     }
 
     private void SpotlightPrevious_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(-1);
 
     private void SpotlightNext_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(1);
 
-    private void AdvanceSpotlight(int delta, CatalogSnapshot? snapshot = null)
+    private void AdvanceSpotlight(int delta, CatalogSnapshot? snapshot = null, bool automatic = false)
     {
         snapshot ??= _renderedSnapshot;
         if (snapshot is null) return;
         var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
         if (candidates.Length < 2) return;
         var index = Array.FindIndex(candidates, card => card.Id == _spotlightCard?.Id);
-        if (index < 0) index = delta > 0 ? -1 : 0;
-        var nextIndex = ((index + delta) % candidates.Length + candidates.Length) % candidates.Length;
+        var nextIndex = NextSpotlightIndex(candidates.Length, index, delta, automatic);
+        if (nextIndex < 0) return;
         _spotlightByMode[_activeMode] = candidates[nextIndex];
         RenderSpotlight(snapshot.SpotlightShelves);
+    }
+
+    public static int SpotlightWarmCount(int candidateCount) => Math.Clamp(candidateCount, 0, SpotlightWarmCandidateLimit);
+
+    public static int NextSpotlightIndex(int candidateCount, int currentIndex, int delta, bool automatic)
+    {
+        var count = automatic ? SpotlightWarmCount(candidateCount) : candidateCount;
+        if (count <= 0) return -1;
+        if (currentIndex < 0) currentIndex = delta > 0 ? -1 : 0;
+        return ((currentIndex + delta) % count + count) % count;
+    }
+
+    private void WarmSpotlightCandidates(IEnumerable<CatalogCard> candidates)
+    {
+        foreach (var card in candidates)
+        {
+            if (!Uri.TryCreate(card.ArtworkUrl, UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("http" or "https") || !_spotlightWarmUrls.Add(uri.AbsoluteUri)) continue;
+            _ = WarmSpotlightArtworkAsync(uri);
+        }
+    }
+
+    private async Task WarmSpotlightArtworkAsync(Uri uri)
+    {
+        var cacheKey = $"{uri.AbsoluteUri}|600x336";
+        if (TryGetCachedArtworkBitmap(cacheKey, out _)) return;
+        var slotAcquired = false;
+        try
+        {
+            var bytes = await ArtworkBytes.GetAsync(uri);
+            if (bytes is null) return;
+            await _artworkSlots.WaitAsync();
+            slotAcquired = true;
+            var bitmap = new BitmapImage { DecodePixelWidth = 600, DecodePixelHeight = 336 };
+            using var imageStream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(imageStream))
+            {
+                writer.WriteBytes(bytes);
+                await writer.StoreAsync();
+                writer.DetachStream();
+            }
+            imageStream.Seek(0);
+            await bitmap.SetSourceAsync(imageStream);
+            CacheArtworkBitmap(cacheKey, bitmap);
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"Spotlight artwork warm-up failed: type={exception.GetType().Name}; HRESULT=0x{exception.HResult:X8}");
+        }
+        finally
+        {
+            if (slotAcquired) _artworkSlots.Release();
+        }
     }
 
     private void RenderSpotlightIndicators(IReadOnlyList<CatalogCard> candidates, int selectedIndex)

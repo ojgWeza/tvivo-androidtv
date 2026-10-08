@@ -151,6 +151,71 @@ public sealed class AppSmokeTests
         }
     }
 
+    [Fact]
+    public async Task Spotlight_warm_set_rotates_offline_and_clear_refetches_lazily()
+    {
+        var root = Path.Combine("D:/Scratch", $"tvivo-spotlight-artwork-{Guid.NewGuid():N}", "artwork-cache");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var onlineGets = 0;
+            using var onlineClient = new HttpClient(new ArtworkHandler(() =>
+            {
+                Interlocked.Increment(ref onlineGets);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(Encoding.UTF8.GetBytes("spotlight image bytes"))
+                });
+            }));
+            var cache = new ArtworkDiskCache(onlineClient, root);
+            var urls = Enumerable.Range(0, 10)
+                .Select(index => new Uri($"https://images.example.test/spotlight-{index}"))
+                .ToArray();
+            var warmCount = CatalogLandingPage.SpotlightWarmCount(urls.Length);
+
+            Assert.Equal(6, warmCount);
+            Assert.Equal(6, CatalogLandingPage.NextSpotlightIndex(10, 5, 1, automatic: false));
+            for (var index = 0; index < warmCount; index++)
+                Assert.NotNull(await cache.GetAsync(urls[index]));
+            Assert.Equal(warmCount, onlineGets);
+
+            var selected = 0;
+            for (var rotation = 0; rotation < warmCount * 2; rotation++)
+            {
+                selected = CatalogLandingPage.NextSpotlightIndex(urls.Length, selected, 1, automatic: true);
+                Assert.InRange(selected, 0, warmCount - 1);
+                Assert.NotNull(await cache.GetAsync(urls[selected]));
+            }
+            Assert.Equal(warmCount, onlineGets);
+
+            var manualIndex = CatalogLandingPage.NextSpotlightIndex(urls.Length, warmCount - 1, 1, automatic: false);
+            Assert.Equal(warmCount, manualIndex);
+            Assert.NotNull(await cache.GetAsync(urls[manualIndex]));
+            Assert.Equal(warmCount + 1, onlineGets);
+
+            var offlineGets = 0;
+            using var offlineClient = new HttpClient(new ArtworkHandler(() =>
+            {
+                Interlocked.Increment(ref offlineGets);
+                return Task.FromException<HttpResponseMessage>(new HttpRequestException("offline"));
+            }));
+            var restartedCache = new ArtworkDiskCache(offlineClient, root);
+            for (var index = 0; index < warmCount; index++)
+                Assert.NotNull(await restartedCache.GetAsync(urls[index]));
+            Assert.Equal(0, offlineGets);
+
+            cache.Clear();
+            Assert.Equal(0, cache.TotalBytes);
+            Assert.NotNull(await cache.GetAsync(urls[0]));
+            Assert.Equal(warmCount + 2, onlineGets);
+        }
+        finally
+        {
+            var directory = Path.GetDirectoryName(root)!;
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private sealed class ArtworkHandler(Func<Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
