@@ -1,6 +1,7 @@
 using Tvivo.Core;
 using Tvivo.App.Pages;
 using Tvivo.App;
+using Tvivo.Infrastructure;
 using Xunit;
 
 namespace Tvivo.App.Tests;
@@ -151,6 +152,71 @@ public sealed class AppSmokeTests
         Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: false, sameAccount: true, dataVersionMatches: true));
         Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: true, sameAccount: false, dataVersionMatches: true));
         Assert.False(CatalogReloadPolicy.ShouldReuseHome(hasSuccessfulLoad: true, sameAccount: true, dataVersionMatches: false));
+    }
+
+    [Fact]
+    public async Task Catalog_refresh_routes_by_type_and_deduplicates_account_type_tasks()
+    {
+        var account = new ProviderAccount("account-a", new ProviderEndpoint("https", "example.invalid", 0), "user");
+        var other = account with { AccountId = "account-b" };
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = new List<(string AccountId, CatalogItemType Type)>();
+        var sync = new object();
+        var tasks = new CatalogRefreshTasks(async (requested, type) =>
+        {
+            lock (sync) calls.Add((requested.AccountId, type));
+            await gate.Task;
+            return true;
+        });
+
+        var movie = tasks.RefreshTypeAsync(account, CatalogLandingPage.TypesForMode(CatalogLandingPage.CatalogMode.Movies)[0]);
+        var sameMovie = tasks.RefreshTypeAsync(account, CatalogItemType.Movie);
+        var otherMovie = tasks.RefreshTypeAsync(other, CatalogItemType.Movie);
+        var global = CatalogLandingPage.TypesForMode(CatalogLandingPage.CatalogMode.MyTvivo)
+            .Select(type => tasks.RefreshTypeAsync(account, type)).ToArray();
+        Assert.Same(movie, sameMovie);
+        Assert.Same(movie, global[1]);
+        gate.SetResult(true);
+        Assert.All(await Task.WhenAll(global.Append(otherMovie)), result => Assert.True(result));
+        lock (sync)
+            Assert.Equal(new[]
+            {
+                ("account-a", CatalogItemType.Live),
+                ("account-a", CatalogItemType.Movie),
+                ("account-a", CatalogItemType.Series),
+                ("account-b", CatalogItemType.Movie),
+            }, calls.OrderBy(call => call.AccountId).ThenBy(call => call.Type).ToArray());
+    }
+
+    [Fact]
+    public void Catalog_refresh_policy_survives_reopen_and_updated_copy_uses_persisted_stamp()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tvivo-refresh-" + Guid.NewGuid().ToString("N"), "catalog-options.json");
+        try
+        {
+            foreach (var policy in Enum.GetValues<CatalogRefreshPolicy>())
+            {
+                new CatalogRefreshPolicyStore(path).Write(policy);
+                Assert.Equal(policy, new CatalogRefreshPolicyStore(path).Read());
+            }
+            Assert.Equal("Updated never", CatalogLandingPage.FormatUpdated(null, DateTimeOffset.UtcNow));
+            var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+            Assert.Equal("Updated 2 days ago", CatalogLandingPage.FormatUpdated(now.AddDays(-2), now));
+            Assert.False(CatalogLandingPage.ShouldAutoRefresh(CatalogRefreshPolicy.OnDemandOnly,
+                null, now, refreshedThisStart: false, canAttempt: true));
+            Assert.True(CatalogLandingPage.ShouldAutoRefresh(CatalogRefreshPolicy.OlderThanOneDay,
+                now.AddDays(-2), now, refreshedThisStart: false, canAttempt: true));
+            Assert.False(CatalogLandingPage.ShouldAutoRefresh(CatalogRefreshPolicy.OlderThanSevenDays,
+                now.AddDays(-2), now, refreshedThisStart: false, canAttempt: true));
+            Assert.False(CatalogLandingPage.ShouldAutoRefresh(CatalogRefreshPolicy.EveryStart,
+                now.AddDays(-2), now, refreshedThisStart: true, canAttempt: true));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            var directory = Path.GetDirectoryName(path)!;
+            if (Directory.Exists(directory)) Directory.Delete(directory);
+        }
     }
 
     [Fact]

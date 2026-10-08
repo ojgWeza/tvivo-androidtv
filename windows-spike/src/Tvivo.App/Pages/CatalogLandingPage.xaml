@@ -195,6 +195,14 @@
                             Click="ClearSearch_Click" />
                 </Grid>
             </Border>
+            <StackPanel x:Name="TypeRefreshPanel" Grid.Column="1" Orientation="Horizontal"
+                        VerticalAlignment="Center" Spacing="12" Visibility="Collapsed">
+                <TextBlock x:Name="TypeUpdatedText" VerticalAlignment="Center"
+                           Foreground="{StaticResource AppMutedTextBrush}" Text="Updated never" />
+                <Button x:Name="TypeRefreshButton" Content="Refresh"
+                        Style="{StaticResource AppQuietButtonStyle}"
+                        Click="TypeRefreshButton_Click" />
+            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="2">

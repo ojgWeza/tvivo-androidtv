@@ -27,6 +27,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly ICatalogProvider _provider = App.Services.GetRequiredService<ICatalogProvider>();
     private readonly SqliteCatalogRepository _repository = App.Services.GetRequiredService<SqliteCatalogRepository>();
     private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
+    private readonly CatalogRefreshPolicyStore _refreshPolicyStore = new();
+    private readonly CatalogRefreshRetry _refreshRetry = new();
+    private readonly CatalogRefreshTasks _refreshTasks;
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private readonly EpgCoordinator _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
     private ProviderAccount? _account;
@@ -40,7 +43,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private CategorySort _categorySort = CategorySort.Visited;
     private int _offset;
     private long _loadGeneration;
-    private int _silentRefreshRetries;
+    private readonly HashSet<(string AccountId, CatalogItemType Type)> _scheduledRetries = new();
+    private readonly HashSet<(string AccountId, CatalogItemType Type)> _refreshedThisStart = new();
+    private readonly DateTimeOffset _sessionStartedAt = DateTimeOffset.UtcNow;
     private long _pageQueryGeneration;
     private bool _suppressSearchChanged;
     private bool _isReadyForInteraction;
@@ -53,7 +58,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
     private readonly ObservableCollection<CatalogShelf> _renderedShelves = new();
-    private readonly Dictionary<(string AccountId, CatalogMode Mode), DateTimeOffset> _lastRefreshAt = new();
     private bool _activityDataDirty;
     private bool _favoriteDataDirty;
     private readonly Dictionary<CatalogMode, ModeInteractionState> _modeStates = new();
@@ -66,7 +70,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<(string AccountId, CatalogMode Mode), IReadOnlyList<CatalogShelf>> _spotlightShelvesCache = new();
     private static readonly string SpotlightSessionId = Guid.NewGuid().ToString("N");
     private const int SnapshotCacheCapacity = 16;
-    private static readonly TimeSpan SnapshotFreshness = TimeSpan.FromMinutes(15);
     private static readonly Regex QualityToken = new(
         @"(?i)(?<![\p{L}\p{N}])(?<quality>FULL[\s_\-]?HD|FHD|UHD|4K|2160p|1080[pi]|720p|576p|480p|HD|SD)(?![\p{L}\p{N}])",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -75,7 +78,6 @@ public sealed partial class CatalogLandingPage : UserControl
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex EmptyBrackets = new(@"[\(\[\{]\s*[\)\]\}]", RegexOptions.Compiled);
     private static readonly Regex RepeatedSpaces = new(@"\s{2,}", RegexOptions.Compiled);
-    private readonly Dictionary<string, Task> _activeRefreshTasks = new(StringComparer.Ordinal);
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
@@ -147,6 +149,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public CatalogLandingPage()
     {
+        _refreshTasks = new CatalogRefreshTasks((account, type) =>
+            Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
         InitializeComponent();
         _spotlightTimer.Tick += SpotlightTimer_Tick;
         _epgTimer.Tick += EpgTimer_Tick;
@@ -200,7 +204,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _modeStates.Clear();
         SetSearchTextWithoutReload(string.Empty);
         _spotlightByMode.Clear();
-        _lastRefreshAt.Clear();
+        _scheduledRetries.Clear();
         _activityDataDirty = false;
         _favoriteDataDirty = false;
         _recentSpotlightIds.Clear();
@@ -347,7 +351,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     public async Task LoadAsync(ProviderAccount account, ProviderConnection? connection = null,
-        bool forceRefresh = false, string reason = "navigation")
+        bool forceRefresh = false, string reason = "navigation", bool refreshAll = false)
     {
         var returningFromPlayer = reason == "player-return";
         var canReuseRenderedSnapshot = returningFromPlayer && _account?.AccountId == account.AccountId &&
@@ -385,7 +389,7 @@ public sealed partial class CatalogLandingPage : UserControl
             RefreshInfoBar.IsOpen = false;
             SetState(loading: true);
         }
-        await LoadCatalogAsync(account, generation, forceRefresh);
+        await LoadCatalogAsync(account, generation, forceRefresh, refreshAll);
     }
 
     public async Task LoadSavedAsync()
@@ -439,7 +443,7 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private async Task LoadCatalogAsync(ProviderAccount account, long generation, bool forceRefresh = false)
+    private async Task LoadCatalogAsync(ProviderAccount account, long generation, bool forceRefresh = false, bool refreshAll = false)
     {
         var cacheStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var cacheCompleted = false;
@@ -466,7 +470,6 @@ public sealed partial class CatalogLandingPage : UserControl
                 _activityDataDirty = false;
                 _favoriteDataDirty = false;
                 _firstCatalogLoadCompleted = true;
-                ShowRefreshingStatus();
             }
             else
             {
@@ -474,36 +477,71 @@ public sealed partial class CatalogLandingPage : UserControl
                 if (!_firstCatalogLoadCompleted)
                     ShowFirstLoadTakeover();
             }
+            await UpdateRefreshChromeAsync(account, generation);
 
-            var shouldRefresh = forceRefresh || !HasCatalogData(cached) || (!cacheDirty && IsSnapshotStale(account));
-            if (!shouldRefresh)
+            var policy = _refreshPolicyStore.Read();
+            var types = refreshAll ? AllRefreshTypes : TypesForMode(_activeMode);
+            var refreshedThisStart = types.Where(type => _refreshedThisStart.Contains((account.AccountId, type))).ToHashSet();
+            var dueTypes = forceRefresh ? types : await Task.Run(() => types
+                .Where(type =>
+                {
+                    var stamp = _repository.GetLastRefreshSuccess(account, type);
+                    return ShouldAutoRefresh(policy, stamp, DateTimeOffset.UtcNow,
+                        refreshedThisStart.Contains(type) || stamp >= _sessionStartedAt,
+                        _refreshRetry.CanAttempt(account.AccountId, type, DateTimeOffset.UtcNow));
+                }).ToArray());
+            if (!IsCurrentLoad(generation)) return;
+            if (dueTypes.Length == 0)
             {
                 StartEpgIfVisible();
                 RefreshInfoBar.IsOpen = false;
                 DismissFirstLoadTakeover();
+                if (!HasCatalogData(cached)) SetState(empty: true);
                 return;
             }
 
+            if (HasCatalogData(cached)) CaptureBrowseState();
+            ShowRefreshingStatus();
             var refreshStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             LaunchDiagnostics.Write($"event=catalog.cache.refresh.start mode={_activeMode}");
-            try
+            var anyChanged = false;
+            var anyFailed = false;
+            var liveChanged = false;
+            foreach (var type in dueTypes)
             {
-                await RefreshAccountAsync(account);
-                LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome=success durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
+                try
+                {
+                    var changed = await _refreshTasks.RefreshTypeAsync(account, type);
+                    if (!IsCurrentLoad(generation)) return;
+                    if (!changed) throw new InvalidOperationException("Catalog replacement was rejected");
+                    anyChanged = true;
+                    if (type == CatalogItemType.Live) liveChanged = true;
+                    _refreshRetry.RecordSuccess(account.AccountId, type);
+                    _refreshedThisStart.Add((account.AccountId, type));
+                }
+                catch (Exception exception)
+                {
+                    if (!IsCurrentLoad(generation)) return;
+                    anyFailed = true;
+                    LaunchDiagnostics.Write($"Catalog {type} refresh failed: {DescribeForLog(exception)}");
+                    var retryAt = _refreshRetry.RecordFailure(account.AccountId, type, DateTimeOffset.UtcNow);
+                    if (!forceRefresh && policy != CatalogRefreshPolicy.OnDemandOnly)
+                        ScheduleRefreshRetry(account, type, retryAt);
+                }
             }
-            catch
-            {
-                LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome=failure durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
-                throw;
-            }
-            // The refresh already downloaded the full live list, which fills the provider's EPG channel map;
-            // skip the second full download the EPG warm-up would otherwise make.
-            lock (_epgMapLoadedAccounts) _epgMapLoadedAccounts.Add(account.AccountId);
+            LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome={(anyFailed ? "failure" : "success")} durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
+            if (liveChanged)
+                lock (_epgMapLoadedAccounts) _epgMapLoadedAccounts.Add(account.AccountId);
             if (!IsCurrentLoad(generation)) return;
+            if (!anyChanged)
+            {
+                if (anyFailed) ShowRefreshFailure(userInitiated: forceRefresh);
+                else RefreshInfoBar.IsOpen = false;
+                DismissFirstLoadTakeover();
+                if (!HasCatalogData(cached)) SetState(empty: true);
+                return;
+            }
             InvalidateAccountSnapshots(account.AccountId);
-            var refreshedAt = DateTimeOffset.UtcNow;
-            foreach (var mode in Enum.GetValues<CatalogMode>())
-                _lastRefreshAt[(account.AccountId, mode)] = refreshedAt;
 
             var refreshed = await ReadCurrentCatalogSnapshotAsync(account, generation);
             if (!IsCurrentLoad(generation)) return;
@@ -514,8 +552,9 @@ public sealed partial class CatalogLandingPage : UserControl
             StartEpgIfVisible();
             _firstCatalogLoadCompleted = true;
             DismissFirstLoadTakeover();
-            RefreshInfoBar.IsOpen = false;
-            _silentRefreshRetries = 0;
+            await UpdateRefreshChromeAsync(account, generation);
+            if (anyFailed) ShowRefreshFailure(userInitiated: forceRefresh);
+            else RefreshInfoBar.IsOpen = false;
         }
         catch (Exception exception)
         {
@@ -525,7 +564,7 @@ public sealed partial class CatalogLandingPage : UserControl
             LaunchDiagnostics.Write($"Catalog load failed: {DescribeForLog(exception)} (HRESULT 0x{exception.HResult:X8})");
             if (ContentState.Visibility == Visibility.Visible)
             {
-                ShowRefreshFailure(exception);
+                ShowRefreshFailure(userInitiated: forceRefresh);
                 var visual = ElementCompositionPreview.GetElementVisual(ContentState);
                 if (visual.Opacity < 1f)
                     await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: Volatile.Read(ref _modeTransitionGeneration));
@@ -714,26 +753,71 @@ public sealed partial class CatalogLandingPage : UserControl
         return null;
     }
 
-    private async Task RefreshAccountAsync(ProviderAccount account)
-    {
-        if (!_activeRefreshTasks.TryGetValue(account.AccountId, out var refreshTask) || refreshTask.IsCompleted)
-        {
-            refreshTask = Task.Run(() => _refresh.RefreshAsync(account));
-            _activeRefreshTasks[account.AccountId] = refreshTask;
-        }
+    private static readonly CatalogItemType[] AllRefreshTypes =
+        [CatalogItemType.Live, CatalogItemType.Movie, CatalogItemType.Series];
 
+    public static CatalogItemType[] TypesForMode(CatalogMode mode) => mode switch
+    {
+        CatalogMode.LiveTv => [CatalogItemType.Live],
+        CatalogMode.Movies => [CatalogItemType.Movie],
+        CatalogMode.Series => [CatalogItemType.Series],
+        _ => AllRefreshTypes,
+    };
+
+    public static bool ShouldAutoRefresh(CatalogRefreshPolicy policy, DateTimeOffset? lastSuccess,
+        DateTimeOffset now, bool refreshedThisStart, bool canAttempt) =>
+        policy != CatalogRefreshPolicy.OnDemandOnly && canAttempt &&
+        CatalogRefreshPolicyStore.IsDue(policy, lastSuccess, now, refreshedThisStart);
+
+    private async Task UpdateRefreshChromeAsync(ProviderAccount account, long generation)
+    {
+        var mode = _activeMode;
+        TypeRefreshPanel.Visibility = mode == CatalogMode.MyTvivo ? Visibility.Collapsed : Visibility.Visible;
+        if (mode == CatalogMode.MyTvivo) return;
+        var type = TypesForMode(mode)[0];
+        var refreshed = await Task.Run(() => _repository.GetLastRefreshSuccess(account, type));
+        if (!IsCurrentLoad(generation) || _activeMode != mode) return;
+        TypeUpdatedText.Text = FormatUpdated(refreshed, DateTimeOffset.UtcNow);
+    }
+
+    public static string FormatUpdated(DateTimeOffset? refreshed, DateTimeOffset now)
+    {
+        if (refreshed is null) return "Updated never";
+        var age = now - refreshed.Value;
+        if (age < TimeSpan.FromMinutes(1)) return "Updated just now";
+        if (age < TimeSpan.FromHours(1)) return $"Updated {(int)age.TotalMinutes} min ago";
+        if (age < TimeSpan.FromDays(1)) return $"Updated {(int)age.TotalHours} hr ago";
+        return $"Updated {(int)age.TotalDays} days ago";
+    }
+
+    private void ScheduleRefreshRetry(ProviderAccount account, CatalogItemType type, DateTimeOffset retryAt)
+    {
+        var key = (account.AccountId, type);
+        if (!_scheduledRetries.Add(key)) return;
+        _ = RetryRefreshAfterCooldownAsync(account, type, retryAt);
+    }
+
+    private async Task RetryRefreshAfterCooldownAsync(ProviderAccount account, CatalogItemType type, DateTimeOffset retryAt)
+    {
+        var removed = false;
         try
         {
-            await refreshTask;
+            await Task.Delay(retryAt - DateTimeOffset.UtcNow > TimeSpan.Zero ? retryAt - DateTimeOffset.UtcNow : TimeSpan.Zero);
+            _scheduledRetries.Remove((account.AccountId, type));
+            removed = true;
+            if (!_isActive || _account?.AccountId != account.AccountId ||
+                _refreshPolicyStore.Read() == CatalogRefreshPolicy.OnDemandOnly) return;
+            if (!TypesForMode(_activeMode).Contains(type)) return;
+            await LoadAsync(account, reason: "auto-retry");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"Quiet refresh retry failed: {DescribeForLog(exception)}");
         }
         finally
         {
-            if (refreshTask.IsCompleted &&
-                _activeRefreshTasks.TryGetValue(account.AccountId, out var activeTask) &&
-                ReferenceEquals(activeTask, refreshTask))
-            {
-                _activeRefreshTasks.Remove(account.AccountId);
-            }
+            if (!removed)
+                _scheduledRetries.Remove((account.AccountId, type));
         }
     }
 
@@ -754,7 +838,7 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
         }
 
-        _activeRefreshTasks.TryGetValue(account.AccountId, out var catalogRefreshTask);
+        _refreshTasks.TryGetActive(account.AccountId, CatalogItemType.Live, out var catalogRefreshTask);
         _ = StartEpgAsync(account, connection, catalogRefreshTask);
     }
 
@@ -1521,10 +1605,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
         _snapshotCache.TryGetValue(CurrentSnapshotKey(account), out var entry) ? entry.Snapshot : null;
 
-    private bool IsSnapshotStale(ProviderAccount account) =>
-        !_lastRefreshAt.TryGetValue((account.AccountId, _activeMode), out var refreshedAt) ||
-        DateTimeOffset.UtcNow - refreshedAt >= SnapshotFreshness;
-
     private CatalogSnapshotKey CurrentSnapshotKey(ProviderAccount account) =>
         new(account.AccountId, _activeMode, _openShelfId ?? string.Empty, _openShelfType?.ToString() ?? string.Empty,
             _selectedGroupId ?? string.Empty, SearchBox.Text ?? string.Empty, _categorySort, _offset);
@@ -1551,8 +1631,6 @@ public sealed partial class CatalogLandingPage : UserControl
             foreach (var key in _spotlightShelvesCache.Keys.Where(key => key.AccountId == accountId).ToArray())
                 _spotlightShelvesCache.Remove(key);
         }
-        foreach (var key in _lastRefreshAt.Keys.Where(key => key.AccountId == accountId).ToArray())
-            _lastRefreshAt.Remove(key);
     }
 
     private void SaveModeState(CatalogMode mode) =>
@@ -2388,14 +2466,23 @@ public sealed partial class CatalogLandingPage : UserControl
         get
         {
             if (_account is not { } account) return null;
-            var times = _lastRefreshAt.Where(entry => entry.Key.AccountId == account.AccountId).Select(entry => entry.Value).ToArray();
+            var times = AllRefreshTypes.Select(type => _repository.GetLastRefreshSuccess(account, type))
+                .Where(time => time.HasValue).Select(time => time!.Value).ToArray();
             return times.Length == 0 ? null : times.Max();
         }
     }
 
     public Task RefreshNowAsync() => _account is { } account
-        ? LoadAsync(account, forceRefresh: true, reason: "manual-refresh")
+        ? LoadAsync(account, forceRefresh: true, reason: "manual-refresh", refreshAll: true)
         : LoadSavedAsync();
+
+    private async void TypeRefreshButton_Click(object sender, RoutedEventArgs args)
+    {
+        if (_account is not { } account || _activeMode == CatalogMode.MyTvivo) return;
+        TypeRefreshButton.IsEnabled = false;
+        try { await LoadAsync(account, forceRefresh: true, reason: "manual-type-refresh"); }
+        finally { TypeRefreshButton.IsEnabled = true; }
+    }
 
     public async void SetCategorySort(string? tag)
     {
@@ -2467,34 +2554,21 @@ public sealed partial class CatalogLandingPage : UserControl
         RefreshInfoBar.IsOpen = true;
     }
 
-    // A failed background refresh is not user-facing: the saved channels are already on screen, so the
-    // failure is logged and the refresh is retried quietly a couple of times.
-    private void ShowRefreshFailure(Exception exception)
+    // Automatic (policy/retry) refresh failures stay silent: the saved items are already on screen and the
+    // retry primitive tries again quietly. Only a refresh the user asked for reports back, in plain words.
+    private void ShowRefreshFailure(bool userInitiated)
     {
-        LaunchDiagnostics.Write($"Catalog refresh failed, showing saved channels: {DescribeForLog(exception)}");
-        RefreshInfoBar.IsOpen = false;
+        if (!userInitiated)
+        {
+            RefreshInfoBar.IsOpen = false;
+            DismissFirstLoadTakeover();
+            return;
+        }
+        RefreshInfoBar.Message = "Couldn't refresh — showing saved items";
+        RefreshInfoBar.Severity = InfoBarSeverity.Warning;
+        RefreshRetryButton.Visibility = Visibility.Visible;
+        RefreshInfoBar.IsOpen = true;
         DismissFirstLoadTakeover();
-        SetState(content: true);
-        if (_silentRefreshRetries >= SilentRefreshRetryDelays.Length || _account is not { } account) return;
-        var delay = SilentRefreshRetryDelays[_silentRefreshRetries++];
-        var generation = Volatile.Read(ref _loadGeneration);
-        _ = RetryRefreshQuietlyAsync(account, generation, delay);
-    }
-
-    private static readonly TimeSpan[] SilentRefreshRetryDelays = { TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(60) };
-
-    private async Task RetryRefreshQuietlyAsync(ProviderAccount account, long generation, TimeSpan delay)
-    {
-        try
-        {
-            await Task.Delay(delay);
-            if (!_isActive || !IsCurrentLoad(generation) || _account?.AccountId != account.AccountId) return;
-            await LoadAsync(account, forceRefresh: true, reason: "auto-retry");
-        }
-        catch (Exception exception)
-        {
-            LaunchDiagnostics.Write($"Quiet refresh retry failed: {DescribeForLog(exception)}");
-        }
     }
 
     // Exception type and HTTP status only. Messages can embed provider URLs (which carry credentials).
@@ -2524,6 +2598,7 @@ public sealed partial class CatalogLandingPage : UserControl
         SetModeButtonState(MyTvivoButton, _activeMode == CatalogMode.MyTvivo);
         SetModeButtonState(MoviesButton, _activeMode == CatalogMode.Movies);
         SetModeButtonState(SeriesButton, _activeMode == CatalogMode.Series);
+        TypeRefreshPanel.Visibility = _activeMode == CatalogMode.MyTvivo ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void ShelfGrid_KeyDown(object sender, KeyRoutedEventArgs args)
@@ -2928,4 +3003,38 @@ public static class ArtworkMemoryBudget
 
     public static bool ShouldEvict(long retainedBytes, long limitBytes, int entryCount, int countLimit) =>
         entryCount > 1 && (retainedBytes > limitBytes || entryCount > countLimit);
+}
+
+public sealed class CatalogRefreshTasks(Func<ProviderAccount, CatalogItemType, Task<bool>> refresh)
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<(string AccountId, CatalogItemType Type), Task<bool>> _active = new();
+
+    public Task<bool> RefreshTypeAsync(ProviderAccount account, CatalogItemType type)
+    {
+        var key = (account.AccountId, type);
+        lock (_gate)
+        {
+            if (_active.TryGetValue(key, out var pending) && !pending.IsCompleted) return pending;
+            var task = Task.Run(() => refresh(account, type));
+            _active[key] = task;
+            _ = task.ContinueWith(_ =>
+            {
+                lock (_gate)
+                    if (_active.TryGetValue(key, out var current) && ReferenceEquals(current, task))
+                        _active.Remove(key);
+            }, TaskScheduler.Default);
+            return task;
+        }
+    }
+
+    public bool TryGetActive(string accountId, CatalogItemType type, out Task? task)
+    {
+        lock (_gate)
+        {
+            var found = _active.TryGetValue((accountId, type), out var pending);
+            task = pending;
+            return found;
+        }
+    }
 }

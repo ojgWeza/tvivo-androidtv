@@ -4,12 +4,14 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Tvivo.Core;
+using Tvivo.Infrastructure;
 
 namespace Tvivo.App.Pages;
 
 public sealed partial class AccountPage : UserControl
 {
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
+    private readonly CatalogRefreshPolicyStore _catalogRefreshPolicyStore = new();
 
     public AccountPage()
     {
@@ -24,6 +26,7 @@ public sealed partial class AccountPage : UserControl
 
     private bool _suppressEngineChanged;
     private bool _suppressMinimizeToMiniModeChanged;
+    private bool _suppressCatalogRefreshPolicyChanged;
 
     public void SetMinimizeToMiniMode(MinimizeToMiniMode mode)
     {
@@ -94,9 +97,14 @@ public sealed partial class AccountPage : UserControl
         SetOpenTab("Library");
         ErrorText.Visibility = Visibility.Collapsed;
         RefreshCatalogButton.IsEnabled = true;
+        _suppressCatalogRefreshPolicyChanged = true;
+        var policy = _catalogRefreshPolicyStore.Read();
+        CatalogRefreshPolicySelector.SelectedItem = CatalogRefreshPolicySelector.Items
+            .OfType<ComboBoxItem>().First(item => string.Equals(item.Tag as string, policy.ToString(), StringComparison.Ordinal));
+        _suppressCatalogRefreshPolicyChanged = false;
         LastRefreshText.Text = lastRefreshAt is { } refreshed
             ? refreshed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-            : "Not refreshed in this session";
+            : "Never refreshed";
 
         DisplayNameText.Text = string.IsNullOrWhiteSpace(account.DisplayName) ? account.Username : account.DisplayName;
         UsernameText.Text = account.Username;
@@ -148,6 +156,22 @@ public sealed partial class AccountPage : UserControl
         RefreshCatalogButton.IsEnabled = false;
         LastRefreshText.Text = "Refreshing... returning to your catalog";
         RefreshCatalogRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CatalogRefreshPolicySelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_suppressCatalogRefreshPolicyChanged ||
+            CatalogRefreshPolicySelector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
+            !Enum.TryParse<CatalogRefreshPolicy>(tag, out var policy)) return;
+        try
+        {
+            _catalogRefreshPolicyStore.Write(policy);
+            ErrorText.Visibility = Visibility.Collapsed;
+        }
+        catch
+        {
+            ShowError("Couldn't save the refresh setting. Please try again.");
+        }
     }
 
     private void ShowError(string message)

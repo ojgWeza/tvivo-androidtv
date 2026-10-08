@@ -85,8 +85,17 @@
                     <StackPanel Spacing="10">
                         <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Last catalog refresh" />
                         <TextBlock x:Name="LastRefreshText" Foreground="{StaticResource AppTextBrush}" FontSize="16" />
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" Text="Refresh catalog" />
+                        <ComboBox x:Name="CatalogRefreshPolicySelector" MinWidth="300"
+                                  SelectionChanged="CatalogRefreshPolicySelector_SelectionChanged"
+                                  AutomationProperties.Name="Refresh catalog">
+                            <ComboBoxItem Content="Only when I refresh" Tag="OnDemandOnly" />
+                            <ComboBoxItem Content="If older than 1 day" Tag="OlderThanOneDay" />
+                            <ComboBoxItem Content="If older than 7 days" Tag="OlderThanSevenDays" />
+                            <ComboBoxItem Content="Every time the app opens" Tag="EveryStart" />
+                        </ComboBox>
                         <Button x:Name="RefreshCatalogButton" Style="{StaticResource AppQuietButtonStyle}"
-                                HorizontalAlignment="Left" Content="Refresh catalog now"
+                                HorizontalAlignment="Left" Content="Refresh all"
                                 Click="RefreshCatalogButton_Click" />
                         <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="13" TextWrapping="Wrap"
                                    Text="Re-downloads your provider's catalog. Favorites, resume positions and visit history are kept. Large catalogs can take a few minutes." />

@@ -36,7 +36,7 @@
 | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L543) | CALL | `MainWindow.xaml.cs` | [`GetEpisodeResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L543) | `GetEpisodeResumePosition` | _direct SQL, see §7_ | `media_progress` |
 | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L519) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetFavorites`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L519) | `GetFavorites` | _direct SQL, see §7_ | `favorites` |
 | [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L342) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetGroups`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L342) | `GetGroups` | _direct SQL, see §7_ | `categories` |
-| [`GetLastRefreshSuccess`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L331) | CALL | — ⚠️ | [`GetLastRefreshSuccess`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L331) | `GetLastRefreshSuccess` | _direct SQL, see §7_ | `catalog_refresh_state` |
+| [`GetLastRefreshSuccess`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L331) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetLastRefreshSuccess`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L331) | `GetLastRefreshSuccess` | _direct SQL, see §7_ | `catalog_refresh_state` |
 | [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L155) | CALL | `MainWindow.xaml.cs` | [`GetMetadata`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L155) | `GetMetadata` | _direct SQL, see §7_ | `items` |
 | [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L669) | CALL | `MainWindow.xaml.cs`<br>`Pages/CatalogLandingPage.xaml.cs` | [`GetPlaybackProgress`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L669) | `GetPlaybackProgress` | _direct SQL, see §7_ | `items`<br>`media_progress`<br>`series_playback` |
 | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L481) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L481) | `GetRecentlyAdded` | _direct SQL, see §7_ | `items` |
@@ -73,7 +73,6 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `CatalogCategoryMatchCount` (CALL)
 - `CatalogPage` (CALL)
 - `For` (CALL)
-- `GetLastRefreshSuccess` (CALL)
 - `GetSuggestions` (CALL)
 - `MarkEpisodeUnwatched` (CALL)
 - `MarkEpisodeWatched` (CALL)
