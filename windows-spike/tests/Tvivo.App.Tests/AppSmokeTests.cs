@@ -69,6 +69,16 @@ public sealed class AppSmokeTests
         Assert.Equal(0, provider.Calls);
     }
 
+    [Fact]
+    public void Epg_off_hides_stale_now_next_rows_from_live_ui()
+    {
+        var staleRows = new EpgNowNext(
+            new EpgProgramme("old-now", DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(25), "Old programme"),
+            new EpgProgramme("old-next", DateTimeOffset.UtcNow.AddMinutes(25), DateTimeOffset.UtcNow.AddMinutes(55), "Next programme"));
+
+        Assert.Null(CatalogLandingPage.FilterEpgForUi(new EpgFeature().Enabled, staleRows));
+    }
+
     private sealed class NoCallEpgProvider : IEpgProvider
     {
         public int Calls { get; private set; }

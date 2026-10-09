@@ -2323,7 +2323,7 @@ public sealed partial class MainWindow : Window
 
     private void EpgCoordinator_EpgUpdated(object? sender, EventArgs args)
     {
-        if (_isClosing) return;
+        if (_isClosing || !_catalogLandingPage.EpgEnabled) return;
         if (!WindowRoot.DispatcherQueue.HasThreadAccess)
         {
             WindowRoot.DispatcherQueue.TryEnqueue(() => EpgCoordinator_EpgUpdated(sender, args));
@@ -2335,7 +2335,7 @@ public sealed partial class MainWindow : Window
 
     private void PlayerEpgTimer_Tick(object? sender, object args)
     {
-        if (!IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live)
+        if (!_catalogLandingPage.EpgEnabled || !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live)
         {
             StopPlayerEpgUpdates();
             return;
@@ -2346,7 +2346,7 @@ public sealed partial class MainWindow : Window
     private void StartPlayerEpgUpdates()
     {
         StopPlayerEpgUpdates();
-        if (_isClosing || !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live ||
+        if (!_catalogLandingPage.EpgEnabled || _isClosing || !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live ||
             _nowPlayingChannel?.Metadata.TryGetValue("epg_channel_id", out var epgChannelId) != true ||
             string.IsNullOrWhiteSpace(epgChannelId) || _catalogLandingPage.Account is null)
             return;
@@ -2365,6 +2365,11 @@ public sealed partial class MainWindow : Window
     private async Task RefreshPlayerNowNextAsync()
     {
         if (_isClosing) return;
+        if (!_catalogLandingPage.EpgEnabled)
+        {
+            ClearPlayerNowNext();
+            return;
+        }
         if (!WindowRoot.DispatcherQueue.HasThreadAccess)
         {
             WindowRoot.DispatcherQueue.TryEnqueue(() => _ = RefreshPlayerNowNextAsync());
@@ -2403,6 +2408,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyPlayerNowNext(EpgNowNext? nowNext)
     {
+        nowNext = CatalogLandingPage.FilterEpgForUi(_catalogLandingPage.EpgEnabled, nowNext);
         _playerNowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;
         if (_playerNowNext?.Now is { } now)
         {

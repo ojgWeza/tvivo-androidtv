@@ -32,6 +32,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly CatalogRefreshTasks _refreshTasks;
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private readonly EpgCoordinator _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
+    internal bool EpgEnabled => _epgCoordinator.Feature.Enabled;
     private ProviderAccount? _account;
     private ProviderConnection? _connection;
     private IReadOnlyList<ChannelGroup> _groups = Array.Empty<ChannelGroup>();
@@ -876,7 +877,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void UpdateEpgLifecycle()
     {
-        if (_isActive && _activeMode == CatalogMode.LiveTv)
+        if (EpgEnabled && _isActive && _activeMode == CatalogMode.LiveTv)
             _epgTimer.Start();
         else
             _epgTimer.Stop();
@@ -884,6 +885,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void StartEpgIfVisible()
     {
+        if (!EpgEnabled) return;
         if (!_isActive || _activeMode != CatalogMode.LiveTv ||
             _account is not { } account || _connection is not { } connection)
         {
@@ -897,6 +899,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task StartEpgAsync(ProviderAccount account, ProviderConnection connection, Task? catalogRefreshTask)
     {
+        if (!EpgEnabled) return;
         if (!await _epgStartGate.WaitAsync(0).ConfigureAwait(false)) return;
 
         try
@@ -944,6 +947,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void EpgTimer_Tick(object? sender, object args)
     {
+        if (!EpgEnabled) return;
         StartEpgIfVisible();
         _ = RefreshVisibleEpgAsync();
     }
@@ -962,7 +966,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task RefreshVisibleEpgAsync()
     {
-        if (!_isActive || _activeMode != CatalogMode.LiveTv || _account is not { } account ||
+        if (!EpgEnabled || !_isActive || _activeMode != CatalogMode.LiveTv || _account is not { } account ||
             !await _epgQueryGate.WaitAsync(0))
             return;
 
@@ -1239,7 +1243,8 @@ public sealed partial class CatalogLandingPage : UserControl
             channel,
             qualityBadge ?? categoryQuality,
             type,
-            isContinueWatching);
+            isContinueWatching,
+            EpgEnabled);
         if (type == CatalogItemType.Movie)
             card.ApplyWatchProgress(_movieProgressById.GetValueOrDefault(channel.Id));
         else if (type == CatalogItemType.Series)
@@ -2952,12 +2957,16 @@ public sealed partial class CatalogLandingPage : UserControl
         public Visibility NewSinceLastVisitVisibility => HasNewItems ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    internal static EpgNowNext? FilterEpgForUi(bool enabled, EpgNowNext? nowNext) =>
+        enabled ? nowNext : null;
+
     private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
         double width, double height, Channel? channel, string? qualityBadge, CatalogItemType type,
-        bool isContinueWatching) : INotifyPropertyChanged
+        bool isContinueWatching, bool epgEnabled) : INotifyPropertyChanged
     {
         private EpgNowNext? _nowNext;
         private PlaybackProgress? _watchProgress;
+        private readonly bool _epgEnabled = epgEnabled;
 
         public string Id { get; } = id;
         public string Title { get; } = title;
@@ -2979,24 +2988,25 @@ public sealed partial class CatalogLandingPage : UserControl
             ? Visibility.Visible
             : Visibility.Collapsed;
         public Visibility QualityBadgeVisibility => string.IsNullOrWhiteSpace(QualityBadge) ? Visibility.Collapsed : Visibility.Visible;
-        public string NowText => _nowNext?.Now is { } now ? $"Now: {now.Title}" : string.Empty;
-        public Visibility NowVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
-        public double ProgressValue => _nowNext?.Now is { } now
+        public string NowText => _epgEnabled && _nowNext?.Now is { } now ? $"Now: {now.Title}" : string.Empty;
+        public Visibility NowVisibility => !_epgEnabled || _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
+        public double ProgressValue => _epgEnabled && _nowNext?.Now is { } now
             ? Math.Clamp((DateTimeOffset.UtcNow - now.StartUtc).TotalSeconds /
                 Math.Max(1, (now.EndUtc - now.StartUtc).TotalSeconds) * 100, 0, 100)
             : 0;
-        public Visibility ProgressVisibility => _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
-        public string NextText => _nowNext?.Next is { } next
+        public Visibility ProgressVisibility => !_epgEnabled || _nowNext?.Now is null ? Visibility.Collapsed : Visibility.Visible;
+        public string NextText => _epgEnabled && _nowNext?.Next is { } next
             ? $"Next: {next.Title} · {FormatLocalTime(next.StartUtc)}"
             : string.Empty;
-        public Visibility NextVisibility => _nowNext?.Next is null ? Visibility.Collapsed : Visibility.Visible;
-        public Visibility EpgVisibility => _nowNext?.Now is null && _nowNext?.Next is null
+        public Visibility NextVisibility => !_epgEnabled || _nowNext?.Next is null ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility EpgVisibility => !_epgEnabled || _nowNext?.Now is null && _nowNext?.Next is null
             ? Visibility.Collapsed
             : Visibility.Visible;
         public string EpgAutomationName
         {
             get
             {
+                if (!_epgEnabled) return string.Empty;
                 var parts = new List<string>();
                 if (_nowNext?.Now is { } now)
                     parts.Add($"Now playing: {now.Title}, {Math.Clamp((int)Math.Round(ProgressValue), 0, 100)} percent through");
@@ -3042,6 +3052,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         public void ApplyNowNext(EpgNowNext? nowNext)
         {
+            nowNext = FilterEpgForUi(_epgEnabled, nowNext);
             _nowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowVisibility)));

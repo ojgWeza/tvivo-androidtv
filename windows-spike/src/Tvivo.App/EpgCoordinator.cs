@@ -31,6 +31,8 @@ public sealed class EpgCoordinator : IDisposable
         set => _playbackBusy = value ?? (static () => false);
     }
 
+    public EpgFeature Feature => _feature;
+
     public event EventHandler? EpgUpdated;
 
     public Task StartIfDueAsync(
