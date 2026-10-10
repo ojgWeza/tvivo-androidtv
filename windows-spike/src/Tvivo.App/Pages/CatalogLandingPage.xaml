@@ -144,7 +144,7 @@
                             Visibility="Collapsed">
                 <StackPanel x:Name="ModeButtonStackPanel" Orientation="Horizontal" Spacing="12">
                     <Button x:Name="MyTvivoButton"
-                            Content="My Tvivo"
+                            Content="For You"
                             Style="{StaticResource AppQuietButtonStyle}"
                             Click="ModeButton_Click"
                             Tag="MyTvivo" />

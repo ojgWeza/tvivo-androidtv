@@ -17,9 +17,15 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="TVIVO" Margin="24,0,16,0" VerticalAlignment="Center"
-                       FontSize="15" FontWeight="Bold" CharacterSpacing="80"
-                       Foreground="{StaticResource AppTextBrush}" />
+            <Border Width="22" Height="22" Margin="24,0,16,0" CornerRadius="6"
+                    Background="{StaticResource AppAccentBrush}"
+                    VerticalAlignment="Center" IsHitTestVisible="False"
+                    AutomationProperties.Name="Tvivo">
+                <FontIcon Glyph="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                          FontSize="12" Foreground="#FFFFFFFF"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          AutomationProperties.AccessibilityView="Raw" />
+            </Border>
             <Grid x:Name="TitleBarDragRegion" Grid.Column="1" Background="Transparent"
                   AutomationProperties.AccessibilityView="Raw" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
@@ -47,19 +53,18 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Button x:Name="BrandNavigation"
-                        Content="TVIVO"
-                        Style="{StaticResource AppTopNavButtonStyle}"
-                        FontSize="22"
-                        FontWeight="Bold"
-                        CharacterSpacing="80"
-                        Foreground="{StaticResource AppTextBrush}"
-                        Click="HomeNavigation_Click"
-                        ToolTipService.ToolTip="{x:Null}" />
+                <TextBlock Grid.Column="0"
+                           Text="TVIVO"
+                           FontSize="22"
+                           FontWeight="Bold"
+                           CharacterSpacing="80"
+                           Foreground="{StaticResource AppTextBrush}"
+                           VerticalAlignment="Center"
+                           AutomationProperties.Name="Tvivo" />
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="26">
                     <Button x:Name="MyTvivoNavigation"
-                            Content="My Tvivo"
+                            Content="For You"
                             Style="{StaticResource AppTopNavButtonStyle}"
                             Click="MyTvivoNavigation_Click"
                             ToolTipService.ToolTip="{x:Null}" />

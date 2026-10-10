@@ -15,6 +15,7 @@ namespace Tvivo.App;
 public partial class App : Application
 {
     public static IServiceProvider Services { get; }
+    private static Mutex? _singleInstanceMutex;
     private Window? _window;
 
     static App()
@@ -63,6 +64,17 @@ public partial class App : Application
     {
         try
         {
+            var mutexName = SingleInstanceGuard.GetMutexName(Environment.GetEnvironmentVariable("TVIVO_DATA_ROOT"));
+            if (!SingleInstanceGuard.TryAcquire(mutexName, out var acquiredMutex))
+            {
+                var activated = SingleInstanceGuard.ActivateExistingInstance(Process.GetCurrentProcess().Id);
+                LaunchDiagnostics.Write($"event=app.second-instance activated-existing={activated.ToString().ToLowerInvariant()}");
+                Environment.Exit(0);
+                return;
+            }
+            _singleInstanceMutex = acquiredMutex;
+            GC.KeepAlive(_singleInstanceMutex);
+
             LaunchDiagnostics.Write("OnLaunched entered");
             if (Environment.GetEnvironmentVariable("TVIVO_NET_LOG") == "1")
             {

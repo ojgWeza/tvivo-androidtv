@@ -139,4 +139,4 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 
 ---
 
-Indexed 36 routes · 36 backend methods · 21 procs · 7 tables · 14 frontend files · 0 SQL files.
+Indexed 36 routes · 36 backend methods · 21 procs · 7 tables · 15 frontend files · 0 SQL files.
