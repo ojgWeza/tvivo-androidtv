@@ -114,21 +114,21 @@
                     <Color x:Key="AppDeepColor">#F4E5CC</Color>
                     <Color x:Key="AppSurfaceColor">#FFF9EF</Color>
                     <Color x:Key="AppSurfaceRaisedColor">#EBD9BA</Color>
-                    <Color x:Key="AppAccentColor">#1B5557</Color>
-                    <Color x:Key="SystemAccentColor">#1B5557</Color>
-                    <Color x:Key="SystemAccentColorLight1">#1B5557</Color>
-                    <Color x:Key="SystemAccentColorLight2">#1B5557</Color>
-                    <Color x:Key="SystemAccentColorLight3">#1B5557</Color>
-                    <Color x:Key="SystemAccentColorDark1">#12383F</Color>
-                    <Color x:Key="SystemAccentColorDark2">#0F2126</Color>
-                    <Color x:Key="SystemAccentColorDark3">#0A1619</Color>
-                    <Color x:Key="AppAccentSoftColor">#12383F</Color>
-                    <Color x:Key="AppTextColor">#B85B40</Color>
-                    <Color x:Key="AppMutedTextColor">#D97757</Color>
+                    <Color x:Key="AppAccentColor">#D97757</Color>
+                    <Color x:Key="SystemAccentColor">#D97757</Color>
+                    <Color x:Key="SystemAccentColorLight1">#E7A084</Color>
+                    <Color x:Key="SystemAccentColorLight2">#F0BBA5</Color>
+                    <Color x:Key="SystemAccentColorLight3">#F7D9CC</Color>
+                    <Color x:Key="SystemAccentColorDark1">#B85B40</Color>
+                    <Color x:Key="SystemAccentColorDark2">#98452F</Color>
+                    <Color x:Key="SystemAccentColorDark3">#783521</Color>
+                    <Color x:Key="AppAccentSoftColor">#B85B40</Color>
+                    <Color x:Key="AppTextColor">#0F2126</Color>
+                    <Color x:Key="AppMutedTextColor">#1B5557</Color>
                     <Color x:Key="AppGoodColor">#14664B</Color>
                     <Color x:Key="AppFavoriteColor">#9D5E00</Color>
-                    <Color x:Key="AppFocusTintColor">#331B5557</Color>
-                    <Color x:Key="AppLineColor">#331B5557</Color>
+                    <Color x:Key="AppFocusTintColor">#33D97757</Color>
+                    <Color x:Key="AppLineColor">#330F2126</Color>
                     <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
                     <SolidColorBrush x:Key="AppDeepBrush" Color="{StaticResource AppDeepColor}" />
                     <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
@@ -141,14 +141,14 @@
                     <SolidColorBrush x:Key="AppFavoriteBrush" Color="{StaticResource AppFavoriteColor}" />
                     <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
                     <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
-                    <SolidColorBrush x:Key="AppOnAccentBrush" Color="#FFF5E5" />
+                    <SolidColorBrush x:Key="AppOnAccentBrush" Color="#0A1619" />
                     <SolidColorBrush x:Key="AppBrandGlyphBrush" Color="#FFF5E5" />
                     <SolidColorBrush x:Key="AppOnMediaTextBrush" Color="#FFF5E5" />
                     <SolidColorBrush x:Key="AppOnMediaMutedBrush" Color="#FFF5E5" />
                     <SolidColorBrush x:Key="AppDangerTextBrush" Color="#98452F" />
                     <SolidColorBrush x:Key="AppMediaScrimBrush" Color="#E0071114" />
                     <SolidColorBrush x:Key="AppScrollPillBrush" Color="#FFEBD9BA" />
-                    <SolidColorBrush x:Key="AppScrollPillBorderBrush" Color="#331B5557" />
+                    <SolidColorBrush x:Key="AppScrollPillBorderBrush" Color="#330F2126" />
                     <Color x:Key="AppPlaceholderStartColor">#EBD9BA</Color>
                     <Color x:Key="AppPlaceholderMidColor">#FFF9EF</Color>
                     <Color x:Key="AppPlaceholderEndColor">#1B5557</Color>
