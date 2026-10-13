@@ -212,7 +212,7 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
-        ApplySelectedTheme();
+        WindowRoot.ActualThemeChanged += WindowRoot_ActualThemeChanged;
         // Sliders mark pointer presses handled, so listen for handled events too.
         VolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
         CompactVolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
@@ -259,6 +259,7 @@ public sealed partial class MainWindow : Window
         _windowState.InstallMinimizeInterceptor(WindowRoot.DispatcherQueue,
             () => ShouldMinimizeBecomeWindowMini(), () => EnterWindowMiniPlayer(), HandleWindowMiniModeRequest, ForceExitWindowMini);
         _windowState.WindowMiniGeometryChanged += WindowState_WindowMiniGeometryChanged;
+        ApplySelectedTheme();
         ApplyWindowChromeState();
         _catalogLandingPage.InteractionReadinessChanged += CatalogLandingPage_InteractionReadinessChanged;
         _catalogLandingPage.SearchTextChanged += CatalogLandingPage_SearchTextChanged;
@@ -599,7 +600,7 @@ public sealed partial class MainWindow : Window
             {
                 Text = "No alternate tracks",
                 IsEnabled = false,
-                Foreground = (Brush)Application.Current.Resources["AppMutedTextBrush"],
+                Foreground = ThemeBrush("AppMutedTextBrush"),
             });
             return;
         }
@@ -616,8 +617,8 @@ public sealed partial class MainWindow : Window
                     GroupName = "AudioTracks",
                     IsChecked = track.IsSelected,
                     Foreground = track.IsSelected
-                        ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                        : (Brush)Application.Current.Resources["AppTextBrush"],
+                        ? ThemeBrush("AppAccentBrush")
+                        : ThemeBrush("AppTextBrush"),
                 };
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Audio: {track.DisplayName}");
                 item.Click += AudioTrackMenuItem_Click;
@@ -635,8 +636,8 @@ public sealed partial class MainWindow : Window
             GroupName = "SubtitleTracks",
             IsChecked = !snapshot.Subtitles.Any(track => track.IsSelected),
             Foreground = !snapshot.Subtitles.Any(track => track.IsSelected)
-                ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                : (Brush)Application.Current.Resources["AppTextBrush"],
+                ? ThemeBrush("AppAccentBrush")
+                : ThemeBrush("AppTextBrush"),
         };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(subtitleOff, "Subtitles off");
         subtitleOff.Click += SubtitleTrackMenuItem_Click;
@@ -650,8 +651,8 @@ public sealed partial class MainWindow : Window
                 GroupName = "SubtitleTracks",
                 IsChecked = track.IsSelected,
                 Foreground = track.IsSelected
-                    ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                    : (Brush)Application.Current.Resources["AppTextBrush"],
+                    ? ThemeBrush("AppAccentBrush")
+                    : ThemeBrush("AppTextBrush"),
             };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"Subtitle: {track.DisplayName}");
             item.Click += SubtitleTrackMenuItem_Click;
@@ -659,11 +660,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static MenuFlyoutItem CreateTrackSectionHeader(string text) => new()
+    private MenuFlyoutItem CreateTrackSectionHeader(string text) => new()
     {
         Text = text,
         IsEnabled = false,
-        Foreground = (Brush)Application.Current.Resources["AppAccentSoftBrush"],
+        Foreground = ThemeBrush("AppAccentSoftBrush"),
     };
 
     private void AudioTrackMenuItem_Click(object sender, RoutedEventArgs args)
@@ -1100,7 +1101,7 @@ public sealed partial class MainWindow : Window
     {
         WindowRoot.RequestedTheme = _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark;
         var isDark = _selectedTheme == ThemePreference.Dark;
-        UpdateTopNavigationState();
+        RefreshThemeAwareBrushes();
         ThemeToggleButton.Content = isDark ? "\uE706" : "\uE708";
         var actionName = isDark ? "Switch to light theme" : "Switch to dark theme";
         AutomationProperties.SetName(ThemeToggleButton, actionName);
@@ -1111,6 +1112,20 @@ public sealed partial class MainWindow : Window
             DwmwaUseImmersiveDarkMode, ref darkCaptionValue, sizeof(int));
         if (darkModeResult < 0)
             LaunchDiagnostics.Write($"DWM theme caption attribute failed: 0x{darkModeResult:X8}");
+    }
+
+    private void WindowRoot_ActualThemeChanged(FrameworkElement sender, object args) => RefreshThemeAwareBrushes();
+
+    private void RefreshThemeAwareBrushes()
+    {
+        UpdateTopNavigationState();
+        foreach (var entry in _playerEntries)
+            entry.RefreshTheme(WindowRoot.ActualTheme);
+        if (SeriesFavoriteButton.Visibility == Visibility.Visible)
+            UpdateSeriesFavoriteButton(SeriesFavoriteButton.Content?.ToString() == "★");
+        if (AudioSubtitlesFlyout.IsOpen) RebuildAudioSubtitlesFlyout(AudioSubtitlesFlyout);
+        if (CompactAudioSubtitlesFlyout.IsOpen) RebuildAudioSubtitlesFlyout(CompactAudioSubtitlesFlyout);
+        ApplyPlayerLayout();
     }
 
     private void CatalogLandingPage_RefreshStateChanged(object? sender, EventArgs args)
@@ -1508,8 +1523,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>A brush from the dictionary of the theme this window is set to, for colours assigned in code.</summary>
-    private Brush ThemeBrush(string key) => AppThemeBrushResolver.For(
-        _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark, key);
+    private Brush ThemeBrush(string key) => AppThemeBrushResolver.For(WindowRoot, key);
 
     private void TopSearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
@@ -1896,7 +1910,8 @@ public sealed partial class MainWindow : Window
             _playerEntries.Clear();
             foreach (var channel in channels)
                 _playerEntries.Add(new PlayerListEntry(channel, IsChannelFavorite(channel),
-                    channel.Source.Kind == StreamKind.Episode && _seriesEpisodeProgress.TryGetValue(channel.Id, out var progress) ? progress : null));
+                    channel.Source.Kind == StreamKind.Episode && _seriesEpisodeProgress.TryGetValue(channel.Id, out var progress) ? progress : null,
+                    WindowRoot.ActualTheme));
         }
         else
             foreach (var entry in _playerEntries)
@@ -1966,8 +1981,7 @@ public sealed partial class MainWindow : Window
     private void UpdateSeriesFavoriteButton(bool isFavorite)
     {
         SeriesFavoriteButton.Content = isFavorite ? "★" : "☆";
-        SeriesFavoriteButton.Foreground = (Brush)Application.Current.Resources[
-            isFavorite ? "AppFavoriteBrush" : "AppMutedTextBrush"];
+        SeriesFavoriteButton.Foreground = ThemeBrush(isFavorite ? "AppFavoriteBrush" : "AppMutedTextBrush");
         SeriesFavoriteButton.Visibility = Visibility.Visible;
     }
 
@@ -3736,7 +3750,7 @@ public sealed partial class MainWindow : Window
             presentation == PlayerPresentation.Compact ? "Mini player card" : "Player");
         CompactChrome.Visibility = presentation == PlayerPresentation.Compact ? Visibility.Visible : Visibility.Collapsed;
         PlayerPage.Background = presentation == PlayerPresentation.Compact
-            ? (Brush)Application.Current.Resources["AppPanelSurfaceBrush"]
+            ? ThemeBrush("AppPanelSurfaceBrush")
             : null;
         if (presentation == PlayerPresentation.Compact)
         {
@@ -4127,10 +4141,8 @@ public sealed partial class MainWindow : Window
         VlcTransportBar.HorizontalAlignment = HorizontalAlignment.Stretch;
         VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
         VlcTransportBar.Margin = cinema ? new Thickness(24, 0, 24, 28) : new Thickness(0);
-        var panelBrush = (Brush)Application.Current.Resources["AppPanelSurfaceBrush"];
-        VlcTransportBar.Background = cinema && panelBrush is SolidColorBrush solid
-            ? new SolidColorBrush(Windows.UI.Color.FromArgb(0xE0, solid.Color.R, solid.Color.G, solid.Color.B))
-            : panelBrush;
+        var panelBrush = ThemeBrush("AppPanelSurfaceBrush");
+        VlcTransportBar.Background = cinema ? ThemeBrush("AppMediaScrimBrush") : panelBrush;
         CinemaTitleStrip.Visibility = cinema ? Visibility.Visible : Visibility.Collapsed;
         CompactChrome.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
         SetWindowMiniCompactControls(_windowState.IsWindowMini);
@@ -4146,6 +4158,7 @@ public sealed partial class MainWindow : Window
             CinemaTitleStrip.Opacity = 0;
         }
         ApplyPlayerNowNextVisibility();
+        ApplyPlayerSurfaceColors(cinema, compact);
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         NativePlayerElement.AreTransportControlsEnabled = false;
         if (compact)
@@ -4153,6 +4166,32 @@ public sealed partial class MainWindow : Window
             CompactTitleText.Text = PlayerTitleText.Text;
             CompactSeekRow.Visibility = _currentSource?.Kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
         }
+    }
+
+    private void ApplyPlayerSurfaceColors(bool cinema, bool compact)
+    {
+        var textKey = cinema || compact ? "AppOnMediaTextBrush" : "AppTextBrush";
+        var mutedKey = cinema || compact ? "AppOnMediaMutedBrush" : "AppMutedTextBrush";
+        foreach (var button in new[]
+                 {
+                     PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
+                     AudioSubtitlesButton, VolumeButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
+                 })
+            button.Foreground = ThemeBrush(textKey);
+        ElapsedText.Foreground = ThemeBrush(mutedKey);
+        DurationText.Foreground = ThemeBrush(mutedKey);
+        VolumeStateText.Foreground = ThemeBrush(mutedKey);
+
+        var compactTextKey = compact ? "AppOnMediaTextBrush" : "AppTextBrush";
+        foreach (var button in new[]
+                 {
+                     CompactExpandButton, CompactCloseButton, CompactMinimizeButton, CompactPreviousButton,
+                     CompactRewindButton, CompactPauseButton, CompactForwardButton, CompactNextButton,
+                     CompactAudioSubtitlesButton, CompactMuteButton
+                 })
+            button.Foreground = ThemeBrush(compactTextKey);
+        CompactProgressSlider.Foreground = ThemeBrush(compactTextKey);
+        CompactVolumeSlider.Foreground = ThemeBrush(compactTextKey);
     }
 
     private void SetWindowMiniCompactControls(bool isWindowMini)
@@ -4257,15 +4296,18 @@ public sealed partial class MainWindow : Window
         Player
     }
 
-    public sealed class PlayerListEntry(Channel channel, bool isFavorite = false, PlaybackProgress? progress = null) : INotifyPropertyChanged
+    public sealed class PlayerListEntry(Channel channel, bool isFavorite = false, PlaybackProgress? progress = null,
+        ElementTheme theme = ElementTheme.Dark) : INotifyPropertyChanged
     {
         private bool _isCurrent;
         private bool _isFavorite = isFavorite;
         private PlaybackProgress? _progress = progress;
-        private static Brush AccentBrush => (Brush)Application.Current.Resources["AppAccentBrush"];
-        private static Brush NormalBrush => (Brush)Application.Current.Resources["AppTextBrush"];
-        private static Brush SelectedTextBrush => (Brush)Application.Current.Resources["AppDeepBrush"];
-        private static Brush MutedBrush => (Brush)Application.Current.Resources["AppMutedTextBrush"];
+        private ElementTheme _theme = theme;
+        private Brush ThemeBrush(string key) => AppThemeBrushResolver.For(_theme, key);
+        private Brush AccentBrush => ThemeBrush("AppAccentBrush");
+        private Brush NormalBrush => ThemeBrush("AppTextBrush");
+        private Brush SelectedTextBrush => ThemeBrush("AppOnAccentBrush");
+        private Brush MutedBrush => ThemeBrush("AppMutedTextBrush");
 
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
@@ -4274,15 +4316,30 @@ public sealed partial class MainWindow : Window
             : Visibility.Collapsed;
         public Brush BackgroundBrush => _isCurrent ? AccentBrush : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         public Brush ForegroundBrush => _isCurrent ? SelectedTextBrush : NormalBrush;
-        public Brush FavoriteBrush => _isFavorite
-            ? (Brush)Application.Current.Resources["AppFavoriteBrush"]
-            : MutedBrush;
+        public Brush FavoriteBrush => _isFavorite ? ThemeBrush("AppFavoriteBrush") : MutedBrush;
         public string FavoriteGlyph => _isFavorite ? "★" : "☆";
         // Row bar: full once watched, otherwise how far playback got (hidden until a duration is known).
         private PlaybackProgressPresentation ProgressPresentation => PlaybackProgressPresentation.For(_progress);
         public Visibility ProgressVisibility => ProgressPresentation.IsVisible ? Visibility.Visible : Visibility.Collapsed;
         public double ProgressValue => ProgressPresentation.Value;
         public Brush ProgressBarBrush => _isCurrent ? SelectedTextBrush : AccentBrush;
+        public Brush ProgressTrackBrush => _isCurrent
+            ? new SolidColorBrush(_theme == ElementTheme.Dark
+                ? Windows.UI.Color.FromArgb(0x33, 255, 255, 255)
+                : Windows.UI.Color.FromArgb(0x33, 255, 245, 229))
+            : _theme == ElementTheme.Dark
+                ? new SolidColorBrush(Windows.UI.Color.FromArgb(0x33, 255, 255, 255))
+                : ThemeBrush("AppLineBrush");
+
+        public void RefreshTheme(ElementTheme actualTheme)
+        {
+            _theme = actualTheme;
+            OnPropertyChanged(nameof(BackgroundBrush));
+            OnPropertyChanged(nameof(ForegroundBrush));
+            OnPropertyChanged(nameof(FavoriteBrush));
+            OnPropertyChanged(nameof(ProgressBarBrush));
+            OnPropertyChanged(nameof(ProgressTrackBrush));
+        }
         public string ProgressAutomationName => ProgressPresentation.AutomationName;
         public bool IsFinished => _progress?.State == PlaybackProgressState.Finished;
         public bool IsFavorite
@@ -4308,6 +4365,7 @@ public sealed partial class MainWindow : Window
                 OnPropertyChanged(nameof(BackgroundBrush));
                 OnPropertyChanged(nameof(ForegroundBrush));
                 OnPropertyChanged(nameof(ProgressBarBrush));
+                OnPropertyChanged(nameof(ProgressTrackBrush));
             }
         }
 

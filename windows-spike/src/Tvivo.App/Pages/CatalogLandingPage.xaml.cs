@@ -171,11 +171,48 @@ public sealed partial class CatalogLandingPage : UserControl
             Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
         lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
         InitializeComponent();
+        CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         _spotlightTimer.Tick += SpotlightTimer_Tick;
         _epgTimer.Tick += EpgTimer_Tick;
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         Unloaded += CatalogLandingPage_Unloaded;
         UpdateModeChrome();
+    }
+
+    private Brush ThemeBrush(string key) => AppThemeBrushResolver.For(CatalogPageRoot, key);
+
+    private void CatalogPageRoot_ActualThemeChanged(FrameworkElement sender, object args)
+    {
+        UpdateModeChrome();
+        foreach (var button in SearchCategoryChips.Children.OfType<Button>())
+        {
+            var groupId = button.Tag as string ?? string.Empty;
+            ApplySearchCategoryChipState(button, string.Equals(groupId, _selectedGroupId ?? string.Empty, StringComparison.Ordinal));
+        }
+
+        if (_renderedSnapshot is { } snapshot)
+        {
+            var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
+            var selectedIndex = _spotlightCard is null
+                ? -1
+                : Array.FindIndex(candidates, candidate => candidate.Id == _spotlightCard.Id);
+            RenderSpotlightIndicators(candidates, selectedIndex);
+        }
+
+        if (_hoveredCardElement is { } hoveredElement)
+            ApplyCardToolTipTheme(hoveredElement);
+    }
+
+    private void ApplyCardToolTipTheme(FrameworkElement cardElement)
+    {
+        if (ToolTipService.GetToolTip(cardElement) is not ToolTip toolTip) return;
+        toolTip.DataContext = cardElement.DataContext;
+        toolTip.RequestedTheme = CatalogPageRoot.ActualTheme;
+        toolTip.Background = ThemeBrush("AppPanelSurfaceBrush");
+        toolTip.Foreground = ThemeBrush("AppTextBrush");
+        toolTip.BorderBrush = ThemeBrush("AppLineBrush");
+        if (cardElement.DataContext is CatalogCard card)
+            AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
     }
 
     public void SetActive(bool active)
@@ -1392,12 +1429,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _hoverLease = lease;
         _summaryTriggeredByFocus = triggeredByFocus;
         card.BeginHoverSummary();
-        if (ToolTipService.GetToolTip(cardElement) is ToolTip toolTip)
-        {
-            toolTip.DataContext = card;
-            toolTip.RequestedTheme = ActualTheme;
-            AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
-        }
+        ApplyCardToolTipTheme(cardElement);
         if (!HoverMetadataLookup.NeedsLookup(channel.Metadata.GetValueOrDefault("plot")))
         {
             // The card already carries a summary: show it, never ask the provider.
@@ -1471,6 +1503,7 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
 
         toolTip.DataContext = card;
+        ApplyCardToolTipTheme(_hoveredCardElement!);
         AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
         toolTip.IsOpen = true;
     }
@@ -1960,8 +1993,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 Padding = new Thickness(0),
                 Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
                 Style = (Style)Application.Current.Resources["AppCaptionButtonStyle"],
-                Foreground = (Brush)Application.Current.Resources[
-                    index == selectedIndex ? "AppAccentBrush" : "AppMutedTextBrush"],
+                Foreground = ThemeBrush(index == selectedIndex ? "AppAccentBrush" : "AppMutedTextBrush"),
                 FontSize = 10,
             };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,
@@ -2856,19 +2888,18 @@ public sealed partial class CatalogLandingPage : UserControl
             Style = (Style)Application.Current.Resources["AppQuietButtonStyle"],
             Padding = new Thickness(12, 7, 12, 7),
             MinHeight = 0,
-            Background = selected
-                ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                : (Brush)Application.Current.Resources["AppPanelSurfaceBrush"],
-            Foreground = selected
-                ? (Brush)Application.Current.Resources["AppDeepBrush"]
-                : (Brush)Application.Current.Resources["AppTextBrush"],
-            BorderBrush = selected
-                ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                : (Brush)Application.Current.Resources["AppLineBrush"],
         };
+        ApplySearchCategoryChipState(button, selected);
         AutomationProperties.SetName(button, label);
         button.Click += SearchCategoryChip_Click;
         SearchCategoryChips.Children.Add(button);
+    }
+
+    private void ApplySearchCategoryChipState(Button button, bool selected)
+    {
+        button.Background = selected ? ThemeBrush("AppAccentBrush") : ThemeBrush("AppPanelSurfaceBrush");
+        button.Foreground = selected ? ThemeBrush("AppOnAccentBrush") : ThemeBrush("AppTextBrush");
+        button.BorderBrush = selected ? ThemeBrush("AppAccentBrush") : ThemeBrush("AppLineBrush");
     }
 
     private async void SearchCategoryChip_Click(object sender, RoutedEventArgs args)
@@ -3122,10 +3153,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SetModeButtonState(Button button, bool selected)
     {
         button.Foreground = selected
-            ? (Brush)Application.Current.Resources["AppDeepBrush"]
-            : (Brush)Application.Current.Resources["AppTextBrush"];
+            ? ThemeBrush("AppOnAccentBrush")
+            : ThemeBrush("AppTextBrush");
         button.Background = selected
-            ? (Brush)Application.Current.Resources["AppAccentBrush"]
+            ? ThemeBrush("AppAccentBrush")
             : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
 

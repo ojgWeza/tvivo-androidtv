@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Tvivo.App;
 
 namespace Tvivo.App.Controls;
 
@@ -10,6 +11,8 @@ public sealed partial class ShellNavigationButton : UserControl
     public ShellNavigationButton()
     {
         InitializeComponent();
+        ActualThemeChanged += (_, _) => ApplyNavigationTheme();
+        ApplyNavigationTheme();
     }
 
     public string Label
@@ -28,11 +31,18 @@ public sealed partial class ShellNavigationButton : UserControl
         set
         {
             SelectionMark.Opacity = value ? 1 : 0;
-            NavigationButton.Foreground = (Brush)Application.Current.Resources[
-                value ? "AppTextBrush" : "AppMutedTextBrush"];
-            NavigationButton.Background = (Brush)Application.Current.Resources[
-                value ? "AppRaisedSurfaceBrush" : "AppCanvasBrush"];
+            ApplyNavigationTheme();
         }
+    }
+
+    private void ApplyNavigationTheme()
+    {
+        var selected = IsSelected;
+        SelectionMark.Background = AppThemeBrushResolver.For(this, "AppAccentBrush");
+        NavigationButton.Foreground = AppThemeBrushResolver.For(this,
+            selected ? "AppTextBrush" : "AppMutedTextBrush");
+        NavigationButton.Background = AppThemeBrushResolver.For(this,
+            selected ? "AppRaisedSurfaceBrush" : "AppCanvasBrush");
     }
 
     public event EventHandler? Clicked;

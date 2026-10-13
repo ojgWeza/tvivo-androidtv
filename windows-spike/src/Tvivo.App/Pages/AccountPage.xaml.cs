@@ -3,6 +3,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Tvivo.App;
 using Tvivo.Core;
 using Tvivo.Infrastructure;
 
@@ -13,10 +14,13 @@ public sealed partial class AccountPage : UserControl
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private readonly CatalogRefreshPolicyStore _catalogRefreshPolicyStore = new();
     private readonly DispatcherTimer _artworkCacheStatusTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private bool _expiryExpired;
+    private bool _expiryHasValue;
 
     public AccountPage()
     {
         InitializeComponent();
+        ActualThemeChanged += AccountPage_ActualThemeChanged;
         _artworkCacheStatusTimer.Tick += ArtworkCacheStatusTimer_Tick;
     }
 
@@ -172,12 +176,27 @@ public sealed partial class AccountPage : UserControl
         RenderForYouLayout();
     }
 
-    private static void MarkTab(Button button, bool selected)
+    private void AccountPage_ActualThemeChanged(FrameworkElement sender, object args)
     {
-        button.Foreground = (Brush)App.Current.Resources[selected ? "AppTextBrush" : "AppMutedTextBrush"];
+        MarkTab(AccountTabButton, _openTab == "Account");
+        MarkTab(PlayerTabButton, _openTab == "Player");
+        MarkTab(LibraryTabButton, _openTab == "Library");
+        MarkTab(ForYouTabButton, _openTab == "ForYou");
+        ApplyExpiryBrush();
+    }
+
+    private void MarkTab(Button button, bool selected)
+    {
+        button.Foreground = AppThemeBrushResolver.For(button, selected ? "AppTextBrush" : "AppMutedTextBrush");
         button.BorderBrush = selected
-            ? (Brush)App.Current.Resources["AppAccentBrush"]
+            ? AppThemeBrushResolver.For(button, "AppAccentBrush")
             : new SolidColorBrush(Colors.Transparent);
+    }
+
+    private void ApplyExpiryBrush()
+    {
+        var key = !_expiryHasValue ? "AppMutedTextBrush" : _expiryExpired ? "AppDangerTextBrush" : "AppTextBrush";
+        ExpiryText.Foreground = AppThemeBrushResolver.For(this, key);
     }
 
     public void ShowAccount(ProviderAccount account, DateTimeOffset? lastRefreshAt)
@@ -204,18 +223,22 @@ public sealed partial class AccountPage : UserControl
         if (account.ExpiresAt is not { } expiresAt)
         {
             ExpiryText.Text = "No expiry reported";
-            ExpiryText.Foreground = (Brush)App.Current.Resources["AppMutedTextBrush"];
+            _expiryHasValue = false;
+            _expiryExpired = false;
         }
         else if (expiresAt < DateTimeOffset.Now)
         {
             ExpiryText.Text = $"Expired {expiresAt:yyyy-MM-dd}";
-            ExpiryText.Foreground = new SolidColorBrush(Colors.OrangeRed);
+            _expiryHasValue = true;
+            _expiryExpired = true;
         }
         else
         {
             ExpiryText.Text = expiresAt.ToString("yyyy-MM-dd");
-            ExpiryText.Foreground = (Brush)App.Current.Resources["AppTextBrush"];
+            _expiryHasValue = true;
+            _expiryExpired = false;
         }
+        ApplyExpiryBrush();
     }
 
     private async void SignOutButton_Click(object sender, RoutedEventArgs args)
