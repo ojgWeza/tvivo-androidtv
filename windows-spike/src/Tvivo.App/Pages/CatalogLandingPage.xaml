@@ -2,6 +2,7 @@
     x:Class="Tvivo.App.Pages.CatalogLandingPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Tvivo.App.Pages"
     MinWidth="776"
     RequestedTheme="Dark">
     <UserControl.Resources>
@@ -37,7 +38,44 @@
         </DataTemplate>
         <DataTemplate x:Key="CatalogCardTemplate">
             <Grid Width="{Binding Width}" Height="{Binding Height}"
-                  ToolTipService.ToolTip="{Binding HoverPreviewText}">
+                  PointerEntered="CatalogCard_PointerEntered"
+                  PointerExited="CatalogCard_PointerExited"
+                  DataContextChanged="CatalogCard_DataContextChanged"
+                  Unloaded="CatalogCard_Unloaded">
+                <ToolTipService.ToolTip>
+                    <ToolTip x:Name="CatalogCardToolTip"
+                             DataContext="{Binding}"
+                             Background="{ThemeResource AppPanelSurfaceBrush}"
+                             Foreground="{ThemeResource AppTextBrush}"
+                             BorderBrush="{ThemeResource SystemControlBackgroundChromeHighBrush}"
+                             BorderThickness="1"
+                             Padding="14"
+                             MaxWidth="420"
+                             MaxHeight="280"
+                             AutomationProperties.Name="{Binding HoverAccessibleName}">
+                        <ScrollViewer MaxHeight="250"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Width="380" Spacing="8">
+                                <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding DetailsLine}"
+                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding HoverSummaryText}"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding NowText}" Visibility="{Binding NowVisibility}"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding NextText}" Visibility="{Binding NextVisibility}"
+                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding HoverCastText}" Visibility="{Binding HoverCastVisibility}"
+                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </ToolTip>
+                </ToolTipService.ToolTip>
                 <Border CornerRadius="12" Background="{StaticResource AppRaisedSurfaceBrush}">
                     <Grid>
                         <Grid>
@@ -126,7 +164,7 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <Grid x:Name="CatalogPageRoot" Padding="48,24,48,64" Background="{StaticResource AppCanvasBrush}">
+    <Grid x:Name="CatalogPageRoot" Padding="48,24,48,20" Background="{StaticResource AppCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -195,17 +233,6 @@
                             Click="ClearSearch_Click" />
                 </Grid>
             </Border>
-            <StackPanel x:Name="TypeRefreshPanel" Grid.Column="1" Orientation="Horizontal"
-                        VerticalAlignment="Center" Spacing="12" Visibility="Collapsed">
-                <TextBlock x:Name="TypeUpdatedText" VerticalAlignment="Center"
-                           Foreground="{StaticResource AppMutedTextBrush}" Text="Updated never" />
-                <Button x:Name="TypeRefreshButton" Content="&#xE72C;"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        Style="{StaticResource AppIconButtonStyle}"
-                        AutomationProperties.Name="Refresh catalog"
-                        ToolTipService.ToolTip="{x:Null}"
-                        Click="TypeRefreshButton_Click" />
-            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="2">
@@ -269,10 +296,21 @@
                             <TextBlock x:Name="SearchResultsCount" Foreground="{StaticResource AppTextBrush}"
                                        FontSize="22" FontWeight="SemiBold" />
                         </Grid>
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                                      HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
-                            <StackPanel x:Name="SearchCategoryChips" Orientation="Horizontal" Spacing="8" />
-                        </ScrollViewer>
+                        <!-- Folder chips wrap onto rows (two by default); "+N more" opens the rest. No sideways scrolling. -->
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                          HorizontalScrollMode="Disabled">
+                                <local:WrapPanel x:Name="SearchCategoryChips" MaxRows="2" />
+                            </ScrollViewer>
+                            <Button x:Name="SearchChipsToggle" Grid.Column="1" VerticalAlignment="Top"
+                                    Visibility="Collapsed" Padding="12,7" MinHeight="0"
+                                    Style="{StaticResource AppQuietButtonStyle}"
+                                    Click="SearchChipsToggle_Click" />
+                        </Grid>
                     </StackPanel>
                     <Grid x:Name="OpenShelfHeader" Grid.Row="0" Visibility="Collapsed" ColumnSpacing="18">
                         <Grid.ColumnDefinitions>
@@ -284,7 +322,6 @@
                                 Style="{StaticResource AppQuietButtonStyle}"
                                 Click="BackToShelves_Click" />
                         <StackPanel Grid.Column="1" Spacing="4">
-                            <TextBlock Style="{StaticResource AppEyebrowTextStyle}" Text="CATEGORY" />
                             <TextBlock x:Name="OpenShelfTitle"
                                        Foreground="{StaticResource AppTextBrush}"
                                        FontSize="28"
@@ -297,6 +334,7 @@
                     </Grid>
                     <ListView x:Name="ShelvesItems"
                               Grid.Row="1"
+                              Margin="0,-18,0,0"
                               SelectionMode="None"
                               IsItemClickEnabled="False"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -310,23 +348,24 @@
                             </Style>
                         </ListView.ItemContainerStyle>
                         <ListView.Header>
-                        <StackPanel Spacing="26">
+                        <StackPanel>
                             <Border x:Name="SpotlightPanel"
-                                    Padding="30,22"
-                                    CornerRadius="18">
+                                    Margin="0,0,0,30"
+                                    Padding="20,12"
+                                    CornerRadius="16">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                         <GradientStop Color="{StaticResource AppSurfaceRaisedColor}" Offset="0" />
                                         <GradientStop Color="{StaticResource AppSurfaceColor}" Offset="1" />
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <Grid ColumnSpacing="32">
+                                <Grid ColumnSpacing="24">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="300" />
+                                        <ColumnDefinition Width="176" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Spacing="8">
-                                        <Border Width="300" Height="168" CornerRadius="14"
+                                    <StackPanel Spacing="8" VerticalAlignment="Center">
+                                        <Border x:Name="SpotlightArtworkTarget" Width="176" Height="99" CornerRadius="12"
                                                 Tapped="SpotlightArtwork_Tapped"
                                                 AutomationProperties.Name="Open spotlight item">
                                             <Grid>
@@ -345,20 +384,15 @@
                                                    Text="TVIVO SPOTLIGHT" />
                                         <TextBlock x:Name="SpotlightTitle"
                                                    Foreground="{StaticResource AppTextBrush}"
-                                                   FontSize="30"
+                                                   FontSize="26"
                                                    FontWeight="SemiBold"
                                                    TextWrapping="WrapWholeWords" />
                                         <TextBlock x:Name="SpotlightSubtitle"
                                                    Foreground="{StaticResource AppMutedTextBrush}"
                                                    FontSize="15" />
-                                        <Button x:Name="SpotlightAction"
-                                                Margin="0,10,0,0"
-                                                HorizontalAlignment="Left"
-                                                Content="Open category"
-                                                Style="{StaticResource AppPrimaryButtonStyle}"
-                                                Click="SpotlightAction_Click" />
-                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                                                    VerticalAlignment="Center" Spacing="3" Margin="0,8,0,0">
+                                    </StackPanel>
+                                        <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                                                    VerticalAlignment="Bottom" Spacing="3">
                                             <Button x:Name="SpotlightPreviousButton" Content="‹"
                                                     Width="30" Height="30" MinWidth="30" MinHeight="30" Padding="0"
                                                     Foreground="{StaticResource AppMutedTextBrush}"
@@ -376,14 +410,13 @@
                                                     AutomationProperties.Name="Next spotlight item"
                                                     ToolTipService.ToolTip="{x:Null}" />
                                         </StackPanel>
-                                    </StackPanel>
                                 </Grid>
                             </Border>
                         </StackPanel>
                         </ListView.Header>
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <StackPanel Margin="0,0,0,30"
+                                        <StackPanel Margin="0,0,0,16"
                                                     Loaded="ShelfContainer_Loaded"
                                                     Unloaded="ShelfContainer_Unloaded">
                                             <Grid Margin="0,0,0,16" ColumnSpacing="18">
@@ -444,6 +477,33 @@
                               KeyDown="OpenShelfGrid_KeyDown"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+
+                    <!-- Scroll helper: jump to top / page up / page down / bottom, sitting in the page's right padding. -->
+                    <StackPanel x:Name="ScrollNavPanel"
+                                Grid.Row="1"
+                                Spacing="2"
+                                Width="40"
+                                Padding="2,6"
+                                CornerRadius="20"
+                                Background="#CC0B1620"
+                                BorderBrush="#33FFFFFF"
+                                BorderThickness="1"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Margin="0,0,-44,0">
+                        <Button Content="&#xE74A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                                Style="{StaticResource AppIconButtonStyle}" Click="ScrollTop_Click"
+                                ToolTipService.ToolTip="Jump to top" AutomationProperties.Name="Jump to top" />
+                        <Button Content="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                                Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageUp_Click"
+                                ToolTipService.ToolTip="Page up" AutomationProperties.Name="Page up" />
+                        <Button Content="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                                Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageDown_Click"
+                                ToolTipService.ToolTip="Page down" AutomationProperties.Name="Page down" />
+                        <Button Content="&#xE74B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                                Style="{StaticResource AppIconButtonStyle}" Click="ScrollBottom_Click"
+                                ToolTipService.ToolTip="Jump to bottom" AutomationProperties.Name="Jump to bottom" />
+                    </StackPanel>
 
                     <StackPanel x:Name="PagerPanel"
                                 Grid.Row="2"

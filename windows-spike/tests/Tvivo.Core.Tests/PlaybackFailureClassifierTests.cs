@@ -73,6 +73,22 @@ public sealed class PlaybackFailureClassifierTests
         PlaybackAttemptResult result, bool alreadyTried, bool expected) =>
         Assert.Equal(expected, EngineFallbackPolicy.ShouldFallback(result, alreadyTried));
 
+    [Theory]
+    [InlineData("HTTP 403 error", true)]
+    [InlineData("error: HTTP/1.1 403 Forbidden", true)]
+    [InlineData("buffer deadlock prevented", false)]
+    [InlineData(null, false)]
+    public void Forbidden_log_lines_are_recognised(string? message, bool expected) =>
+        Assert.Equal(expected, PlaybackFailureClassifier.IsForbiddenLog(message));
+
+    [Fact]
+    public void A_refused_stream_is_a_network_failure_so_no_engine_fallback_is_offered()
+    {
+        var refined = PlaybackFailureClassifier.RefineLibVlcFailure(PlaybackAttemptResult.UnknownFailure, false, true);
+        Assert.Equal(PlaybackAttemptResult.NetworkFailure, refined);
+        Assert.False(EngineFallbackPolicy.ShouldFallback(refined, false));
+    }
+
     [Fact]
     public void No_video_grace_applies_to_vod_but_not_to_live_radio()
     {

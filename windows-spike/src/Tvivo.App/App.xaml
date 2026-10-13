@@ -300,7 +300,7 @@
                  (190 px * 3% per side) so a popped card never covers its neighbour. -->
             <Style x:Key="AppCardGridViewItemStyle" TargetType="GridViewItem">
                 <Setter Property="Padding" Value="0" />
-                <Setter Property="Margin" Value="0,0,8,8" />
+                <Setter Property="Margin" Value="0,0,14,10" />
                 <Setter Property="MinWidth" Value="0" />
                 <Setter Property="MinHeight" Value="0" />
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -320,9 +320,9 @@
                                         <VisualState x:Name="Normal" />
                                         <VisualState x:Name="PointerOver">
                                             <Storyboard>
-                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.03" Duration="0:0:0.12" />
-                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.03" Duration="0:0:0.12" />
-                                                <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0.45" Duration="0:0:0.12" />
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.07" Duration="0:0:0.12" />
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.07" Duration="0:0:0.12" />
+                                                <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0.9" Duration="0:0:0.12" />
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
@@ -338,10 +338,10 @@
                                         <VisualState x:Name="Unfocused" />
                                         <VisualState x:Name="Focused">
                                             <Storyboard>
-                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.06" Duration="0:0:0.14">
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.13" Duration="0:0:0.14">
                                                     <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
                                                 </DoubleAnimation>
-                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.06" Duration="0:0:0.14">
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.13" Duration="0:0:0.14">
                                                     <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
                                                 </DoubleAnimation>
                                                 <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.14" />
@@ -359,7 +359,7 @@
                                                   Padding="{TemplateBinding Padding}" />
                                 <Border x:Name="FocusRing"
                                         BorderBrush="{StaticResource AppAccentBrush}"
-                                        BorderThickness="3"
+                                        BorderThickness="5"
                                         CornerRadius="12"
                                         Opacity="0"
                                         IsHitTestVisible="False" />

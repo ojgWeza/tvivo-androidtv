@@ -78,7 +78,8 @@ public sealed record StreamSource(
     Uri? DirectUri = null,
     TimeSpan? Duration = null,
     string? AudioHint = null,
-    string? VideoHint = null);
+    string? VideoHint = null,
+    long? StartPositionMilliseconds = null);
 
 public enum StreamKind { Live, Movie, Series, Episode }
 

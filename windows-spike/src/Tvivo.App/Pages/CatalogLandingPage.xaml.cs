@@ -21,11 +21,13 @@ namespace Tvivo.App.Pages;
 
 public sealed partial class CatalogLandingPage : UserControl
 {
-#if DEBUG
-    private static readonly string? LocalFixturePath = FindFixturePath();
-#endif
     private readonly ICatalogProvider _provider = App.Services.GetRequiredService<ICatalogProvider>();
     private readonly SqliteCatalogRepository _repository = App.Services.GetRequiredService<SqliteCatalogRepository>();
+    private readonly HoverMetadataLookup _hoverMetadataLookup;
+    private readonly HoverRequestScheduler _hoverRequestScheduler = new();
+    private CatalogCard? _hoveredCard;
+    private FrameworkElement? _hoveredCardElement;
+    private HoverRequestScheduler.Lease? _hoverLease;
     private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
     private readonly CatalogRefreshPolicyStore _refreshPolicyStore = new();
     private readonly CatalogRefreshRetry _refreshRetry = new();
@@ -163,6 +165,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public CatalogLandingPage()
     {
+        _hoverMetadataLookup = new HoverMetadataLookup(_provider, _repository);
         _refreshTasks = new CatalogRefreshTasks((account, type) =>
             Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
         lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
@@ -170,28 +173,14 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightTimer.Tick += SpotlightTimer_Tick;
         _epgTimer.Tick += EpgTimer_Tick;
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
+        Unloaded += CatalogLandingPage_Unloaded;
         UpdateModeChrome();
-#if DEBUG
-        if (LocalFixturePath is not null)
-        {
-            var fixtureButton = new Button
-            {
-                Content = "Debug: Gate 9 fixture",
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 0, 8),
-                Style = (Style)Application.Current.Resources["AppQuietButtonStyle"],
-            };
-            fixtureButton.Click += LocalFixtureButton_Click;
-            Grid.SetRowSpan(fixtureButton, 3);
-            CatalogPageRoot.Children.Add(fixtureButton);
-        }
-#endif
     }
 
     public void SetActive(bool active)
     {
         _isActive = active;
+        if (!active) CancelHoverRequest();
         if (active) _spotlightTimer.Start();
         else _spotlightTimer.Stop();
         UpdateEpgLifecycle();
@@ -207,6 +196,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public void ClearAccountState()
     {
+        CancelHoverRequest();
         Interlocked.Increment(ref _loadGeneration);
         Interlocked.Increment(ref _pageQueryGeneration);
         _account = null;
@@ -311,6 +301,8 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
         }
 
+        CancelHoverRequest();
+
         var leavingOpenFolder = _renderedSnapshot is not null && _renderedOpenShelfId is not null;
         if (leavingOpenFolder)
         {
@@ -324,6 +316,9 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _pageQueryGeneration);
         Interlocked.Increment(ref _modeTransitionGeneration);
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
+        // Each tab keeps its own place: remember where this one was scrolled before leaving it.
+        if (_renderedSnapshot?.Mode == _activeMode && ContentState.Visibility == Visibility.Visible)
+            CaptureBrowseState();
         SaveModeState(_activeMode);
         _activeMode = mode;
         UpdateEpgLifecycle();
@@ -355,6 +350,7 @@ public sealed partial class CatalogLandingPage : UserControl
             // Keep the old category attached until the incoming snapshot is ready.
             // The snapshot swap itself is performed while the content is faded out.
             ContentState.IsHitTestVisible = false;
+            _ = WatchModeSwapAsync(mode, Volatile.Read(ref _modeTransitionGeneration));
         }
         else
         {
@@ -366,6 +362,26 @@ public sealed partial class CatalogLandingPage : UserControl
             SpotlightPanel.Visibility = Visibility.Collapsed;
             SetState(loading: true);
         }
+    }
+
+    private bool ModeSwapPending(CatalogMode mode, long transitionGeneration) =>
+        transitionGeneration == Volatile.Read(ref _modeTransitionGeneration) && _activeMode == mode &&
+        _renderedSnapshot is not null && _renderedSnapshot.Mode != mode;
+
+    /// <summary>
+    /// While the incoming mode loads, the previous mode's shelves stay attached (no flicker on fast swaps).
+    /// If that takes noticeable time the old content would sit under the new tab, so cover it with the
+    /// loading state; if the swap never happens, ask for the page again.
+    /// </summary>
+    private async Task WatchModeSwapAsync(CatalogMode mode, long transitionGeneration)
+    {
+        await Task.Delay(300);
+        if (!ModeSwapPending(mode, transitionGeneration)) return;
+        SetState(loading: true);
+        await Task.Delay(2700);
+        if (!ModeSwapPending(mode, transitionGeneration)) return;
+        LaunchDiagnostics.Write($"event=catalog.mode-swap-stalled mode={mode}");
+        await ShowCachedPageAsync();
     }
 
     public async Task SetModeAsync(CatalogMode mode)
@@ -422,6 +438,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _pageQueryGeneration);
         var accountChanged = _account?.AccountId != account.AccountId;
         var previousAccountId = _account?.AccountId;
+        if (accountChanged) CancelHoverRequest();
         _account = account;
         if (connection is not null || accountChanged)
             _connection = connection;
@@ -448,6 +465,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public async Task LoadSavedAsync()
     {
+        CancelHoverRequest();
         LaunchDiagnostics.Write("event=catalog.load reason=saved-account-startup reused=false");
         var previousAccountId = _account?.AccountId;
         var generation = Interlocked.Increment(ref _loadGeneration);
@@ -826,13 +844,26 @@ public sealed partial class CatalogLandingPage : UserControl
     private async Task UpdateRefreshChromeAsync(ProviderAccount account, long generation)
     {
         var mode = _activeMode;
-        TypeRefreshPanel.Visibility = mode == CatalogMode.MyTvivo ? Visibility.Collapsed : Visibility.Visible;
-        if (mode == CatalogMode.MyTvivo) return;
-        var type = TypesForMode(mode)[0];
-        var refreshed = await Task.Run(() => _repository.GetLastRefreshSuccess(account, type));
+        RaiseRefreshStateChanged();
+        // For You spans every content type, so its "updated" time is the most recent refresh of any of them.
+        var refreshed = mode == CatalogMode.MyTvivo
+            ? await Task.Run(() => LastRefreshAt)
+            : await Task.Run(() => _repository.GetLastRefreshSuccess(account, TypesForMode(mode)[0]));
         if (!IsCurrentLoad(generation) || _activeMode != mode) return;
-        TypeUpdatedText.Text = FormatUpdated(refreshed, DateTimeOffset.UtcNow);
+        UpdatedText = FormatUpdated(refreshed, DateTimeOffset.UtcNow);
+        RaiseRefreshStateChanged();
     }
+
+    /// <summary>The "Updated 3 hr ago" text, shown by the shell as the refresh button's tooltip.</summary>
+    public string UpdatedText { get; private set; } = "Updated never";
+
+    public bool CanRefreshType => true;
+
+    public bool IsRefreshingType { get; private set; }
+
+    public event EventHandler? RefreshStateChanged;
+
+    private void RaiseRefreshStateChanged() => RefreshStateChanged?.Invoke(this, EventArgs.Empty);
 
     public static string FormatUpdated(DateTimeOffset? refreshed, DateTimeOffset now)
     {
@@ -1115,7 +1146,9 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private IReadOnlyList<CatalogShelf> BuildMyTvivoShelves(ProviderAccount account, string? filter)
     {
-        return MyTvivoShelfDefinitions.All
+        return MyTvivoShelfDefinitions.Resolve(new MyTvivoLayoutStore().Read())
+            .Where(entry => entry.Visible)
+            .Select(entry => entry.Definition)
             .Select(definition => CreateMyTvivoShelf(account, definition, GetMyTvivoShelfItems(account, definition, filter)))
             .Where(shelf => ShelfVisibilityPolicy.HasItems(shelf.Cards.Count))
             .ToArray();
@@ -1291,11 +1324,169 @@ public sealed partial class CatalogLandingPage : UserControl
         return string.IsNullOrWhiteSpace(clean) ? (title, null) : (clean, badge);
     }
 
-    public void NotifyMetadataChanged(string channelId)
+    public void NotifyMetadataChanged(string accountId, CatalogItemType type, string itemId)
     {
-        foreach (var card in _snapshotCache.Values.SelectMany(value => value.Snapshot.Shelves)
-                     .SelectMany(shelf => shelf.Cards).Where(card => card.Channel?.Id == channelId))
+        var account = _account;
+        var metadata = account is { } activeAccount && activeAccount.AccountId == accountId
+            ? _repository.GetMetadata(activeAccount, type, itemId)
+            : null;
+        foreach (var card in AllKnownCards().Where(card => IsMatchingCard(card, accountId, type, itemId)))
+        {
+            if (metadata is not null) card.ApplyMetadata(metadata);
             card.NotifyMetadataChanged();
+        }
+    }
+
+    private IEnumerable<CatalogCard> AllKnownCards()
+    {
+        var snapshotCards = _snapshotCache.Values.SelectMany(value => value.Snapshot.Shelves)
+            .Concat(_snapshotCache.Values.SelectMany(value => value.Snapshot.SpotlightShelves))
+            .SelectMany(shelf => shelf.Cards);
+        var renderedCards = _renderedSnapshot is null
+            ? Enumerable.Empty<CatalogCard>()
+            : _renderedSnapshot.Shelves.Concat(_renderedSnapshot.SpotlightShelves).SelectMany(shelf => shelf.Cards);
+        var openCards = OpenShelfGrid.Items.OfType<CatalogCard>();
+        var spotlightCards = _spotlightCard is { } spotlightCard
+            ? new[] { spotlightCard }
+            : Array.Empty<CatalogCard>();
+        return snapshotCards.Concat(renderedCards).Concat(_renderedShelves.SelectMany(shelf => shelf.Cards)).Concat(openCards)
+            .Concat(_spotlightByMode.Values)
+            .Concat(spotlightCards)
+            .Distinct();
+    }
+
+    private static bool IsMatchingCard(CatalogCard card, string accountId, CatalogItemType type, string itemId) =>
+        card.Type == type && card.Channel is { } channel && channel.ProviderAccountId == accountId && channel.Id == itemId;
+
+    private void CatalogCard_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: CatalogCard { Channel: { } channel } card } ||
+            !_isActive || _account is not { } account || account.AccountId != channel.ProviderAccountId ||
+            card.Type == CatalogItemType.Live)
+            return;
+
+        var key = $"{account.AccountId}\0{card.Type}\0{channel.Id}";
+        var lease = _hoverRequestScheduler.Begin(key);
+        _hoveredCard = card;
+        _hoveredCardElement = (FrameworkElement)sender;
+        _hoverLease = lease;
+        card.BeginHoverSummary();
+        if (ToolTipService.GetToolTip(_hoveredCardElement) is ToolTip toolTip)
+        {
+            toolTip.DataContext = card;
+            toolTip.RequestedTheme = ActualTheme;
+            AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
+        }
+        _ = _hoverRequestScheduler.RunAfterDelayAsync(lease, TimeSpan.FromMilliseconds(800), async cancellationToken =>
+        {
+            try
+            {
+                var metadata = await _hoverMetadataLookup.GetAsync(account, card.Type, channel.Id, cancellationToken);
+                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, metadata, failed: metadata is null);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch
+            {
+                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, null, failed: true);
+            }
+        });
+        _ = ApplyCachedHoverMetadataAsync(card, account, lease);
+    }
+
+    private async Task ApplyCachedHoverMetadataAsync(CatalogCard card, ProviderAccount account,
+        HoverRequestScheduler.Lease lease)
+    {
+        try
+        {
+            var channel = card.Channel;
+            if (channel is null) return;
+            var metadata = await _hoverMetadataLookup.GetCachedAsync(account, card.Type, channel.Id, lease.CancellationToken);
+            if (metadata is null) return;
+            await RunOnUiThreadAsync(() =>
+            {
+                if (!IsCurrentHover(card, lease)) return;
+                _hoverRequestScheduler.Cancel(lease);
+                card.SetHoverMetadata(metadata, failed: false);
+                NotifyMetadataChanged(account.AccountId, card.Type, channel.Id);
+            });
+        }
+        catch (OperationCanceledException) when (lease.CancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // The delayed lookup applies its own failure cooldown and keeps the card browseable.
+        }
+    }
+
+    private bool IsCurrentHover(CatalogCard card, HoverRequestScheduler.Lease lease) =>
+        ReferenceEquals(_hoveredCard, card) && _hoverLease == lease && _isActive &&
+        _hoverRequestScheduler.IsCurrent(lease) && _account?.AccountId == card.Channel?.ProviderAccountId;
+
+    private Task UpdateHoverResultOnUiAsync(CatalogCard card, ProviderAccount account, string itemId,
+        HoverRequestScheduler.Lease lease, CatalogMetadata? metadata, bool failed) =>
+        RunOnUiThreadAsync(() =>
+        {
+            if (!IsCurrentHover(card, lease)) return;
+            card.SetHoverMetadata(metadata, failed);
+            if (metadata is not null) NotifyMetadataChanged(account.AccountId, card.Type, itemId);
+        });
+
+    private Task RunOnUiThreadAsync(Action action)
+    {
+        var dispatcher = DispatcherQueue;
+        if (dispatcher.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!dispatcher.TryEnqueue(() =>
+            {
+                try
+                {
+                    action();
+                    completion.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetException(exception);
+                }
+            }))
+            completion.TrySetCanceled();
+        return completion.Task;
+    }
+
+    private void CatalogCard_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        if (ReferenceEquals(_hoveredCardElement, sender))
+            CancelHoverRequest();
+    }
+
+    private void CatalogCard_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
+    {
+        if (ReferenceEquals(_hoveredCardElement, sender) && !ReferenceEquals(args.NewValue, _hoveredCard))
+            CancelHoverRequest();
+    }
+
+    private void CatalogCard_Unloaded(object sender, RoutedEventArgs args)
+    {
+        if (ReferenceEquals(_hoveredCardElement, sender))
+            CancelHoverRequest();
+    }
+
+    private void CatalogLandingPage_Unloaded(object sender, RoutedEventArgs args) => CancelHoverRequest();
+
+    private void CancelHoverRequest()
+    {
+        _hoveredCard?.EndHoverSummary();
+        _hoverRequestScheduler.Cancel();
+        _hoveredCard = null;
+        _hoveredCardElement = null;
+        _hoverLease = null;
     }
 
     private static CatalogItemType TypeForMode(CatalogMode mode) => mode switch
@@ -1461,6 +1652,10 @@ public sealed partial class CatalogLandingPage : UserControl
                 _renderedOpenShelfId = _openShelfId;
             }
             _renderedSnapshot = snapshot;
+            // The shelf list is one shared scroller: a tab never visited before must open at its top,
+            // not at the offset the previous tab was left at.
+            if (modeChanged && !_browsePositions.ContainsKey((snapshot.Mode, _openShelfId ?? string.Empty)))
+                ResetBrowseScroll();
             UpdatePaging(snapshot.Page.TotalCount);
 
             if ((snapshot.IsFlatSearch && snapshot.Page.TotalCount == 0) || (!snapshot.IsFlatSearch && snapshot.Shelves.Count == 0))
@@ -1583,21 +1778,35 @@ public sealed partial class CatalogLandingPage : UserControl
             ? SubtitleFor(spotlightChannel.Source.Kind)
             : card.Subtitle;
         SpotlightEyebrow.Text = $"TVIVO SPOTLIGHT - {TypeLabel(card.Channel?.Source.Kind)}";
-        SpotlightAction.Content = card.Channel is null ? "Open shelf" : card.Channel.Source.Kind switch
-        {
-            StreamKind.Movie => "Play movie",
-            StreamKind.Series => "Open series",
-            _ => "Open channel",
-        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SpotlightArtworkTarget,
+            card.Channel is null ? "Open shelf" : card.Channel.Source.Kind switch
+            {
+                StreamKind.Movie => "Play movie",
+                StreamKind.Series => "Open series",
+                _ => "Open channel",
+            });
         StartArtwork(SpotlightArtwork, card.ArtworkUrl);
     }
 
-    private static CatalogCard[] GetSpotlightCandidates(IReadOnlyList<CatalogShelf> shelves) => shelves.SelectMany(shelf => shelf.Cards)
-        .Where(card => card.Channel is not null)
-        .GroupBy(card => card.Id, StringComparer.Ordinal)
-        .Select(group => group.First())
-        .OrderBy(card => card.Id, StringComparer.Ordinal)
-        .ToArray();
+    // The first SpotlightWarmCandidateLimit candidates are the ones the carousel auto-rotates through,
+    // so they must mix content types. Sorting by card id alone put every Live card ("...:Live:...")
+    // ahead of Movie and Series, so the auto-rotation only ever showed live channels.
+    private static CatalogCard[] GetSpotlightCandidates(IReadOnlyList<CatalogShelf> shelves)
+    {
+        var byKind = shelves.SelectMany(shelf => shelf.Cards)
+            .Where(card => card.Channel is not null)
+            .GroupBy(card => card.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .GroupBy(card => card.Channel!.Source.Kind)
+            .OrderBy(group => group.Key switch { StreamKind.Movie => 0, StreamKind.Series => 1, _ => 2 })
+            .Select(group => group.OrderBy(card => card.Id, StringComparer.Ordinal).ToArray())
+            .ToArray();
+        var result = new List<CatalogCard>();
+        for (var index = 0; byKind.Any(cards => index < cards.Length); index++)
+            foreach (var cards in byKind)
+                if (index < cards.Length) result.Add(cards[index]);
+        return result.ToArray();
+    }
 
     private void SpotlightTimer_Tick(object? sender, object args)
     {
@@ -1758,7 +1967,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         void ScrollToTop()
         {
-            var scrollViewer = _openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+            var scrollViewer = ActiveVerticalScrollViewer();
             scrollViewer?.ChangeView(null, 0, null, true);
         }
 
@@ -1768,7 +1977,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CaptureBrowseState()
     {
-        var scrollViewer = _openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+        var scrollViewer = ActiveVerticalScrollViewer();
         var offset = scrollViewer?.VerticalOffset ?? 0;
 
         string? focusedCardId = null;
@@ -1833,7 +2042,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 // Fallback used only when no focused card was captured (e.g. the user scrolled
                 // without clicking anything). A single ChangeView here can undershoot because the
                 // virtualizing panel may not have measured its full extent yet; retry briefly.
-                var scrollViewer = openShelfId is not null ? FindShelfScrollViewer(OpenShelfGrid) : FindShelfScrollViewer(ShelvesItems);
+                var scrollViewer = ActiveVerticalScrollViewer();
                 if (scrollViewer is null || position.ScrollOffset <= 0) return;
                 var scrollAttempts = 0;
                 var scrollRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
@@ -2272,6 +2481,9 @@ public sealed partial class CatalogLandingPage : UserControl
             }
             _renderedShelves.Add(shelves[index]);
         }
+        // Inserting new shelves in front of old ones (a different tab) pushes the leftovers past the end.
+        for (var index = _renderedShelves.Count - 1; index >= shelves.Count; index--)
+            _renderedShelves.RemoveAt(index);
     }
 
     private async void ModeButton_Click(object sender, RoutedEventArgs args)
@@ -2460,6 +2672,29 @@ public sealed partial class CatalogLandingPage : UserControl
         _shelfDragStarted = false;
     }
 
+    // Search results and an opened category both live in OpenShelfGrid and the shelf list is hidden then, so
+    // pick the scroller that is on screen rather than guessing from whether a category is open.
+    private ScrollViewer? ActiveVerticalScrollViewer() =>
+        OpenShelfGrid.Visibility == Visibility.Visible
+            ? FindShelfScrollViewer(OpenShelfGrid)
+            : FindShelfScrollViewer(ShelvesItems);
+
+    private void ScrollVerticallyTo(Func<ScrollViewer, double> target)
+    {
+        if (ActiveVerticalScrollViewer() is not { } viewer) return;
+        viewer.ChangeView(null, Math.Clamp(target(viewer), 0, viewer.ScrollableHeight), null, true);
+    }
+
+    private void ScrollTop_Click(object sender, RoutedEventArgs args) => ScrollVerticallyTo(_ => 0);
+
+    private void ScrollBottom_Click(object sender, RoutedEventArgs args) => ScrollVerticallyTo(viewer => viewer.ScrollableHeight);
+
+    private void ScrollPageUp_Click(object sender, RoutedEventArgs args) =>
+        ScrollVerticallyTo(viewer => viewer.VerticalOffset - viewer.ViewportHeight * 0.85);
+
+    private void ScrollPageDown_Click(object sender, RoutedEventArgs args) =>
+        ScrollVerticallyTo(viewer => viewer.VerticalOffset + viewer.ViewportHeight * 0.85);
+
     private static ScrollViewer? FindShelfScrollViewer(DependencyObject element)
     {
         if (element is ScrollViewer scrollViewer)
@@ -2522,9 +2757,31 @@ public sealed partial class CatalogLandingPage : UserControl
         SearchBox.Focus(FocusState.Programmatic);
     }
 
+    private bool _searchChipsWired;
+
+    private void SearchChipsToggle_Click(object sender, RoutedEventArgs args)
+    {
+        SearchCategoryChips.MaxRows = SearchCategoryChips.MaxRows == 0 ? 2 : 0;
+        UpdateSearchChipsToggle();
+    }
+
+    private void UpdateSearchChipsToggle()
+    {
+        var expanded = SearchCategoryChips.MaxRows == 0;
+        var hidden = SearchCategoryChips.HiddenCount;
+        SearchChipsToggle.Visibility = expanded || hidden > 0 ? Visibility.Visible : Visibility.Collapsed;
+        SearchChipsToggle.Content = expanded ? "Show fewer" : $"+{hidden} more";
+    }
+
     private void UpdateSearchCategoryChips(CatalogSnapshot snapshot)
     {
+        if (!_searchChipsWired)
+        {
+            _searchChipsWired = true;
+            SearchCategoryChips.HiddenCountChanged += (_, _) => UpdateSearchChipsToggle();
+        }
         SearchCategoryChips.Children.Clear();
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateSearchChipsToggle);
         var categories = snapshot.SearchCategoryCounts ?? Array.Empty<SearchCategoryCount>();
         var allCount = categories.Sum(category => category.MatchCount);
         AddSearchCategoryChip(string.Empty, "All", allCount, snapshot.SelectedGroupId is null);
@@ -2581,12 +2838,18 @@ public sealed partial class CatalogLandingPage : UserControl
         ? LoadAsync(account, forceRefresh: true, reason: "manual-refresh", refreshAll: true)
         : LoadSavedAsync();
 
-    private async void TypeRefreshButton_Click(object sender, RoutedEventArgs args)
+    public async void RefreshCurrentType()
     {
-        if (_account is not { } account || _activeMode == CatalogMode.MyTvivo) return;
-        TypeRefreshButton.IsEnabled = false;
-        try { await LoadAsync(account, forceRefresh: true, reason: "manual-type-refresh"); }
-        finally { TypeRefreshButton.IsEnabled = true; }
+        if (_account is not { } account || IsRefreshingType) return;
+        IsRefreshingType = true;
+        RaiseRefreshStateChanged();
+        var allTypes = _activeMode == CatalogMode.MyTvivo; // For You shows every type, so refresh them all
+        try { await LoadAsync(account, forceRefresh: true, reason: allTypes ? "manual-refresh" : "manual-type-refresh", refreshAll: allTypes); }
+        finally
+        {
+            IsRefreshingType = false;
+            RaiseRefreshStateChanged();
+        }
     }
 
     public async void SetCategorySort(string? tag)
@@ -2703,7 +2966,7 @@ public sealed partial class CatalogLandingPage : UserControl
         SetModeButtonState(MyTvivoButton, _activeMode == CatalogMode.MyTvivo);
         SetModeButtonState(MoviesButton, _activeMode == CatalogMode.Movies);
         SetModeButtonState(SeriesButton, _activeMode == CatalogMode.Series);
-        TypeRefreshPanel.Visibility = _activeMode == CatalogMode.MyTvivo ? Visibility.Collapsed : Visibility.Visible;
+        RaiseRefreshStateChanged();
     }
 
     private void ShelfGrid_KeyDown(object sender, KeyRoutedEventArgs args)
@@ -2809,29 +3072,6 @@ public sealed partial class CatalogLandingPage : UserControl
             ? (Brush)Application.Current.Resources["AppAccentBrush"]
             : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
-
-#if DEBUG
-    private static Channel CreateLocalFixtureChannel() => new(
-        "local-fixture", "gate-9-local-fixture", null, "Gate 9 local fixture", "Gate 9 local fixture",
-        null, null, int.MaxValue,
-        new StreamSource("gate-9-local-fixture", StreamKind.Movie, DirectUri: new Uri(LocalFixturePath!)),
-        new Dictionary<string, string>());
-
-    private static string? FindFixturePath()
-    {
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-        {
-            var fixturePath = Path.Combine(directory.FullName, "windows-spike", "tests", "Gate9", "thirtyfive-second-h264.mp4");
-            if (File.Exists(fixturePath)) return fixturePath;
-        }
-        return null;
-    }
-#endif
-
-#if DEBUG
-    private void LocalFixtureButton_Click(object sender, RoutedEventArgs args) =>
-        RaiseChannelSelected(CreateLocalFixtureChannel());
-#endif
 
     private async void Retry_Click(object sender, RoutedEventArgs args)
     {
@@ -2970,6 +3210,9 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         private EpgNowNext? _nowNext;
         private PlaybackProgress? _watchProgress;
+        private CatalogMetadata? _hoverMetadata;
+        private bool _hoverSummaryLoading;
+        private bool _hoverSummaryFailed;
         private readonly bool _epgEnabled = epgEnabled;
 
         public string Id { get; } = id;
@@ -2978,7 +3221,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public string? ArtworkUrl { get; } = artworkUrl;
         public double Width { get; } = width;
         public double Height { get; } = height;
-        public Channel? Channel { get; } = channel;
+        public Channel? Channel { get; private set; } = channel;
         public string? QualityBadge { get; } = qualityBadge;
         public CatalogItemType Type { get; } = type;
         public bool IsContinueWatching { get; } = isContinueWatching;
@@ -3030,6 +3273,24 @@ public sealed partial class CatalogLandingPage : UserControl
             Channel.Metadata.TryGetValue("rating", out var rating) && RatingDisplayFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
             Channel.Metadata.GetValueOrDefault("genre"),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        private string? HoverPlot => _hoverMetadata is not null
+            ? _hoverMetadata.Plot
+            : Channel?.Metadata.GetValueOrDefault("plot");
+        public string HoverSummaryText => CatalogHoverTextFormatter.Summary(Type,
+            HoverPlot, _hoverSummaryLoading,
+            _hoverSummaryFailed, NowText, NextText);
+        public string HoverCastText => CatalogHoverTextFormatter.Cast(
+            _hoverMetadata is not null ? _hoverMetadata.Cast : Channel?.Metadata.GetValueOrDefault("cast"));
+        public Visibility HoverCastVisibility => string.IsNullOrWhiteSpace(HoverCastText) ? Visibility.Collapsed : Visibility.Visible;
+        public string HoverAccessibleName => string.Join(". ", new[]
+        {
+            Title,
+            DetailsLine,
+            HoverSummaryText,
+            NowText,
+            NextText,
+            HoverCastText,
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
         public string HoverPreviewText
         {
             get
@@ -3047,7 +3308,57 @@ public sealed partial class CatalogLandingPage : UserControl
             }
         }
 
+        public void ApplyMetadata(CatalogMetadata metadata)
+        {
+            if (Channel is null) return;
+            var values = Channel.Metadata.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            Add("year", metadata.Year);
+            Add("rating", metadata.Rating);
+            Add("genre", metadata.Genre);
+            Add("plot", metadata.Plot);
+            Add("cast", metadata.Cast);
+            Channel = Channel with { Metadata = values };
+            SetHoverMetadata(metadata, failed: false);
+
+            void Add(string key, string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) values[key] = value;
+            }
+        }
+
         public event PropertyChangedEventHandler? PropertyChanged;
+        public void BeginHoverSummary()
+        {
+            _hoverSummaryLoading = Type != CatalogItemType.Live &&
+                _hoverMetadata is null && string.IsNullOrWhiteSpace(Channel?.Metadata.GetValueOrDefault("plot"));
+            _hoverSummaryFailed = false;
+            NotifyHoverTextChanged();
+        }
+
+        public void EndHoverSummary()
+        {
+            _hoverSummaryLoading = false;
+            _hoverSummaryFailed = false;
+            NotifyHoverTextChanged();
+        }
+
+        public void SetHoverMetadata(CatalogMetadata? metadata, bool failed)
+        {
+            _hoverMetadata = metadata;
+            _hoverSummaryLoading = false;
+            _hoverSummaryFailed = failed;
+            NotifyHoverTextChanged();
+        }
+
+        private void NotifyHoverTextChanged()
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverPreviewText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverSummaryText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverCastText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverCastVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverAccessibleName)));
+        }
+
         public void ApplyWatchProgress(PlaybackProgress? progress)
         {
             if (_watchProgress == progress) return;
@@ -3071,12 +3382,13 @@ public sealed partial class CatalogLandingPage : UserControl
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NextVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgAutomationName)));
+            NotifyHoverTextChanged();
         }
 
         public void NotifyMetadataChanged()
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverPreviewText)));
+            NotifyHoverTextChanged();
         }
 
         private static string FormatLocalTime(DateTimeOffset utcTime) =>

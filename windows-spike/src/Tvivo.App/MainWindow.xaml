@@ -108,6 +108,7 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                           FontSize="13" Foreground="{StaticResource AppMutedTextBrush}"
@@ -123,8 +124,25 @@
                                          TextChanged="TopSearchBox_TextChanged"
                                          KeyDown="TopSearchBox_KeyDown"
                                          LostFocus="TopSearchBox_LostFocus"
+                                         Loaded="TopSearchBox_Loaded"
                                          AutomationProperties.Name="Search current catalog"
                                          ToolTipService.ToolTip="{x:Null}" />
+                                <!-- Works without focusing the box: clears the search and closes the pill. -->
+                                <Button x:Name="TopSearchCloseButton"
+                                        Grid.Column="2"
+                                        Content="&#xE711;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                        FontSize="12"
+                                        Width="28" Height="28" Padding="0"
+                                        MinWidth="0" MinHeight="0"
+                                        Margin="0,0,-6,0"
+                                        CornerRadius="14"
+                                        VerticalAlignment="Center"
+                                        Background="Transparent" BorderThickness="0"
+                                        Foreground="{StaticResource AppMutedTextBrush}"
+                                        Click="TopSearchCloseButton_Click"
+                                        AutomationProperties.Name="Clear search and close"
+                                        ToolTipService.ToolTip="Clear search" />
                             </Grid>
                         </Border>
                         <Button x:Name="TopSortButton"
@@ -143,6 +161,13 @@
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
+                        <Button x:Name="TopRefreshButton"
+                                Content="&#xE72C;"
+                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Style="{StaticResource AppIconButtonStyle}"
+                                Visibility="Collapsed"
+                                Click="TopRefreshButton_Click"
+                                AutomationProperties.Name="Refresh catalog" />
                     </StackPanel>
                     <Button x:Name="AccountNavigation"
                             Content="&#xE713;"

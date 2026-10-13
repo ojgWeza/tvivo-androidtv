@@ -57,6 +57,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private Stopwatch? _attemptClock;
     private AttemptWarningRing? _warnings;
     private volatile bool _missingDecoderLogged;
+    private volatile bool _forbiddenLogged;
 
     public VlcPlaybackEngine(bool enableLiveTimeshift = false)
     {
@@ -230,6 +231,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _attemptClock = Stopwatch.StartNew();
             _warnings = new AttemptWarningRing();
             _missingDecoderLogged = false;
+            _forbiddenLogged = false;
             EmitPhase("open-start");
             var timeshiftPath = PrepareLiveTimeshift(source.Kind);
             Media media;
@@ -244,6 +246,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             var timeshiftOptions = LiveTimeshiftOptions.ForMedia(source.Kind, _enableLiveTimeshift && timeshiftPath is not null, timeshiftPath);
             foreach (var option in timeshiftOptions)
                 media.AddOption(option);
+            // Open at the resume point so playback never flashes the start of the film first.
+            if (source.StartPositionMilliseconds is > 0 and var startMs)
+                media.AddOption(string.Create(System.Globalization.CultureInfo.InvariantCulture, $":start-time={startMs / 1000.0:0.###}"));
             if (timeshiftOptions.Count > 0)
             {
                 var message = $"event=playback.timeshift.config engine=LibVLC scope=media granularity_bytes={LiveTimeshiftOptions.GranularityBytes}";
@@ -340,7 +345,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                     : await handlers.Completion.Task.ConfigureAwait(true);
 
                 // A logged "no suitable decoder" turns a vague failure or timeout into "format not supported".
-                result = PlaybackFailureClassifier.RefineLibVlcFailure(result, _missingDecoderLogged);
+                result = PlaybackFailureClassifier.RefineLibVlcFailure(result, _missingDecoderLogged, _forbiddenLogged);
 
                 if (result != PlaybackAttemptResult.FirstFrame)
                 {
@@ -579,6 +584,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         {
             if (PlaybackFailureClassifier.IsMissingDecoderLog(args.Message))
                 _missingDecoderLogged = true;
+            if (PlaybackFailureClassifier.IsForbiddenLog(args.Message))
+                _forbiddenLogged = true;
             Volatile.Read(ref _warnings)?.Enqueue($"level={args.Level} module={args.Module} message={args.Message}");
         }
     }

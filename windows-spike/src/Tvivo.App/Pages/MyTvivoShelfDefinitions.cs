@@ -1,4 +1,5 @@
 using Tvivo.Core;
+using Tvivo.Infrastructure;
 
 namespace Tvivo.App.Pages;
 
@@ -29,4 +30,23 @@ public static class MyTvivoShelfDefinitions
         new MyTvivoShelfDefinition("__my_favorites_series", "Favorite Series", CatalogItemType.Series, MyTvivoShelfKind.Favorites),
         new MyTvivoShelfDefinition("__my_favorites_live", "Favorite Live TV", CatalogItemType.Live, MyTvivoShelfKind.Favorites),
     });
+
+    /// <summary>
+    /// Every shelf in the user's chosen order with its visibility. Saved entries come first;
+    /// unknown ids are dropped and shelves missing from the saved list are appended, visible.
+    /// </summary>
+    public static IReadOnlyList<(MyTvivoShelfDefinition Definition, bool Visible)> Resolve(
+        IReadOnlyList<MyTvivoShelfPreference> saved)
+    {
+        var byId = All.ToDictionary(definition => definition.Id, StringComparer.Ordinal);
+        var result = new List<(MyTvivoShelfDefinition, bool)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var preference in saved)
+            if (byId.TryGetValue(preference.Id, out var definition) && seen.Add(preference.Id))
+                result.Add((definition, preference.Visible));
+        foreach (var definition in All)
+            if (seen.Add(definition.Id))
+                result.Add((definition, true));
+        return result;
+    }
 }

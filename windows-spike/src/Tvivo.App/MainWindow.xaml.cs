@@ -208,6 +208,9 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        // Sliders mark pointer presses handled, so listen for handled events too.
+        VolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
+        CompactVolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
         _cinemaCursorController = new CinemaCursorController(WinRT.Interop.WindowNative.GetWindowHandle(this));
         var playbackOptions = ReadPlaybackOptions();
         _episodePlaybackMode = playbackOptions.EpisodeMode;
@@ -273,10 +276,12 @@ public sealed partial class MainWindow : Window
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
+        _catalogLandingPage.RefreshStateChanged += CatalogLandingPage_RefreshStateChanged;
         _catalogLandingPage.VisibleCatalogDataChanged += (_, _) => _homePage.MarkDataChanged();
         _homePage.ChannelSelected += CatalogLandingPage_ChannelSelected;
         _homePage.ProviderSetupRequested += (_, _) => ShowPage(ShellPage.Setup);
         _providerSetupPage.ConnectionSaved += ProviderSetupPage_ConnectionSaved;
+        _accountPage.MyTvivoLayoutChanged += (_, _) => _catalogLandingPage.InvalidateCatalogSnapshots();
         _accountPage.SignOutCompleted += AccountPage_SignOutCompleted;
         _accountPage.ChangeUserRequested += AccountPage_ChangeUserRequested;
         _accountPage.RefreshCatalogRequested += AccountPage_RefreshCatalogRequested;
@@ -973,7 +978,20 @@ public sealed partial class MainWindow : Window
         var package = new DataPackage();
         package.SetText(LaunchDiagnostics.ExportRecent());
         Clipboard.SetContent(package);
-        CopyDiagnosticsStatus.Text = "Diagnostics copied";
+        // The time makes a second copy visibly new; the note is cleared after a few seconds and whenever
+        // another title starts, so it never describes a different movie.
+        CopyDiagnosticsStatus.Text = $"Diagnostics copied {DateTime.Now:HH:mm:ss}";
+        var copyToken = ++_copyDiagnosticsNoteVersion;
+        _ = ClearCopyNoteAsync(copyToken);
+    }
+
+    private int _copyDiagnosticsNoteVersion;
+
+    private async Task ClearCopyNoteAsync(int version)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        if (version == _copyDiagnosticsNoteVersion)
+            CopyDiagnosticsStatus.Text = string.Empty;
     }
 
     private void ShowPage(ShellPage page, bool updateTopNavigation = true)
@@ -1059,6 +1077,16 @@ public sealed partial class MainWindow : Window
         TopSortButton.IsEnabled = enabled;
     }
 
+    private void TopRefreshButton_Click(object sender, RoutedEventArgs args) =>
+        _catalogLandingPage.RefreshCurrentType();
+
+    private void CatalogLandingPage_RefreshStateChanged(object? sender, EventArgs args)
+    {
+        TopRefreshButton.Visibility = _catalogLandingPage.CanRefreshType ? Visibility.Visible : Visibility.Collapsed;
+        TopRefreshButton.IsEnabled = !_catalogLandingPage.IsRefreshingType;
+        ToolTipService.SetToolTip(TopRefreshButton, _catalogLandingPage.UpdatedText);
+    }
+
     private void TopSortItem_Click(object sender, RoutedEventArgs args)
     {
         if (sender is RadioMenuFlyoutItem { Tag: string tag })
@@ -1103,6 +1131,35 @@ public sealed partial class MainWindow : Window
 
     private void TopSearchButton_Click(object sender, RoutedEventArgs args) =>
         SetTopSearchExpanded(true, focus: true);
+
+    // The pill has its own always-available ✕, so hide the text box's built-in one (shown only while focused).
+    private void TopSearchBox_Loaded(object sender, RoutedEventArgs args)
+    {
+        TopSearchBox.ApplyTemplate();
+        if (FindDescendantByName(TopSearchBox, "DeleteButton") is { } builtIn)
+        {
+            builtIn.Opacity = 0;
+            builtIn.IsHitTestVisible = false;
+            builtIn.Width = 0;
+        }
+    }
+
+    private static FrameworkElement? FindDescendantByName(DependencyObject root, string name)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is FrameworkElement { } element && element.Name == name) return element;
+            if (FindDescendantByName(child, name) is { } found) return found;
+        }
+        return null;
+    }
+
+    private void TopSearchCloseButton_Click(object sender, RoutedEventArgs args)
+    {
+        TopSearchBox.Text = string.Empty;
+        SetTopSearchExpanded(false);
+    }
 
     private void TopSearchBox_LostFocus(object sender, RoutedEventArgs args)
     {
@@ -1712,10 +1769,13 @@ public sealed partial class MainWindow : Window
             ? kind == StreamKind.Episode ? GetAdjacentEpisode(-1) : GetAdjacentVisiblePlaylistItem(-1)
             : GetNextPlaylistItem();
         if (target is null) return;
+        // Same as the auto-advance path: from the mini player (or any compact player) stay compact. Without
+        // this, ShowPage(Player) pulled the whole window into the mini size and the new video had no surface.
+        var preserveCompact = _playerPresentation == PlayerPresentation.Compact;
         if (target.Source.Kind == StreamKind.Episode)
-            OpenSeriesEpisode(target);
+            OpenSeriesEpisode(target, preserveCompact);
         else
-            PlayRelatedChannel(target);
+            PlayRelatedChannel(target, preserveCompact);
     }
 
     private Channel? GetAdjacentVisiblePlaylistItem(int offset)
@@ -1997,7 +2057,8 @@ public sealed partial class MainWindow : Window
         bool preserveCompact = false,
         bool isRecovery = false,
         long? recoveryPositionMs = null,
-        bool engineFallbackAttempt = false)
+        bool engineFallbackAttempt = false,
+        bool providerRetryAttempt = false)
     {
         var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
@@ -2026,6 +2087,12 @@ public sealed partial class MainWindow : Window
         _lastGoodPlaybackPositionMilliseconds = Math.Max(0, isRecovery
             ? recoveryPositionMs ?? resumePosition
             : resumePosition);
+        // LibVLC can open straight at the resume point; the player then skips the seek-after-first-frame.
+        var openAtResume = ReferenceEquals(_engine, _vlcEngine) && source.Kind != StreamKind.Live &&
+            _lastGoodPlaybackPositionMilliseconds > 5_000;
+        var playSource = openAtResume ? source with { StartPositionMilliseconds = _lastGoodPlaybackPositionMilliseconds } : source;
+        _copyDiagnosticsNoteVersion++;
+        CopyDiagnosticsStatus.Text = string.Empty;
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
         _diagnosticLastPosition = 0;
@@ -2090,7 +2157,7 @@ public sealed partial class MainWindow : Window
                         return Task.FromResult(PlaybackAttemptResult.Cancelled);
                     LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
                     _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
-                    return _playback.PlayAsync(source, token);
+                    return _playback.PlayAsync(playSource, token);
                 }),
                 sessionCts.Token);
         }
@@ -2132,6 +2199,20 @@ public sealed partial class MainWindow : Window
             await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs, engineFallbackAttempt: true);
             return;
         }
+        if (!providerRetryAttempt && !engineFallbackAttempt && source.Kind != StreamKind.Live &&
+            result == PlaybackAttemptResult.NetworkFailure)
+        {
+            // Providers cap simultaneous connections and release the previous one a moment late, so a
+            // stream started (or seeked) right after another is often refused once. Wait and try again.
+            LaunchDiagnostics.Write($"event=playback.provider-retry engine={engineName} kind={source.Kind} delayMs=3000");
+            StatusText.Text = "The provider refused the stream. Retrying in a moment…";
+            try { await Task.Delay(TimeSpan.FromSeconds(3)); }
+            catch (OperationCanceledException) { return; }
+            if (generation != Volatile.Read(ref _playbackSessionGeneration)) return;
+            _resumePositionOnStart = resumeOnStartForFallback;
+            await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs, providerRetryAttempt: true);
+            return;
+        }
         if (engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame)
         {
             _itemEngineOverride[itemKey] = _engine;
@@ -2151,7 +2232,8 @@ public sealed partial class MainWindow : Window
         if (result == PlaybackAttemptResult.FirstFrame)
         {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
-            _pendingResumePosition = isRecovery && recoveryPositionMs is > 0
+            _pendingResumePosition = openAtResume ? null
+                : isRecovery && recoveryPositionMs is > 0
                 ? recoveryPositionMs
                 : resumePosition > 0 ? resumePosition : null;
             _activePlaybackSessionGeneration = generation;
@@ -2356,7 +2438,7 @@ public sealed partial class MainWindow : Window
         PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
         PlaybackAttemptResult.DecodeFailure => $"The {engineLabel} player opened the stream but could not decode it.",
         PlaybackAttemptResult.UnsupportedMedia => $"The {engineLabel} player doesn't support this video format.",
-        PlaybackAttemptResult.NetworkFailure => "The connection to the provider was lost or could not be made. Check your connection and retry.",
+        PlaybackAttemptResult.NetworkFailure => "The provider refused or dropped the connection. If another stream or device is playing on this account, stop it, then retry.",
         _ => $"Playback failed ({result}). The provider may have rejected the stream or its format is not supported. Retry, or try another title.",
     };
 
@@ -2434,7 +2516,7 @@ public sealed partial class MainWindow : Window
         }
         if (metadata is not null && _catalogLandingPage.Account is { } account)
             _catalogRepository.SaveMetadata(account, type, channel.Id, metadata);
-        _catalogLandingPage.NotifyMetadataChanged(channel.Id);
+        _catalogLandingPage.NotifyMetadataChanged(_catalogLandingPage.Account?.AccountId ?? channel.ProviderAccountId, type, channel.Id);
     }
 
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
@@ -2621,6 +2703,42 @@ public sealed partial class MainWindow : Window
             await StartPlaybackAsync(_currentSource, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
     }
 
+    private const int AutoResumeMaxAttempts = 3;
+    private static readonly TimeSpan AutoResumeResetAfter = TimeSpan.FromMinutes(2);
+    private string? _autoResumeItemKey;
+    private int _autoResumeAttempts;
+    private DateTime _autoResumeLastAt;
+
+    /// <summary>
+    /// A film or episode whose stream is cut short (providers drop connections) is reopened at the saved
+    /// position after a short pause instead of waiting for a manual Retry. Gives up after a few quick cuts.
+    /// </summary>
+    private bool TryBeginAutoResumeAfterCut()
+    {
+        if (_currentSource is not { } source) return false;
+        var key = PlaybackItemKey(source);
+        if (key != _autoResumeItemKey || DateTime.UtcNow - _autoResumeLastAt > AutoResumeResetAfter)
+            _autoResumeAttempts = 0;
+        if (_autoResumeAttempts >= AutoResumeMaxAttempts) return false;
+        _autoResumeItemKey = key;
+        _autoResumeAttempts++;
+        _autoResumeLastAt = DateTime.UtcNow;
+        var generation = Volatile.Read(ref _playbackSessionGeneration);
+        LaunchDiagnostics.Write($"event=playback.auto-resume attempt={_autoResumeAttempts} positionMs={_lastGoodPlaybackPositionMilliseconds}");
+        StatusText.Text = "The stream was interrupted. Reconnecting…";
+        _ = ResumeAfterCutAsync(source, generation);
+        return true;
+    }
+
+    private async Task ResumeAfterCutAsync(StreamSource source, long generation)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        if (generation != Volatile.Read(ref _playbackSessionGeneration) || !IsPlaybackUiActive ||
+            Volatile.Read(ref _playbackSessionCts) is not null)
+            return;
+        await StartPlaybackAsync(source, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
+    }
+
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
         if (!IsPlaybackUiActive)
@@ -2708,9 +2826,11 @@ public sealed partial class MainWindow : Window
             _nowPlayingChannel?.Source.Kind is StreamKind.Movie or StreamKind.Episode)
         {
             SaveResumePosition(force: true);
+            _unverifiedPlaybackEndHandled = true;
+            if (TryBeginAutoResumeAfterCut())
+                return;
             StatusText.Text = "Playback ended before completion could be verified. Select Retry to resume.";
             SetPauseButtonState("Retry");
-            _unverifiedPlaybackEndHandled = true;
         }
         if (sessionIsCurrent && !playbackFailed && !_playbackCompletionShown && ended && genuineEnd && _nowPlayingChannel is { } finishedChannel)
         {
@@ -3170,6 +3290,7 @@ public sealed partial class MainWindow : Window
     private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs args)
     {
         if (_isUpdatingVolume) return;
+        UnmuteIfMuted();
         _engine.Volume = (int)args.NewValue;
         if (CompactVolumeSlider is null) return;
         _isUpdatingVolume = true;
@@ -3229,6 +3350,14 @@ public sealed partial class MainWindow : Window
     }
 
     private void ToggleMute_Click(object sender, RoutedEventArgs args) => ToggleMute();
+
+    /// <summary>Touching the volume control while muted brings the sound back.</summary>
+    private void UnmuteIfMuted()
+    {
+        if (_playbackMuteState.IsMuted) ToggleMute();
+    }
+
+    private void VolumeSlider_PointerPressed(object sender, PointerRoutedEventArgs args) => UnmuteIfMuted();
 
     private void ToggleMute()
     {
@@ -4020,6 +4149,7 @@ public sealed partial class MainWindow : Window
         Activated -= MainWindow_Activated;
         _vlcEngine.StateChanged -= VlcEngine_StateChanged;
         _nativeEngine.PlaybackFailed -= NativeEngine_PlaybackFailed;
+        _catalogLandingPage.RefreshStateChanged -= CatalogLandingPage_RefreshStateChanged;
         _accountPage.MinimizeToMiniModeChanged -= AccountPage_MinimizeToMiniModeChanged;
         _windowState.WindowMiniGeometryChanged -= WindowState_WindowMiniGeometryChanged;
         _windowState.Dispose();

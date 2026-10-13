@@ -81,9 +81,95 @@ public sealed partial class AccountPage : UserControl
         AccountTabPanel.Visibility = tab == "Account" ? Visibility.Visible : Visibility.Collapsed;
         PlayerTabPanel.Visibility = tab == "Player" ? Visibility.Visible : Visibility.Collapsed;
         LibraryTabPanel.Visibility = tab == "Library" ? Visibility.Visible : Visibility.Collapsed;
+        ForYouTabPanel.Visibility = tab == "ForYou" ? Visibility.Visible : Visibility.Collapsed;
         MarkTab(AccountTabButton, tab == "Account");
         MarkTab(PlayerTabButton, tab == "Player");
         MarkTab(LibraryTabButton, tab == "Library");
+        MarkTab(ForYouTabButton, tab == "ForYou");
+        if (tab == "ForYou") RenderForYouLayout();
+    }
+
+    private readonly MyTvivoLayoutStore _myTvivoLayoutStore = new();
+
+    public event EventHandler? MyTvivoLayoutChanged;
+
+    private void RenderForYouLayout()
+    {
+        var entries = MyTvivoShelfDefinitions.Resolve(_myTvivoLayoutStore.Read());
+        ForYouShelfList.Children.Clear();
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var (definition, visible) = entries[index];
+            var position = index;
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var toggle = new CheckBox { Content = definition.Title, IsChecked = visible, FontSize = 16 };
+            toggle.Click += (_, _) => SaveForYouLayout(entries, position, delta: 0, visible: toggle.IsChecked == true);
+            row.Children.Add(toggle);
+
+            var up = MoveButton("", "Move up", position > 0);
+            up.Click += (_, _) => SaveForYouLayout(entries, position, delta: -1, visible);
+            Grid.SetColumn(up, 1);
+            row.Children.Add(up);
+
+            var down = MoveButton("", "Move down", position < entries.Count - 1);
+            down.Click += (_, _) => SaveForYouLayout(entries, position, delta: 1, visible);
+            Grid.SetColumn(down, 2);
+            row.Children.Add(down);
+
+            ForYouShelfList.Children.Add(row);
+        }
+    }
+
+    private static Button MoveButton(string glyph, string name, bool enabled)
+    {
+        var button = new Button
+        {
+            Content = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            Style = (Style)App.Current.Resources["AppIconButtonStyle"],
+            IsEnabled = enabled,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, name);
+        return button;
+    }
+
+    private void SaveForYouLayout(
+        IReadOnlyList<(MyTvivoShelfDefinition Definition, bool Visible)> entries, int position, int delta, bool visible)
+    {
+        var list = entries.Select(entry => new MyTvivoShelfPreference(entry.Definition.Id, entry.Visible)).ToList();
+        list[position] = list[position] with { Visible = visible };
+        var target = position + delta;
+        if (delta != 0 && target >= 0 && target < list.Count)
+            (list[position], list[target]) = (list[target], list[position]);
+        try
+        {
+            _myTvivoLayoutStore.Write(list);
+            ErrorText.Visibility = Visibility.Collapsed;
+            MyTvivoLayoutChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            ShowError("Couldn't save the For You layout. Please try again.");
+        }
+        RenderForYouLayout();
+    }
+
+    private void ResetForYouLayout_Click(object sender, RoutedEventArgs args)
+    {
+        try
+        {
+            _myTvivoLayoutStore.Reset();
+            MyTvivoLayoutChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            ShowError("Couldn't reset the For You layout. Please try again.");
+        }
+        RenderForYouLayout();
     }
 
     private static void MarkTab(Button button, bool selected)

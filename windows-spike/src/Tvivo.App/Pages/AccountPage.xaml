@@ -9,6 +9,10 @@
                         Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
                         FontSize="16"
                         Click="SettingsTab_Click" />
+                <Button x:Name="ForYouTabButton" Content="For You" Tag="ForYou"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
+                        FontSize="16"
+                        Click="SettingsTab_Click" />
                 <Button x:Name="PlayerTabButton" Content="Player" Tag="Player"
                         Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
                         FontSize="16"
@@ -50,6 +54,19 @@
                     <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
                             FontSize="16" Content="Change user" Click="ChangeUserButton_Click" />
                 </StackPanel>
+            </StackPanel>
+
+            <StackPanel x:Name="ForYouTabPanel" Visibility="Collapsed">
+                <Border Background="{StaticResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
+                    <StackPanel Spacing="10">
+                        <TextBlock Foreground="{StaticResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                                   Text="Choose which shelves appear on For You and the order they show in." />
+                        <StackPanel x:Name="ForYouShelfList" Spacing="4" />
+                        <Button Style="{StaticResource AppQuietButtonStyle}" FontSize="16"
+                                HorizontalAlignment="Left" Content="Reset to default"
+                                Click="ResetForYouLayout_Click" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <StackPanel x:Name="PlayerTabPanel" Visibility="Collapsed">

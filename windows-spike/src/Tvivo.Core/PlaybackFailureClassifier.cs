@@ -27,6 +27,12 @@ public static class PlaybackFailureClassifier
         (message.Contains("no suitable decoder", StringComparison.OrdinalIgnoreCase) ||
          message.Contains("does not support this sound or video format", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>True for a LibVLC log line saying the provider refused the request (HTTP 403, e.g. too many connections).</summary>
+    public static bool IsForbiddenLog(string? message) =>
+        message is not null &&
+        (message.Contains("403", StringComparison.Ordinal) ||
+         message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase));
+
     public static PlaybackAttemptResult FromMediaPlayerError(int error, int hresult) => error switch
     {
         MediaPlayerNetworkError => PlaybackAttemptResult.NetworkFailure,
@@ -52,10 +58,12 @@ public static class PlaybackFailureClassifier
     /// A LibVLC attempt that ended without video: a logged missing decoder means the format is the problem,
     /// otherwise the failure stays generic.
     /// </summary>
-    public static PlaybackAttemptResult RefineLibVlcFailure(PlaybackAttemptResult result, bool missingDecoderLogged) =>
-        missingDecoderLogged && result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout
-            ? PlaybackAttemptResult.UnsupportedMedia
-            : result;
+    public static PlaybackAttemptResult RefineLibVlcFailure(PlaybackAttemptResult result, bool missingDecoderLogged, bool forbiddenLogged = false) =>
+        forbiddenLogged && result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout
+            ? PlaybackAttemptResult.NetworkFailure // the provider refused it: another player would get the same 403
+            : missingDecoderLogged && result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout
+                ? PlaybackAttemptResult.UnsupportedMedia
+                : result;
 }
 
 public static class EngineFallbackPolicy
