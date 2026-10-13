@@ -45,9 +45,9 @@
                 <ToolTipService.ToolTip>
                     <ToolTip x:Name="CatalogCardToolTip"
                              DataContext="{Binding}"
-                             Background="{ThemeResource AppPanelSurfaceBrush}"
-                             Foreground="{ThemeResource AppTextBrush}"
-                             BorderBrush="{ThemeResource SystemControlBackgroundChromeHighBrush}"
+                             Background="{StaticResource AppPanelSurfaceBrush}"
+                             Foreground="{StaticResource AppTextBrush}"
+                             BorderBrush="{StaticResource AppLineBrush}"
                              BorderThickness="1"
                              Padding="14"
                              MaxWidth="420"
@@ -60,17 +60,17 @@
                                 <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold"
                                            TextWrapping="WrapWholeWords" />
                                 <TextBlock Text="{Binding DetailsLine}"
-                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           Foreground="{StaticResource AppMutedTextBrush}"
                                            TextWrapping="WrapWholeWords" />
                                 <TextBlock Text="{Binding HoverSummaryText}"
                                            TextWrapping="WrapWholeWords" />
                                 <TextBlock Text="{Binding NowText}" Visibility="{Binding NowVisibility}"
                                            TextWrapping="WrapWholeWords" />
                                 <TextBlock Text="{Binding NextText}" Visibility="{Binding NextVisibility}"
-                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           Foreground="{StaticResource AppMutedTextBrush}"
                                            TextWrapping="WrapWholeWords" />
                                 <TextBlock Text="{Binding HoverCastText}" Visibility="{Binding HoverCastVisibility}"
-                                           Foreground="{ThemeResource AppMutedTextBrush}"
+                                           Foreground="{StaticResource AppMutedTextBrush}"
                                            TextWrapping="WrapWholeWords" />
                             </StackPanel>
                         </ScrollViewer>
