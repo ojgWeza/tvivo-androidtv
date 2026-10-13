@@ -169,6 +169,13 @@
                                 Click="TopRefreshButton_Click"
                                 AutomationProperties.Name="Refresh catalog" />
                     </StackPanel>
+                    <Button x:Name="ThemeToggleButton"
+                            Content="&#xE706;"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            Style="{StaticResource AppIconButtonStyle}"
+                            Click="ThemeToggleButton_Click"
+                            AutomationProperties.Name="Switch to light theme"
+                            ToolTipService.ToolTip="Switch to light theme" />
                     <Button x:Name="AccountNavigation"
                             Content="&#xE713;"
                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -648,5 +655,9 @@
                                 VerticalContentAlignment="Stretch" />
             </Grid>
         </Grid>
+        <InfoBar x:Name="ThemePreferenceInfoBar" Grid.Row="2" Canvas.ZIndex="10"
+                 HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0"
+                 Severity="Error" IsClosable="True" IsOpen="False"
+                 Message="Theme preference couldn't be saved. This choice will last until Tvivo closes." />
     </Grid>
 </Window>

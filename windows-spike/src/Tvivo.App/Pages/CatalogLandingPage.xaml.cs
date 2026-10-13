@@ -27,6 +27,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HoverRequestScheduler _hoverRequestScheduler = new();
     private CatalogCard? _hoveredCard;
     private FrameworkElement? _hoveredCardElement;
+    private bool _summaryTriggeredByFocus;
     private HoverRequestScheduler.Lease? _hoverLease;
     private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
     private readonly CatalogRefreshPolicyStore _refreshPolicyStore = new();
@@ -165,7 +166,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public CatalogLandingPage()
     {
-        _hoverMetadataLookup = new HoverMetadataLookup(_provider, _repository);
+        _hoverMetadataLookup = new HoverMetadataLookup(_provider, _repository, log: LaunchDiagnostics.Write);
         _refreshTasks = new CatalogRefreshTasks((account, type) =>
             Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
         lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
@@ -1360,22 +1361,49 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CatalogCard_PointerEntered(object sender, PointerRoutedEventArgs args)
     {
-        if (sender is not FrameworkElement { DataContext: CatalogCard { Channel: { } channel } card } ||
+        BeginCardSummary(sender as FrameworkElement, triggeredByFocus: false);
+    }
+
+    private void CatalogCard_GotFocus(object sender, RoutedEventArgs args)
+    {
+        var focusState = args.OriginalSource is UIElement focusedElement
+            ? focusedElement.FocusState
+            : (sender as UIElement)?.FocusState;
+        if (focusState is not (FocusState.Keyboard or FocusState.Programmatic))
+            return;
+
+        BeginCardSummary(sender as FrameworkElement, triggeredByFocus: true);
+    }
+
+    private void BeginCardSummary(FrameworkElement? cardElement, bool triggeredByFocus)
+    {
+        if (cardElement is not { DataContext: CatalogCard { Channel: { } channel } card } ||
             !_isActive || _account is not { } account || account.AccountId != channel.ProviderAccountId ||
-            card.Type == CatalogItemType.Live)
+            (card.Type == CatalogItemType.Live && !triggeredByFocus))
             return;
 
         var key = $"{account.AccountId}\0{card.Type}\0{channel.Id}";
         var lease = _hoverRequestScheduler.Begin(key);
+        if (_hoveredCardElement is { } previousElement && !ReferenceEquals(previousElement, cardElement) &&
+            ToolTipService.GetToolTip(previousElement) is ToolTip previousToolTip)
+            previousToolTip.IsOpen = false;
         _hoveredCard = card;
-        _hoveredCardElement = (FrameworkElement)sender;
+        _hoveredCardElement = cardElement;
         _hoverLease = lease;
+        _summaryTriggeredByFocus = triggeredByFocus;
         card.BeginHoverSummary();
-        if (ToolTipService.GetToolTip(_hoveredCardElement) is ToolTip toolTip)
+        if (ToolTipService.GetToolTip(cardElement) is ToolTip toolTip)
         {
             toolTip.DataContext = card;
             toolTip.RequestedTheme = ActualTheme;
             AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
+        }
+        if (!HoverMetadataLookup.NeedsLookup(channel.Metadata.GetValueOrDefault("plot")))
+        {
+            // The card already carries a summary: show it, never ask the provider.
+            LaunchDiagnostics.Write($"event=hover.metadata source=card type={card.Type}");
+            OpenFocusedSummaryToolTipIfCurrent(card, lease);
+            return;
         }
         _ = _hoverRequestScheduler.RunAfterDelayAsync(lease, TimeSpan.FromMilliseconds(800), async cancellationToken =>
         {
@@ -1407,9 +1435,10 @@ public sealed partial class CatalogLandingPage : UserControl
             await RunOnUiThreadAsync(() =>
             {
                 if (!IsCurrentHover(card, lease)) return;
-                _hoverRequestScheduler.Cancel(lease);
                 card.SetHoverMetadata(metadata, failed: false);
                 NotifyMetadataChanged(account.AccountId, card.Type, channel.Id);
+                OpenFocusedSummaryToolTipIfCurrent(card, lease);
+                _hoverRequestScheduler.Cancel(lease);
             });
         }
         catch (OperationCanceledException) when (lease.CancellationToken.IsCancellationRequested)
@@ -1432,7 +1461,19 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!IsCurrentHover(card, lease)) return;
             card.SetHoverMetadata(metadata, failed);
             if (metadata is not null) NotifyMetadataChanged(account.AccountId, card.Type, itemId);
+            OpenFocusedSummaryToolTipIfCurrent(card, lease);
         });
+
+    private void OpenFocusedSummaryToolTipIfCurrent(CatalogCard card, HoverRequestScheduler.Lease lease)
+    {
+        if (!_summaryTriggeredByFocus || !IsCurrentHover(card, lease) ||
+            ToolTipService.GetToolTip(_hoveredCardElement) is not ToolTip toolTip)
+            return;
+
+        toolTip.DataContext = card;
+        AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
+        toolTip.IsOpen = true;
+    }
 
     private Task RunOnUiThreadAsync(Action action)
     {
@@ -1462,8 +1503,15 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CatalogCard_PointerExited(object sender, PointerRoutedEventArgs args)
     {
-        if (ReferenceEquals(_hoveredCardElement, sender))
+        if (ReferenceEquals(_hoveredCardElement, sender) && !_summaryTriggeredByFocus)
             CancelHoverRequest();
+    }
+
+    private void CatalogCard_LostFocus(object sender, RoutedEventArgs args)
+    {
+        if (!ReferenceEquals(_hoveredCardElement, sender) || !_summaryTriggeredByFocus) return;
+        CloseCardToolTip(sender as FrameworkElement);
+        CancelHoverRequest();
     }
 
     private void CatalogCard_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
@@ -1482,11 +1530,19 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CancelHoverRequest()
     {
+        CloseCardToolTip(_hoveredCardElement);
         _hoveredCard?.EndHoverSummary();
         _hoverRequestScheduler.Cancel();
         _hoveredCard = null;
         _hoveredCardElement = null;
         _hoverLease = null;
+        _summaryTriggeredByFocus = false;
+    }
+
+    private static void CloseCardToolTip(FrameworkElement? element)
+    {
+        if (element is not null && ToolTipService.GetToolTip(element) is ToolTip toolTip)
+            toolTip.IsOpen = false;
     }
 
     private static CatalogItemType TypeForMode(CatalogMode mode) => mode switch

@@ -25,6 +25,34 @@ public sealed class HoverMetadataLookupTests
     }
 
     [Fact]
+    public void AnAlreadyShownSummaryNeverNeedsALookup()
+    {
+        Assert.False(HoverMetadataLookup.NeedsLookup("A real summary."));
+        Assert.True(HoverMetadataLookup.NeedsLookup(null));
+        Assert.True(HoverMetadataLookup.NeedsLookup("   "));
+    }
+
+    [Fact]
+    public async Task LogsCacheAndProviderSourcesWithoutTitlesOrAccounts()
+    {
+        var store = new MetadataStore();
+        var provider = new FakeProvider();
+        var lines = new List<string>();
+        var lookup = new HoverMetadataLookup(provider, store.Get, store.Save, null, lines.Add);
+
+        await lookup.GetAsync(Account, CatalogItemType.Movie, "movie-1");
+        await lookup.GetAsync(Account, CatalogItemType.Movie, "movie-1");
+
+        Assert.Equal(1, provider.MovieCalls);
+        Assert.Equal(new[]
+        {
+            "event=hover.metadata source=provider type=Movie",
+            "event=hover.metadata fetched type=Movie plot=empty",
+            "event=hover.metadata source=cache type=Movie",
+        }, lines);
+    }
+
+    [Fact]
     public async Task NearSimultaneousRequestsForOneKeyMakeOneProviderCall()
     {
         var store = new MetadataStore();

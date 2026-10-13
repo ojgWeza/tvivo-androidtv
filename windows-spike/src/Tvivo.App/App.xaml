@@ -7,8 +7,261 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <controls:XamlControlsResources />
+            <controls:XamlControlsResources />
             </ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="AppCanvasColor">#0A1619</Color>
+                    <Color x:Key="AppDeepColor">#071114</Color>
+                    <Color x:Key="AppSurfaceColor">#0F2126</Color>
+                    <Color x:Key="AppSurfaceRaisedColor">#163036</Color>
+                    <Color x:Key="AppAccentColor">#D97757</Color>
+                    <Color x:Key="SystemAccentColor">#D97757</Color>
+                    <Color x:Key="SystemAccentColorLight1">#E7A084</Color>
+                    <Color x:Key="SystemAccentColorLight2">#F0BBA5</Color>
+                    <Color x:Key="SystemAccentColorLight3">#F7D9CC</Color>
+                    <Color x:Key="SystemAccentColorDark1">#B85B40</Color>
+                    <Color x:Key="SystemAccentColorDark2">#98452F</Color>
+                    <Color x:Key="SystemAccentColorDark3">#783521</Color>
+                    <Color x:Key="AppAccentSoftColor">#E7A084</Color>
+                    <Color x:Key="AppTextColor">#E8F1F2</Color>
+                    <Color x:Key="AppMutedTextColor">#93ACB1</Color>
+                    <Color x:Key="AppGoodColor">#8BC8A0</Color>
+                    <Color x:Key="AppFavoriteColor">#F2C94C</Color>
+                    <Color x:Key="AppFocusTintColor">#33E7A084</Color>
+                    <Color x:Key="AppLineColor">#1FE8F1F2</Color>
+                    <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
+                    <SolidColorBrush x:Key="AppDeepBrush" Color="{StaticResource AppDeepColor}" />
+                    <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
+                    <SolidColorBrush x:Key="AppRaisedSurfaceBrush" Color="{StaticResource AppSurfaceRaisedColor}" />
+                    <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
+                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="{StaticResource AppAccentSoftColor}" />
+                    <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
+                    <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
+                    <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
+                    <SolidColorBrush x:Key="AppFavoriteBrush" Color="{StaticResource AppFavoriteColor}" />
+                    <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
+                    <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
+                    <SolidColorBrush x:Key="AppOnAccentBrush" Color="#071114" />
+                    <SolidColorBrush x:Key="AppOnMediaTextBrush" Color="#E8F1F2" />
+                    <SolidColorBrush x:Key="AppOnMediaMutedBrush" Color="#93ACB1" />
+                    <SolidColorBrush x:Key="AppDangerTextBrush" Color="#FFFF8A80" />
+                    <SolidColorBrush x:Key="AppMediaScrimBrush" Color="#E0071114" />
+                    <SolidColorBrush x:Key="AppScrollPillBrush" Color="#CC0B1620" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="SystemControlForegroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlBackgroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#33D97757" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#66D97757" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#B3D97757" />
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#66D97757" />
+                    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4DD97757" />
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource SystemAccentColorLight2}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#80D97757" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="ButtonForegroundPressed" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#4DD97757" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#66D97757" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#4DD97757" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundSelected" Color="#4DD97757" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
+                    <SolidColorBrush x:Key="CheckBoxBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="CheckBoxBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="RadioButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="RadioButtonBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#4DD97757" />
+                    <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="SplitButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="#66D97757" />
+                    <SolidColorBrush x:Key="RepeaterButtonBackgroundPointerOver" Color="#33D97757" />
+                    <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="AppCanvasColor">#FFF5E5</Color>
+                    <Color x:Key="AppDeepColor">#F4E5CC</Color>
+                    <Color x:Key="AppSurfaceColor">#FFF9EF</Color>
+                    <Color x:Key="AppSurfaceRaisedColor">#EBD9BA</Color>
+                    <Color x:Key="AppAccentColor">#1B5557</Color>
+                    <Color x:Key="SystemAccentColor">#1B5557</Color>
+                    <Color x:Key="SystemAccentColorLight1">#1B5557</Color>
+                    <Color x:Key="SystemAccentColorLight2">#1B5557</Color>
+                    <Color x:Key="SystemAccentColorLight3">#1B5557</Color>
+                    <Color x:Key="SystemAccentColorDark1">#12383F</Color>
+                    <Color x:Key="SystemAccentColorDark2">#0F2126</Color>
+                    <Color x:Key="SystemAccentColorDark3">#0A1619</Color>
+                    <Color x:Key="AppAccentSoftColor">#12383F</Color>
+                    <Color x:Key="AppTextColor">#B85B40</Color>
+                    <Color x:Key="AppMutedTextColor">#D97757</Color>
+                    <Color x:Key="AppGoodColor">#14664B</Color>
+                    <Color x:Key="AppFavoriteColor">#9D5E00</Color>
+                    <Color x:Key="AppFocusTintColor">#331B5557</Color>
+                    <Color x:Key="AppLineColor">#331B5557</Color>
+                    <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
+                    <SolidColorBrush x:Key="AppDeepBrush" Color="{StaticResource AppDeepColor}" />
+                    <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
+                    <SolidColorBrush x:Key="AppRaisedSurfaceBrush" Color="{StaticResource AppSurfaceRaisedColor}" />
+                    <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
+                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="{StaticResource AppAccentSoftColor}" />
+                    <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
+                    <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
+                    <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
+                    <SolidColorBrush x:Key="AppFavoriteBrush" Color="{StaticResource AppFavoriteColor}" />
+                    <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
+                    <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
+                    <SolidColorBrush x:Key="AppOnAccentBrush" Color="#FFF5E5" />
+                    <SolidColorBrush x:Key="AppOnMediaTextBrush" Color="#FFF5E5" />
+                    <SolidColorBrush x:Key="AppOnMediaMutedBrush" Color="#D9E9E6" />
+                    <SolidColorBrush x:Key="AppDangerTextBrush" Color="#8B280F" />
+                    <SolidColorBrush x:Key="AppMediaScrimBrush" Color="#E0071114" />
+                    <SolidColorBrush x:Key="AppScrollPillBrush" Color="#FFEBD9BA" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="SystemControlForegroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlBackgroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#33006B68" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#66006B68" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#B3006B68" />
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#66006B68" />
+                    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4D006B68" />
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource SystemAccentColorDark2}" />
+                    <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#80006B68" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ButtonForegroundPressed" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{StaticResource SystemAccentColor}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{StaticResource SystemAccentColorDark1}" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#4D006B68" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#66006B68" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#4D006B68" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#66006B68" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundSelected" Color="#4D006B68" />
+                    <SolidColorBrush x:Key="GridViewItemBackgroundSelectedPointerOver" Color="#66006B68" />
+                    <SolidColorBrush x:Key="CheckBoxBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="CheckBoxBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="RadioButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="RadioButtonBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#4D006B68" />
+                    <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="SplitButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="#66006B68" />
+                    <SolidColorBrush x:Key="RepeaterButtonBackgroundPointerOver" Color="#33006B68" />
+                    <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66006B68" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="AppCanvasBrush" ResourceKey="SystemColorWindowBrush" />
+                    <StaticResource x:Key="AppDeepBrush" ResourceKey="SystemColorWindowBrush" />
+                    <StaticResource x:Key="AppPanelSurfaceBrush" ResourceKey="SystemColorWindowBrush" />
+                    <StaticResource x:Key="AppRaisedSurfaceBrush" ResourceKey="SystemColorButtonFaceBrush" />
+                    <StaticResource x:Key="AppAccentBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AppAccentSoftBrush" ResourceKey="SystemColorHotlightBrush" />
+                    <StaticResource x:Key="AppTextBrush" ResourceKey="SystemColorWindowTextBrush" />
+                    <StaticResource x:Key="AppMutedTextBrush" ResourceKey="SystemColorGrayTextBrush" />
+                    <StaticResource x:Key="AppGoodBrush" ResourceKey="SystemColorWindowTextBrush" />
+                    <StaticResource x:Key="AppFavoriteBrush" ResourceKey="SystemColorWindowTextBrush" />
+                    <StaticResource x:Key="AppFocusTintBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AppLineBrush" ResourceKey="SystemColorWindowTextBrush" />
+                    <StaticResource x:Key="AppOnAccentBrush" ResourceKey="SystemColorHighlightTextBrush" />
+                    <StaticResource x:Key="AppOnMediaTextBrush" ResourceKey="SystemColorWindowTextBrush" />
+                    <StaticResource x:Key="AppOnMediaMutedBrush" ResourceKey="SystemColorGrayTextBrush" />
+                    <StaticResource x:Key="AppDangerTextBrush" ResourceKey="SystemColorHotlightBrush" />
+                    <StaticResource x:Key="AppMediaScrimBrush" ResourceKey="SystemColorWindowBrush" />
+                    <StaticResource x:Key="AppScrollPillBrush" ResourceKey="SystemColorButtonFaceBrush" />
+                    <StaticResource x:Key="SystemControlHighlightAccentBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SystemControlHighlightAltAccentBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SystemControlForegroundAccentBrush" ResourceKey="SystemColorHighlightTextBrush" />
+                    <StaticResource x:Key="SystemControlBackgroundAccentBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SystemControlHighlightListAccentLowBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SystemControlHighlightListAccentMediumBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SystemControlHighlightListAccentHighBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AccentFillColorDefaultBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AccentFillColorSecondaryBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AccentFillColorTertiaryBrush" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AccentFillColorDisabledBrush" ResourceKey="SystemColorGrayTextBrush" />
+                    <StaticResource x:Key="AccentTextFillColorPrimaryBrush" ResourceKey="SystemColorHotlightBrush" />
+                    <StaticResource x:Key="AccentTextFillColorSecondaryBrush" ResourceKey="SystemColorHotlightBrush" />
+                    <StaticResource x:Key="AccentTextFillColorTertiaryBrush" ResourceKey="SystemColorHotlightBrush" />
+                    <StaticResource x:Key="AccentTextFillColorDisabledBrush" ResourceKey="SystemColorGrayTextBrush" />
+                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="SystemColorHighlightTextBrush" />
+                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="SystemColorHighlightTextBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ComboBoxItemBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ComboBoxItemBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ComboBoxItemBackgroundSelected" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ComboBoxItemBackgroundSelectedPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundSelected" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundSelectedPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="GridViewItemBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="GridViewItemBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="GridViewItemBackgroundSelected" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="GridViewItemBackgroundSelectedPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="CheckBoxBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="CheckBoxBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="RadioButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="RadioButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="NavigationViewItemBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="NavigationViewItemBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="NavigationViewItemBackgroundSelected" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AppBarButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="AppBarButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SplitButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="SplitButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="RepeaterButtonBackgroundPointerOver" ResourceKey="SystemColorHighlightBrush" />
+                    <StaticResource x:Key="RepeaterButtonBackgroundPressed" ResourceKey="SystemColorHighlightBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
             <!-- Atkinson Hyperlegible Next (SIL OFL, Assets/Fonts/OFL.txt): letterforms designed for low-vision and
                  distance reading. The theme resource covers every control; the implicit style covers bare TextBlocks.
                  Icon glyphs keep their explicit Segoe Fluent Icons FontFamily. -->
@@ -17,89 +270,6 @@
             <Style TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
             </Style>
-            <Color x:Key="AppCanvasColor">#0A1619</Color>
-            <Color x:Key="AppDeepColor">#071114</Color>
-            <Color x:Key="AppSurfaceColor">#0F2126</Color>
-            <Color x:Key="AppSurfaceRaisedColor">#163036</Color>
-            <Color x:Key="AppAccentColor">#D97757</Color>
-            <!-- Global accent rule: system chrome and every default control consume this orange palette. -->
-            <Color x:Key="SystemAccentColor">#D97757</Color>
-            <Color x:Key="SystemAccentColorLight1">#E7A084</Color>
-            <Color x:Key="SystemAccentColorLight2">#F0BBA5</Color>
-            <Color x:Key="SystemAccentColorLight3">#F7D9CC</Color>
-            <Color x:Key="SystemAccentColorDark1">#B85B40</Color>
-            <Color x:Key="SystemAccentColorDark2">#98452F</Color>
-            <Color x:Key="SystemAccentColorDark3">#783521</Color>
-            <Color x:Key="AppAccentSoftColor">#E7A084</Color>
-            <Color x:Key="AppTextColor">#E8F1F2</Color>
-            <Color x:Key="AppMutedTextColor">#93ACB1</Color>
-            <Color x:Key="AppGoodColor">#8BC8A0</Color>
-            <Color x:Key="AppFavoriteColor">#F2C94C</Color>
-            <Color x:Key="AppFocusTintColor">#33E7A084</Color>
-            <Color x:Key="AppLineColor">#1FE8F1F2</Color>
-            <SolidColorBrush x:Key="AppCanvasBrush" Color="{StaticResource AppCanvasColor}" />
-            <SolidColorBrush x:Key="AppDeepBrush" Color="{StaticResource AppDeepColor}" />
-            <SolidColorBrush x:Key="AppPanelSurfaceBrush" Color="{StaticResource AppSurfaceColor}" />
-            <SolidColorBrush x:Key="AppRaisedSurfaceBrush" Color="{StaticResource AppSurfaceRaisedColor}" />
-            <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
-            <SolidColorBrush x:Key="AppAccentSoftBrush" Color="{StaticResource AppAccentSoftColor}" />
-            <SolidColorBrush x:Key="AppTextBrush" Color="{StaticResource AppTextColor}" />
-            <SolidColorBrush x:Key="AppMutedTextBrush" Color="{StaticResource AppMutedTextColor}" />
-            <SolidColorBrush x:Key="AppGoodBrush" Color="{StaticResource AppGoodColor}" />
-            <SolidColorBrush x:Key="AppFavoriteBrush" Color="{StaticResource AppFavoriteColor}" />
-            <SolidColorBrush x:Key="AppFocusTintBrush" Color="{StaticResource AppFocusTintColor}" />
-            <SolidColorBrush x:Key="AppLineBrush" Color="{StaticResource AppLineColor}" />
-            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="{StaticResource SystemAccentColorLight1}" />
-            <SolidColorBrush x:Key="SystemControlForegroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="SystemControlBackgroundAccentBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#33D97757" />
-            <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#66D97757" />
-            <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#B3D97757" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#66D97757" />
-            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4DD97757" />
-            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource SystemAccentColorLight1}" />
-            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource SystemAccentColorLight2}" />
-            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#80D97757" />
-            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="{StaticResource SystemAccentColorDark1}" />
-            <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
-            <SolidColorBrush x:Key="ButtonForegroundPressed" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{StaticResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{StaticResource SystemAccentColorLight1}" />
-            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{StaticResource SystemAccentColorDark1}" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#4DD97757" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#66D97757" />
-            <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#4DD97757" />
-            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
-            <SolidColorBrush x:Key="GridViewItemBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="GridViewItemBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="GridViewItemBackgroundSelected" Color="#4DD97757" />
-            <SolidColorBrush x:Key="GridViewItemBackgroundSelectedPointerOver" Color="#66D97757" />
-            <SolidColorBrush x:Key="CheckBoxBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="CheckBoxBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="RadioButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="RadioButtonBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="NavigationViewItemBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="NavigationViewItemBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#4DD97757" />
-            <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="SplitButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="#66D97757" />
-            <SolidColorBrush x:Key="RepeaterButtonBackgroundPointerOver" Color="#33D97757" />
-            <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
             <Style TargetType="Button">
                 <Setter Property="CornerRadius" Value="12" />
                 <Setter Property="Padding" Value="14,8" />
@@ -110,26 +280,26 @@
                 <Setter Property="Padding" Value="16,12" />
                 <Setter Property="MinHeight" Value="48" />
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppMutedTextBrush}" />
             </Style>
             <Style x:Key="AppPrimaryButtonStyle" TargetType="Button">
-                <Setter Property="Background" Value="{StaticResource AppAccentBrush}" />
-                <Setter Property="Foreground" Value="{StaticResource AppDeepBrush}" />
+                <Setter Property="Background" Value="{ThemeResource AppAccentBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppOnAccentBrush}" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Padding" Value="16,10" />
                 <Setter Property="CornerRadius" Value="12" />
             </Style>
             <Style x:Key="AppQuietButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="BorderBrush" Value="{StaticResource AppLineBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource AppLineBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="Foreground" Value="{StaticResource AppTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppTextBrush}" />
                 <Setter Property="Padding" Value="16,10" />
                 <Setter Property="CornerRadius" Value="12" />
             </Style>
             <Style x:Key="AppShelfTitleButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="Foreground" Value="{StaticResource AppTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppTextBrush}" />
                 <Setter Property="Padding" Value="0" />
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
                 <Setter Property="FontSize" Value="20" />
@@ -139,7 +309,7 @@
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0,0,0,3" />
-                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppMutedTextBrush}" />
                 <Setter Property="Padding" Value="0,25,0,22" />
                 <Setter Property="MinWidth" Value="0" />
                 <Setter Property="UseSystemFocusVisuals" Value="True" />
@@ -153,15 +323,15 @@
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
                                                 <Setter Target="BackgroundElement.Background" Value="Transparent" />
-                                                <Setter Target="BackgroundElement.BorderBrush" Value="{StaticResource AppAccentBrush}" />
-                                                <Setter Target="ContentPresenter.Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                                                <Setter Target="BackgroundElement.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
+                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppAccentSoftBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
                                                 <Setter Target="BackgroundElement.Background" Value="Transparent" />
-                                                <Setter Target="BackgroundElement.BorderBrush" Value="{StaticResource AppAccentBrush}" />
-                                                <Setter Target="ContentPresenter.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                                <Setter Target="BackgroundElement.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
+                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Disabled" />
@@ -192,7 +362,7 @@
                 <Setter Property="Padding" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppMutedTextBrush}" />
                 <Setter Property="FontSize" Value="16" />
                 <Setter Property="UseSystemFocusVisuals" Value="True" />
                 <Setter Property="Template">
@@ -204,14 +374,14 @@
                                         <VisualState x:Name="Normal" />
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
-                                                <Setter Target="CaptionBackground.Background" Value="#33D97757" />
-                                                <Setter Target="CaptionContent.Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                                                <Setter Target="CaptionBackground.Background" Value="{ThemeResource ButtonBackgroundPointerOver}" />
+                                                <Setter Target="CaptionContent.Foreground" Value="{ThemeResource AppAccentSoftBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
-                                                <Setter Target="CaptionBackground.Background" Value="#4DD97757" />
-                                                <Setter Target="CaptionContent.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                                <Setter Target="CaptionBackground.Background" Value="{ThemeResource ButtonBackgroundPressed}" />
+                                                <Setter Target="CaptionContent.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Disabled" />
@@ -243,7 +413,7 @@
                 <Setter Property="Padding" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Foreground" Value="{StaticResource AppMutedTextBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppMutedTextBrush}" />
                 <Setter Property="FontSize" Value="16" />
                 <Setter Property="UseSystemFocusVisuals" Value="True" />
                 <Setter Property="Template">
@@ -255,14 +425,14 @@
                                         <VisualState x:Name="Normal" />
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
-                                                <Setter Target="ToggleBackground.Background" Value="#33D97757" />
-                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                                                <Setter Target="ToggleBackground.Background" Value="{ThemeResource ToggleButtonBackgroundPointerOver}" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppAccentSoftBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
-                                                <Setter Target="ToggleBackground.Background" Value="#66D97757" />
-                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                                <Setter Target="ToggleBackground.Background" Value="{ThemeResource ToggleButtonBackgroundPressed}" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Disabled" />
@@ -271,8 +441,8 @@
                                         <VisualState x:Name="Unchecked" />
                                         <VisualState x:Name="Checked">
                                             <VisualState.Setters>
-                                                <Setter Target="ToggleBackground.Background" Value="{StaticResource AccentFillColorTertiaryBrush}" />
-                                                <Setter Target="ToggleContent.Foreground" Value="{StaticResource AppAccentBrush}" />
+                                                <Setter Target="ToggleBackground.Background" Value="{ThemeResource AccentFillColorTertiaryBrush}" />
+                                                <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Indeterminate" />
@@ -358,7 +528,7 @@
                                                   VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
                                                   Padding="{TemplateBinding Padding}" />
                                 <Border x:Name="FocusRing"
-                                        BorderBrush="{StaticResource AppAccentBrush}"
+                                        BorderBrush="{ThemeResource AppAccentBrush}"
                                         BorderThickness="5"
                                         CornerRadius="12"
                                         Opacity="0"
@@ -380,7 +550,7 @@
                 <Setter Property="ItemContainerStyle" Value="{StaticResource AppCardGridViewItemStyle}" />
             </Style>
             <Style x:Key="AppEyebrowTextStyle" TargetType="TextBlock">
-                <Setter Property="Foreground" Value="{StaticResource AppAccentSoftBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource AppAccentSoftBrush}" />
                 <Setter Property="FontSize" Value="11" />
                 <Setter Property="FontWeight" Value="Bold" />
                 <Setter Property="CharacterSpacing" Value="130" />

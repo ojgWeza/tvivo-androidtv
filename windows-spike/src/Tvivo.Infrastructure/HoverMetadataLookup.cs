@@ -10,21 +10,26 @@ public sealed class HoverMetadataLookup
     private readonly Func<ProviderAccount, CatalogItemType, string, CatalogMetadata?> _getMetadata;
     private readonly Action<ProviderAccount, CatalogItemType, string, CatalogMetadata> _saveMetadata;
     private readonly TimeProvider _clock;
+    private readonly Action<string>? _log;
     private readonly SemaphoreSlim _requestGate = new(1, 1);
     private readonly object _failureLock = new();
     private readonly Dictionary<LookupKey, DateTimeOffset> _failedUntil = new();
 
     public HoverMetadataLookup(ICatalogProvider provider, SqliteCatalogRepository repository,
-        TimeProvider? clock = null)
-        : this(provider, repository.GetMetadata, repository.SaveMetadata, clock)
+        TimeProvider? clock = null, Action<string>? log = null)
+        : this(provider, repository.GetMetadata, repository.SaveMetadata, clock, log)
     {
     }
+
+    /// <summary>A card that already shows a summary never needs a lookup.</summary>
+    public static bool NeedsLookup(string? knownPlot) => string.IsNullOrWhiteSpace(knownPlot);
 
     public HoverMetadataLookup(ICatalogProvider provider,
         Func<ProviderAccount, CatalogItemType, string, CatalogMetadata?> getMetadata,
         Action<ProviderAccount, CatalogItemType, string, CatalogMetadata> saveMetadata,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, Action<string>? log = null)
     {
+        _log = log;
         _provider = provider;
         _getMetadata = getMetadata;
         _saveMetadata = saveMetadata;
@@ -60,7 +65,11 @@ public sealed class HoverMetadataLookup
             SetFailureCooldown(key);
             return null;
         }
-        if (cached is not null) return cached;
+        if (cached is not null)
+        {
+            _log?.Invoke($"event=hover.metadata source=cache type={type}");
+            return cached;
+        }
 
         if (IsCoolingDown(key)) return null;
 
@@ -68,9 +77,14 @@ public sealed class HoverMetadataLookup
         try
         {
             cached = await GetCachedAsync(account, type, itemId, cancellationToken).ConfigureAwait(false);
-            if (cached is not null) return cached;
+            if (cached is not null)
+            {
+                _log?.Invoke($"event=hover.metadata source=cache type={type}");
+                return cached;
+            }
             if (IsCoolingDown(key)) return null;
 
+            _log?.Invoke($"event=hover.metadata source=provider type={type}");
             CatalogMetadata? metadata = type switch
             {
                 CatalogItemType.Movie when _provider is IMovieInfoProvider movieProvider =>
@@ -82,12 +96,14 @@ public sealed class HoverMetadataLookup
 
             if (metadata is null)
             {
+                _log?.Invoke($"event=hover.metadata failed type={type} reason=no-provider-support");
                 SetFailureCooldown(key);
                 return null;
             }
 
             await Task.Run(() => _saveMetadata(account, type, itemId, metadata), cancellationToken)
                 .ConfigureAwait(false);
+            _log?.Invoke($"event=hover.metadata fetched type={type} plot={(string.IsNullOrWhiteSpace(metadata.Plot) ? "empty" : "present")}");
             ClearFailureCooldown(key);
             return metadata;
         }
@@ -95,8 +111,9 @@ public sealed class HoverMetadataLookup
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            _log?.Invoke($"event=hover.metadata failed type={type} reason={exception.GetType().Name}");
             SetFailureCooldown(key);
             return null;
         }

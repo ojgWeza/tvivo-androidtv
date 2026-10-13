@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -27,6 +28,8 @@ namespace Tvivo.App;
 public sealed partial class MainWindow : Window
 {
     private const int DwmwaUseImmersiveDarkMode = 20;
+    private readonly ThemePreferenceStore _themePreferenceStore = new();
+    private ThemePreference _selectedTheme;
 
     private PlaybackService _playback;
     private readonly VlcPlaybackEngine _vlcEngine;
@@ -174,6 +177,7 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        _selectedTheme = _themePreferenceStore.Read();
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _vlcEngine = App.Services.GetRequiredService<VlcPlaybackEngine>();
         _vlcEngine.StateChanged += VlcEngine_StateChanged;
@@ -208,6 +212,7 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        ApplySelectedTheme();
         // Sliders mark pointer presses handled, so listen for handled events too.
         VolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
         CompactVolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
@@ -232,11 +237,6 @@ public sealed partial class MainWindow : Window
         SetTrackSelectingEngine(_engine);
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         _playerEpgTimer.Tick += PlayerEpgTimer_Tick;
-        var useDarkMode = 1;
-        var darkModeResult = DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this),
-            DwmwaUseImmersiveDarkMode, ref useDarkMode, sizeof(int));
-        if (darkModeResult < 0)
-            LaunchDiagnostics.Write($"DWM dark mode attribute failed: 0x{darkModeResult:X8}");
         PlayerRelatedList.ItemsSource = _playerEntries;
         Title = "Tvivo";
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Tvivo.ico");
@@ -1080,6 +1080,39 @@ public sealed partial class MainWindow : Window
     private void TopRefreshButton_Click(object sender, RoutedEventArgs args) =>
         _catalogLandingPage.RefreshCurrentType();
 
+    private void ThemeToggleButton_Click(object sender, RoutedEventArgs args)
+    {
+        _selectedTheme = _selectedTheme == ThemePreference.Dark ? ThemePreference.Light : ThemePreference.Dark;
+        ApplySelectedTheme();
+        try
+        {
+            _themePreferenceStore.Write(_selectedTheme);
+            ThemePreferenceInfoBar.IsOpen = false;
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteExceptionDetails("Saving theme preference failed", exception);
+            ThemePreferenceInfoBar.IsOpen = true;
+        }
+    }
+
+    private void ApplySelectedTheme()
+    {
+        WindowRoot.RequestedTheme = _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark;
+        var isDark = _selectedTheme == ThemePreference.Dark;
+        UpdateTopNavigationState();
+        ThemeToggleButton.Content = isDark ? "\uE706" : "\uE708";
+        var actionName = isDark ? "Switch to light theme" : "Switch to dark theme";
+        AutomationProperties.SetName(ThemeToggleButton, actionName);
+        ToolTipService.SetToolTip(ThemeToggleButton, actionName);
+
+        var darkCaptionValue = isDark ? 1 : 0;
+        var darkModeResult = DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this),
+            DwmwaUseImmersiveDarkMode, ref darkCaptionValue, sizeof(int));
+        if (darkModeResult < 0)
+            LaunchDiagnostics.Write($"DWM theme caption attribute failed: 0x{darkModeResult:X8}");
+    }
+
     private void CatalogLandingPage_RefreshStateChanged(object? sender, EventArgs args)
     {
         TopRefreshButton.Visibility = _catalogLandingPage.CanRefreshType ? Visibility.Visible : Visibility.Collapsed;
@@ -1462,19 +1495,21 @@ public sealed partial class MainWindow : Window
         SetTopNavState(MoviesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Movies);
         SetTopNavState(SeriesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Series);
         SetTopNavState(LiveTvNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.LiveTv);
-        AccountNavigation.Foreground = (Brush)Application.Current.Resources[
-            _currentPage is ShellPage.Setup or ShellPage.Account ? "AppAccentBrush" : "AppMutedTextBrush"];
+        AccountNavigation.Foreground = ThemeBrush(
+            _currentPage is ShellPage.Setup or ShellPage.Account ? "AppAccentBrush" : "AppMutedTextBrush");
     }
 
     private void SetTopNavState(Button button, bool selected)
     {
-        button.Foreground = selected
-            ? (Brush)Application.Current.Resources["AppTextBrush"]
-            : (Brush)Application.Current.Resources["AppMutedTextBrush"];
+        button.Foreground = selected ? ThemeBrush("AppTextBrush") : ThemeBrush("AppMutedTextBrush");
         button.BorderBrush = selected
-            ? (Brush)Application.Current.Resources["AppAccentBrush"]
+            ? ThemeBrush("AppAccentBrush")
             : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
+
+    /// <summary>A brush from the dictionary of the theme this window is set to, for colours assigned in code.</summary>
+    private Brush ThemeBrush(string key) => AppThemeBrushResolver.For(
+        _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark, key);
 
     private void TopSearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {

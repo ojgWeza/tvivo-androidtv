@@ -40,6 +40,8 @@
             <Grid Width="{Binding Width}" Height="{Binding Height}"
                   PointerEntered="CatalogCard_PointerEntered"
                   PointerExited="CatalogCard_PointerExited"
+                  GotFocus="CatalogCard_GotFocus"
+                  LostFocus="CatalogCard_LostFocus"
                   DataContextChanged="CatalogCard_DataContextChanged"
                   Unloaded="CatalogCard_Unloaded">
                 <ToolTipService.ToolTip>
