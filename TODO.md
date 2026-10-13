@@ -228,6 +228,22 @@ See `windows-spike/docs/PLAN-winui-moderate-features.md` for the full combined p
 - [ ] **More Settings tabs** — Library is built (Diagnostics/About were built then removed by request); still open: Appearance (UI scale/density), Playback defaults (default audio/subtitle language and resume behaviour; persistence still needs a format-by-engine matrix), Profiles. Playlist advance is a persisted per-kind Off / Next / Shuffle choice in the player. Library could also gain a clear-artwork-cache action if a disk cache is ever added.
 - [ ] **WinUI catalog search sync verification** — top-bar search mirrors each mode's saved filter, a never-searched mode is blank, page clear empties the top bar, and returning from the player restores the same filter. The inner `PageSearchPanel` remains collapsed and is only the page's filter-state/control host.
 
+**WinUI polish and playback resilience (2026-10-13):** header, For You, focus, player and font work. Built and live-checked on a Debug build; all 343 tests pass (Core 190, Infrastructure 94, Playback 20, App 39). Items still open are listed below.
+- [x] **Header.** TVIVO left, menu (For You / Movies / Series / Live TV) centered, search is a lens that expands on click (Esc or empty blur collapses it), sort and Settings are icons; the catalog Refresh is an icon beside "Updated ..." (the page text and the button no longer disagree).
+- [x] **For You shelves.** Continue watching (Movies, Series, Live TV), Recently added (x3), Favorites (x3). Recently played is gone because it duplicated Continue watching. Live "continue" is the most recently watched channels (no progress bar).
+- [x] **Selected item is obvious.** The focused card scales to 106% with a 3 px accent ring; hover scales to 103% with a faint ring. Card and shelf names are real text for screen readers and UI Automation ("Title, Type"), not class names.
+- [x] **Font.** Atkinson Hyperlegible Next (SIL OFL, `Assets/Fonts/OFL.txt`) is the app font, applied through the theme font resource plus an implicit TextBlock style. It must be referenced by explicit file URI (`ms-appx:///Assets/Fonts/AtkinsonHyperlegibleNext-Regular.ttf#Atkinson Hyperlegible Next`); the folder form silently falls back to Segoe.
+- [x] **Player.** Playlist show/hide button in the transport bar (hidden in cinema/compact; state is per session). Fullscreen sets the window topmost while it is active and drops it on exit and on deactivation, so it sits above a taskbar that is not auto-hidden and Alt+Tab still works.
+- [x] **Playback.** Space or a video click is ignored while a start is in flight (it used to restart the open and queue a second one). Per-stage handoff timing is logged (`playback.handoff stage=gate-acquired|engine-open`, `previous-stop-wait`, `slow-stop`). Failures are classified as format, decode or network (`PlaybackFailureClassifier`); a format/decode/unknown failure switches once to the other engine for that title; a VOD stream that plays but shows no video for 10 s fails as unsupported instead of timing out at 30 s.
+- [ ] **Root-cause the 19 s pre-open stall** seen 2026-10-13 19:17 (click to `open-start`, 31 s to first frame; 0.5 s on 2026-10-12). Leading hypothesis, not proven: a second start from Space/click queued behind the uncancellable stop step. Play one real title and read the new `playback.handoff` lines.
+- [ ] **Taskbar over cinema/fullscreen.** The topmost fix is defensive. The original failure was not reproduced: with the taskbar visible, a foreground fullscreen window already covered it here, with or without topmost. Needs the exact steps (second monitor, clicking the taskbar and returning, entering cinema while unfocused).
+- [ ] **Verify engine fallback and the no-video grace on a real unsupported stream.** Only unit-tested (`PlaybackFailureClassifierTests`).
+- [ ] **Native engine** still counts an audio-only open as started; it has no no-video check.
+- [ ] **Real Bold/SemiBold faces.** Only Regular is loaded, so bold text is synthesized.
+- [ ] **Keyboard.** Tab does not reach shelf cards (arrows work once a card has focus; not known whether this predates the item style). One open-shelf search showed no filter once and filtered correctly on retry; not reproduced.
+- [ ] **Persistence.** Playlist hidden state and the per-title engine choice reset on restart.
+- [ ] A Debug-only "Gate 9 fixture" badge overlaps the bottom-right corner of Debug builds.
+
 ---
 
 ## Phase 5 (Hardening) — Pending

@@ -45,12 +45,11 @@
         </Grid>
 
         <Border x:Name="MainHeader" Grid.Row="1" Background="{StaticResource AppDeepBrush}" Padding="42,0">
-            <Grid ColumnSpacing="42">
+            <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0"
@@ -59,10 +58,11 @@
                            FontWeight="Bold"
                            CharacterSpacing="80"
                            Foreground="{StaticResource AppTextBrush}"
+                           HorizontalAlignment="Left"
                            VerticalAlignment="Center"
                            AutomationProperties.Name="Tvivo" />
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="26">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="32">
                     <Button x:Name="MyTvivoNavigation"
                             Content="For You"
                             Style="{StaticResource AppTopNavButtonStyle}"
@@ -85,64 +85,73 @@
                             ToolTipService.ToolTip="{x:Null}" />
                 </StackPanel>
 
-                <StackPanel x:Name="CatalogSearchBar" Grid.Column="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                    <Border Width="320"
-                            BorderBrush="{StaticResource AppLineBrush}"
-                            BorderThickness="1"
-                            Background="{StaticResource AppPanelSurfaceBrush}"
-                            CornerRadius="22"
-                            Padding="12,8">
-                        <Grid ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="⌕"
-                                       Foreground="{StaticResource AppMutedTextBrush}"
-                                       VerticalAlignment="Center" />
-                            <TextBox x:Name="TopSearchBox"
-                                     Grid.Column="1"
-                                     PlaceholderText="Search current catalog"
-                                     Background="Transparent"
-                                     BorderThickness="0"
-                                     Foreground="{StaticResource AppTextBrush}"
-                                     TextChanged="TopSearchBox_TextChanged"
-                                     ToolTipService.ToolTip="{x:Null}" />
-                        </Grid>
-                    </Border>
-                    <ComboBox x:Name="TopSortBox"
-                              MinWidth="190"
-                              VerticalAlignment="Center"
-                              CornerRadius="22"
-                              Padding="16,10,8,10"
-                              BorderThickness="1"
-                              Background="{StaticResource AppPanelSurfaceBrush}"
-                              BorderBrush="{StaticResource AppLineBrush}"
-                              Foreground="{StaticResource AppTextBrush}"
-                              SelectionChanged="TopSortBox_SelectionChanged"
-                              AutomationProperties.Name="Sort categories"
-                              ToolTipService.ToolTip="{x:Null}">
-                        <ComboBox.Resources>
-                            <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource AppSurfaceColor}" />
-                            <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource AppSurfaceColor}" />
-                            <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="{StaticResource AppSurfaceColor}" />
-                            <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="{StaticResource AppSurfaceColor}" />
-                            <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="{StaticResource AppSurfaceColor}" />
-                        </ComboBox.Resources>
-                        <ComboBoxItem Content="Most visited" Tag="Visited" IsSelected="True" />
-                        <ComboBoxItem Content="Alphabetical (A-Z)" Tag="AlphabeticalAsc" />
-                        <ComboBoxItem Content="Alphabetical (Z-A)" Tag="AlphabeticalDesc" />
-                        <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
-                        <ComboBoxItem Content="Recently updated" Tag="RecentlyUpdated" />
-                    </ComboBox>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4"
+                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel x:Name="CatalogSearchBar" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                        <Button x:Name="TopSearchButton"
+                                Content="&#xE721;"
+                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Style="{StaticResource AppIconButtonStyle}"
+                                Click="TopSearchButton_Click"
+                                AutomationProperties.Name="Search current catalog"
+                                ToolTipService.ToolTip="{x:Null}" />
+                        <Border x:Name="TopSearchPill"
+                                Width="0"
+                                Height="36"
+                                Visibility="Collapsed"
+                                BorderBrush="{StaticResource AppLineBrush}"
+                                BorderThickness="1"
+                                Background="{StaticResource AppPanelSurfaceBrush}"
+                                CornerRadius="18"
+                                Padding="12,0">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                          FontSize="13" Foreground="{StaticResource AppMutedTextBrush}"
+                                          VerticalAlignment="Center"
+                                          AutomationProperties.AccessibilityView="Raw" />
+                                <TextBox x:Name="TopSearchBox"
+                                         Grid.Column="1"
+                                         PlaceholderText="Search current catalog"
+                                         VerticalAlignment="Center"
+                                         Background="Transparent"
+                                         BorderThickness="0"
+                                         Foreground="{StaticResource AppTextBrush}"
+                                         TextChanged="TopSearchBox_TextChanged"
+                                         KeyDown="TopSearchBox_KeyDown"
+                                         LostFocus="TopSearchBox_LostFocus"
+                                         AutomationProperties.Name="Search current catalog"
+                                         ToolTipService.ToolTip="{x:Null}" />
+                            </Grid>
+                        </Border>
+                        <Button x:Name="TopSortButton"
+                                Content="&#xE8CB;"
+                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Style="{StaticResource AppIconButtonStyle}"
+                                AutomationProperties.Name="Sort categories"
+                                ToolTipService.ToolTip="{x:Null}">
+                            <Button.Flyout>
+                                <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                    <RadioMenuFlyoutItem Text="Most visited" Tag="Visited" GroupName="TopSort" IsChecked="True" Click="TopSortItem_Click" />
+                                    <RadioMenuFlyoutItem Text="Alphabetical (A-Z)" Tag="AlphabeticalAsc" GroupName="TopSort" Click="TopSortItem_Click" />
+                                    <RadioMenuFlyoutItem Text="Alphabetical (Z-A)" Tag="AlphabeticalDesc" GroupName="TopSort" Click="TopSortItem_Click" />
+                                    <RadioMenuFlyoutItem Text="Recently added" Tag="RecentlyAdded" GroupName="TopSort" Click="TopSortItem_Click" />
+                                    <RadioMenuFlyoutItem Text="Recently updated" Tag="RecentlyUpdated" GroupName="TopSort" Click="TopSortItem_Click" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                    <Button x:Name="AccountNavigation"
+                            Content="&#xE713;"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            Style="{StaticResource AppIconButtonStyle}"
+                            Click="AccountNavigation_Click"
+                            AutomationProperties.Name="Settings"
+                            ToolTipService.ToolTip="{x:Null}" />
                 </StackPanel>
-
-                <Button x:Name="AccountNavigation"
-                        Grid.Column="3"
-                        Content="Settings"
-                        Style="{StaticResource AppTopNavButtonStyle}"
-                        Click="AccountNavigation_Click"
-                        ToolTipService.ToolTip="{x:Null}" />
             </Grid>
         </Border>
 
@@ -454,6 +463,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
                         <Button x:Name="RewindButton" Grid.Column="2" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
@@ -504,6 +514,10 @@
                                 AutomationProperties.Name="Mini player" AutomationProperties.AutomationId="MiniPlayerButton"
                                 ToolTipService.ToolTip="Mini player" Style="{StaticResource AppIconButtonStyle}"
                                 Click="MiniPlayerButton_Click" />
+                        <Button x:Name="PlaylistToggleButton" Grid.Column="10" Content="&#xE8A0;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                AutomationProperties.Name="Hide playlist" AutomationProperties.AutomationId="PlaylistToggleButton"
+                                ToolTipService.ToolTip="Hide playlist" Style="{StaticResource AppIconButtonStyle}"
+                                Click="PlaylistToggleButton_Click" />
                     </Grid>
                     </Border>
                     </Grid>

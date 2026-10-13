@@ -43,6 +43,9 @@ internal sealed class WindowStateController : IDisposable
     private const int VkShift = 0x10;
     private const short KeyDownMask = unchecked((short)0x8000);
     private static readonly nint HwndTop = 0;
+    private static readonly nint HwndTopmost = -1;
+    private static readonly nint HwndNoTopmost = -2;
+    private const uint WmActivate = 0x0006;
 
     private readonly nint _hwnd;
     private readonly Microsoft.UI.Xaml.Window _window;
@@ -202,6 +205,11 @@ internal sealed class WindowStateController : IDisposable
             return 0;
         }
         var result = DefSubclassProc(hwnd, message, wParam, lParam);
+        if (message == WmActivate && Mode == WindowMode.Fullscreen && !IsWindowMini)
+        {
+            var active = ((int)wParam & 0xFFFF) != 0;
+            SetWindowPos(hwnd, active ? HwndTopmost : HwndNoTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+        }
         if (IsWindowMini && _minimizedFromMini && message == WmSize && (int)wParam == SizeRestored)
             _dispatcher?.TryEnqueue(RestoreWindowMiniAfterTaskbarRestore);
         if (message == WmEnterSizeMove)
@@ -348,10 +356,13 @@ internal sealed class WindowStateController : IDisposable
             SetStyle(fullscreenStyle);
             try
             {
-                SetBounds(monitor.Monitor, SwpFrameChanged | SwpNoActivate);
+                // HWND_TOPMOST puts the window above a taskbar that is not auto-hidden (the taskbar is itself
+                // topmost, and the shell's fullscreen hint alone does not re-evaluate for an already-active window).
+                SetBounds(monitor.Monitor, SwpFrameChanged | SwpNoActivate, HwndTopmost);
             }
             catch
             {
+                SetWindowPos(_hwnd, HwndNoTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
                 SetStyle(style);
                 SetWindowPlacement(_hwnd, ref placement);
                 SetBounds(bounds, SwpFrameChanged | SwpNoActivate | SwpNoZOrder);
@@ -368,6 +379,7 @@ internal sealed class WindowStateController : IDisposable
                 _windowedBounds is not { } savedBounds)
                 throw new InvalidOperationException("Windowed state was not captured before fullscreen.");
 
+            SetWindowPos(_hwnd, HwndNoTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
             SetStyle(style);
             var placement = savedPlacement;
             LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPlacement-begin showCmd={placement.ShowCmd}");
@@ -490,10 +502,10 @@ internal sealed class WindowStateController : IDisposable
         return info;
     }
 
-    private void SetBounds(Rect bounds, uint flags)
+    private void SetBounds(Rect bounds, uint flags, nint? insertAfter = null)
     {
         LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-begin rect=({bounds.Left},{bounds.Top},{bounds.Right},{bounds.Bottom}) flags=0x{flags:X}");
-        if (!SetWindowPos(_hwnd, HwndTop, bounds.Left, bounds.Top,
+        if (!SetWindowPos(_hwnd, insertAfter ?? HwndTop, bounds.Left, bounds.Top,
                 bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, flags))
             throw new Win32Exception(Marshal.GetLastWin32Error());
         LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-complete");

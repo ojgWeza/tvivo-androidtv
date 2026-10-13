@@ -199,8 +199,11 @@
                         VerticalAlignment="Center" Spacing="12" Visibility="Collapsed">
                 <TextBlock x:Name="TypeUpdatedText" VerticalAlignment="Center"
                            Foreground="{StaticResource AppMutedTextBrush}" Text="Updated never" />
-                <Button x:Name="TypeRefreshButton" Content="Refresh"
-                        Style="{StaticResource AppQuietButtonStyle}"
+                <Button x:Name="TypeRefreshButton" Content="&#xE72C;"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        Style="{StaticResource AppIconButtonStyle}"
+                        AutomationProperties.Name="Refresh catalog"
+                        ToolTipService.ToolTip="{x:Null}"
                         Click="TypeRefreshButton_Click" />
             </StackPanel>
         </Grid>

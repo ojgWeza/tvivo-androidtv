@@ -258,7 +258,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
             {
                 EmitException("source-or-playback", exception);
                 StopCore("error");
-                return PlaybackAttemptResult.DecodeFailure;
+                return PlaybackFailureClassifier.FromOpenException(exception);
             }
         }
         finally
@@ -326,7 +326,8 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         var wasReady = startup is not null &&
             startup.Task.IsCompletedSuccessfully &&
             startup.Task.Result == PlaybackAttemptResult.FirstFrame;
-        var startupFailureWasRecorded = startup?.TrySetResult(PlaybackAttemptResult.DecodeFailure) == true;
+        var classified = PlaybackFailureClassifier.FromMediaPlayerError((int)args.Error, args.ExtendedErrorCode.HResult);
+        var startupFailureWasRecorded = startup?.TrySetResult(classified) == true;
         if (wasReady && !startupFailureWasRecorded && _currentSession is { } session)
             PlaybackFailed?.Invoke(session);
     }

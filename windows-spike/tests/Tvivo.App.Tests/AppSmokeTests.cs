@@ -273,25 +273,22 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
-    public void My_Tvivo_shelves_are_type_specific_and_ordered_by_concept_then_type()
+    public void My_Tvivo_shelves_are_continue_then_added_then_favorites_without_recently_played()
     {
         Assert.Equal(new[]
         {
             "Continue watching Movies",
             "Continue watching Series",
+            "Continue watching Live TV",
             "Recently added Movies",
             "Recently added Series",
             "Recently added Live TV",
-            "Recently played Movies",
-            "Recently played Series",
-            "Recently played Live TV",
             "Favorite Movies",
             "Favorite Series",
             "Favorite Live TV",
         }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Title));
         Assert.Equal(new[]
         {
-            CatalogItemType.Movie, CatalogItemType.Series,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,

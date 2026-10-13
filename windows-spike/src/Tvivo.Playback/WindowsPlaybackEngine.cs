@@ -56,6 +56,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private bool _liveTimeshiftConfigured;
     private Stopwatch? _attemptClock;
     private AttemptWarningRing? _warnings;
+    private volatile bool _missingDecoderLogged;
 
     public VlcPlaybackEngine(bool enableLiveTimeshift = false)
     {
@@ -228,6 +229,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
 
             _attemptClock = Stopwatch.StartNew();
             _warnings = new AttemptWarningRing();
+            _missingDecoderLogged = false;
             EmitPhase("open-start");
             var timeshiftPath = PrepareLiveTimeshift(source.Kind);
             Media media;
@@ -254,12 +256,14 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 // the window handles video clicks itself (single = pause, double = cinema).
                 EnableMouseInput = false,
             };
+            var playingSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var handlers = new EventHandlers(
                 player,
                 state => PublishState(session, state),
                 resolved => RefreshVlcTracks(session, player, resolved),
                 () =>
                 {
+                    playingSeen.TrySetResult();
                     // Reapply once playback is active so the mmdevice backend
                     // writes this volume over a persisted Windows session scalar.
                     // Never call libvlc setters on the event thread: a concurrent UI-thread call
@@ -307,6 +311,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 using var cancellationRegistration = linkedCancellation.Token.Register(
                     () => handlers.Completion.TrySetResult(PlaybackAttemptResult.Cancelled));
                 var timeoutTask = Task.Delay(StartupDeadline, linkedCancellation.Token);
+                if (EngineFallbackPolicy.AppliesNoVideoGrace(source.Kind))
+                    _ = WatchForMissingVideoAsync(session, player, handlers, playingSeen.Task, linkedCancellation.Token);
                 var playTask = Task.FromResult(player.Play());
                 var completed = await Task.WhenAny(handlers.Completion.Task, timeoutTask, playTask)
                     .ConfigureAwait(true);
@@ -332,6 +338,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                         ? PlaybackAttemptResult.Cancelled
                         : PlaybackAttemptResult.Timeout
                     : await handlers.Completion.Task.ConfigureAwait(true);
+
+                // A logged "no suitable decoder" turns a vague failure or timeout into "format not supported".
+                result = PlaybackFailureClassifier.RefineLibVlcFailure(result, _missingDecoderLogged);
 
                 if (result != PlaybackAttemptResult.FirstFrame)
                 {
@@ -567,7 +576,42 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private void OnLibVlcLog(object? sender, LogEventArgs args)
     {
         if (args.Level >= LibVLCSharp.Shared.LogLevel.Warning)
+        {
+            if (PlaybackFailureClassifier.IsMissingDecoderLog(args.Message))
+                _missingDecoderLogged = true;
             Volatile.Read(ref _warnings)?.Enqueue($"level={args.Level} module={args.Module} message={args.Message}");
+        }
+    }
+
+    // Audio can start while the video decoder is missing: the stream is "playing" but no picture ever
+    // appears. Without this the attempt only fails at the 30 s startup deadline, as a vague timeout.
+    // Runs on the window dispatcher (same context as StartAsync), so it cannot race StopCore.
+    private async Task WatchForMissingVideoAsync(
+        PlaybackSessionToken session,
+        MediaPlayer player,
+        EventHandlers handlers,
+        Task playingSeen,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await playingSeen.WaitAsync(cancellationToken).ConfigureAwait(true);
+            await Task.Delay(EngineFallbackPolicy.NoVideoGrace, cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        lock (_trackSync)
+        {
+            if (!ReferenceEquals(_player, player) || _currentSession != session)
+                return;
+        }
+        if (handlers.Completion.Task.IsCompleted || player.VoutCount > 0)
+            return;
+        Log("event=playback.novideo engine=LibVLC outcome=unsupported-media");
+        handlers.Completion.TrySetResult(PlaybackAttemptResult.UnsupportedMedia);
     }
 
     private void EmitPhase(string phase) =>

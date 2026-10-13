@@ -1126,9 +1126,10 @@ public sealed partial class CatalogLandingPage : UserControl
         MyTvivoShelfDefinition definition,
         string? filter) => definition.Kind switch
     {
+        // Live has no resume position: its "continue" shelf is the channels watched most recently.
+        MyTvivoShelfKind.ContinueWatching when definition.Type == CatalogItemType.Live => _repository.GetRecentlyPlayed(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.ContinueWatching => _repository.GetContinueWatching(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.RecentlyAdded => _repository.GetRecentlyAdded(account, definition.Type, _connection, int.MaxValue, filter),
-        MyTvivoShelfKind.RecentlyPlayed => _repository.GetRecentlyPlayed(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.Favorites => _repository.GetFavorites(account, definition.Type, _connection, int.MaxValue, filter),
         _ => Array.Empty<Channel>(),
     };
@@ -1152,7 +1153,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var preview = channels.Take(ShelfPreviewSize)
             .Select(channel => ToCard(channel, definition.Type,
-                isContinueWatching: definition.Kind == MyTvivoShelfKind.ContinueWatching))
+                isContinueWatching: definition.Kind == MyTvivoShelfKind.ContinueWatching && definition.Type != CatalogItemType.Live))
             .ToArray();
         return CreateShelf(account, definition.Id, definition.Title, CountLabel(channels.Count, NounFor(definition.Type)), preview,
             definition.Type, null, false,
@@ -2955,6 +2956,9 @@ public sealed partial class CatalogLandingPage : UserControl
         bool HasNewItems)
     {
         public Visibility NewSinceLastVisitVisibility => HasNewItems ? Visibility.Visible : Visibility.Collapsed;
+
+        // The shelf row is named from ToString() for screen readers; the record's default dumps every field.
+        public override string ToString() => $"{Title}, {CountLabel}";
     }
 
     internal static EpgNowNext? FilterEpgForUi(bool enabled, EpgNowNext? nowNext) =>
@@ -2978,6 +2982,11 @@ public sealed partial class CatalogLandingPage : UserControl
         public string? QualityBadge { get; } = qualityBadge;
         public CatalogItemType Type { get; } = type;
         public bool IsContinueWatching { get; } = isContinueWatching;
+
+        // List items are named for screen readers and UI Automation from ToString(); without this the
+        // name is the class name ("Tvivo.App.Pages.CatalogLandingPage+CatalogCard").
+        public override string ToString() => string.IsNullOrWhiteSpace(Subtitle) ? Title : $"{Title}, {Subtitle}";
+
         private PlaybackProgressPresentation WatchProgress => PlaybackProgressPresentation.For(_watchProgress);
         private ContinueWatchingProgress ContinueProgress => ContinueWatchingProgress.For(Channel!, _watchProgress);
         public double WatchProgressValue => WatchProgress.Value;

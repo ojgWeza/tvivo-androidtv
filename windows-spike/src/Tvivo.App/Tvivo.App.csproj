@@ -38,6 +38,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\Tvivo.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Fonts\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Tvivo.Core\Tvivo.Core.csproj" />

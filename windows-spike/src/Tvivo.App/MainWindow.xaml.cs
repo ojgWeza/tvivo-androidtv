@@ -145,6 +145,13 @@ public sealed partial class MainWindow : Window
     private bool _isUpdatingVolume;
     private PlaybackMuteState _playbackMuteState;
     private long? _resumePositionOnStart;
+    // The engine the user picked in settings. A per-item fallback may borrow the other engine without
+    // changing it; the next item goes back to this one unless it has its own working override.
+    // The side playlist can be hidden to give the video the full width. Kept for the session.
+    private bool _playlistHidden;
+    private IPlaybackEngine _preferredEngine = null!;
+    private readonly Dictionary<string, IPlaybackEngine> _itemEngineOverride = new();
+    private readonly HashSet<string> _engineFallbackTried = new();
     private long? _pendingResumePosition;
     private long _lastGoodPlaybackPositionMilliseconds;
     private bool _resumeReady;
@@ -178,6 +185,7 @@ public sealed partial class MainWindow : Window
         _nativePlayback = new PlaybackService(_nativeEngine);
         var useVlc = string.Equals(ReadPlaybackEnginePreference(), "LibVLC", StringComparison.Ordinal);
         Volatile.Write(ref _engine, useVlc ? _vlcEngine : _nativeEngine);
+        _preferredEngine = _engine;
         _playback = useVlc ? _vlcPlayback : _nativePlayback;
         _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
         _epgCoordinator.PlaybackBusy = () =>
@@ -439,6 +447,10 @@ public sealed partial class MainWindow : Window
         }
         selectedEngine.IsMuted = _playbackMuteState.IsMuted;
         Volatile.Write(ref _engine, selectedEngine);
+        // An explicit choice in settings replaces any per-item fallback decisions.
+        _preferredEngine = selectedEngine;
+        _itemEngineOverride.Clear();
+        _engineFallbackTried.Clear();
         SetTrackSelectingEngine(_engine);
         _playback = ReferenceEquals(_engine, _vlcEngine) ? _vlcPlayback : _nativePlayback;
         WritePlaybackEnginePreference(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native");
@@ -1042,14 +1054,68 @@ public sealed partial class MainWindow : Window
 
     private void SetCatalogSearchEnabled(bool enabled)
     {
+        TopSearchButton.IsEnabled = enabled;
         TopSearchBox.IsEnabled = enabled;
-        TopSortBox.IsEnabled = enabled;
+        TopSortButton.IsEnabled = enabled;
     }
 
-    private void TopSortBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    private void TopSortItem_Click(object sender, RoutedEventArgs args)
     {
-        if (TopSortBox.SelectedItem is ComboBoxItem { Tag: string tag })
+        if (sender is RadioMenuFlyoutItem { Tag: string tag })
             _catalogLandingPage.SetCategorySort(tag);
+    }
+
+    private const double TopSearchExpandedWidth = 280;
+
+    private void SetTopSearchExpanded(bool expanded, bool focus = false)
+    {
+        if (expanded == (TopSearchPill.Visibility == Visibility.Visible && TopSearchPill.Width > 0))
+        {
+            if (expanded && focus) TopSearchBox.Focus(FocusState.Programmatic);
+            return;
+        }
+        if (expanded)
+        {
+            TopSearchButton.Visibility = Visibility.Collapsed;
+            TopSearchPill.Visibility = Visibility.Visible;
+        }
+        var animation = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            From = TopSearchPill.Width,
+            To = expanded ? TopSearchExpandedWidth : 0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(180)),
+            EnableDependentAnimation = true,
+            EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut },
+        };
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animation, TopSearchPill);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animation, "Width");
+        var storyboard = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+        storyboard.Children.Add(animation);
+        storyboard.Completed += (_, _) =>
+        {
+            if (expanded) return;
+            TopSearchPill.Visibility = Visibility.Collapsed;
+            TopSearchButton.Visibility = Visibility.Visible;
+        };
+        storyboard.Begin();
+        if (expanded && focus) TopSearchBox.Focus(FocusState.Programmatic);
+    }
+
+    private void TopSearchButton_Click(object sender, RoutedEventArgs args) =>
+        SetTopSearchExpanded(true, focus: true);
+
+    private void TopSearchBox_LostFocus(object sender, RoutedEventArgs args)
+    {
+        if (string.IsNullOrEmpty(TopSearchBox.Text))
+            SetTopSearchExpanded(false);
+    }
+
+    private void TopSearchBox_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != Windows.System.VirtualKey.Escape) return;
+        TopSearchBox.Text = string.Empty;
+        SetTopSearchExpanded(false);
+        args.Handled = true;
     }
 
     private void BeginBackTransitionTrace(string message)
@@ -1339,7 +1405,8 @@ public sealed partial class MainWindow : Window
         SetTopNavState(MoviesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Movies);
         SetTopNavState(SeriesNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.Series);
         SetTopNavState(LiveTvNavigation, isCatalog && _catalogLandingPage.ActiveMode == CatalogLandingPage.CatalogMode.LiveTv);
-        SetTopNavState(AccountNavigation, _currentPage is ShellPage.Setup or ShellPage.Account);
+        AccountNavigation.Foreground = (Brush)Application.Current.Resources[
+            _currentPage is ShellPage.Setup or ShellPage.Account ? "AppAccentBrush" : "AppMutedTextBrush"];
     }
 
     private void SetTopNavState(Button button, bool selected)
@@ -1365,6 +1432,9 @@ public sealed partial class MainWindow : Window
         try
         {
             TopSearchBox.Text = text;
+            if (!string.IsNullOrEmpty(text)) SetTopSearchExpanded(true);
+            else if (TopSearchBox.FocusState == FocusState.Unfocused)
+                SetTopSearchExpanded(false);
         }
         finally
         {
@@ -1926,8 +1996,17 @@ public sealed partial class MainWindow : Window
         StreamSource source,
         bool preserveCompact = false,
         bool isRecovery = false,
-        long? recoveryPositionMs = null)
+        long? recoveryPositionMs = null,
+        bool engineFallbackAttempt = false)
     {
+        var itemKey = PlaybackItemKey(source);
+        var resumeOnStartForFallback = _resumePositionOnStart;
+        if (!engineFallbackAttempt)
+        {
+            var wantedEngine = _itemEngineOverride.TryGetValue(itemKey, out var overrideEngine) ? overrideEngine : _preferredEngine;
+            if (!ReferenceEquals(wantedEngine, _engine))
+                SwitchEngineForPlayback(wantedEngine);
+        }
         StopHeldSeek(commit: true, released: false);
         _engine.IsMuted = _playbackMuteState.IsMuted;
         var resumePosition = source.Kind switch
@@ -1983,11 +2062,19 @@ public sealed partial class MainWindow : Window
             // Stop both backends before opening a replacement. Each backend owns
             // native/network state independently, so stopping only the selected
             // PlaybackService can leave the previous provider connection alive.
+            var handoffStartedAt = Stopwatch.GetTimestamp();
             result = await _playbackHandoff.RunAsync(
                 _ => OnUiAsync(async () =>
                 {
+                    // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
+                    // while stopping) shows up here as a large gateWaitMs.
+                    LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
                     if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                    var pendingStopStartedAt = Stopwatch.GetTimestamp();
                     await _playbackStopTask;
+                    var pendingStopMs = Stopwatch.GetElapsedTime(pendingStopStartedAt).TotalMilliseconds;
+                    if (pendingStopMs >= 500)
+                        LaunchDiagnostics.Write($"event=playback.handoff stage=previous-stop-wait generation={generation} elapsedMs={pendingStopMs:0}");
                     if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                     await StopBothPlaybackEnginesAsync();
                     if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
@@ -2001,6 +2088,7 @@ public sealed partial class MainWindow : Window
                 {
                     if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
                         return Task.FromResult(PlaybackAttemptResult.Cancelled);
+                    LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
                     _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
                     return _playback.PlayAsync(source, token);
                 }),
@@ -2031,6 +2119,24 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
         if (result != PlaybackAttemptResult.FirstFrame)
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", _ => "error" }}");
+        if (!engineFallbackAttempt && EngineFallbackPolicy.ShouldFallback(result, _engineFallbackTried.Contains(itemKey)))
+        {
+            // The format, not the network, is the problem: the other player may well handle it.
+            _engineFallbackTried.Add(itemKey);
+            var failedLabel = EngineLabel(_engine);
+            var otherEngine = ReferenceEquals(_engine, _vlcEngine) ? (IPlaybackEngine)_nativeEngine : _vlcEngine;
+            LaunchDiagnostics.Write($"event=playback.fallback from={engineName} to={EngineLabel(otherEngine)} reason={result}");
+            StatusText.Text = $"The {failedLabel} player couldn't play this ({DescribeFailure(result)}). Trying the {EngineLabel(otherEngine)} player…";
+            SwitchEngineForPlayback(otherEngine);
+            _resumePositionOnStart = resumeOnStartForFallback;
+            await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs, engineFallbackAttempt: true);
+            return;
+        }
+        if (engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame)
+        {
+            _itemEngineOverride[itemKey] = _engine;
+            LaunchDiagnostics.Write($"event=playback.fallback outcome=playing engine={engineName}");
+        }
         if (source.Kind == StreamKind.Live && result != PlaybackAttemptResult.FirstFrame)
         {
             StopPlayerEpgUpdates();
@@ -2038,7 +2144,10 @@ public sealed partial class MainWindow : Window
         }
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
             ShowCinemaControls();
-        StatusText.Text = PlaybackStatusMessage(result, source.Kind);
+        StatusText.Text = engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame
+            ? $"Playing with the {EngineLabel(_engine)} player (the other player couldn't handle this stream)"
+            : PlaybackStatusMessage(result, source.Kind, EngineLabel(_engine)) +
+              (engineFallbackAttempt && result != PlaybackAttemptResult.Cancelled ? " The other player couldn't play it either." : string.Empty);
         if (result == PlaybackAttemptResult.FirstFrame)
         {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
@@ -2172,8 +2281,19 @@ public sealed partial class MainWindow : Window
     private async Task StopBothPlaybackEnginesAsync()
     {
         TraceBackTransition($"engine-stop-both-begin vlcPlaying={_vlcEngine.IsPlaying} nativePlaying={_nativeEngine.IsPlaying}");
-        await Task.WhenAll(_vlcPlayback.StopAsync(), _nativePlayback.StopAsync());
+        await Task.WhenAll(TimedStopAsync("LibVLC", _vlcPlayback), TimedStopAsync("Native", _nativePlayback));
         TraceBackTransition($"engine-stop-both-complete vlcPlaying={_vlcEngine.IsPlaying} nativePlaying={_nativeEngine.IsPlaying}");
+    }
+
+    // A stop that blocks delays the next open (the handoff gate is held meanwhile), so a slow one is
+    // always logged with the engine that caused it.
+    private static async Task TimedStopAsync(string engineName, PlaybackService service)
+    {
+        var started = Stopwatch.GetTimestamp();
+        await service.StopAsync();
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        if (elapsed >= TimeSpan.FromMilliseconds(500))
+            LaunchDiagnostics.Write($"event=playback.handoff.slow-stop engine={engineName} elapsedMs={elapsed.TotalMilliseconds:0}");
     }
 
     private Task<T> OnUiAsync<T>(Func<Task<T>> action)
@@ -2206,16 +2326,38 @@ public sealed partial class MainWindow : Window
         return true;
     });
 
-    private static string PlaybackStatusMessage(PlaybackAttemptResult result, StreamKind kind) => result switch
+    private string EngineLabel(IPlaybackEngine engine) => ReferenceEquals(engine, _vlcEngine) ? "LibVLC" : "Native";
+
+    // The key never leaves memory (the stream path can carry provider credentials) and is never logged.
+    private static string PlaybackItemKey(StreamSource source) => $"{source.Kind}|{source.DirectUri?.AbsolutePath}";
+
+    // Switches the engine for the current item only; unlike the settings toggle it does not touch the saved preference.
+    private void SwitchEngineForPlayback(IPlaybackEngine target)
+    {
+        target.IsMuted = _playbackMuteState.IsMuted;
+        Volatile.Write(ref _engine, target);
+        SetTrackSelectingEngine(_engine);
+        _playback = ReferenceEquals(target, _vlcEngine) ? _vlcPlayback : _nativePlayback;
+        ApplyPlaybackEngineVisuals();
+    }
+
+    private static string DescribeFailure(PlaybackAttemptResult result) => result switch
+    {
+        PlaybackAttemptResult.UnsupportedMedia => "unsupported video format",
+        PlaybackAttemptResult.DecodeFailure => "decoding failed",
+        _ => "playback failed",
+    };
+
+    private static string PlaybackStatusMessage(PlaybackAttemptResult result, StreamKind kind, string engineLabel) => result switch
     {
         PlaybackAttemptResult.FirstFrame => "Playing",
         PlaybackAttemptResult.Cancelled => "Playback cancelled",
         PlaybackAttemptResult.Timeout => $"The {kind.ToString().ToLowerInvariant()} stream did not start before the timeout. Check the provider connection and stream URL, then retry.",
         PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
-        PlaybackAttemptResult.DecodeFailure => "The stream opened but could not be decoded. Try another episode or playback engine.",
-        PlaybackAttemptResult.UnsupportedMedia => "This stream format is not supported by the selected playback engine.",
-        PlaybackAttemptResult.NetworkFailure => "The stream could not be reached. Check the provider connection and retry.",
-        _ => $"Playback failed ({result}). Check the provider connection and stream details, then retry.",
+        PlaybackAttemptResult.DecodeFailure => $"The {engineLabel} player opened the stream but could not decode it.",
+        PlaybackAttemptResult.UnsupportedMedia => $"The {engineLabel} player doesn't support this video format.",
+        PlaybackAttemptResult.NetworkFailure => "The connection to the provider was lost or could not be made. Check your connection and retry.",
+        _ => $"Playback failed ({result}). The provider may have rejected the stream or its format is not supported. Retry, or try another title.",
     };
 
     private void FadeIn(UIElement element)
@@ -2463,6 +2605,13 @@ public sealed partial class MainWindow : Window
     private async void PauseButton_Click(object sender, RoutedEventArgs args)
     {
         if (_currentSource is null) return;
+        if (Volatile.Read(ref _playbackSessionCts) is not null)
+        {
+            // A start is still in flight. Space or a click on the video must not restart it: that cancels
+            // the open in progress and queues a second one behind the handoff gate.
+            LaunchDiagnostics.Write("event=playback.toggle-ignored reason=start-in-flight");
+            return;
+        }
         if (!_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused))
         {
             _engine.TogglePause();
@@ -3775,6 +3924,13 @@ public sealed partial class MainWindow : Window
         _cinemaCursorController.SetHidden(_cinemaCursorHidden);
     }
 
+    private void PlaylistToggleButton_Click(object sender, RoutedEventArgs args)
+    {
+        _playlistHidden = !_playlistHidden;
+        LaunchDiagnostics.Write($"event=player.playlist hidden={_playlistHidden}");
+        ApplyPlayerLayout();
+    }
+
     private void ApplyPlayerLayout()
     {
         var cinema = _isCinemaMode;
@@ -3783,10 +3939,17 @@ public sealed partial class MainWindow : Window
         PlayerPage.Padding = cinema || compact ? new Thickness(0) : new Thickness(24);
         PlayerNavigation.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
         PlayerNavigationRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
-        PlayerLayoutGrid.ColumnSpacing = cinema || compact ? 0 : 18;
-        PlayerContentColumn.Width = new GridLength(cinema || compact ? 1 : 2.35, GridUnitType.Star);
-        PlayerSideColumn.Width = new GridLength(cinema || compact ? 0 : 0.9, GridUnitType.Star);
-        PlayerSidePanel.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
+        var showPlaylist = !cinema && !compact && !_playlistHidden;
+        PlayerLayoutGrid.ColumnSpacing = showPlaylist ? 18 : 0;
+        PlayerContentColumn.Width = new GridLength(showPlaylist ? 2.35 : 1, GridUnitType.Star);
+        PlayerSideColumn.Width = new GridLength(showPlaylist ? 0.9 : 0, GridUnitType.Star);
+        PlayerSidePanel.Visibility = showPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        // The toggle only makes sense where the playlist can appear (not in cinema or the compact card).
+        PlaylistToggleButton.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
+        var playlistLabel = _playlistHidden ? "Show playlist" : "Hide playlist";
+        PlaylistToggleButton.Content = _playlistHidden ? "\uE89F" : "\uE8A0";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PlaylistToggleButton, playlistLabel);
+        ToolTipService.SetToolTip(PlaylistToggleButton, playlistLabel);
 
         PlayerContentGrid.RowSpacing = cinema || compact ? 0 : 10;
         PlayerVideoRow.Height = new GridLength(1, GridUnitType.Star);

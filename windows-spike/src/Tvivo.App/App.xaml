@@ -9,6 +9,14 @@
             <ResourceDictionary.MergedDictionaries>
                 <controls:XamlControlsResources />
             </ResourceDictionary.MergedDictionaries>
+            <!-- Atkinson Hyperlegible Next (SIL OFL, Assets/Fonts/OFL.txt): letterforms designed for low-vision and
+                 distance reading. The theme resource covers every control; the implicit style covers bare TextBlocks.
+                 Icon glyphs keep their explicit Segoe Fluent Icons FontFamily. -->
+            <FontFamily x:Key="AppFontFamily">ms-appx:///Assets/Fonts/AtkinsonHyperlegibleNext-Regular.ttf#Atkinson Hyperlegible Next</FontFamily>
+            <FontFamily x:Key="ContentControlThemeFontFamily">ms-appx:///Assets/Fonts/AtkinsonHyperlegibleNext-Regular.ttf#Atkinson Hyperlegible Next</FontFamily>
+            <Style TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+            </Style>
             <Color x:Key="AppCanvasColor">#0A1619</Color>
             <Color x:Key="AppDeepColor">#071114</Color>
             <Color x:Key="AppSurfaceColor">#0F2126</Color>
@@ -287,12 +295,89 @@
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
+            <!-- Catalog card container: the focused card (keyboard/remote) pops forward with an accent
+                 ring; hover gives a smaller lift. Spacing is wider than the overhang of the scaled card
+                 (190 px * 3% per side) so a popped card never covers its neighbour. -->
+            <Style x:Key="AppCardGridViewItemStyle" TargetType="GridViewItem">
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0,0,8,8" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                <Setter Property="UseSystemFocusVisuals" Value="False" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="0" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="GridViewItem">
+                            <Grid x:Name="CardRoot" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform>
+                                    <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1" />
+                                </Grid.RenderTransform>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.03" Duration="0:0:0.12" />
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.03" Duration="0:0:0.12" />
+                                                <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0.45" Duration="0:0:0.12" />
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.0" Duration="0:0:0.06" />
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.06" />
+                                                <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0.8" Duration="0:0:0.06" />
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled" />
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="FocusStates">
+                                        <VisualState x:Name="Unfocused" />
+                                        <VisualState x:Name="Focused">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="1.06" Duration="0:0:0.14">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="1.06" Duration="0:0:0.14">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.14" />
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="PointerFocused" />
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  Padding="{TemplateBinding Padding}" />
+                                <Border x:Name="FocusRing"
+                                        BorderBrush="{StaticResource AppAccentBrush}"
+                                        BorderThickness="3"
+                                        CornerRadius="12"
+                                        Opacity="0"
+                                        IsHitTestVisible="False" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
             <Style x:Key="AppShelfGridViewStyle" TargetType="GridView">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Padding" Value="0,4,0,10" />
+                <!-- Room for the popped card (scale + ring) so it is not clipped; the negative margin
+                     keeps the first card aligned with the page edge. -->
+                <Setter Property="Padding" Value="8,12,8,14" />
+                <Setter Property="Margin" Value="-8,0,-8,0" />
                 <Setter Property="SelectionMode" Value="None" />
                 <Setter Property="IsItemClickEnabled" Value="True" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource AppCardGridViewItemStyle}" />
             </Style>
             <Style x:Key="AppEyebrowTextStyle" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{StaticResource AppAccentSoftBrush}" />
