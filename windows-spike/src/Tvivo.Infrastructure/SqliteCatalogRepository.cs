@@ -283,7 +283,7 @@ public sealed class SqliteCatalogRepository : IDisposable
 
     private static string CleanTitle(string? title)
     {
-        var cleaned = Whitespace.Replace(EmptyBrackets.Replace(title ?? string.Empty, " "), " ").Trim();
+        var cleaned = Whitespace.Replace(EmptyBrackets.Replace(CatalogTitleFormatter.Clean(title), " "), " ").Trim();
         return string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned;
     }
 

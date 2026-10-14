@@ -12,7 +12,7 @@
             <ItemsWrapGrid Orientation="Horizontal" />
         </ItemsPanelTemplate>
         <DataTemplate x:Key="TvivoArtworkPlaceholderTemplate">
-            <Grid>
+            <Grid x:Name="PlaceholderArtworkRoot">
                 <Rectangle RadiusX="12" RadiusY="12">
                     <Rectangle.Fill>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
@@ -22,7 +22,12 @@
                         </LinearGradientBrush>
                     </Rectangle.Fill>
                 </Rectangle>
-                <Viewbox Width="108" Height="108" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Viewbox x:Name="PlaceholderArtworkGlyph" Width="108" Height="108"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         RenderTransformOrigin="0.5,0.5">
+                    <Viewbox.RenderTransform>
+                        <ScaleTransform x:Name="PlaceholderArtworkScale" ScaleX="1" ScaleY="1" />
+                    </Viewbox.RenderTransform>
                     <Grid Width="64" Height="64">
                         <Border Margin="5" CornerRadius="11" BorderThickness="3" BorderBrush="{ThemeResource AppPlaceholderFrameBrush}" />
                         <Border Margin="3,10,3,10" CornerRadius="7" BorderThickness="3" BorderBrush="{ThemeResource AppPlaceholderFrameInnerBrush}" />
@@ -45,16 +50,20 @@
                   Unloaded="CatalogCard_Unloaded">
                 <Border CornerRadius="12" Background="{ThemeResource AppRaisedSurfaceBrush}">
                     <Grid>
-                        <Grid>
+                        <Grid x:Name="ArtworkViewport">
                             <ContentControl x:Name="ArtworkFallback" Content="Tvivo"
                                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                                             ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
-                            <Image Stretch="UniformToFill" Opacity="0"
+                            <Image Stretch="UniformToFill" Opacity="0" RenderTransformOrigin="0.5,0.5"
                                    Loaded="ArtworkImage_Loaded"
                                    Unloaded="ArtworkImage_Unloaded"
                                    DataContextChanged="ArtworkImage_DataContextChanged"
                                    ImageOpened="ArtworkImage_Opened"
-                                   ImageFailed="ArtworkImage_Failed" />
+                                   ImageFailed="ArtworkImage_Failed">
+                                <Image.RenderTransform>
+                                    <ScaleTransform x:Name="ArtworkImageScale" ScaleX="1" ScaleY="1" />
+                                </Image.RenderTransform>
+                            </Image>
                         </Grid>
                         <Border VerticalAlignment="Bottom" Padding="10,36,10,10">
                             <Border.Background>

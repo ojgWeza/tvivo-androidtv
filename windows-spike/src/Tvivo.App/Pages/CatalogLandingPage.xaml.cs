@@ -1408,11 +1408,16 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CatalogCard_PointerEntered(object sender, PointerRoutedEventArgs args)
     {
+        if (sender is FrameworkElement cardRoot)
+            SetCardArtworkState(cardRoot, IsCardKeyboardFocused(cardRoot) ? "Focused" : "PointerOver");
         BeginCardSummary(sender as FrameworkElement, triggeredByFocus: false);
     }
 
     private void CatalogCard_GotFocus(object sender, RoutedEventArgs args)
     {
+        if (sender is FrameworkElement cardRoot)
+            SetCardArtworkState(cardRoot, IsCardKeyboardFocused(cardRoot) ? "Focused" : "PointerOver");
+
         var focusState = args.OriginalSource is UIElement focusedElement
             ? focusedElement.FocusState
             : (sender as UIElement)?.FocusState;
@@ -1633,14 +1638,90 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CatalogCard_PointerExited(object sender, PointerRoutedEventArgs args)
     {
+        if (sender is FrameworkElement cardRoot)
+            SetCardArtworkState(cardRoot, IsCardKeyboardFocused(cardRoot) ? "Focused" : "Normal");
         if (ReferenceEquals(_hoveredCardElement, sender) && !_summaryTriggeredByFocus)
             CancelHoverRequest();
     }
 
     private void CatalogCard_LostFocus(object sender, RoutedEventArgs args)
     {
+        if (sender is FrameworkElement cardRoot)
+            SetCardArtworkState(cardRoot, "Normal");
         if (!ReferenceEquals(_hoveredCardElement, sender) || !_summaryTriggeredByFocus) return;
         CancelHoverRequest();
+    }
+
+    private static bool IsCardKeyboardFocused(FrameworkElement cardRoot)
+    {
+        for (var current = VisualTreeHelper.GetParent(cardRoot); current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is GridViewItem item)
+                return item.FocusState is FocusState.Keyboard or FocusState.Programmatic;
+        }
+
+        return false;
+    }
+
+    private static void SetCardArtworkState(FrameworkElement cardRoot, string state)
+    {
+        var scale = state switch { "Focused" => 1.12, "PointerOver" => 1.10, _ => 1.0 };
+        if (FindFirstImage(cardRoot) is { RenderTransform: ScaleTransform imageScale })
+            AnimateScale(imageScale, scale);
+        if (FindVisualElement(cardRoot, "PlaceholderArtworkGlyph") is { RenderTransform: ScaleTransform glyphScale })
+            AnimateScale(glyphScale, scale);
+    }
+
+    // Lens effect: ease the artwork's own scale; the viewport clip keeps it inside the card.
+    private static void AnimateScale(ScaleTransform transform, double target)
+    {
+        if (Math.Abs(transform.ScaleX - target) < 0.001 && Math.Abs(transform.ScaleY - target) < 0.001) return;
+        var storyboard = new Storyboard();
+        foreach (var property in new[] { "ScaleX", "ScaleY" })
+        {
+            var animation = new DoubleAnimation
+            {
+                To = target,
+                Duration = TimeSpan.FromMilliseconds(140),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true,
+            };
+            Storyboard.SetTarget(animation, transform);
+            Storyboard.SetTargetProperty(animation, property);
+            storyboard.Children.Add(animation);
+        }
+        storyboard.Begin();
+    }
+
+    private static Image? FindFirstImage(DependencyObject root)
+    {
+        if (root is Image image) return image;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            if (FindFirstImage(VisualTreeHelper.GetChild(root, index)) is { } match)
+                return match;
+        return null;
+    }
+
+    // Rounded clip for the artwork viewport (WinUI's RectangleGeometry has no corner radius, so use a composition clip).
+    private static void ApplyArtworkClip(Image image)
+    {
+        if (VisualTreeHelper.GetParent(image) is not Grid viewport || image.DataContext is not CatalogCard card ||
+            card.Width <= 0 || card.Height <= 0)
+            return;
+        var visual = ElementCompositionPreview.GetElementVisual(viewport);
+        var geometry = visual.Compositor.CreateRoundedRectangleGeometry();
+        geometry.Size = new System.Numerics.Vector2((float)card.Width, (float)card.Height);
+        geometry.CornerRadius = new System.Numerics.Vector2(12, 12);
+        visual.Clip = visual.Compositor.CreateGeometricClip(geometry);
+    }
+
+    private static FrameworkElement? FindVisualElement(DependencyObject root, string name)
+    {
+        if (root is FrameworkElement element && element.Name == name) return element;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            if (FindVisualElement(VisualTreeHelper.GetChild(root, index), name) is { } match)
+                return match;
+        return null;
     }
 
     private void CatalogCard_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
@@ -2300,6 +2381,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (sender is not Image image) return;
         if (ReferenceEquals(image, SpotlightArtwork) && _openShelfId is not null) return;
+        if (!ReferenceEquals(image, SpotlightArtwork)) ApplyArtworkClip(image);
+
         var url = ReferenceEquals(image, SpotlightArtwork)
             ? _spotlightCard?.ArtworkUrl
             : (image.DataContext as CatalogCard)?.ArtworkUrl;
