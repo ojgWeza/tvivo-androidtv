@@ -7,20 +7,13 @@ public static class CatalogHoverTextFormatter
     private const int CastLimit = 160;
     private const string CastPrefix = "Cast: ";
 
-    public static string Summary(CatalogItemType type, string? plot, bool loading, bool failed,
-        string? nowText = null, string? nextText = null)
-    {
-        if (type == CatalogItemType.Live)
-            return string.IsNullOrWhiteSpace(nowText) && string.IsNullOrWhiteSpace(nextText)
-                ? "No programme summary available"
-                : string.Empty;
+    public static string Summary(CatalogItemType type, string? plot) =>
+        type == CatalogItemType.Live ? string.Empty : Normalize(plot);
 
-        var normalizedPlot = Normalize(plot);
-        if (!string.IsNullOrEmpty(normalizedPlot)) return normalizedPlot;
-        if (loading) return "Loading summary…";
-        if (failed) return "Summary unavailable";
-        return "No summary available";
-    }
+    public static bool HasSummary(CatalogItemType type, string? plot, string? nowText = null, string? nextText = null) =>
+        type == CatalogItemType.Live
+            ? !string.IsNullOrWhiteSpace(nowText) || !string.IsNullOrWhiteSpace(nextText)
+            : !string.IsNullOrEmpty(Normalize(plot));
 
     public static string Cast(string? cast)
     {

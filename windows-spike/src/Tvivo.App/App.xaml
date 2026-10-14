@@ -11,6 +11,7 @@
             </ResourceDictionary.MergedDictionaries>
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppSelectionRingInnerBrush" Color="Transparent" />
                     <SolidColorBrush x:Key="AppSelectionRingBrush" Color="#D97757" />
                     <Color x:Key="AppCanvasColor">#0A1619</Color>
                     <Color x:Key="AppDeepColor">#071114</Color>
@@ -111,6 +112,7 @@
                     <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppSelectionRingInnerBrush" Color="#FFF5E5" />
                     <SolidColorBrush x:Key="AppSelectionRingBrush" Color="#12383F" />
                     <Color x:Key="AppCanvasColor">#FFF5E5</Color>
                     <Color x:Key="AppDeepColor">#F4E5CC</Color>
@@ -211,6 +213,7 @@
                     <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#661B5557" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="AppSelectionRingInnerBrush" Color="Transparent" />
                     <StaticResource x:Key="AppSelectionRingBrush" ResourceKey="SystemColorHighlightBrush" />
                     <StaticResource x:Key="AppCanvasBrush" ResourceKey="SystemColorWindowBrush" />
                     <StaticResource x:Key="AppDeepBrush" ResourceKey="SystemColorWindowBrush" />
@@ -564,7 +567,12 @@
                                         BorderThickness="5"
                                         CornerRadius="12"
                                         Opacity="0"
-                                        IsHitTestVisible="False" />
+                                        IsHitTestVisible="False">
+                                    <!-- Thin inner line so the ring stays visible against dark posters in the light theme. -->
+                                    <Border BorderBrush="{ThemeResource AppSelectionRingInnerBrush}"
+                                            BorderThickness="2"
+                                            CornerRadius="7" />
+                                </Border>
                             </Grid>
                         </ControlTemplate>
                     </Setter.Value>

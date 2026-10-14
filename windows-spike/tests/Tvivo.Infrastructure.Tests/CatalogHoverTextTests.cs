@@ -7,18 +7,17 @@ namespace Tvivo.Infrastructure.Tests;
 public sealed class CatalogHoverTextTests
 {
     [Theory]
-    [InlineData(null, false, false, "No summary available")]
-    [InlineData("  \t\r\n ", false, false, "No summary available")]
-    [InlineData(null, true, false, "Loading summary…")]
-    [InlineData(null, false, true, "Summary unavailable")]
-    public void MissingMoviePlotUsesAppropriateState(string? plot, bool loading, bool failed, string expected) =>
-        Assert.Equal(expected, CatalogHoverTextFormatter.Summary(CatalogItemType.Movie, plot, loading, failed));
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  \t\r\n ")]
+    public void MissingMoviePlotProducesNoSummary(string? plot) =>
+        Assert.Equal(string.Empty, CatalogHoverTextFormatter.Summary(CatalogItemType.Movie, plot));
 
     [Fact]
     public void PlotWhitespaceIsNormalizedWithoutDiscardingTheSummary()
     {
         Assert.Equal("A story about second chances.",
-            CatalogHoverTextFormatter.Summary(CatalogItemType.Series, " A   story about\n\nsecond chances. ", false, false));
+            CatalogHoverTextFormatter.Summary(CatalogItemType.Series, " A   story about\n\nsecond chances. "));
     }
 
     [Fact]
@@ -32,11 +31,26 @@ public sealed class CatalogHoverTextTests
     }
 
     [Fact]
-    public void LiveUsesEpgOrAnExplicitFallback()
+    public void LiveHasTooltipOnlyWhenEpgTextExists()
     {
-        Assert.Equal("No programme summary available",
-            CatalogHoverTextFormatter.Summary(CatalogItemType.Live, null, false, false));
-        Assert.Equal(string.Empty,
-            CatalogHoverTextFormatter.Summary(CatalogItemType.Live, null, false, false, "Now: News", null));
+        Assert.False(CatalogHoverTextFormatter.HasSummary(CatalogItemType.Live, null));
+        Assert.False(CatalogHoverTextFormatter.HasSummary(CatalogItemType.Live, null, " ", null));
+        Assert.True(CatalogHoverTextFormatter.HasSummary(CatalogItemType.Live, null, "Now: News", null));
+        Assert.True(CatalogHoverTextFormatter.HasSummary(CatalogItemType.Live, null, null, "Next: News"));
+        Assert.Equal(string.Empty, CatalogHoverTextFormatter.Summary(CatalogItemType.Live, null));
     }
+
+    [Theory]
+    [InlineData("0", null)]
+    [InlineData("0.0", null)]
+    [InlineData("0.00", null)]
+    [InlineData("", null)]
+    [InlineData("  ", null)]
+    [InlineData(null, null)]
+    [InlineData("7.5", "7.5")]
+    [InlineData("abc", null)]
+    [InlineData("-1", null)]
+    [InlineData("10", "10")]
+    public void RatingIsShownOnlyForPositiveNumericValues(string? rating, string? expected) =>
+        Assert.Equal(expected, CatalogRatingFormatter.Format(rating));
 }

@@ -27,6 +27,14 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HoverRequestScheduler _hoverRequestScheduler = new();
     private CatalogCard? _hoveredCard;
     private FrameworkElement? _hoveredCardElement;
+    private FrameworkElement? _cardToolTipOwner;
+    private ToolTip? _cardToolTip;
+    private TextBlock? _cardToolTipTitle;
+    private TextBlock? _cardToolTipDetails;
+    private TextBlock? _cardToolTipSummary;
+    private TextBlock? _cardToolTipNow;
+    private TextBlock? _cardToolTipNext;
+    private TextBlock? _cardToolTipCast;
     private bool _summaryTriggeredByFocus;
     private HoverRequestScheduler.Lease? _hoverLease;
     private readonly CatalogRefreshService _refresh = App.Services.GetRequiredService<CatalogRefreshService>();
@@ -199,20 +207,20 @@ public sealed partial class CatalogLandingPage : UserControl
             RenderSpotlightIndicators(candidates, selectedIndex);
         }
 
-        if (_hoveredCardElement is { } hoveredElement)
-            ApplyCardToolTipTheme(hoveredElement);
+        ApplyCardToolTipTheme();
     }
 
-    private void ApplyCardToolTipTheme(FrameworkElement cardElement)
+    private void ApplyCardToolTipTheme()
     {
-        if (ToolTipService.GetToolTip(cardElement) is not ToolTip toolTip) return;
-        toolTip.DataContext = cardElement.DataContext;
+        if (_cardToolTip is not { } toolTip) return;
         toolTip.RequestedTheme = CatalogPageRoot.ActualTheme;
         toolTip.Background = ThemeBrush("AppPanelSurfaceBrush");
         toolTip.Foreground = ThemeBrush("AppTextBrush");
         toolTip.BorderBrush = ThemeBrush("AppLineBrush");
-        if (cardElement.DataContext is CatalogCard card)
-            AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
+        var foreground = ThemeBrush("AppTextBrush");
+        foreach (var textBlock in new[]
+                 { _cardToolTipTitle, _cardToolTipDetails, _cardToolTipSummary, _cardToolTipNow, _cardToolTipNext, _cardToolTipCast })
+            if (textBlock is not null) textBlock.Foreground = foreground;
     }
 
     public void SetActive(bool active)
@@ -1059,6 +1067,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 var epgId = card.Channel!.Metadata["epg_channel_id"];
                 nowNext.TryGetValue(epgId, out var programme);
                 card.ApplyNowNext(programme);
+                if (ReferenceEquals(_hoveredCard, card) && _hoveredCardElement is { } hoveredElement)
+                    ShowCardToolTip(card, hoveredElement);
             }
         }
         catch (Exception exception)
@@ -1415,26 +1425,35 @@ public sealed partial class CatalogLandingPage : UserControl
     private void BeginCardSummary(FrameworkElement? cardElement, bool triggeredByFocus)
     {
         if (cardElement is not { DataContext: CatalogCard { Channel: { } channel } card } ||
-            !_isActive || _account is not { } account || account.AccountId != channel.ProviderAccountId ||
-            (card.Type == CatalogItemType.Live && !triggeredByFocus))
+            !_isActive || _account is not { } account || account.AccountId != channel.ProviderAccountId)
             return;
+
+        if (card.Type == CatalogItemType.Live)
+        {
+            _hoverRequestScheduler.Cancel();
+            if (_hoveredCardElement is { } previousLiveElement && !ReferenceEquals(previousLiveElement, cardElement))
+                DetachCardToolTip(previousLiveElement);
+            _hoveredCard = card;
+            _hoveredCardElement = cardElement;
+            _hoverLease = null;
+            _summaryTriggeredByFocus = triggeredByFocus;
+            ShowCardToolTip(card, cardElement);
+            return;
+        }
 
         var key = $"{account.AccountId}\0{card.Type}\0{channel.Id}";
         var lease = _hoverRequestScheduler.Begin(key);
-        if (_hoveredCardElement is { } previousElement && !ReferenceEquals(previousElement, cardElement) &&
-            ToolTipService.GetToolTip(previousElement) is ToolTip previousToolTip)
-            previousToolTip.IsOpen = false;
+        if (_hoveredCardElement is { } previousElement && !ReferenceEquals(previousElement, cardElement))
+            DetachCardToolTip(previousElement);
         _hoveredCard = card;
         _hoveredCardElement = cardElement;
         _hoverLease = lease;
         _summaryTriggeredByFocus = triggeredByFocus;
-        card.BeginHoverSummary();
-        ApplyCardToolTipTheme(cardElement);
         if (!HoverMetadataLookup.NeedsLookup(channel.Metadata.GetValueOrDefault("plot")))
         {
             // The card already carries a summary: show it, never ask the provider.
             LaunchDiagnostics.Write($"event=hover.metadata source=card type={card.Type}");
-            OpenFocusedSummaryToolTipIfCurrent(card, lease);
+            ShowCardToolTipIfCurrent(card, lease);
             return;
         }
         _ = _hoverRequestScheduler.RunAfterDelayAsync(lease, TimeSpan.FromMilliseconds(800), async cancellationToken =>
@@ -1442,14 +1461,14 @@ public sealed partial class CatalogLandingPage : UserControl
             try
             {
                 var metadata = await _hoverMetadataLookup.GetAsync(account, card.Type, channel.Id, cancellationToken);
-                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, metadata, failed: metadata is null);
+                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, metadata);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
             }
             catch
             {
-                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, null, failed: true);
+                await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, null);
             }
         });
         _ = ApplyCachedHoverMetadataAsync(card, account, lease);
@@ -1467,9 +1486,9 @@ public sealed partial class CatalogLandingPage : UserControl
             await RunOnUiThreadAsync(() =>
             {
                 if (!IsCurrentHover(card, lease)) return;
-                card.SetHoverMetadata(metadata, failed: false);
+                card.SetHoverMetadata(metadata);
                 NotifyMetadataChanged(account.AccountId, card.Type, channel.Id);
-                OpenFocusedSummaryToolTipIfCurrent(card, lease);
+                ShowCardToolTipIfCurrent(card, lease);
                 _hoverRequestScheduler.Cancel(lease);
             });
         }
@@ -1487,26 +1506,104 @@ public sealed partial class CatalogLandingPage : UserControl
         _hoverRequestScheduler.IsCurrent(lease) && _account?.AccountId == card.Channel?.ProviderAccountId;
 
     private Task UpdateHoverResultOnUiAsync(CatalogCard card, ProviderAccount account, string itemId,
-        HoverRequestScheduler.Lease lease, CatalogMetadata? metadata, bool failed) =>
+        HoverRequestScheduler.Lease lease, CatalogMetadata? metadata) =>
         RunOnUiThreadAsync(() =>
         {
             if (!IsCurrentHover(card, lease)) return;
-            card.SetHoverMetadata(metadata, failed);
+            card.SetHoverMetadata(metadata);
             if (metadata is not null) NotifyMetadataChanged(account.AccountId, card.Type, itemId);
-            OpenFocusedSummaryToolTipIfCurrent(card, lease);
+            ShowCardToolTipIfCurrent(card, lease);
         });
 
-    private void OpenFocusedSummaryToolTipIfCurrent(CatalogCard card, HoverRequestScheduler.Lease lease)
+    private void ShowCardToolTipIfCurrent(CatalogCard card, HoverRequestScheduler.Lease lease)
     {
-        if (!_summaryTriggeredByFocus || !IsCurrentHover(card, lease) ||
-            ToolTipService.GetToolTip(_hoveredCardElement) is not ToolTip toolTip)
+        if (!IsCurrentHover(card, lease) || _hoveredCardElement is not { } cardElement)
             return;
 
-        toolTip.DataContext = card;
-        ApplyCardToolTipTheme(_hoveredCardElement!);
-        AutomationProperties.SetName(toolTip, card.HoverAccessibleName);
+        ShowCardToolTip(card, cardElement);
+    }
+
+    private void ShowCardToolTip(CatalogCard card, FrameworkElement cardElement)
+    {
+        if (!card.HasHoverSummary)
+        {
+            DetachCardToolTip(cardElement);
+            return;
+        }
+
+        EnsureCardToolTip();
+        if (_cardToolTip is not { } toolTip || _cardToolTipTitle is null || _cardToolTipDetails is null ||
+            _cardToolTipSummary is null || _cardToolTipNow is null || _cardToolTipNext is null || _cardToolTipCast is null)
+            return;
+
+        _cardToolTipTitle.Text = card.Title;
+        _cardToolTipDetails.Text = card.DetailsLine;
+        _cardToolTipDetails.Visibility = string.IsNullOrWhiteSpace(card.DetailsLine) ? Visibility.Collapsed : Visibility.Visible;
+        _cardToolTipSummary.Text = card.HoverSummaryText;
+        _cardToolTipSummary.Visibility = string.IsNullOrWhiteSpace(card.HoverSummaryText) ? Visibility.Collapsed : Visibility.Visible;
+        _cardToolTipNow.Text = card.NowText;
+        _cardToolTipNow.Visibility = string.IsNullOrWhiteSpace(card.NowText) ? Visibility.Collapsed : Visibility.Visible;
+        _cardToolTipNext.Text = card.NextText;
+        _cardToolTipNext.Visibility = string.IsNullOrWhiteSpace(card.NextText) ? Visibility.Collapsed : Visibility.Visible;
+        _cardToolTipCast.Text = CatalogHoverTextFormatter.Cast(card.HoverCast);
+        _cardToolTipCast.Visibility = string.IsNullOrWhiteSpace(_cardToolTipCast.Text) ? Visibility.Collapsed : Visibility.Visible;
+        AutomationProperties.SetName(toolTip, string.Join(". ", new[]
+        {
+            card.Title, card.DetailsLine, card.HoverSummaryText, card.NowText, card.NextText, _cardToolTipCast.Text,
+        }.Where(value => !string.IsNullOrWhiteSpace(value))));
+
+        if (_cardToolTipOwner is { } previousOwner && !ReferenceEquals(previousOwner, cardElement))
+            DetachCardToolTip(previousOwner);
+        if (!ReferenceEquals(_cardToolTipOwner, cardElement))
+        {
+            ToolTipService.SetToolTip(cardElement, toolTip);
+            _cardToolTipOwner = cardElement;
+        }
+        ApplyCardToolTipTheme();
+        // Pointer-enter can happen before lazy content exists. Open explicitly once its summary arrives.
         toolTip.IsOpen = true;
     }
+
+    private void EnsureCardToolTip()
+    {
+        if (_cardToolTip is not null) return;
+
+        _cardToolTipTitle = CreateCardToolTipText(fontSize: 18, semiBold: true);
+        _cardToolTipDetails = CreateCardToolTipText();
+        _cardToolTipSummary = CreateCardToolTipText();
+        _cardToolTipNow = CreateCardToolTipText();
+        _cardToolTipNext = CreateCardToolTipText();
+        _cardToolTipCast = CreateCardToolTipText();
+        var content = new StackPanel { Width = 380, Spacing = 8 };
+        content.Children.Add(_cardToolTipTitle);
+        content.Children.Add(_cardToolTipDetails);
+        content.Children.Add(_cardToolTipSummary);
+        content.Children.Add(_cardToolTipNow);
+        content.Children.Add(_cardToolTipNext);
+        content.Children.Add(_cardToolTipCast);
+        _cardToolTip = new ToolTip
+        {
+            Padding = new Thickness(14),
+            MaxWidth = 420,
+            MaxHeight = 280,
+            BorderThickness = new Thickness(1),
+            Content = new ScrollViewer
+            {
+                MaxHeight = 250,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = content,
+            },
+        };
+        ApplyCardToolTipTheme();
+    }
+
+    private static TextBlock CreateCardToolTipText(double fontSize = 14, bool semiBold = false) => new()
+    {
+        FontSize = fontSize,
+        FontWeight = semiBold ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
+        TextWrapping = TextWrapping.WrapWholeWords,
+    };
 
     private Task RunOnUiThreadAsync(Action action)
     {
@@ -1543,7 +1640,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private void CatalogCard_LostFocus(object sender, RoutedEventArgs args)
     {
         if (!ReferenceEquals(_hoveredCardElement, sender) || !_summaryTriggeredByFocus) return;
-        CloseCardToolTip(sender as FrameworkElement);
         CancelHoverRequest();
     }
 
@@ -1563,8 +1659,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CancelHoverRequest()
     {
-        CloseCardToolTip(_hoveredCardElement);
-        _hoveredCard?.EndHoverSummary();
+        DetachCardToolTip(_hoveredCardElement);
         _hoverRequestScheduler.Cancel();
         _hoveredCard = null;
         _hoveredCardElement = null;
@@ -1572,10 +1667,12 @@ public sealed partial class CatalogLandingPage : UserControl
         _summaryTriggeredByFocus = false;
     }
 
-    private static void CloseCardToolTip(FrameworkElement? element)
+    private void DetachCardToolTip(FrameworkElement? element)
     {
-        if (element is not null && ToolTipService.GetToolTip(element) is ToolTip toolTip)
-            toolTip.IsOpen = false;
+        if (element is null || !ReferenceEquals(_cardToolTipOwner, element)) return;
+        if (_cardToolTip is { } toolTip) toolTip.IsOpen = false;
+        ToolTipService.SetToolTip(element, null);
+        _cardToolTipOwner = null;
     }
 
     private static CatalogItemType TypeForMode(CatalogMode mode) => mode switch
@@ -3298,8 +3395,6 @@ public sealed partial class CatalogLandingPage : UserControl
         private EpgNowNext? _nowNext;
         private PlaybackProgress? _watchProgress;
         private CatalogMetadata? _hoverMetadata;
-        private bool _hoverSummaryLoading;
-        private bool _hoverSummaryFailed;
         private readonly bool _epgEnabled = epgEnabled;
 
         public string Id { get; } = id;
@@ -3357,43 +3452,17 @@ public sealed partial class CatalogLandingPage : UserControl
         public string DetailsLine => Channel is null ? string.Empty : string.Join(" · ", new[]
         {
             Channel.Metadata.GetValueOrDefault("year"),
-            Channel.Metadata.TryGetValue("rating", out var rating) && RatingDisplayFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
+            Channel.Metadata.TryGetValue("rating", out var rating) && CatalogRatingFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
             Channel.Metadata.GetValueOrDefault("genre"),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         private string? HoverPlot => _hoverMetadata is not null
             ? _hoverMetadata.Plot
             : Channel?.Metadata.GetValueOrDefault("plot");
-        public string HoverSummaryText => CatalogHoverTextFormatter.Summary(Type,
-            HoverPlot, _hoverSummaryLoading,
-            _hoverSummaryFailed, NowText, NextText);
-        public string HoverCastText => CatalogHoverTextFormatter.Cast(
-            _hoverMetadata is not null ? _hoverMetadata.Cast : Channel?.Metadata.GetValueOrDefault("cast"));
-        public Visibility HoverCastVisibility => string.IsNullOrWhiteSpace(HoverCastText) ? Visibility.Collapsed : Visibility.Visible;
-        public string HoverAccessibleName => string.Join(". ", new[]
-        {
-            Title,
-            DetailsLine,
-            HoverSummaryText,
-            NowText,
-            NextText,
-            HoverCastText,
-        }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        public string HoverPreviewText
-        {
-            get
-            {
-                var details = Channel?.Metadata;
-                return string.Join(Environment.NewLine + Environment.NewLine, new[]
-                {
-                    Title,
-                    DetailsLine,
-                    details?.GetValueOrDefault("plot"),
-                    details is not null && !string.IsNullOrWhiteSpace(details.GetValueOrDefault("cast"))
-                        ? $"Cast: {details.GetValueOrDefault("cast")}"
-                        : null,
-                }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            }
-        }
+        public string HoverSummaryText => CatalogHoverTextFormatter.Summary(Type, HoverPlot);
+        public string? HoverCast => _hoverMetadata is not null
+            ? _hoverMetadata.Cast
+            : Channel?.Metadata.GetValueOrDefault("cast");
+        public bool HasHoverSummary => CatalogHoverTextFormatter.HasSummary(Type, HoverPlot, NowText, NextText);
 
         public void ApplyMetadata(CatalogMetadata metadata)
         {
@@ -3405,7 +3474,7 @@ public sealed partial class CatalogLandingPage : UserControl
             Add("plot", metadata.Plot);
             Add("cast", metadata.Cast);
             Channel = Channel with { Metadata = values };
-            SetHoverMetadata(metadata, failed: false);
+            SetHoverMetadata(metadata);
 
             void Add(string key, string? value)
             {
@@ -3414,36 +3483,9 @@ public sealed partial class CatalogLandingPage : UserControl
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        public void BeginHoverSummary()
-        {
-            _hoverSummaryLoading = Type != CatalogItemType.Live &&
-                _hoverMetadata is null && string.IsNullOrWhiteSpace(Channel?.Metadata.GetValueOrDefault("plot"));
-            _hoverSummaryFailed = false;
-            NotifyHoverTextChanged();
-        }
-
-        public void EndHoverSummary()
-        {
-            _hoverSummaryLoading = false;
-            _hoverSummaryFailed = false;
-            NotifyHoverTextChanged();
-        }
-
-        public void SetHoverMetadata(CatalogMetadata? metadata, bool failed)
+        public void SetHoverMetadata(CatalogMetadata? metadata)
         {
             _hoverMetadata = metadata;
-            _hoverSummaryLoading = false;
-            _hoverSummaryFailed = failed;
-            NotifyHoverTextChanged();
-        }
-
-        private void NotifyHoverTextChanged()
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverPreviewText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverSummaryText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverCastText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverCastVisibility)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverAccessibleName)));
         }
 
         public void ApplyWatchProgress(PlaybackProgress? progress)
@@ -3469,13 +3511,11 @@ public sealed partial class CatalogLandingPage : UserControl
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NextVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EpgAutomationName)));
-            NotifyHoverTextChanged();
         }
 
         public void NotifyMetadataChanged()
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
-            NotifyHoverTextChanged();
         }
 
         private static string FormatLocalTime(DateTimeOffset utcTime) =>

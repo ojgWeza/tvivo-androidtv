@@ -2585,7 +2585,7 @@ public sealed partial class MainWindow : Window
         PlayerMetadataLine.Text = string.Join(" · ", new[]
         {
             metadata.Year,
-            RatingDisplayFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
+            CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
             metadata.Genre,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();

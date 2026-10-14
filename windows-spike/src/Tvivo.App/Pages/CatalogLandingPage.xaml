@@ -43,37 +43,6 @@
                   LostFocus="CatalogCard_LostFocus"
                   DataContextChanged="CatalogCard_DataContextChanged"
                   Unloaded="CatalogCard_Unloaded">
-                <ToolTipService.ToolTip>
-                    <ToolTip x:Name="CatalogCardToolTip"
-                             DataContext="{Binding}"
-                             Background="{StaticResource AppPanelSurfaceBrush}"
-                             Foreground="{StaticResource AppTextBrush}"
-                             BorderBrush="{StaticResource AppLineBrush}"
-                             BorderThickness="1"
-                             Padding="14"
-                             MaxWidth="420"
-                             MaxHeight="280"
-                             AutomationProperties.Name="{Binding HoverAccessibleName}">
-                        <ScrollViewer MaxHeight="250"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel Width="380" Spacing="8">
-                                <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold"
-                                           TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{Binding DetailsLine}"
-                                           TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{Binding HoverSummaryText}"
-                                           TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{Binding NowText}" Visibility="{Binding NowVisibility}"
-                                           TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{Binding NextText}" Visibility="{Binding NextVisibility}"
-                                           TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{Binding HoverCastText}" Visibility="{Binding HoverCastVisibility}"
-                                           TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                        </ScrollViewer>
-                    </ToolTip>
-                </ToolTipService.ToolTip>
                 <Border CornerRadius="12" Background="{ThemeResource AppRaisedSurfaceBrush}">
                     <Grid>
                         <Grid>
