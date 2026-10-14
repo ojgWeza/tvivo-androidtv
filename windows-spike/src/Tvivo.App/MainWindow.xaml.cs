@@ -242,7 +242,9 @@ public sealed partial class MainWindow : Window
         // Sliders mark pointer presses handled, so listen for handled events too.
         VolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
         CompactVolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
-        _cinemaCursorController = new CinemaCursorController(WinRT.Interop.WindowNative.GetWindowHandle(this));
+        _cinemaCursorController = new CinemaCursorController(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            reason => ShowCinemaControls(reason, resetIdleDeadline: true));
         var playbackOptions = ReadPlaybackOptions();
         _episodePlaybackMode = playbackOptions.EpisodeMode;
         _moviePlaybackMode = playbackOptions.MovieMode;
@@ -1885,57 +1887,41 @@ public sealed partial class MainWindow : Window
         _seriesOpenMessageIsFailure = false;
     }
 
-    private void ShowPlaybackRetryInfoBar(int nextAttempt, int maxAttempts)
+    private void ShowPlaybackRetryProgress(string message)
     {
-        var message = $"Trying again ({nextAttempt} of {maxAttempts})…";
-        WindowInfoBar.Message = message;
-        AutomationProperties.SetName(WindowInfoBar, message);
-        WindowInfoBar.Severity = InfoBarSeverity.Informational;
-        WindowInfoBar.IsOpen = true;
+        RetryPlaybackButton.Visibility = Visibility.Collapsed;
+        SetPlaybackStatus(message);
     }
 
-    private void ShowReconnectingInfoBar(int nextAttempt, int maxAttempts)
+    private void SetPlaybackStatus(string message)
     {
-        var message = $"Reconnecting ({nextAttempt} of {maxAttempts})…";
-        WindowInfoBar.Message = message;
-        AutomationProperties.SetName(WindowInfoBar, message);
-        WindowInfoBar.Severity = InfoBarSeverity.Informational;
-        WindowInfoBar.IsOpen = true;
+        StatusText.Text = message;
+        AutomationProperties.SetName(StatusText, message);
+        PlaybackStatusPanel.Visibility = string.IsNullOrEmpty(message) && RetryPlaybackButton.Visibility != Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
-    private void ClearPlaybackRetryInfoBar()
+    private void ClearPlaybackStatus()
     {
-        if (_terminalPlaybackFailure)
-        {
-            _terminalPlaybackFailure = false;
-            WindowInfoBar.Content = null;
-            WindowInfoBar.IsOpen = false;
-            PauseButton.IsEnabled = true;
-            return;
-        }
-        if (WindowInfoBar.Message.StartsWith("Trying again (", StringComparison.Ordinal) ||
-            WindowInfoBar.Message.StartsWith("Reconnecting (", StringComparison.Ordinal) ||
-            WindowInfoBar.Message.StartsWith("Playback couldn't reconnect.", StringComparison.Ordinal))
-            WindowInfoBar.IsOpen = false;
+        _terminalPlaybackFailure = false;
+        RetryPlaybackButton.Visibility = Visibility.Collapsed;
+        PauseButton.IsEnabled = true;
+        SetPlaybackStatus(string.Empty);
     }
 
-    private void ShowFinalPlaybackFailure(string reason)
+    private void ShowFinalPlaybackFailure(PlaybackAttemptResult reason, string status = "Couldn't start playback")
     {
         _terminalPlaybackFailure = true;
+        _playbackFailurePolicy.MarkFinalFailure(Volatile.Read(ref _playbackSessionGeneration));
         PlayerVideoCurtain.Visibility = Visibility.Collapsed;
         PauseButton.IsEnabled = false;
-        WindowInfoBar.Message = reason;
-        AutomationProperties.SetName(WindowInfoBar, reason);
-        WindowInfoBar.Severity = InfoBarSeverity.Error;
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        var retry = new Button { Content = "Try again" };
-        retry.Click += PlaybackFailureRetry_Click;
-        var choose = new Button { Content = "Choose something else" };
-        choose.Click += PlaybackFailureChoose_Click;
-        actions.Children.Add(retry);
-        actions.Children.Add(choose);
-        WindowInfoBar.Content = actions;
-        WindowInfoBar.IsOpen = true;
+        SetPauseButtonState("Play");
+        SetPlaybackStatus(status);
+        RetryPlaybackButton.Visibility = Visibility.Visible;
+        LaunchDiagnostics.Write($"event=playback.final-failure stay=true reason={reason}");
+        if (_isCinemaMode)
+            ShowCinemaControls("playback-failure");
     }
 
     private void PlaybackFailureRetry_Click(object sender, RoutedEventArgs args)
@@ -1945,13 +1931,6 @@ public sealed partial class MainWindow : Window
         _resumePositionOnStart = position;
         _engineFallbackTried.Remove(PlaybackItemKey(source));
         _ = StartPlaybackAsync(source, recoveryPositionMs: position);
-    }
-
-    private void PlaybackFailureChoose_Click(object sender, RoutedEventArgs args)
-    {
-        if (!_terminalPlaybackFailure) return;
-        ClearPlaybackRetryInfoBar();
-        ReturnFromPlayer();
     }
 
     private void LogSeriesOpenExit(long startedAt, Channel series, string reason, string details = "")
@@ -2412,7 +2391,10 @@ public sealed partial class MainWindow : Window
         if (!isRecovery)
             SetPlaybackIntent(PlaybackUserIntent.Playing, awaitForwardProgress: false);
         if (!isRecovery)
-            ClearPlaybackRetryInfoBar();
+        {
+            ClearPlaybackStatus();
+            SetPlaybackStatus("Starting playback…");
+        }
         var retryClock = retryBudgetStopwatch ?? Stopwatch.StartNew();
         var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
@@ -2592,12 +2574,12 @@ public sealed partial class MainWindow : Window
                 if (isRecovery)
                 {
                     LaunchDiagnostics.Write($"event=playback.resume attempt={_interruptionBudget.AttemptsUsed + 1} of {_playbackAttempts} positionMs={_lastGoodPlaybackPositionMilliseconds}");
-                    ShowReconnectingInfoBar(_interruptionBudget.AttemptsUsed + 1, _playbackAttempts);
+                    ShowPlaybackRetryProgress($"Reconnecting ({_interruptionBudget.AttemptsUsed + 1} of {_playbackAttempts})…");
                 }
                 else
                 {
                     LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
-                    ShowPlaybackRetryInfoBar(attemptCount + 1, _playbackAttempts);
+                    ShowPlaybackRetryProgress($"Retrying ({attemptCount + 1} of {_playbackAttempts})…");
                 }
                 await Task.Delay(delay, sessionCts.Token);
                 if (!IsCurrentPlaybackStart(generation, sessionCts))
@@ -2620,8 +2602,6 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            if (!isRecovery)
-                ClearPlaybackRetryInfoBar();
             if (ReferenceEquals(Interlocked.CompareExchange(ref _playbackSessionCts, null, sessionCts), sessionCts))
                 sessionCts.Dispose();
         }
@@ -2653,12 +2633,11 @@ public sealed partial class MainWindow : Window
         {
             // The selected engine exhausted its attempts; the other player may handle the format or connection.
             _engineFallbackTried.Add(itemKey);
-            var failedLabel = EngineLabel(_engine);
             var otherEngine = ReferenceEquals(_engine, _vlcEngine) ? (IPlaybackEngine)_nativeEngine : _vlcEngine;
             if (!isRecovery)
                 WritePendingPlaybackTarget(generation);
             LaunchDiagnostics.Write($"event=playback.fallback from={engineName} to={EngineLabel(otherEngine)} reason={result}");
-            StatusText.Text = $"The {failedLabel} player couldn't play this ({DescribeFailure(result)}). Trying the {EngineLabel(otherEngine)} player…";
+            SetPlaybackStatus("Trying the other player…");
             SwitchEngineForPlayback(otherEngine);
             _resumePositionOnStart = resumeOnStartForFallback;
             await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs,
@@ -2677,18 +2656,11 @@ public sealed partial class MainWindow : Window
         }
         if (_isCinemaMode && result == PlaybackAttemptResult.FirstFrame)
             ShowCinemaControls();
-        StatusText.Text = engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame
-            ? $"Playing with the {EngineLabel(_engine)} player (the other player couldn't handle this stream)"
-            : PlaybackStatusMessage(result, source.Kind, EngineLabel(_engine)) +
-              (engineFallbackAttempt && result != PlaybackAttemptResult.Cancelled ? " The other player couldn't play it either." : string.Empty);
-        if (result == PlaybackAttemptResult.NotFound)
-        {
-            const string message = "This title isn't available from your provider right now (not found). Try another one.";
-            ShowFinalPlaybackFailure(message);
-            PlayerVideoCurtain.Visibility = Visibility.Collapsed;
-        }
         if (result == PlaybackAttemptResult.FirstFrame)
         {
+            ClearPlaybackStatus();
+            if (engineFallbackAttempt)
+                SetPlaybackStatus("Playing with the other player");
             if (_playbackIntent == PlaybackUserIntent.Paused && (_engine.IsPlaying || _engine.IsBuffering))
             {
                 _engine.TogglePause();
@@ -2696,7 +2668,6 @@ public sealed partial class MainWindow : Window
             }
             if (isRecovery)
             {
-                ClearPlaybackRetryInfoBar();
                 LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={_lastGoodPlaybackPositionMilliseconds}");
             }
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
@@ -2707,9 +2678,13 @@ public sealed partial class MainWindow : Window
             _activePlaybackSessionGeneration = generation;
             _resumeReady = true;
         }
-        SetPauseButtonState(result == PlaybackAttemptResult.FirstFrame
-            ? (_playbackIntent == PlaybackUserIntent.Paused ? "Play" : "Pause")
-            : result is PlaybackAttemptResult.Cancelled or PlaybackAttemptResult.NotFound ? "Play" : "Retry");
+        if (result == PlaybackAttemptResult.FirstFrame)
+            SetPauseButtonState(_playbackIntent == PlaybackUserIntent.Paused ? "Play" : "Pause");
+        else if (result == PlaybackAttemptResult.Cancelled)
+        {
+            ClearPlaybackStatus();
+            SetPauseButtonState("Play");
+        }
         _isUpdatingVolume = true;
         try
         {
@@ -2720,9 +2695,8 @@ public sealed partial class MainWindow : Window
         {
             _isUpdatingVolume = false;
         }
-        if (result != PlaybackAttemptResult.FirstFrame && result != PlaybackAttemptResult.Cancelled &&
-            result != PlaybackAttemptResult.NotFound)
-            ShowFinalPlaybackFailure(PlaybackStatusMessage(result, source.Kind, EngineLabel(_engine)));
+        if (result != PlaybackAttemptResult.FirstFrame && result != PlaybackAttemptResult.Cancelled)
+            ShowFinalPlaybackFailure(result);
     }
 
     private static string SanitizePlaybackLabel(string value)
@@ -2807,7 +2781,7 @@ public sealed partial class MainWindow : Window
         _playbackUiTimer.Stop();
         _isDraggingProgress = false;
         _isUpdatingProgress = false;
-        StatusText.Text = string.Empty;
+        ClearPlaybackStatus();
         ElapsedText.Text = FormatTime(0);
         DurationText.Text = FormatTime(0);
         ProgressSlider.Minimum = 0;
@@ -2929,29 +2903,6 @@ public sealed partial class MainWindow : Window
         _playback = ReferenceEquals(target, _vlcEngine) ? _vlcPlayback : _nativePlayback;
         ApplyPlaybackEngineVisuals();
     }
-
-    private static string DescribeFailure(PlaybackAttemptResult result) => result switch
-    {
-        PlaybackAttemptResult.NotFound => "title not found",
-        PlaybackAttemptResult.Forbidden => "provider refused the stream",
-        PlaybackAttemptResult.UnsupportedMedia => "unsupported video format",
-        PlaybackAttemptResult.DecodeFailure => "decoding failed",
-        _ => "playback failed",
-    };
-
-    private static string PlaybackStatusMessage(PlaybackAttemptResult result, StreamKind kind, string engineLabel) => result switch
-    {
-        PlaybackAttemptResult.FirstFrame => "Playing",
-        PlaybackAttemptResult.Cancelled => "Playback cancelled",
-        PlaybackAttemptResult.NotFound => "This title isn't available from your provider right now (not found). Try another one.",
-        PlaybackAttemptResult.Forbidden => "The provider refused this stream (HTTP 403 or a connection limit). Stop any other active stream on this account, then retry.",
-        PlaybackAttemptResult.Timeout => $"The {kind.ToString().ToLowerInvariant()} stream did not start before the timeout. Check the provider connection and stream URL, then retry.",
-        PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
-        PlaybackAttemptResult.DecodeFailure => $"The {engineLabel} player opened the stream but could not decode it.",
-        PlaybackAttemptResult.UnsupportedMedia => $"The {engineLabel} player doesn't support this video format.",
-        PlaybackAttemptResult.NetworkFailure => "The provider refused or dropped the connection. If another stream or device is playing on this account, stop it, then retry.",
-        _ => $"Playback failed ({result}). The provider may have rejected the stream or its format is not supported. Retry, or try another title.",
-    };
 
     private void FadeIn(UIElement element)
     {
@@ -3208,7 +3159,7 @@ public sealed partial class MainWindow : Window
 
     private async void PauseButton_Click(object sender, RoutedEventArgs args)
     {
-        if (_currentSource is null) return;
+        if (_currentSource is null || _terminalPlaybackFailure) return;
         if (Volatile.Read(ref _playbackSessionCts) is not null)
         {
             // A start is still in flight. Space or a click on the video must not restart it: that cancels
@@ -3359,7 +3310,7 @@ public sealed partial class MainWindow : Window
                 PlayRelatedChannel(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
             return;
         }
-        if (_windowState.IsWindowMini && (_engine.IsEnded ||
+        if (_windowState.IsWindowMini && !_terminalPlaybackFailure && (_engine.IsEnded ||
             (_engine.IsStopped && Volatile.Read(ref _playbackSessionCts) is null)))
         {
             ExitWindowMiniPlayer(expandToPlayer: false);
@@ -3452,9 +3403,15 @@ public sealed partial class MainWindow : Window
         DurationText.Text = duration.HasValue ? FormatTime(length) : "—:—";
         CompactDurationText.Text = DurationText.Text;
         _isUpdatingProgress = false;
-        SetPauseButtonState(playbackFailed || _unverifiedPlaybackEndHandled
-            ? "Retry"
-            : _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
+        if (_terminalPlaybackFailure)
+        {
+            SetPauseButtonState("Play");
+            PauseButton.IsEnabled = false;
+        }
+        else
+            SetPauseButtonState(playbackFailed || _unverifiedPlaybackEndHandled
+                ? "Retry"
+                : _engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
     }
 
     private void RecordEpisodeCompletion(long position, long? duration)
@@ -3497,7 +3454,7 @@ public sealed partial class MainWindow : Window
                 {
                     var target = Math.Max(0, position - 2_000);
                     var before = _engine.Timeline.PositionMilliseconds;
-                    ShowReconnectingInfoBar(_interruptionBudget.AttemptsUsed, _playbackAttempts);
+                    ShowPlaybackRetryProgress($"Reconnecting ({_interruptionBudget.AttemptsUsed} of {_playbackAttempts})…");
                     LaunchDiagnostics.Write($"event=playback.resume attempt={_interruptionBudget.AttemptsUsed} of {_playbackAttempts} positionMs={target}");
                     if (_engine.TryResume(target))
                     {
@@ -3513,7 +3470,7 @@ public sealed partial class MainWindow : Window
                             _lastForwardProgressAt = Stopwatch.GetElapsedTime(_stallClockStart);
                             _interruptionBudget.RecordForwardProgress(_lastForwardProgressAt);
                             _playbackFailurePolicy.ClearFailure(generation);
-                            ClearPlaybackRetryInfoBar();
+                            ClearPlaybackStatus();
                             LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={resumed}");
                             return;
                         }
@@ -3526,7 +3483,7 @@ public sealed partial class MainWindow : Window
             if (action == PlaybackRecoveryAction.Reopen && _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts))
             {
                 var nextAttempt = _interruptionBudget.AttemptsUsed + 1;
-                ShowReconnectingInfoBar(nextAttempt, _playbackAttempts);
+                ShowPlaybackRetryProgress($"Reconnecting ({nextAttempt} of {_playbackAttempts})…");
                 LaunchDiagnostics.Write($"event=playback.resume attempt={nextAttempt} of {_playbackAttempts} positionMs={Math.Max(0, position - 2_000)}");
                 if (_interruptionBudget.AttemptsUsed > 0)
                     await Task.Delay(PlaybackRetryPolicy.InterruptionDelay(_interruptionBudget.AttemptsUsed));
@@ -3541,6 +3498,8 @@ public sealed partial class MainWindow : Window
                 await reopenTask;
                 if (reopenGeneration != Volatile.Read(ref _playbackSessionGeneration))
                     return;
+                if (_terminalPlaybackFailure)
+                    return;
                 if (_playbackIntent != PlaybackUserIntent.Playing || _awaitingForwardProgressAfterAction)
                     return;
                 if (_resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration))
@@ -3551,13 +3510,9 @@ public sealed partial class MainWindow : Window
             if (action == PlaybackRecoveryAction.Stop || _interruptionBudget.AttemptsUsed >= PlaybackRetryPolicy.ClampAttempts(_playbackAttempts))
             {
                 LaunchDiagnostics.Write($"event=playback.resume.failed attempts={_interruptionBudget.AttemptsUsed} of {_playbackAttempts}");
-                const string message = "Playback couldn't reconnect. Select Retry to resume.";
-                StatusText.Text = message;
-                SetPauseButtonState("Retry");
-                WindowInfoBar.Message = message;
-                AutomationProperties.SetName(WindowInfoBar, message);
-                WindowInfoBar.Severity = InfoBarSeverity.Error;
-                WindowInfoBar.IsOpen = true;
+                var finalReason = PlaybackFailureClassifier.RefineHttpStatus(
+                    PlaybackAttemptResult.UnknownFailure, _engine.HttpStatus);
+                ShowFinalPlaybackFailure(finalReason, "Couldn't reconnect");
             }
         }
         catch (OperationCanceledException)
@@ -3567,9 +3522,7 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             LaunchDiagnostics.Write($"event=playback.resume.failed error={exception.GetType().Name}");
-            ShowFinalPlaybackFailure("Playback couldn't reconnect. Try again or choose something else.");
-            StatusText.Text = "Playback couldn't reconnect.";
-            SetPauseButtonState("Retry");
+            ShowFinalPlaybackFailure(PlaybackFailureClassifier.FromOpenException(exception), "Couldn't reconnect");
         }
         finally
         {
@@ -4627,7 +4580,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         var playbackFailed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
-        if (_playbackIntent != PlaybackUserIntent.Playing || _engine.IsEnded || playbackFailed)
+        if (_terminalPlaybackFailure || _playbackIntent != PlaybackUserIntent.Playing || _engine.IsEnded || playbackFailed)
         {
             StopCinemaCursorIdleTimer(showCursor: true);
             return;
@@ -4673,7 +4626,7 @@ public sealed partial class MainWindow : Window
     private void ScheduleCinemaIdleCheck()
     {
         _cinemaCursorIdleTimer.Stop();
-        if (!_isCinemaMode || _currentPage != ShellPage.Player || !_cinemaWindowActive || _isClosing ||
+        if (!_isCinemaMode || _currentPage != ShellPage.Player || !_cinemaWindowActive || _isClosing || _terminalPlaybackFailure ||
             !(_engine.IsPlaying || _engine.IsBuffering)) return;
 
         var remaining = CinemaIdlePolicy.HideDelay - (DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt);
@@ -4773,7 +4726,6 @@ public sealed partial class MainWindow : Window
     {
         if (_cinemaCursorHidden == !visible) return;
         _cinemaCursorHidden = !visible;
-        CinemaCursorZone.SetCinemaCursorHidden(_cinemaCursorHidden);
         _cinemaCursorController.SetHidden(_cinemaCursorHidden);
         if (_cinemaCursorHidden)
         {
@@ -4868,9 +4820,11 @@ public sealed partial class MainWindow : Window
         foreach (var button in new[]
                  {
                      PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
+                     RetryPlaybackButton,
                      AudioSubtitlesButton, VolumeButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
+        StatusText.Foreground = ThemeBrush(mutedKey);
         ElapsedText.Foreground = ThemeBrush(mutedKey);
         DurationText.Foreground = ThemeBrush(mutedKey);
         VolumeStateText.Foreground = ThemeBrush(mutedKey);

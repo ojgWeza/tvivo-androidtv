@@ -1,162 +1,186 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Tvivo.Core;
 
 namespace Tvivo.App;
 
-/// <summary>Applies cinema cursor visibility only to this window and its native child windows.</summary>
+/// <summary>Hides the idle cinema pointer with a tiny, owned hit-target window.</summary>
 internal sealed class CinemaCursorController : IDisposable
 {
     private const uint WmSetCursor = 0x0020;
     private const uint WmMouseMove = 0x0200;
+    private const uint WmMouseLeave = 0x02A3;
+    private const uint WmLButtonDown = 0x0201;
+    private const uint WmRButtonDown = 0x0204;
+    private const uint WmMouseWheel = 0x020A;
+    private const uint WmXButtonDown = 0x020B;
     private const uint WmNcDestroy = 0x0082;
+    private const uint WmClose = 0x0010;
+    private const uint WmMouseActivate = 0x0021;
+    private const int MaNoActivate = 3;
     private const int HtClient = 1;
-    private const nuint SubclassId = 0x43494E45;
+    private const uint WsPopup = 0x80000000;
+    private const uint WsExLayered = 0x00080000;
+    private const uint WsExToolWindow = 0x00000080;
+    private const uint WsExNoActivate = 0x08000000;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpShowWindow = 0x0040;
+    private const int SwShownNoActivate = 4;
+    private const uint LwaAlpha = 0x00000002;
+    private const uint TmeLeave = 0x00000002;
+    private const uint ErrorClassAlreadyExists = 1410;
+    private const int PopupSize = 2;
+    private const string WindowClassName = "Tvivo.CinemaCursorHitTarget";
+
+    private static readonly WndProc PopupWindowProcedure = PopupWndProc;
+    private static readonly Dictionary<nint, CinemaCursorController> PopupOwners = new();
+    private static bool _windowClassRegistered;
 
     private readonly nint _rootHwnd;
-    private readonly nint _transparentCursor;
-    private readonly HashSet<nint> _subclassedWindows = new();
-    private readonly SubclassProcedure _subclassProcedure;
+    private readonly Action<string> _showControls;
     private bool _hidden;
-    private bool _loggedHide;
+    private bool _loggedPopupProbe;
     private bool _disposed;
+    private long _hiddenAtTick;
     private NativePoint _hideBaseline;
+    private nint _popupHwnd;
 
-    internal CinemaCursorController(nint rootHwnd)
+    internal CinemaCursorController(nint rootHwnd, Action<string> showControls)
     {
         _rootHwnd = rootHwnd;
-        _transparentCursor = LoadCursor(LoadLibrary(Path.Combine(AppContext.BaseDirectory, "Assets", "TvivoCursors.dll")), (nint)101);
-        if (_transparentCursor == 0)
-            LaunchDiagnostics.Write($"event=cinema.cursor-resource.failed error={Marshal.GetLastWin32Error()}");
-        _subclassProcedure = WindowSubclassProc;
-        AddSubclass(rootHwnd, required: true);
+        _showControls = showControls;
     }
 
     internal void SetHidden(bool hidden)
     {
         if (_disposed) return;
         _hidden = hidden;
-        _loggedHide = false;
-        LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
-        _loggedPostHide = false;
+        _loggedPopupProbe = false;
         _hiddenAtTick = Environment.TickCount64;
-        if (hidden && GetCursorPos(out _hideBaseline))
-            WriteHideDiagnostics(_hideBaseline);
-        RefreshChildWindows();
-        // Re-evaluate the cursor under the pointer now in both directions; without this a hide only
-        // takes effect on the next WM_SETCURSOR, i.e. after a mouse move, which immediately reveals it again.
-        RestoreCursorAtPointer();
-        if (hidden) NudgePointer(_hideBaseline);
-        ApplySystemCursorVisibility(hidden);
+        LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
+
+        if (!hidden)
+        {
+            DestroyPopup();
+            RestoreCursorAtPointer();
+            return;
+        }
+
+        DestroyPopup();
+        if (GetCursorPos(out _hideBaseline))
+            CreatePopupAt(_hideBaseline);
     }
 
     internal bool HasMovedSinceHide(int thresholdPixels = 2)
     {
         if (!_hidden || !GetCursorPos(out var current)) return false;
-        if (!_loggedPostHide && Environment.TickCount64 - _hiddenAtTick >= 300)
+
+        if (!_loggedPopupProbe && Environment.TickCount64 - _hiddenAtTick >= 300)
         {
-            // Probe from the UI thread that owns the ShowCursor count: an external probe cannot see it.
-            _loggedPostHide = true;
-            var probe = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-            GetCursorInfo(ref probe);
-            LaunchDiagnostics.Write($"event=cinema.cursor-posthide flags=0x{probe.Flags:X} hCursor=0x{probe.Cursor:X}");
-        }
-        var dx = (long)current.X - _hideBaseline.X;
-        var dy = (long)current.Y - _hideBaseline.Y;
-        return dx * dx + dy * dy >= (long)thresholdPixels * thresholdPixels;
-    }
-
-    private static void WriteHideDiagnostics(NativePoint point)
-    {
-        var info = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-        GetCursorInfo(ref info);
-        var screenPoint = info.ScreenPosition;
-        var hwnd = WindowFromPoint(screenPoint);
-        var className = new char[128];
-        var length = hwnd == 0 ? 0 : GetClassName(hwnd, className, className.Length);
-        var name = length > 0 ? new string(className, 0, length) : "unknown";
-        LaunchDiagnostics.Write($"event=cinema.cursor-hide-diagnostic flags=0x{info.Flags:X} hCursor=0x{info.Cursor:X} ptScreenPos={screenPoint.X},{screenPoint.Y} windowClass=\"{name}\"");
-    }
-
-    private void RefreshChildWindows()
-    {
-        foreach (var child in EnumerateDescendants(_rootHwnd))
-            AddSubclass(child, required: false);
-    }
-
-    private IEnumerable<nint> EnumerateDescendants(nint parent)
-    {
-        var child = FindWindowEx(parent, 0, 0, 0);
-        while (child != 0)
-        {
-            yield return child;
-            foreach (var descendant in EnumerateDescendants(child))
-                yield return descendant;
-            child = FindWindowEx(parent, child, 0, 0);
-        }
-    }
-
-    private void AddSubclass(nint hwnd, bool required)
-    {
-        if (hwnd == 0 || !_subclassedWindows.Add(hwnd)) return;
-        if (SetWindowSubclass(hwnd, _subclassProcedure, SubclassId, 0)) return;
-
-        _subclassedWindows.Remove(hwnd);
-        var error = Marshal.GetLastWin32Error();
-        LaunchDiagnostics.Write($"event=cinema.cursor.hook.failed hwnd=0x{hwnd:X} error={error} required={required}");
-        if (required) throw new Win32Exception(error, "Could not install the cinema cursor window hook.");
-    }
-
-    private nint WindowSubclassProc(nint hwnd, uint message, nint wParam, nint lParam,
-        nuint idSubclass, nuint refData)
-    {
-        if (message == WmSetCursor && _hidden && unchecked((short)(long)lParam) == HtClient)
-        {
-            if (!_loggedHide)
-            {
-                _loggedHide = true;
-                LaunchDiagnostics.Write($"event=cinema.cursor-hidden hwnd=0x{hwnd:X} subclassed={_subclassedWindows.Count}");
-            }
-            SetCursor(_transparentCursor);
-            return 1;
+            _loggedPopupProbe = true;
+            WritePopupDiagnostics();
         }
 
-        var result = DefSubclassProc(hwnd, message, wParam, lParam);
-        if (message == WmNcDestroy)
-        {
-            RemoveWindowSubclass(hwnd, _subclassProcedure, SubclassId);
-            _subclassedWindows.Remove(hwnd);
-        }
-        return result;
+        return CinemaPointerMovementPolicy.HasMoved(
+            _hideBaseline.X, _hideBaseline.Y, current.X, current.Y, thresholdPixels);
     }
 
-    // A same-position refresh is not enough: Windows only re-queries the cursor on real pointer motion, so
-    // an idle pointer would keep the arrow. Move one pixel out and back to force WM_SETCURSOR; this stays
-    // below the movement threshold so it is not mistaken for user input.
-    // The robust, shape-independent hide: one balanced ShowCursor(FALSE) while hidden, one ShowCursor(TRUE)
-    // on show/dispose. The island re-applies its own arrow after a nudge, but a negative display count wins.
-    private bool _displayCountLowered;
-    private bool _loggedPostHide;
-    private long _hiddenAtTick;
-
-    private void ApplySystemCursorVisibility(bool hidden)
+    private void CreatePopupAt(NativePoint point)
     {
-        if (hidden && !_displayCountLowered)
+        // Keep the Win32 screen-pixel coordinates from GetCursorPos intact across monitors;
+        // XAML-scaled coordinates would place the hit target away from the actual hotspot.
+        var hitTarget = WindowFromPoint(point);
+        if (hitTarget == 0 || (hitTarget != _rootHwnd && !IsChild(_rootHwnd, hitTarget)))
+            return;
+
+        if (!RegisterPopupWindowClass())
         {
-            _displayCountLowered = true;
-            var count = ShowCursor(false);
-            LaunchDiagnostics.Write($"event=cinema.cursor-displaycount count={count}");
+            LaunchDiagnostics.Write($"event=cinema.cursor-popup-failed stage=register error={Marshal.GetLastWin32Error()}");
+            return;
         }
-        else if (!hidden && _displayCountLowered)
+
+        var module = GetModuleHandle(null);
+        var hwnd = CreateWindowEx(
+            WsExNoActivate | WsExToolWindow | WsExLayered,
+            WindowClassName,
+            string.Empty,
+            WsPopup,
+            point.X,
+            point.Y,
+            PopupSize,
+            PopupSize,
+            _rootHwnd,
+            0,
+            module,
+            0);
+        if (hwnd == 0)
         {
-            _displayCountLowered = false;
-            ShowCursor(true);
+            LaunchDiagnostics.Write($"event=cinema.cursor-popup-failed stage=create error={Marshal.GetLastWin32Error()}");
+            return;
         }
+
+        _popupHwnd = hwnd;
+        PopupOwners[hwnd] = this;
+        if (!SetLayeredWindowAttributes(hwnd, 0, 1, LwaAlpha) ||
+            !SetWindowPos(hwnd, 0, point.X, point.Y, PopupSize, PopupSize, SwpNoActivate | SwpShowWindow))
+        {
+            var error = Marshal.GetLastWin32Error();
+            DestroyPopup();
+            LaunchDiagnostics.Write($"event=cinema.cursor-popup-failed stage=show error={error}");
+            return;
+        }
+
+        ShowWindow(hwnd, SwShownNoActivate);
+        SetCursor(0);
+        var tracking = new TrackMouseEventData
+        {
+            Size = (uint)Marshal.SizeOf<TrackMouseEventData>(),
+            Flags = TmeLeave,
+            TrackWindow = hwnd
+        };
+        TrackMouseEvent(ref tracking);
+        WritePopupDiagnostics();
     }
 
-    private static void NudgePointer(NativePoint point)
+    private static bool RegisterPopupWindowClass()
     {
-        SetCursorPos(point.X + 1, point.Y);
-        SetCursorPos(point.X, point.Y);
+        if (_windowClassRegistered) return true;
+
+        var windowClass = new WindowClassEx
+        {
+            Size = (uint)Marshal.SizeOf<WindowClassEx>(),
+            WindowProcedure = PopupWindowProcedure,
+            Instance = GetModuleHandle(null),
+            Cursor = 0,
+            ClassName = WindowClassName
+        };
+        if (RegisterClassEx(ref windowClass) != 0)
+        {
+            _windowClassRegistered = true;
+            return true;
+        }
+
+        if (Marshal.GetLastWin32Error() == ErrorClassAlreadyExists)
+        {
+            _windowClassRegistered = true;
+            return true;
+        }
+        return false;
+    }
+
+    private void RequestShow(string reason)
+    {
+        DestroyPopup();
+        _showControls(reason);
+    }
+
+    private void DestroyPopup()
+    {
+        var hwnd = _popupHwnd;
+        if (hwnd == 0) return;
+
+        _popupHwnd = 0;
+        PopupOwners.Remove(hwnd);
+        if (IsWindow(hwnd)) DestroyWindow(hwnd);
     }
 
     private void RestoreCursorAtPointer()
@@ -167,78 +191,97 @@ internal sealed class CinemaCursorController : IDisposable
         SendMessage(hwnd, WmSetCursor, hwnd, (nint)((WmMouseMove << 16) | HtClient));
     }
 
+    private void WritePopupDiagnostics()
+    {
+        if (_popupHwnd == 0 || !GetCursorPos(out var point)) return;
+        var windowAtCursor = WindowFromPoint(point);
+        var cursorInfo = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        GetCursorInfo(ref cursorInfo);
+        var popupThread = GetWindowThreadProcessId(_popupHwnd, out _);
+        LaunchDiagnostics.Write(
+            $"event=cinema.cursor-popup hwnd=0x{_popupHwnd:X} windowFromPoint=0x{windowAtCursor:X} " +
+            $"isPopup={(windowAtCursor == _popupHwnd ? "true" : "false")} uiThread={GetCurrentThreadId()} " +
+            $"popupThread={popupThread} getCursor=0x{GetCursor():X} cursorInfoFlags=0x{cursorInfo.Flags:X} " +
+            $"cursorInfoHandle=0x{cursorInfo.Cursor:X}");
+    }
+
+    private static nint PopupWndProc(nint hwnd, uint message, nint wParam, nint lParam)
+    {
+        if (PopupOwners.TryGetValue(hwnd, out var controller))
+        {
+            if (message == WmSetCursor)
+            {
+                SetCursor(0);
+                controller.WritePopupDiagnostics();
+                return 1;
+            }
+
+            if (message == WmMouseMove)
+            {
+                var tracking = new TrackMouseEventData
+                {
+                    Size = (uint)Marshal.SizeOf<TrackMouseEventData>(),
+                    Flags = TmeLeave,
+                    TrackWindow = hwnd
+                };
+                TrackMouseEvent(ref tracking);
+                controller.RequestShow("pointer-popup-move");
+                return 0;
+            }
+
+            if (message == WmMouseLeave)
+            {
+                controller.RequestShow("pointer-popup-leave");
+                return 0;
+            }
+
+            if (message == WmMouseActivate)
+                return MaNoActivate;
+
+            if (message is WmLButtonDown or WmRButtonDown or WmMouseWheel or WmXButtonDown)
+            {
+                controller.RequestShow("pointer-popup-input");
+                return 0;
+            }
+
+            if (message == WmClose)
+            {
+                controller.DestroyPopup();
+                return 0;
+            }
+        }
+
+        if (message == WmNcDestroy && PopupOwners.Remove(hwnd, out var owner) && owner._popupHwnd == hwnd)
+            owner._popupHwnd = 0;
+        return DefWindowProc(hwnd, message, wParam, lParam);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
-        SetHidden(false);
+        _hidden = false;
+        DestroyPopup();
         _disposed = true;
-        foreach (var hwnd in _subclassedWindows.ToArray())
-        {
-            if (IsWindow(hwnd)) RemoveWindowSubclass(hwnd, _subclassProcedure, SubclassId);
-        }
-        _subclassedWindows.Clear();
     }
 
-    private delegate nint SubclassProcedure(nint hwnd, uint message, nint wParam, nint lParam,
-        nuint idSubclass, nuint refData);
+    private delegate nint WndProc(nint hwnd, uint message, nint wParam, nint lParam);
 
-    [DllImport("comctl32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowSubclass(nint hwnd, SubclassProcedure callback, nuint idSubclass, nuint refData);
-
-    [DllImport("comctl32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool RemoveWindowSubclass(nint hwnd, SubclassProcedure callback, nuint idSubclass);
-
-    [DllImport("comctl32.dll")]
-    private static extern nint DefSubclassProc(nint hwnd, uint message, nint wParam, nint lParam);
-
-    [DllImport("user32.dll", EntryPoint = "FindWindowExW", SetLastError = true)]
-    private static extern nint FindWindowEx(nint parent, nint childAfter, nint className, nint windowName);
-
-    [DllImport("user32.dll")]
-    private static extern nint SetCursor(nint cursor);
-
-    [DllImport("user32.dll", EntryPoint = "LoadCursorW", SetLastError = true)]
-    private static extern nint LoadCursor(nint module, nint resourceId);
-
-    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint LoadLibrary(string fileName);
-
-    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint GetModuleHandle(string? moduleName);
-
-    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
-    private static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out NativePoint point);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetCursorPos(int x, int y);
-
-    [DllImport("user32.dll")]
-    private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
-
-    [DllImport("user32.dll")]
-    private static extern nint WindowFromPoint(NativePoint point);
-
-    [DllImport("user32.dll", EntryPoint = "GetCursorInfo", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorInfo(ref CursorInfo info);
-
-    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetClassName(nint hwnd, [Out] char[] className, int maxCount);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsChild(nint parent, nint child);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWindow(nint hwnd);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WindowClassEx
+    {
+        internal uint Size;
+        internal uint Style;
+        [MarshalAs(UnmanagedType.FunctionPtr)] internal WndProc WindowProcedure;
+        internal int ClassExtra;
+        internal int WindowExtra;
+        internal nint Instance;
+        internal nint Icon;
+        internal nint Cursor;
+        internal nint Background;
+        internal nint MenuName;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string ClassName;
+        internal nint SmallIcon;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint
@@ -255,4 +298,80 @@ internal sealed class CinemaCursorController : IDisposable
         internal nint Cursor;
         internal NativePoint ScreenPosition;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TrackMouseEventData
+    {
+        internal uint Size;
+        internal uint Flags;
+        internal nint TrackWindow;
+        internal uint HoverTime;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "RegisterClassExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern ushort RegisterClassEx(ref WindowClassEx windowClass);
+
+    [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateWindowEx(uint extendedStyle, string className, string windowName, uint style,
+        int x, int y, int width, int height, nint parent, nint menu, nint instance, nint parameter);
+
+    [DllImport("user32.dll", EntryPoint = "SetLayeredWindowAttributes", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetLayeredWindowAttributes(nint hwnd, uint colorKey, byte alpha, uint flags);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowPos", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll", EntryPoint = "ShowWindow")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(nint hwnd, int command);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TrackMouseEvent(ref TrackMouseEventData tracking);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(nint hwnd);
+
+    [DllImport("user32.dll", EntryPoint = "DestroyWindow", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyWindow(nint hwnd);
+
+    [DllImport("user32.dll", EntryPoint = "DefWindowProcW")]
+    private static extern nint DefWindowProc(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetCursor(nint cursor);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetCursor();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern nint WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll", EntryPoint = "GetCursorInfo", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorInfo(ref CursorInfo info);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsChild(nint parent, nint child);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint GetModuleHandle(string? moduleName);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 }

@@ -38,7 +38,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\Tvivo.ico" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\TvivoCursors.dll" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Fonts\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>

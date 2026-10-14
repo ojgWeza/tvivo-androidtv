@@ -21,6 +21,8 @@ public sealed class PlaybackFailurePolicy
 
     public bool HasFailed(long generation) => Volatile.Read(ref _failedGeneration) == generation;
 
+    public void MarkFinalFailure(long generation) => Interlocked.Exchange(ref _failedGeneration, generation);
+
     public void ClearFailure(long generation) =>
         Interlocked.CompareExchange(ref _failedGeneration, -1, generation);
 
