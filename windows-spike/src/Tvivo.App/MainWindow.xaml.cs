@@ -108,6 +108,10 @@ public sealed partial class MainWindow : Window
     private long _metadataGeneration;
     private long _playerEntryTraceId;
     private long _playerEntryTraceStartedAt;
+    private string? _seriesOpeningId;
+    private CancellationTokenSource? _seriesOpenCancellation;
+    private bool _seriesOpenInfoVisible;
+    private bool _seriesOpenMessageIsFailure;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
     private readonly DispatcherTimer _playerEpgTimer = new() { Interval = TimeSpan.FromSeconds(45) };
@@ -1093,12 +1097,12 @@ public sealed partial class MainWindow : Window
         try
         {
             _themePreferenceStore.Write(_selectedTheme);
-            ThemePreferenceInfoBar.IsOpen = false;
+            WindowInfoBar.IsOpen = false;
         }
         catch (Exception exception)
         {
             LaunchDiagnostics.WriteExceptionDetails("Saving theme preference failed", exception);
-            ThemePreferenceInfoBar.IsOpen = true;
+            WindowInfoBar.IsOpen = true;
         }
     }
 
@@ -1557,17 +1561,25 @@ public sealed partial class MainWindow : Window
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
+        if (args.Source.Kind == StreamKind.Series &&
+            _seriesOpeningId == args.Channel.Id &&
+            _seriesOpenCancellation is { IsCancellationRequested: false })
+        {
+            LaunchDiagnostics.Write($"event=series.open.exit ms=0 reason=duplicate-in-flight seriesId={args.Channel.Id}");
+            return;
+        }
+
+        _seriesOpenCancellation?.Cancel();
+        _seriesOpeningId = null;
+        if (_seriesOpenInfoVisible)
+            ClearSeriesOpenMessage();
+
         if (IsPlaybackUiActive) SaveResumePosition(force: true);
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
         var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
         Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
         LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={playerEntryTraceId} event=content-selected kind={args.Source.Kind}");
         Interlocked.Increment(ref _metadataGeneration);
-        if (args.Source.DirectUri is null)
-        {
-            StatusText.Text = _catalogLandingPage.PlaybackUnavailableMessage;
-            return;
-        }
 
         if (args.Source.Kind == StreamKind.Series)
         {
@@ -1578,6 +1590,12 @@ public sealed partial class MainWindow : Window
         if (args.Source.Kind == StreamKind.Episode)
         {
             OpenSeriesEpisode(args.Channel);
+            return;
+        }
+
+        if (args.Source.DirectUri is null)
+        {
+            StatusText.Text = _catalogLandingPage.PlaybackUnavailableMessage;
             return;
         }
 
@@ -1669,55 +1687,148 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenSeriesAsync(Channel series, long selectionGeneration)
     {
-        if (_catalogLandingPage.Account is not { } account ||
-            App.Services.GetRequiredService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
+        var startedAt = Stopwatch.GetTimestamp();
+        LaunchDiagnostics.Write($"event=series.open.start ms=0 seriesId={series.Id}");
+
+        if (_catalogLandingPage.Account is not { } account)
         {
-            StatusText.Text = "Series episodes are unavailable for this provider.";
+            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            LogSeriesOpenExit(startedAt, series.Id, "no-account");
             return;
         }
 
-        SeriesDetails details;
+        if (App.Services.GetService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
+        {
+            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            LogSeriesOpenExit(startedAt, series.Id, "provider-unsupported");
+            return;
+        }
+
+        var selectionCts = new CancellationTokenSource();
+        _seriesOpeningId = series.Id;
+        _seriesOpenCancellation = selectionCts;
+        ShowSeriesOpenMessage($"Opening {series.DisplayName}…");
         try
         {
-            details = await provider.GetSeriesInfoAsync(account, series.Id);
+            SeriesDetails details;
+            using (var infoCts = CancellationTokenSource.CreateLinkedTokenSource(selectionCts.Token))
+            {
+                infoCts.CancelAfter(TimeSpan.FromSeconds(20));
+                try
+                {
+                    details = await provider.GetSeriesInfoAsync(account, series.Id, infoCts.Token);
+                }
+                catch (Exception exception)
+                {
+                    if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
+                    {
+                        LogSeriesOpenExit(startedAt, series.Id, "stale-generation");
+                        return;
+                    }
+
+                    var timedOut = infoCts.IsCancellationRequested && !selectionCts.IsCancellationRequested;
+                    var exceptionType = timedOut ? nameof(TimeoutException) : exception.GetType().Name;
+                    ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+                    LogSeriesOpenExit(startedAt, series.Id, "info-failed", $"exceptionType={exceptionType}");
+                    return;
+                }
+            }
+
+            var episodeCount = details.Seasons.Sum(season => season.Episodes.Count);
+            LaunchDiagnostics.Write($"event=series.open.info ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} seasons={details.Seasons.Count} episodes={episodeCount} seriesId={series.Id}");
             if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
+            {
+                LogSeriesOpenExit(startedAt, series.Id, "stale-generation");
                 return;
-        }
-        catch
-        {
-            if (selectionGeneration == Volatile.Read(ref _itemSelectionGeneration))
-                StatusText.Text = "Couldn't load this series' episodes. Try opening it again.";
-            return;
-        }
+            }
 
-        _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, series.Id);
-        var selected = _catalogRepository.SelectResumeEpisode(account, details);
-        if (selected is null)
-        {
-            StatusText.Text = "This series has no episodes available.";
-            return;
-        }
+            try
+            {
+                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, series.Id);
+                var selected = _catalogRepository.SelectResumeEpisode(account, details);
+                if (selected is null)
+                {
+                    ShowSeriesOpenMessage("This series has no episodes available.", isFailure: true);
+                    LogSeriesOpenExit(startedAt, series.Id, "no-episodes");
+                    return;
+                }
 
-        if (!string.Equals(_currentSeriesId, series.Id, StringComparison.Ordinal))
-        {
-            _nextPlaybackSelector.Reset();
-            ClearPreparedNextItem();
+                if (!string.Equals(_currentSeriesId, series.Id, StringComparison.Ordinal))
+                {
+                    _nextPlaybackSelector.Reset();
+                    ClearPreparedNextItem();
+                }
+                _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+                Interlocked.Increment(ref _metadataGeneration);
+                _currentSeriesId = series.Id;
+                _currentSeriesTitle = string.IsNullOrWhiteSpace(details.Title) ? series.DisplayName : details.Title;
+                _currentSeriesAccount = account;
+                UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));
+                _currentSeriesMetadata = details.Metadata;
+                _playerSeriesSeasons = details.Seasons;
+                ApplyMetadataToChannel(series, CatalogItemType.Series, details.Metadata);
+                SetPlayerMetadata(details.Metadata ?? new CatalogMetadata(), CatalogItemType.Series);
+                _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
+                    .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
+                ConfigureSeasonSelector(details.Seasons);
+                QueueVisit(account, CatalogItemType.Series, series.Id);
+                if (!OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected)))
+                {
+                    LogSeriesOpenExit(startedAt, series.Id, "no-direct-uri");
+                    return;
+                }
+
+                ClearSeriesOpenMessage();
+                LogSeriesOpenExit(startedAt, series.Id, "ok");
+            }
+            catch (Exception exception)
+            {
+                if (selectionGeneration == Volatile.Read(ref _itemSelectionGeneration))
+                    ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+                LaunchDiagnostics.Write($"event=series.open.exception type={exception.GetType().Name} message={SanitizeExceptionMessage(exception.Message)}");
+                LogSeriesOpenExit(startedAt, series.Id, "exception");
+            }
         }
-        _playerReturnPage = _currentPage ?? ShellPage.Catalog;
-        Interlocked.Increment(ref _metadataGeneration);
-        _currentSeriesId = series.Id;
-        _currentSeriesTitle = string.IsNullOrWhiteSpace(details.Title) ? series.DisplayName : details.Title;
-        _currentSeriesAccount = account;
-        UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));
-        _currentSeriesMetadata = details.Metadata;
-        _playerSeriesSeasons = details.Seasons;
-        ApplyMetadataToChannel(series, CatalogItemType.Series, details.Metadata);
-        SetPlayerMetadata(details.Metadata ?? new CatalogMetadata(), CatalogItemType.Series);
-        _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
-            .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
-        ConfigureSeasonSelector(details.Seasons);
-        QueueVisit(account, CatalogItemType.Series, series.Id);
-        OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected));
+        finally
+        {
+            if (ReferenceEquals(_seriesOpenCancellation, selectionCts))
+            {
+                _seriesOpenCancellation = null;
+                _seriesOpeningId = null;
+                if (!_seriesOpenMessageIsFailure)
+                    ClearSeriesOpenMessage();
+            }
+            selectionCts.Dispose();
+        }
+    }
+
+    private void ShowSeriesOpenMessage(string message, bool isFailure = false)
+    {
+        WindowInfoBar.Message = message;
+        AutomationProperties.SetName(WindowInfoBar, message);
+        WindowInfoBar.Severity = isFailure ? InfoBarSeverity.Error : InfoBarSeverity.Informational;
+        WindowInfoBar.IsOpen = true;
+        _seriesOpenInfoVisible = true;
+        _seriesOpenMessageIsFailure = isFailure;
+    }
+
+    private void ClearSeriesOpenMessage()
+    {
+        WindowInfoBar.IsOpen = false;
+        _seriesOpenInfoVisible = false;
+        _seriesOpenMessageIsFailure = false;
+    }
+
+    private static void LogSeriesOpenExit(long startedAt, string seriesId, string reason, string details = "")
+    {
+        var suffix = string.IsNullOrEmpty(details) ? string.Empty : $" {details}";
+        LaunchDiagnostics.Write($"event=series.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason={reason}{suffix} seriesId={seriesId}");
+    }
+
+    private static string SanitizeExceptionMessage(string message)
+    {
+        var singleLine = message.Replace('\r', ' ').Replace('\n', ' ');
+        return System.Text.RegularExpressions.Regex.Replace(singleLine, @"https?://\S+", "[url]");
     }
 
     private static Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
@@ -1728,54 +1839,73 @@ public sealed partial class MainWindow : Window
             new Dictionary<string, string> { ["seriesId"] = seriesId, ["seasonId"] = episode.SeasonId });
     }
 
-    private void OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
+    private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
     {
-        if (episode.Source.DirectUri is null) return;
-        if (IsPlaybackUiActive) SaveResumePosition(force: true);
-        if (_currentPage != ShellPage.Player)
-            _playerReturnPage = _currentPage ?? ShellPage.Catalog;
-        _currentSeriesId ??= episode.Metadata.TryGetValue("seriesId", out var seriesId) ? seriesId : null;
-        _currentSeriesAccount = _catalogLandingPage.Account;
-        if (_currentSeriesId is not null && _currentSeriesAccount is not null)
+        var startedAt = Stopwatch.GetTimestamp();
+        var seriesLogId = episode.Metadata.GetValueOrDefault("seriesId", _currentSeriesId ?? string.Empty);
+        LaunchDiagnostics.Write($"event=episode.open.start ms=0 episodeId={episode.Id} seriesId={seriesLogId}");
+        if (episode.Source.DirectUri is null)
         {
-            _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
-            RefreshSeasonProgressCount();
-            _seriesEpisodeProgress.TryGetValue(episode.Id, out var episodeProgress);
-            _resumePositionOnStart = episodeProgress?.State == PlaybackProgressState.InProgress ? episodeProgress.ResumeMs : null;
-            if (episodeProgress?.State != PlaybackProgressState.Finished)
+            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=no-direct-uri episodeId={episode.Id} seriesId={seriesLogId}");
+            return false;
+        }
+
+        try
+        {
+            if (IsPlaybackUiActive) SaveResumePosition(force: true);
+            if (_currentPage != ShellPage.Player)
+                _playerReturnPage = _currentPage ?? ShellPage.Catalog;
+            _currentSeriesId ??= episode.Metadata.TryGetValue("seriesId", out var seriesId) ? seriesId : null;
+            _currentSeriesAccount = _catalogLandingPage.Account;
+            if (_currentSeriesId is not null && _currentSeriesAccount is not null)
             {
-                _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
-                    _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
                 _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
                 RefreshSeasonProgressCount();
+                _seriesEpisodeProgress.TryGetValue(episode.Id, out var episodeProgress);
+                _resumePositionOnStart = episodeProgress?.State == PlaybackProgressState.InProgress ? episodeProgress.ResumeMs : null;
+                if (episodeProgress?.State != PlaybackProgressState.Finished)
+                {
+                    _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
+                        _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
+                    _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+                    RefreshSeasonProgressCount();
+                }
             }
+            _nowPlayingChannel = episode;
+            _currentSource = episode.Source;
+            UpdatePlaylistOptionControls(StreamKind.Episode);
+            _seriesCompletionRecorded = false;
+            _playbackCompletionShown = false;
+            PlayerTitleText.Text = episode.DisplayName;
+            PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
+            PlayerSideSubtitle.Text = "Select an episode to play";
+            PlayerNowPlayingText.Text = string.Empty;
+            SetPlayerMetadata(_currentSeriesMetadata, CatalogItemType.Series);
+            PlayerVideoCurtain.Visibility = Visibility.Visible;
+            ConfigureSeasonSelector(_playerSeriesSeasons);
+            var seasonId = episode.Metadata.TryGetValue("seasonId", out var id) ? id : null;
+            var selectedSeason = _playerSeriesSeasons.FirstOrDefault(season => season.Id == seasonId);
+            PlayerSeasonComboBox.SelectedItem = selectedSeason;
+            var account = _currentSeriesAccount ?? _catalogLandingPage.Account;
+            var visibleEpisodes = selectedSeason is not null && account is not null && _currentSeriesId is not null
+                ? selectedSeason.Episodes.Select(item => ToEpisodeChannel(account, _currentSeriesId, item)).ToArray()
+                : _playerSiblings;
+            SetPlayerList(visibleEpisodes, episode);
+            _nextEpisodeAutoPlaySuppressed = false;
+            _nextEpisodeAdvanceStarted = false;
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            UpdateEpisodeNavigationButtons();
+            if (!preserveCompact) ShowPage(ShellPage.Player);
+            _ = StartPlaybackAsync(episode.Source, preserveCompact);
+            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=ok episodeId={episode.Id} seriesId={seriesLogId}");
+            return true;
         }
-        _nowPlayingChannel = episode;
-        _currentSource = episode.Source;
-        UpdatePlaylistOptionControls(StreamKind.Episode);
-        _seriesCompletionRecorded = false;
-        _playbackCompletionShown = false;
-        PlayerTitleText.Text = episode.DisplayName;
-        PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
-        PlayerSideSubtitle.Text = "Select an episode to play";
-        PlayerNowPlayingText.Text = string.Empty;
-        SetPlayerMetadata(_currentSeriesMetadata, CatalogItemType.Series);
-        PlayerVideoCurtain.Visibility = Visibility.Visible;
-        ConfigureSeasonSelector(_playerSeriesSeasons);
-        var seasonId = episode.Metadata.TryGetValue("seasonId", out var id) ? id : null;
-        var selectedSeason = _playerSeriesSeasons.FirstOrDefault(season => season.Id == seasonId);
-        PlayerSeasonComboBox.SelectedItem = selectedSeason;
-        var account = _currentSeriesAccount ?? _catalogLandingPage.Account;
-        var visibleEpisodes = selectedSeason is not null && account is not null && _currentSeriesId is not null
-            ? selectedSeason.Episodes.Select(item => ToEpisodeChannel(account, _currentSeriesId, item)).ToArray()
-            : _playerSiblings;
-        SetPlayerList(visibleEpisodes, episode);
-        _nextEpisodeAutoPlaySuppressed = false;
-        _nextEpisodeAdvanceStarted = false;
-        NextEpisodePrompt.Visibility = Visibility.Collapsed;
-        UpdateEpisodeNavigationButtons();
-        if (!preserveCompact) ShowPage(ShellPage.Player);
-        _ = StartPlaybackAsync(episode.Source, preserveCompact);
+        catch
+        {
+            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=exception episodeId={episode.Id} seriesId={seriesLogId}");
+            throw;
+        }
     }
 
     private Channel? GetAdjacentEpisode(int offset)

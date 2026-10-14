@@ -655,9 +655,11 @@
                                 VerticalContentAlignment="Stretch" />
             </Grid>
         </Grid>
-        <InfoBar x:Name="ThemePreferenceInfoBar" Grid.Row="2" Canvas.ZIndex="10"
+        <InfoBar x:Name="WindowInfoBar" Grid.Row="2" Canvas.ZIndex="10"
                  HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0"
-                 Severity="Error" IsClosable="True" IsOpen="False"
+                 MaxWidth="780" FontSize="20"
+                 Severity="Error" IsClosable="False" IsOpen="False"
+                 AutomationProperties.LiveSetting="Polite"
                  Message="Theme preference couldn't be saved. This choice will last until Tvivo closes." />
     </Grid>
 </Window>
