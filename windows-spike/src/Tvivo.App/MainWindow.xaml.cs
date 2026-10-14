@@ -2491,35 +2491,24 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> EnsureSelectedPlaybackHostReadyAsync(CancellationToken cancellationToken)
     {
+        // Poll instead of waiting for Loaded/SizeChanged: those events do not fire again when a host that
+        // was already loaded is merely re-shown, which left the wait hanging until its budget expired.
         var host = SelectedPlaybackHost;
-        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void CheckReady()
-        {
-            host.UpdateLayout();
-            if (host.Visibility == Visibility.Visible && host.IsLoaded &&
-                host.ActualWidth > 0 && host.ActualHeight > 0)
-                ready.TrySetResult();
-        }
-
-        RoutedEventHandler loadedHandler = (_, _) => CheckReady();
-        SizeChangedEventHandler sizeChangedHandler = (_, _) => CheckReady();
-        host.Loaded += loadedHandler;
-        host.SizeChanged += sizeChangedHandler;
         try
         {
-            PlayerPage.UpdateLayout();
-            CheckReady();
-            await ready.Task.WaitAsync(cancellationToken);
-            return true;
+            while (true)
+            {
+                PlayerPage.UpdateLayout();
+                host.UpdateLayout();
+                if (host.Visibility == Visibility.Visible && host.IsLoaded &&
+                    host.ActualWidth > 0 && host.ActualHeight > 0)
+                    return true;
+                await Task.Delay(50, cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return false;
-        }
-        finally
-        {
-            host.Loaded -= loadedHandler;
-            host.SizeChanged -= sizeChangedHandler;
         }
     }
 
@@ -2722,12 +2711,10 @@ public sealed partial class MainWindow : Window
                             var hostReady = await EnsureSelectedPlaybackHostReadyAsync(hostWaitCts.Token);
                             if (!hostReady)
                             {
-                                if (!sessionCts.IsCancellationRequested)
-                                {
-                                    LogPlaybackHostNotReady(generation);
-                                    preOpenFailure = PlaybackAttemptResult.HostNotReady;
-                                }
-                                return;
+                                if (sessionCts.IsCancellationRequested) return;
+                                // Best effort: the host is visible under the curtain, so let the engine try
+                                // rather than failing the attempt on a readiness probe alone.
+                                LogPlaybackHostNotReady(generation);
                             }
                             if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                             LaunchDiagnostics.Write(
