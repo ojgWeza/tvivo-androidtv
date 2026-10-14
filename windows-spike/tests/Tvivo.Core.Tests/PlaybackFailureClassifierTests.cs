@@ -81,6 +81,41 @@ public sealed class PlaybackFailureClassifierTests
     public void Forbidden_log_lines_are_recognised(string? message, bool expected) =>
         Assert.Equal(expected, PlaybackFailureClassifier.IsForbiddenLog(message));
 
+    [Theory]
+    [InlineData("access: HTTP 404 error", true)]
+    [InlineData("http: HTTP/1.1 404 Not Found", true)]
+    [InlineData("HTTP error 410 Gone", true)]
+    [InlineData("HTTP 403 Forbidden", false)]
+    [InlineData("buffer deadlock prevented", false)]
+    [InlineData(null, false)]
+    public void Not_found_log_lines_are_recognised(string? message, bool expected) =>
+        Assert.Equal(expected, PlaybackFailureClassifier.IsNotFoundLog(message));
+
+    [Theory]
+    [InlineData(PlaybackAttemptResult.UnknownFailure)]
+    [InlineData(PlaybackAttemptResult.DecodeFailure)]
+    [InlineData(PlaybackAttemptResult.NetworkFailure)]
+    public void Http_not_found_warnings_refine_engine_failures(PlaybackAttemptResult result)
+    {
+        Assert.Equal(PlaybackAttemptResult.NotFound,
+            PlaybackFailureClassifier.RefineLibVlcFailure(result, false, notFoundLogged: true));
+        Assert.Equal(PlaybackAttemptResult.NotFound,
+            PlaybackFailureClassifier.RefineNativeFailure(result, notFoundLogged: true));
+    }
+
+    [Fact]
+    public void Http_forbidden_remains_a_network_failure()
+    {
+        Assert.Equal(PlaybackAttemptResult.NetworkFailure,
+            PlaybackFailureClassifier.RefineLibVlcFailure(PlaybackAttemptResult.UnknownFailure, false, forbiddenLogged: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Not_found_never_triggers_engine_fallback(bool alreadyTried) =>
+        Assert.False(EngineFallbackPolicy.ShouldFallback(PlaybackAttemptResult.NotFound, alreadyTried));
+
     [Fact]
     public void A_refused_stream_is_a_network_failure_so_no_engine_fallback_is_offered()
     {

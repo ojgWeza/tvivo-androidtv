@@ -15,6 +15,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Windows.ApplicationModel.DataTransfer;
 using LibVLCSharp.Platforms.Windows;
@@ -196,6 +199,7 @@ public sealed partial class MainWindow : Window
         var useVlc = string.Equals(ReadPlaybackEnginePreference(), "LibVLC", StringComparison.Ordinal);
         Volatile.Write(ref _engine, useVlc ? _vlcEngine : _nativeEngine);
         _preferredEngine = _engine;
+        LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
         _playback = useVlc ? _vlcPlayback : _nativePlayback;
         _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
         _epgCoordinator.PlaybackBusy = () =>
@@ -456,6 +460,7 @@ public sealed partial class MainWindow : Window
         Volatile.Write(ref _engine, selectedEngine);
         // An explicit choice in settings replaces any per-item fallback decisions.
         _preferredEngine = selectedEngine;
+        LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
         _itemEngineOverride.Clear();
         _engineFallbackTried.Clear();
         SetTrackSelectingEngine(_engine);
@@ -1110,6 +1115,7 @@ public sealed partial class MainWindow : Window
     {
         using var perfScope = PerfScope.Begin("WindowThemeApply");
         WindowRoot.RequestedTheme = _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark;
+        LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
         var isDark = _selectedTheme == ThemePreference.Dark;
         RefreshThemeAwareBrushes();
         ThemeToggleButton.Content = isDark ? "\uE706" : "\uE708";
@@ -1836,7 +1842,12 @@ public sealed partial class MainWindow : Window
         var displayName = $"S{episode.SeasonNumber:00} E{episode.EpisodeNumber:00} · {episode.Title}";
         return new Channel(account.AccountId, episode.Id, seriesId, episode.Title, displayName, null, null,
             episode.EpisodeNumber, episode.Source,
-            new Dictionary<string, string> { ["seriesId"] = seriesId, ["seasonId"] = episode.SeasonId });
+            new Dictionary<string, string>
+            {
+                ["seriesId"] = seriesId,
+                ["seasonId"] = episode.SeasonId,
+                ["seasonNumber"] = episode.SeasonNumber.ToString(CultureInfo.InvariantCulture),
+            });
     }
 
     private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
@@ -2267,8 +2278,8 @@ public sealed partial class MainWindow : Window
             StreamKind.Movie when _catalogLandingPage.Account is { } account && _nowPlayingChannel is { } movie =>
                 _catalogRepository.GetResumePosition(account, CatalogItemType.Movie, movie.Id),
             StreamKind.Episode => _resumePositionOnStart ??
-                (_currentSeriesAccount is { } seriesAccount && _nowPlayingChannel is { } episode
-                    ? _catalogRepository.GetEpisodeResumePosition(seriesAccount, episode.Id) : 0),
+                (_currentSeriesAccount is { } seriesAccount && _nowPlayingChannel is { } playingEpisode
+                    ? _catalogRepository.GetEpisodeResumePosition(seriesAccount, playingEpisode.Id) : 0),
             _ => 0,
         };
         _resumePositionOnStart = null;
@@ -2313,6 +2324,33 @@ public sealed partial class MainWindow : Window
         }
         StatusText.Text = "Starting playback…";
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        var targetChannel = _nowPlayingChannel;
+        string? category = null;
+        if (targetChannel is not null)
+        {
+            try { category = await _catalogLandingPage.GetCategoryNameForAsync(targetChannel); }
+            catch { /* Category labels are optional diagnostics; playback must still start. */ }
+        }
+        var titleSource = source.Kind == StreamKind.Episode
+            ? targetChannel?.Name
+            : targetChannel?.DisplayName;
+        var title = SanitizePlaybackLabel(titleSource ?? PlayerTitleText.Text);
+        var categoryLabel = SanitizePlaybackLabel(category ?? string.Empty);
+        var seriesLabel = source.Kind == StreamKind.Episode
+            ? SanitizePlaybackLabel(_currentSeriesTitle ?? string.Empty)
+            : string.Empty;
+        var seasonValue = targetChannel?.Metadata.GetValueOrDefault("seasonNumber");
+        var season = int.TryParse(seasonValue, NumberStyles.None, CultureInfo.InvariantCulture, out var seasonNumber)
+            ? seasonNumber.ToString(CultureInfo.InvariantCulture)
+            : "unknown";
+        var episode = source.Kind == StreamKind.Episode && targetChannel?.SortOrder is { } episodeNumber
+            ? episodeNumber.ToString(CultureInfo.InvariantCulture)
+            : "unknown";
+        var itemRef = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{targetChannel?.ProviderAccountId ?? string.Empty}\0{source.StreamId}")))[..8];
+        var extension = Regex.Replace(source.ContainerExtension ?? string.Empty, @"[^a-zA-Z0-9.+_-]", string.Empty)
+            .ToLowerInvariant();
+        LaunchDiagnostics.Write($"event=playback.target kind={(source.Kind == StreamKind.Live ? "Live" : source.Kind == StreamKind.Episode ? "Episode" : "Movie")} title=\"{title}\" ext={extension} category=\"{categoryLabel}\" itemRef={itemRef} series=\"{seriesLabel}\" season={season} episode={episode} engine={engineName}");
         LaunchDiagnostics.Write($"event=playback.start engine={engineName} kind={source.Kind}");
         LaunchDiagnostics.Write($"event=playback.attempt generation={generation} engine={engineName} kind={source.Kind} extensionPresent={(string.IsNullOrWhiteSpace(source.ContainerExtension) ? "no" : "yes")} resume={(resumePosition > 0 || isRecovery && recoveryPositionMs > 0 ? "yes" : "no")} httpStatus=unknown redirect=unknown");
         PlaybackAttemptResult result;
@@ -2378,6 +2416,8 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
         if (result != PlaybackAttemptResult.FirstFrame)
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", _ => "error" }}");
+        if (result == PlaybackAttemptResult.NotFound)
+            LaunchDiagnostics.Write("event=playback.notfound");
         if (!engineFallbackAttempt && EngineFallbackPolicy.ShouldFallback(result, _engineFallbackTried.Contains(itemKey)))
         {
             // The format, not the network, is the problem: the other player may well handle it.
@@ -2421,6 +2461,21 @@ public sealed partial class MainWindow : Window
             ? $"Playing with the {EngineLabel(_engine)} player (the other player couldn't handle this stream)"
             : PlaybackStatusMessage(result, source.Kind, EngineLabel(_engine)) +
               (engineFallbackAttempt && result != PlaybackAttemptResult.Cancelled ? " The other player couldn't play it either." : string.Empty);
+        if (result == PlaybackAttemptResult.NotFound)
+        {
+            const string message = "This title isn't available from your provider right now (not found). Try another one.";
+            ShowSeriesOpenMessage(message, isFailure: true);
+            PlayerVideoCurtain.Visibility = Visibility.Collapsed;
+            _currentSource = null;
+            if (_playerReturnPage == ShellPage.Catalog)
+            {
+                _nowPlayingChannel = null;
+                StopPlayerEpgUpdates();
+                ClearPlayerNowNext();
+                ReturnFromPlayer();
+                return;
+            }
+        }
         if (result == PlaybackAttemptResult.FirstFrame)
         {
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
@@ -2433,7 +2488,7 @@ public sealed partial class MainWindow : Window
         }
         SetPauseButtonState(result == PlaybackAttemptResult.FirstFrame
             ? "Pause"
-            : result == PlaybackAttemptResult.Cancelled ? "Play" : "Retry");
+            : result is PlaybackAttemptResult.Cancelled or PlaybackAttemptResult.NotFound ? "Play" : "Retry");
         _isUpdatingVolume = true;
         try
         {
@@ -2444,6 +2499,21 @@ public sealed partial class MainWindow : Window
         {
             _isUpdatingVolume = false;
         }
+    }
+
+    private static string SanitizePlaybackLabel(string value)
+    {
+        var withoutUrls = Regex.Replace(value,
+            @"(?i)(?:https?|rtsp|ftp)://\S+|\bwww\.\S+|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?", " ");
+        var safe = Regex.Replace(withoutUrls, "[\\p{Cc}\"']", " ");
+        safe = Regex.Replace(safe, @"\s+", " ").Trim();
+        return safe.Length > 120 ? safe[..120] : safe;
+    }
+
+    internal void WriteAppStartDiagnostics()
+    {
+        LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
+        LaunchDiagnostics.WriteAppStart();
     }
 
     private bool IsCurrentPlaybackStart(long generation, CancellationTokenSource sessionCts) =>
@@ -2618,6 +2688,7 @@ public sealed partial class MainWindow : Window
     {
         target.IsMuted = _playbackMuteState.IsMuted;
         Volatile.Write(ref _engine, target);
+        LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
         SetTrackSelectingEngine(_engine);
         _playback = ReferenceEquals(target, _vlcEngine) ? _vlcPlayback : _nativePlayback;
         ApplyPlaybackEngineVisuals();
@@ -2625,6 +2696,7 @@ public sealed partial class MainWindow : Window
 
     private static string DescribeFailure(PlaybackAttemptResult result) => result switch
     {
+        PlaybackAttemptResult.NotFound => "title not found",
         PlaybackAttemptResult.UnsupportedMedia => "unsupported video format",
         PlaybackAttemptResult.DecodeFailure => "decoding failed",
         _ => "playback failed",
@@ -2634,6 +2706,7 @@ public sealed partial class MainWindow : Window
     {
         PlaybackAttemptResult.FirstFrame => "Playing",
         PlaybackAttemptResult.Cancelled => "Playback cancelled",
+        PlaybackAttemptResult.NotFound => "This title isn't available from your provider right now (not found). Try another one.",
         PlaybackAttemptResult.Timeout => $"The {kind.ToString().ToLowerInvariant()} stream did not start before the timeout. Check the provider connection and stream URL, then retry.",
         PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
         PlaybackAttemptResult.DecodeFailure => $"The {engineLabel} player opened the stream but could not decode it.",
@@ -3396,7 +3469,7 @@ public sealed partial class MainWindow : Window
         SaveResumePosition(force: true, positionOverride: _lastGoodPlaybackPositionMilliseconds);
         StatusText.Text = "Playback failed. Select Retry to resume.";
         SetPauseButtonState("Retry");
-        LaunchDiagnostics.Write($"event=playback.failure engine={(_engine == _vlcEngine ? "LibVLC" : "Native")} generation={currentGeneration} positionMs={_lastGoodPlaybackPositionMilliseconds} outcome=retry");
+        LaunchDiagnostics.Write($"event=playback.failure engine={(_engine == _vlcEngine ? "LibVLC" : "Native")} generation={currentGeneration} positionMs={_lastGoodPlaybackPositionMilliseconds} httpStatus={_engine.HttpStatus?.ToString() ?? "unknown"} outcome=retry");
     }
 
     private void HeldSeekTimer_Tick(object? sender, object args)

@@ -171,7 +171,7 @@ public interface IMovieInfoProvider
 public enum PlaybackAttemptResult
 {
     Started, FirstFrame, Cancelled, NetworkFailure, UnsupportedMedia, DecodeFailure,
-    Timeout, HostFailure, UnknownFailure
+    Timeout, HostFailure, UnknownFailure, NotFound
 }
 
 public readonly record struct PlaybackSessionToken(long Generation, Guid SessionId);
@@ -192,6 +192,7 @@ public interface IPlaybackEngine
     bool IsPaused => false;
     bool IsEnded => false;
     bool IsStopped => false;
+    int? HttpStatus => null;
     long Time { get; }
     long Length { get; }
     PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);

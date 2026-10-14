@@ -40,6 +40,16 @@ public sealed class LaunchDiagnosticsTests : IDisposable
     }
 
     [Fact]
+    public void Write_preserves_playback_target_item_ref()
+    {
+        LaunchDiagnostics.Write("event=playback.target kind=Movie title=\"Example\" itemRef=89abcdef engine=Native");
+
+        var log = File.ReadAllText(LaunchDiagnostics.LogPath);
+        Assert.Contains("itemRef=89abcdef", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("[redacted-field]", log, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Write_truncates_long_messages()
     {
         LaunchDiagnostics.Write(new string('x', 5000));
@@ -165,8 +175,39 @@ public sealed class LaunchDiagnosticsTests : IDisposable
 
         Assert.DoesNotContain("line 0 ", export, StringComparison.Ordinal);
         Assert.Contains("line 249 ", export, StringComparison.Ordinal);
-        Assert.InRange(export.Length, 1, 32768);
-        Assert.InRange(export.Split(Environment.NewLine).Length, 1, 200);
+        Assert.InRange(export.Length, 1, 65536);
+        Assert.Contains("Diagnostics appVersion=", export, StringComparison.Ordinal);
+        Assert.Contains("session=", export, StringComparison.Ordinal);
+        Assert.InRange(export.Split(Environment.NewLine).Length, 3, 402);
+    }
+
+    [Fact]
+    public void Export_omits_noisy_lines_and_keeps_recent_400_diagnostic_lines()
+    {
+        for (var i = 0; i < 405; i++) LaunchDiagnostics.Write($"event=diagnostic marker={i}");
+        LaunchDiagnostics.Write("event=perf.surface timestamp=now");
+        LaunchDiagnostics.Write("event=perf.process cpu=1");
+        LaunchDiagnostics.Write("event=perf.timergap ms=3");
+        LaunchDiagnostics.Write("event=perf.shelfwindow first=0");
+        LaunchDiagnostics.Write("event=hover.metadata source=card");
+        LaunchDiagnostics.Write("event=artwork.loaded count=1");
+        LaunchDiagnostics.Write("BACK-TRACE compositor-frame sample=1");
+        LaunchDiagnostics.Write("event=artwork.failure reason=decode count=2");
+
+        var export = LaunchDiagnostics.ExportRecent();
+
+        Assert.Contains("7 noisy lines omitted", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=perf.surface", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=perf.process", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=perf.timergap", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=perf.shelfwindow", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=hover.metadata", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("event=artwork.loaded", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("BACK-TRACE compositor-frame", export, StringComparison.Ordinal);
+        Assert.Contains("event=artwork.failure", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("marker=4", export, StringComparison.Ordinal);
+        Assert.Contains("marker=404", export, StringComparison.Ordinal);
+        Assert.InRange(export.Split(Environment.NewLine).Length, 3, 402);
     }
 
     [Fact]

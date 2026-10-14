@@ -70,6 +70,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool _showModeLoadingFrame;
     private long _modeTransitionGeneration;
     private long _contentFadeGeneration;
+    private long _browseRestoreGeneration;
     private readonly SemaphoreSlim _modeTransitionGate = new(1, 1);
     private CatalogCard? _spotlightCard;
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
@@ -897,7 +898,7 @@ public sealed partial class CatalogLandingPage : UserControl
         LaunchDiagnostics.Write($"event=catalog.load reason={reason} reused={canReuseRenderedSnapshot} mode={_activeMode}");
         if (canReuseRenderedSnapshot)
         {
-            RestoreBrowseStateIfMatching(_activeMode);
+            RestoreBrowseStateIfMatching(_activeMode, preserveScrollOffset: true);
             if (_activityDataDirty || _favoriteDataDirty)
                 _ = RefreshDirtySnapshotAsync(account);
             return;
@@ -2494,6 +2495,9 @@ public sealed partial class CatalogLandingPage : UserControl
             bool contentChanged;
             bool spotlightChanged;
             bool shouldRender;
+            var sameOrderedShelfIds = _openShelfId is null && !snapshot.IsFlatSearch &&
+                _renderedShelves.Select(shelf => shelf.Id)
+                    .SequenceEqual(DeduplicateShelves(snapshot.Shelves).Select(shelf => shelf.Id), StringComparer.Ordinal);
             var preserveShelfOrder = deferShelfStructure || IsSameVisibleShelfListContext(previousSnapshot, snapshot);
             using (PerfScope.Begin("ApplySnapshotCompare"))
             {
@@ -2530,13 +2534,14 @@ public sealed partial class CatalogLandingPage : UserControl
                 SetState(empty: true);
             else
                 SetState(content: true);
-            // The virtualizing panel measures after binding. Browse restoration below
-            // retries at low dispatcher priority and does not require a forced layout.
+            // Browse restoration is applied before the rebound surface is revealed.
+            var preserveScrollOffset = !shouldRender || (contentChanged && sameOrderedShelfIds);
             using (PerfScope.Begin("ApplySnapshotRestore"))
-                RestoreBrowseStateIfMatching(snapshot.Mode);
+                RestoreBrowseStateIfMatching(snapshot.Mode, preserveScrollOffset);
             if (_openShelfId is null && !snapshot.IsFlatSearch && snapshot.Mode != CatalogMode.MyTvivo)
                 ScheduleShelfViewportUpdate("apply");
-            ContentState.IsHitTestVisible = true;
+            if (ContentState.Opacity >= 1)
+                ContentState.IsHitTestVisible = true;
             contentApplied = true;
             if (_isActive && _activeMode == CatalogMode.LiveTv)
                 _ = RefreshVisibleEpgAsync();
@@ -3019,7 +3024,7 @@ public sealed partial class CatalogLandingPage : UserControl
             firstVisibleShelf?.Id, firstVisibleShelf?.OffsetWithinShelf ?? 0);
     }
 
-    private void RestoreBrowseStateIfMatching(CatalogMode mode)
+    private void RestoreBrowseStateIfMatching(CatalogMode mode, bool preserveScrollOffset = false)
     {
         var key = (mode, _openShelfId ?? string.Empty);
         if (!_browsePositions.TryGetValue(key, out var position)) return;
@@ -3027,87 +3032,141 @@ public sealed partial class CatalogLandingPage : UserControl
         // shelf shortly after we return, and that render needs the same remembered position too.
         // It's only replaced by the next real CaptureBrowseState call (a fresh navigation away).
         var openShelfId = _openShelfId;
-
-        // Scrolling to an exact pixel offset right after ItemsSource rebinds can be clamped,
-        // because the virtualizing panel hasn't finished measuring its full extent yet. Defer
-        // two low-priority dispatch passes so layout settles first, and prefer ScrollIntoView
-        // on the remembered card (which handles realization itself) over a raw pixel offset.
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        var generation = Interlocked.Increment(ref _browseRestoreGeneration);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var attempts = 0;
+        var hidden = !preserveScrollOffset;
+        if (hidden)
         {
-            using var dispatchScope = PerfScope.Begin("BrowseRestoreDispatch");
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            var visual = ElementCompositionPreview.GetElementVisual(ContentState);
+            visual.StopAnimation(nameof(Visual.Opacity));
+            ContentState.Opacity = 0;
+            ContentState.IsHitTestVisible = false;
+        }
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
+        {
+            if (generation != Volatile.Read(ref _browseRestoreGeneration)) return;
+            using var restoreScope = PerfScope.Begin("BrowseRestore");
+            var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            var timeout = DispatcherQueue.CreateTimer();
+            timeout.Interval = TimeSpan.FromMilliseconds(350);
+            timeout.IsRepeating = false;
+            void Finish(string path)
             {
-                using var restoreScope = PerfScope.Begin("BrowseRestoreCallback");
-                if (openShelfId is not null && position.FocusedCardId is { } cardId)
+                retryTimer.Stop();
+                timeout.Stop();
+                if (generation != Volatile.Read(ref _browseRestoreGeneration)) return;
+                if (hidden)
                 {
-                    var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(c => c.Id == cardId);
+                    ContentState.Opacity = 1;
+                    ContentState.IsHitTestVisible = true;
+                }
+                var hiddenMs = hidden
+                    ? (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency
+                    : 0;
+                LaunchDiagnostics.Write($"event=browse.restore mode={mode} path={path} hiddenMs={hiddenMs:F0} attempts={attempts}");
+            }
+
+            bool RestoreOnce()
+            {
+                attempts++;
+                var restored = preserveScrollOffset;
+                Control? focusTarget = null;
+                var viewer = ActiveVerticalScrollViewer();
+                if (!preserveScrollOffset && openShelfId is not null && position.FocusedCardId is { } cardId)
+                {
+                    var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(item => item.Id == cardId);
                     if (card is not null)
                     {
                         OpenShelfGrid.ScrollIntoView(card, ScrollIntoViewAlignment.Leading);
-                        // ScrollIntoView queues its own layout pass before the container exists,
-                        // and something elsewhere (page-visibility change moving focus off the
-                        // unloading Player) can reassign focus around the same time. Poll briefly
-                        // instead of guessing a single right moment to focus the container.
-                        var attempts = 0;
-                        var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
-                        retryTimer.Tick += (_, _) =>
+                        focusTarget = OpenShelfGrid.ContainerFromItem(card) as Control;
+                        if (focusTarget is not null && viewer is not null)
                         {
-                            attempts++;
-                            var container = OpenShelfGrid.ContainerFromItem(card) as Control;
-                            if (container is not null)
-                                container.Focus(FocusState.Programmatic);
-                            var nowFocused = container is not null && ReferenceEquals(FocusManager.GetFocusedElement(XamlRoot), container);
-                            if (nowFocused || attempts >= 6)
-                                retryTimer.Stop();
-                        };
-                        retryTimer.Start();
-                        return;
+                            var top = focusTarget.TransformToVisual(viewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+                            viewer.ChangeView(null, Math.Clamp(viewer.VerticalOffset + top, 0, viewer.ScrollableHeight), null, true);
+                        }
+                        restored = focusTarget is not null;
                     }
                 }
-
-                if (openShelfId is null && position.FirstVisibleShelfId is { } shelfId &&
+                else if (!preserveScrollOffset && openShelfId is null && position.FirstVisibleShelfId is { } shelfId &&
                     _renderedShelves.FirstOrDefault(shelf => shelf.Id == shelfId) is { } shelf)
                 {
                     ShelvesItems.ScrollIntoView(shelf, ScrollIntoViewAlignment.Leading);
-                    var shelfAttempts = 0;
-                    var shelfRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
-                    shelfRetryTimer.Tick += (_, _) =>
+                    if (viewer is not null && ShelvesItems.ContainerFromItem(shelf) is FrameworkElement container)
                     {
-                        shelfAttempts++;
-                        var viewer = ActiveVerticalScrollViewer();
-                        if (viewer is null) { shelfRetryTimer.Stop(); return; }
-                        if (ShelvesItems.ContainerFromItem(shelf) is FrameworkElement container)
-                        {
-                            var top = container.TransformToVisual(viewer)
-                                .TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
-                            var target = Math.Clamp(viewer.VerticalOffset + top + position.OffsetWithinShelf,
-                                0, viewer.ScrollableHeight);
-                            viewer.ChangeView(null, target, null, true);
-                            if (Math.Abs(top + position.OffsetWithinShelf) < 1.0 || shelfAttempts >= 6)
-                                shelfRetryTimer.Stop();
-                        }
-                        else if (shelfAttempts >= 6) shelfRetryTimer.Stop();
-                    };
-                    shelfRetryTimer.Start();
-                    return;
+                        var top = container.TransformToVisual(viewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+                        var target = Math.Clamp(viewer.VerticalOffset + top + position.OffsetWithinShelf, 0, viewer.ScrollableHeight);
+                        viewer.ChangeView(null, target, null, true);
+                        restored = Math.Abs(top + position.OffsetWithinShelf) < 1.0;
+                    }
+                }
+                else if (!preserveScrollOffset && viewer is not null && position.ScrollOffset > 0)
+                {
+                    viewer.ChangeView(null, position.ScrollOffset, null, true);
+                    restored = Math.Abs(viewer.VerticalOffset - position.ScrollOffset) < 1.0;
+                }
+                else if (position.FocusedCardId is null && position.FirstVisibleShelfId is null &&
+                    position.ScrollOffset <= 0)
+                {
+                    restored = true;
+                }
+                if (!restored && !preserveScrollOffset && viewer is not null && position.ScrollOffset > 0)
+                {
+                    viewer.ChangeView(null, position.ScrollOffset, null, true);
+                    restored = Math.Abs(viewer.VerticalOffset - position.ScrollOffset) < 1.0;
                 }
 
-                // Fallback used only when no focused card was captured (e.g. the user scrolled
-                // without clicking anything). A single ChangeView here can undershoot because the
-                // virtualizing panel may not have measured its full extent yet; retry briefly.
-                var scrollViewer = ActiveVerticalScrollViewer();
-                if (scrollViewer is null || position.ScrollOffset <= 0) return;
-                var scrollAttempts = 0;
-                var scrollRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
-                scrollRetryTimer.Tick += (_, _) =>
+                if (openShelfId is not null && position.FocusedCardId is { } focusedId)
                 {
-                    scrollAttempts++;
-                    scrollViewer.ChangeView(null, position.ScrollOffset, null, true);
-                    if (Math.Abs(scrollViewer.VerticalOffset - position.ScrollOffset) < 1.0 || scrollAttempts >= 6)
-                        scrollRetryTimer.Stop();
-                };
-                scrollRetryTimer.Start();
-            });
+                    var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(item => item.Id == focusedId);
+                    focusTarget ??= card is null ? null : OpenShelfGrid.ContainerFromItem(card) as Control;
+                    if (focusTarget is not null) focusTarget.Focus(FocusState.Programmatic);
+                    restored &= focusTarget is not null && XamlRoot is not null &&
+                        ReferenceEquals(FocusManager.GetFocusedElement(XamlRoot), focusTarget);
+                }
+                else if (openShelfId is null && position.FocusedCardId is { } shelfCardId)
+                {
+                    if (_renderedSnapshot?.IsFlatSearch == true && OpenShelfGrid.Visibility == Visibility.Visible)
+                    {
+                        var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(item => item.Id == shelfCardId);
+                        if (card is not null)
+                        {
+                            if (!preserveScrollOffset) OpenShelfGrid.ScrollIntoView(card, ScrollIntoViewAlignment.Leading);
+                            focusTarget = OpenShelfGrid.ContainerFromItem(card) as Control;
+                        }
+                    }
+                    else
+                    {
+                        var shelf = _renderedShelves.FirstOrDefault(row => row.Cards.Any(card => card.Id == shelfCardId));
+                        var shelfContainer = shelf is null ? null : ShelvesItems.ContainerFromItem(shelf) as FrameworkElement;
+                        if (!preserveScrollOffset && shelf is not null && shelfContainer is null)
+                            ShelvesItems.ScrollIntoView(shelf, ScrollIntoViewAlignment.Leading);
+                        shelfContainer ??= shelf is null ? null : ShelvesItems.ContainerFromItem(shelf) as FrameworkElement;
+                        var preview = shelfContainer is null ? null : FindDescendant<GridView>(shelfContainer);
+                        var card = shelf?.Cards.FirstOrDefault(item => item.Id == shelfCardId);
+                        if (preview is not null && card is not null)
+                        {
+                            if (!preserveScrollOffset) preview.ScrollIntoView(card, ScrollIntoViewAlignment.Leading);
+                            focusTarget = preview.ContainerFromItem(card) as Control;
+                        }
+                    }
+                    if (focusTarget is not null) focusTarget.Focus(FocusState.Programmatic);
+                    restored &= focusTarget is not null && XamlRoot is not null &&
+                        ReferenceEquals(FocusManager.GetFocusedElement(XamlRoot), focusTarget);
+                }
+                return restored;
+            }
+
+            if (RestoreOnce()) { Finish(preserveScrollOffset ? "in-place" : "rebind"); return; }
+            retryTimer.Tick += (_, _) =>
+            {
+                if (generation != Volatile.Read(ref _browseRestoreGeneration)) { retryTimer.Stop(); return; }
+                if (RestoreOnce() || attempts >= 7) Finish(preserveScrollOffset ? "in-place" : "rebind");
+            };
+            retryTimer.Start();
+            timeout.Tick += (_, _) => Finish(preserveScrollOffset ? "in-place" : "rebind");
+            timeout.Start();
         });
     }
 

@@ -33,6 +33,16 @@ public static class PlaybackFailureClassifier
         (message.Contains("403", StringComparison.Ordinal) ||
          message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>True for engine warnings that report a missing HTTP resource (404/410).</summary>
+    public static bool IsNotFoundLog(string? message) =>
+        message is not null &&
+        ((message.Contains("404", StringComparison.Ordinal) &&
+          (message.Contains("HTTP", StringComparison.OrdinalIgnoreCase) ||
+           message.Contains("Not Found", StringComparison.OrdinalIgnoreCase))) ||
+         (message.Contains("410", StringComparison.Ordinal) &&
+          (message.Contains("HTTP", StringComparison.OrdinalIgnoreCase) ||
+           message.Contains("Gone", StringComparison.OrdinalIgnoreCase))));
+
     public static PlaybackAttemptResult FromMediaPlayerError(int error, int hresult) => error switch
     {
         MediaPlayerNetworkError => PlaybackAttemptResult.NetworkFailure,
@@ -55,15 +65,21 @@ public static class PlaybackFailureClassifier
     }
 
     /// <summary>
-    /// A LibVLC attempt that ended without video: a logged missing decoder means the format is the problem,
-    /// otherwise the failure stays generic.
+    /// Refines a LibVLC attempt using the decoder, HTTP refusal, and missing-resource warnings collected for it.
     /// </summary>
-    public static PlaybackAttemptResult RefineLibVlcFailure(PlaybackAttemptResult result, bool missingDecoderLogged, bool forbiddenLogged = false) =>
-        forbiddenLogged && result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout
+    public static PlaybackAttemptResult RefineLibVlcFailure(PlaybackAttemptResult result, bool missingDecoderLogged, bool forbiddenLogged = false, bool notFoundLogged = false) =>
+        notFoundLogged && result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled)
+            ? PlaybackAttemptResult.NotFound
+            : forbiddenLogged && result is (PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout)
             ? PlaybackAttemptResult.NetworkFailure // the provider refused it: another player would get the same 403
-            : missingDecoderLogged && result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout
+            : missingDecoderLogged && result is (PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout)
                 ? PlaybackAttemptResult.UnsupportedMedia
                 : result;
+
+    public static PlaybackAttemptResult RefineNativeFailure(PlaybackAttemptResult result, bool notFoundLogged) =>
+        notFoundLogged && result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled)
+            ? PlaybackAttemptResult.NotFound
+            : result;
 }
 
 public static class EngineFallbackPolicy

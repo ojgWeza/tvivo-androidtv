@@ -482,7 +482,6 @@
                                             <VisualState.Setters>
                                                 <Setter Target="ToggleBackground.Background" Value="{ThemeResource AppAccentBrush}" />
                                                 <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppOnAccentBrush}" />
-                                                <Setter Target="CheckedIndicator.Opacity" Value="1" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="CheckedPointerOver">
@@ -491,7 +490,6 @@
                                                 <Setter Target="ToggleBackground.BorderBrush" Value="{ThemeResource AppSelectionRingBrush}" />
                                                 <Setter Target="ToggleBackground.BorderThickness" Value="2" />
                                                 <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppOnAccentBrush}" />
-                                                <Setter Target="CheckedIndicator.Opacity" Value="1" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="CheckedPressed">
@@ -500,7 +498,6 @@
                                                 <Setter Target="ToggleBackground.BorderBrush" Value="{ThemeResource AppTextBrush}" />
                                                 <Setter Target="ToggleBackground.BorderThickness" Value="3" />
                                                 <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppOnAccentBrush}" />
-                                                <Setter Target="CheckedIndicator.Opacity" Value="1" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="CheckedDisabled">
@@ -508,7 +505,6 @@
                                                 <Setter Target="ToggleBackground.Background" Value="{ThemeResource AppAccentBrush}" />
                                                 <Setter Target="ToggleBackground.Opacity" Value="0.5" />
                                                 <Setter Target="ToggleContent.Foreground" Value="{ThemeResource AppOnAccentBrush}" />
-                                                <Setter Target="CheckedIndicator.Opacity" Value="1" />
                                             </VisualState.Setters>
                                         </VisualState>
                                     </VisualStateGroup>                                    <VisualStateGroup x:Name="FocusStates">
@@ -532,10 +528,6 @@
                                                   ContentTemplate="{TemplateBinding ContentTemplate}"
                                                   HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                                   Foreground="{TemplateBinding Foreground}" />
-                                <Border x:Name="CheckedIndicator" Height="3" Width="16" CornerRadius="2"
-                                        Background="{ThemeResource AppOnAccentBrush}" HorizontalAlignment="Center"
-                                        VerticalAlignment="Bottom" Margin="0,0,0,4" Opacity="0"
-                                        IsHitTestVisible="False" />
                                 <Border x:Name="FocusRing" BorderBrush="{ThemeResource AppSelectionRingBrush}"
                                         BorderThickness="3" CornerRadius="9" Opacity="0" IsHitTestVisible="False">
                                     <Border BorderBrush="{ThemeResource AppSelectionRingInnerBrush}"

@@ -43,6 +43,7 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public bool IsBuffering => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Buffering;
     public bool IsPaused => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Paused;
     public bool IsEnded => _ended;
+    public int? HttpStatus => _warnings?.HttpStatus;
     public long Time => (long)_player.PlaybackSession.Position.TotalMilliseconds;
     public long Length => _player.PlaybackSession.NaturalDuration == TimeSpan.Zero
         ? 0
@@ -246,7 +247,10 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
                 var result = await _startup.Task.ConfigureAwait(true);
                 if (result != PlaybackAttemptResult.FirstFrame)
+                {
+                    result = PlaybackFailureClassifier.RefineNativeFailure(result, _warnings?.HasNotFoundWarning == true);
                     StopCore(result == PlaybackAttemptResult.Cancelled ? "user-cancelled" : "error");
+                }
                 return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -257,8 +261,11 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
             catch (Exception exception)
             {
                 EmitException("source-or-playback", exception);
+                var result = PlaybackFailureClassifier.RefineNativeFailure(
+                    PlaybackFailureClassifier.FromOpenException(exception),
+                    _warnings?.HasNotFoundWarning == true);
                 StopCore("error");
-                return PlaybackFailureClassifier.FromOpenException(exception);
+                return result;
             }
         }
         finally
@@ -320,13 +327,16 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
 
     private void OnMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
     {
-        LifecycleEvent?.Invoke($"event=playback.native.failure error={args.Error} extendedHResult=0x{args.ExtendedErrorCode.HResult:X8} message={args.ErrorMessage}");
+        var status = _warnings?.HttpStatus;
+        LifecycleEvent?.Invoke($"event=playback.native.failure error={args.Error} extendedHResult=0x{args.ExtendedErrorCode.HResult:X8} httpStatus={status?.ToString() ?? "unknown"} message={args.ErrorMessage}");
         EmitPhase("MediaFailed");
         var startup = _startup;
         var wasReady = startup is not null &&
             startup.Task.IsCompletedSuccessfully &&
             startup.Task.Result == PlaybackAttemptResult.FirstFrame;
-        var classified = PlaybackFailureClassifier.FromMediaPlayerError((int)args.Error, args.ExtendedErrorCode.HResult);
+        var classified = PlaybackFailureClassifier.RefineNativeFailure(
+            PlaybackFailureClassifier.FromMediaPlayerError((int)args.Error, args.ExtendedErrorCode.HResult),
+            _warnings?.HasNotFoundWarning == true);
         var startupFailureWasRecorded = startup?.TrySetResult(classified) == true;
         if (wasReady && !startupFailureWasRecorded && _currentSession is { } session)
             PlaybackFailed?.Invoke(session);
@@ -387,13 +397,13 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         if (warnings is not null)
             foreach (var line in warnings.Drain()) LifecycleEvent?.Invoke($"event=playback.native.warning {line}");
         if (clock is not null)
-            LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase=release-complete elapsedMs={clock.ElapsedMilliseconds} httpStatus=unknown redirect=unknown");
+            LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase=release-complete elapsedMs={clock.ElapsedMilliseconds} httpStatus={warnings?.HttpStatus?.ToString() ?? "unknown"} redirect=unknown");
         _warnings = null;
         _attemptClock = null;
     }
 
     private void EmitPhase(string phase) =>
-        LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus=unknown redirect=unknown");
+        LifecycleEvent?.Invoke($"event=playback.phase engine=Native phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus={_warnings?.HttpStatus?.ToString() ?? "unknown"} redirect=unknown");
 
     private void EmitException(string phase, Exception exception) =>
         LifecycleEvent?.Invoke($"event=playback.native.exception phase={phase} type={exception.GetType().Name} hresult=0x{exception.HResult:X8} message={exception.Message}");
@@ -523,12 +533,29 @@ internal sealed class AttemptWarningRing
 {
     private readonly ConcurrentQueue<string> _lines = new();
     private int _count;
+    private int _httpStatus;
+    private static readonly System.Text.RegularExpressions.Regex HttpStatusPattern = new(
+        @"(?:HTTP/1\.1\s+|HTTP error\s+)(?<status>[1-5][0-9]{2})\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     internal void Enqueue(string line)
     {
+        var statusMatch = HttpStatusPattern.Match(line);
+        if (statusMatch.Success && int.TryParse(statusMatch.Groups["status"].Value, out var status))
+            Volatile.Write(ref _httpStatus, status);
         _lines.Enqueue(line.Length > 1024 ? line[..1024] + "[truncated]" : line);
         if (Interlocked.Increment(ref _count) > 20 && _lines.TryDequeue(out _))
             Interlocked.Decrement(ref _count);
+    }
+
+    internal bool HasNotFoundWarning => _lines.Any(PlaybackFailureClassifier.IsNotFoundLog);
+    internal int? HttpStatus
+    {
+        get
+        {
+            var status = Volatile.Read(ref _httpStatus);
+            return status == 0 ? null : status;
+        }
     }
 
     internal IReadOnlyList<string> Drain()

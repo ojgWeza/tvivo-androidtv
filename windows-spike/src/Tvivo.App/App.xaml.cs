@@ -85,6 +85,7 @@ public partial class App : Application
                 NetworkTally.StartPeriodicLog(TimeSpan.FromSeconds(30));
             }
             _window ??= new MainWindow();
+            ((MainWindow)_window).WriteAppStartDiagnostics();
             ((MainWindow)_window).PrepareForActivation();
             LaunchDiagnostics.Write("MainWindow constructed; startup window state applied; activating");
             _window.Activate();
@@ -131,9 +132,31 @@ internal static class LaunchDiagnostics
     private static readonly SecretScrubber Scrubber = new();
     private static readonly string SessionId = Guid.NewGuid().ToString("N");
     private const long MaxLogBytes = 1024 * 1024;
-    private const int MaxExportLines = 200;
-    private const int MaxExportChars = 32768;
+    private const int MaxExportLines = 400;
+    private const int MaxExportChars = 65536;
     internal static string LogPath { get; set; } = Tvivo.Core.TvivoDataPaths.For("tvivo-launch.log");
+    private static string _engine = "unknown";
+    private static string _theme = "unknown";
+
+    internal static void SetAppContext(string engine, string theme)
+    {
+        lock (Sync)
+        {
+            _engine = SanitizeLabel(engine);
+            _theme = SanitizeLabel(theme);
+        }
+    }
+
+    internal static void WriteAppStart()
+    {
+#if DEBUG
+        const string configuration = "Debug";
+#else
+        const string configuration = "Release";
+#endif
+        var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown";
+        Write($"event=app.start version={version} config={configuration} engine={_engine} theme={_theme}");
+    }
 
     public static void SetActiveSecrets(ProviderConnection connection) =>
         Scrubber.SetActiveSecrets(connection.Endpoint.Host, connection.Username, connection.Password);
@@ -186,20 +209,55 @@ internal static class LaunchDiagnostics
             {
                 if (!File.Exists(LogPath)) return "No diagnostics available.";
                 var lines = new Queue<string>();
+                var noisyLinesOmitted = 0;
                 foreach (var line in File.ReadLines(LogPath))
                 {
                     if (!line.Contains($"session={SessionId} ", StringComparison.Ordinal)) continue;
-                    lines.Enqueue(Sanitize(line));
+                    var safeLine = Sanitize(line);
+                    if (IsNoisy(safeLine))
+                    {
+                        noisyLinesOmitted++;
+                        continue;
+                    }
+                    lines.Enqueue(safeLine);
                     if (lines.Count > MaxExportLines) lines.Dequeue();
                 }
-                var output = string.Join(Environment.NewLine, lines);
-                return output.Length > MaxExportChars ? output[^MaxExportChars..] : output;
+                var header = Sanitize($"Diagnostics appVersion={typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown"} config={BuildConfiguration()} engine={_engine} theme={_theme} os=\"{SanitizeLabel(Environment.OSVersion.VersionString)}\" session={SessionId} utc={DateTimeOffset.UtcNow:O}");
+                var outputLines = new List<string> { header, $"{noisyLinesOmitted} noisy lines omitted" };
+                outputLines.AddRange(lines);
+                while (outputLines.Count > 2 && string.Join(Environment.NewLine, outputLines).Length > MaxExportChars)
+                    outputLines.RemoveAt(2);
+                var output = string.Join(Environment.NewLine, outputLines);
+                return output.Length > MaxExportChars ? output[..MaxExportChars] : output;
             }
             catch
             {
                 return "Diagnostics could not be read.";
             }
         }
+    }
+
+    private static bool IsNoisy(string line) =>
+        line.Contains("event=perf.surface", StringComparison.Ordinal) ||
+        line.Contains("event=perf.process", StringComparison.Ordinal) ||
+        line.Contains("event=perf.timergap", StringComparison.Ordinal) ||
+        line.Contains("event=perf.shelfwindow", StringComparison.Ordinal) ||
+        line.Contains("event=hover.metadata", StringComparison.Ordinal) ||
+        line.Contains("event=artwork.", StringComparison.Ordinal) &&
+            !line.Contains("event=artwork.failure", StringComparison.Ordinal) ||
+        line.Contains("BACK-TRACE", StringComparison.Ordinal) &&
+            line.Contains("compositor-frame", StringComparison.Ordinal);
+
+    private static string SanitizeLabel(string value) =>
+        Regex.Replace(value, @"[\r\n\t\x00-\x1F\x7F]+", " ").Trim();
+
+    private static string BuildConfiguration()
+    {
+#if DEBUG
+        return "Debug";
+#else
+        return "Release";
+#endif
     }
 
     public static void WriteException(string message, Exception exception) =>

@@ -58,6 +58,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     private AttemptWarningRing? _warnings;
     private volatile bool _missingDecoderLogged;
     private volatile bool _forbiddenLogged;
+    private volatile bool _notFoundLogged;
 
     public VlcPlaybackEngine(bool enableLiveTimeshift = false)
     {
@@ -76,6 +77,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public bool IsBuffering => _player?.State == VLCState.Buffering;
     public bool IsPaused => _player?.State == VLCState.Paused;
     public bool IsEnded => _player?.State == VLCState.Ended;
+    public int? HttpStatus => _warnings?.HttpStatus;
     public bool IsStopped => _player?.State == VLCState.Stopped;
     public long Time => _player?.Time ?? 0;
     public long Length => _player?.Length ?? 0;
@@ -232,6 +234,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             _warnings = new AttemptWarningRing();
             _missingDecoderLogged = false;
             _forbiddenLogged = false;
+            _notFoundLogged = false;
             EmitPhase("open-start");
             var timeshiftPath = PrepareLiveTimeshift(source.Kind);
             Media media;
@@ -345,7 +348,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                     : await handlers.Completion.Task.ConfigureAwait(true);
 
                 // A logged "no suitable decoder" turns a vague failure or timeout into "format not supported".
-                result = PlaybackFailureClassifier.RefineLibVlcFailure(result, _missingDecoderLogged, _forbiddenLogged);
+                result = PlaybackFailureClassifier.RefineLibVlcFailure(result, _missingDecoderLogged, _forbiddenLogged, _notFoundLogged);
 
                 if (result != PlaybackAttemptResult.FirstFrame)
                 {
@@ -586,6 +589,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 _missingDecoderLogged = true;
             if (PlaybackFailureClassifier.IsForbiddenLog(args.Message))
                 _forbiddenLogged = true;
+            if (PlaybackFailureClassifier.IsNotFoundLog(args.Message))
+                _notFoundLogged = true;
             Volatile.Read(ref _warnings)?.Enqueue($"level={args.Level} module={args.Module} message={args.Message}");
         }
     }
@@ -622,7 +627,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     }
 
     private void EmitPhase(string phase) =>
-        LifecycleEvent?.Invoke($"event=playback.phase engine=LibVLC phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus=unknown redirect=unknown");
+        LifecycleEvent?.Invoke($"event=playback.phase engine=LibVLC phase={phase} elapsedMs={_attemptClock?.ElapsedMilliseconds ?? 0} httpStatus={_warnings?.HttpStatus?.ToString() ?? "unknown"} redirect=unknown");
 
     private void FlushWarnings()
     {
