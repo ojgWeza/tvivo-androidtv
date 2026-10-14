@@ -233,8 +233,23 @@
                                         PointerReleased="VideoSurface_PointerReleased"
                                          PointerMoved="VideoSurface_PointerMoved"
                                          Background="{ThemeResource AppPanelSurfaceBrush}" />
-                    <Border x:Name="PlayerVideoCurtain" Grid.Row="0" Background="{ThemeResource AppPanelSurfaceBrush}"
-                            Visibility="Collapsed" IsHitTestVisible="False" />
+                    <Grid x:Name="PlayerVideoCurtain" Grid.Row="0" Background="Black"
+                          Visibility="Collapsed" IsHitTestVisible="False"
+                          SizeChanged="PlayerVideoCurtain_SizeChanged">
+                        <Grid x:Name="PlayerLoadingArt" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              RowSpacing="8" IsHitTestVisible="False">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock x:Name="PlayerLoadingPopcorn" HorizontalAlignment="Center"
+                                       FontFamily="Segoe UI Emoji" IsColorFontEnabled="True" FontSize="132"
+                                       Foreground="#FFFFFFFF" Text="🍿" IsHitTestVisible="False" />
+                            <TextBlock x:Name="PlayerLoadingText" Grid.Row="1" HorizontalAlignment="Center"
+                                       Foreground="#FFFFFFFF" FontSize="24" Text="Loading…"
+                                       AutomationProperties.Name="Loading" IsHitTestVisible="False" />
+                        </Grid>
+                    </Grid>
                     <Border x:Name="NextEpisodePrompt" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Bottom"
                             Margin="20" Padding="18,12" CornerRadius="10" Background="{ThemeResource AppPanelSurfaceBrush}"
                             Visibility="Collapsed">

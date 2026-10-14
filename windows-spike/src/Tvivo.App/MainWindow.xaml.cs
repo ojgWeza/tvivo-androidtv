@@ -120,6 +120,7 @@ public sealed partial class MainWindow : Window
     private bool _seriesOpenInfoVisible;
     private bool _seriesOpenMessageIsFailure;
     private bool _terminalPlaybackFailure;
+    private bool _playerLoadingArtActive;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
     private readonly DispatcherTimer _playerEpgTimer = new() { Interval = TimeSpan.FromSeconds(45) };
@@ -512,14 +513,15 @@ public sealed partial class MainWindow : Window
         TraceBackTransition($"playback-surface-visibility engine={(native ? "native" : "vlc")} {VideoSurfaceState()}");
     }
 
-    private void SetPlaybackSurfaceVisibility(bool visible)
+    private void SetPlaybackSurfaceVisibility(bool visible, bool allowCurtain = false)
     {
-        var showVlc = visible && ReferenceEquals(_engine, _vlcEngine);
+        var showSurface = visible && (allowCurtain || PlayerVideoCurtain.Visibility != Visibility.Visible);
+        var showVlc = showSurface && ReferenceEquals(_engine, _vlcEngine);
         VideoView.Visibility = showVlc ? Visibility.Visible : Visibility.Collapsed;
-        NativePlayerElement.Visibility = visible && ReferenceEquals(_engine, _nativeEngine)
+        NativePlayerElement.Visibility = showSurface && ReferenceEquals(_engine, _nativeEngine)
             ? Visibility.Visible
             : Visibility.Collapsed;
-        TraceBackTransition($"playback-surface-state requestedVisible={visible} {VideoSurfaceState()}");
+        TraceBackTransition($"playback-surface-state requestedVisible={visible} allowCurtain={allowCurtain} {VideoSurfaceState()}");
     }
 
     private void SetTrackSelectingEngine(IPlaybackEngine? engine)
@@ -1705,7 +1707,7 @@ public sealed partial class MainWindow : Window
             _ = LoadPlayerCategoryTitleAsync(selectedChannel, selectionGeneration, "Live TV");
         _ = LoadPlayerMetadataAsync(selectedChannel, type);
         LaunchDiagnostics.Write($"event=content-selected outcome=started kind={selectedChannel.Source.Kind}");
-        _ = StartPlaybackAsync(selectedChannel.Source);
+        _ = StartPlaybackAsync(selectedChannel.Source, entryKind: PlayerResetEntryKind.NewItem);
     }
 
     private void ShowContentSelectionError(StreamKind kind, string outcome)
@@ -1910,16 +1912,24 @@ public sealed partial class MainWindow : Window
         SetPlaybackStatus(string.Empty);
     }
 
-    private void ShowFinalPlaybackFailure(PlaybackAttemptResult reason, string status = "Couldn't start playback")
+    private void ShowFinalPlaybackFailure(
+        PlaybackAttemptResult reason,
+        string status = "Couldn't start playback",
+        long? expectedGeneration = null)
     {
+        if (expectedGeneration is { } expected && expected != Volatile.Read(ref _playbackSessionGeneration))
+            return;
         _terminalPlaybackFailure = true;
         _playbackFailurePolicy.MarkFinalFailure(Volatile.Read(ref _playbackSessionGeneration));
-        PlayerVideoCurtain.Visibility = Visibility.Collapsed;
+        SetPlayerLoadingArtState(PlayerLoadingArtState.FinalFailure);
+        SetPlaybackSurfaceVisibility(false);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
         PauseButton.IsEnabled = false;
         SetPauseButtonState("Play");
         SetPlaybackStatus(status);
         RetryPlaybackButton.Visibility = Visibility.Visible;
         LaunchDiagnostics.Write($"event=playback.final-failure stay=true reason={reason}");
+        LaunchDiagnostics.Write($"event=player.final-failure reveal={PlayerResetPolicy.ShouldRevealAfterFinalFailure().ToString().ToLowerInvariant()}");
         if (_isCinemaMode)
             ShowCinemaControls("playback-failure");
     }
@@ -1930,7 +1940,7 @@ public sealed partial class MainWindow : Window
         var position = source.Kind == StreamKind.Live ? 0 : Math.Max(0, _lastGoodPlaybackPositionMilliseconds);
         _resumePositionOnStart = position;
         _engineFallbackTried.Remove(PlaybackItemKey(source));
-        _ = StartPlaybackAsync(source, recoveryPositionMs: position);
+        _ = StartPlaybackAsync(source, recoveryPositionMs: position, entryKind: PlayerResetEntryKind.Retry);
     }
 
     private void LogSeriesOpenExit(long startedAt, Channel series, string reason, string details = "")
@@ -1963,7 +1973,7 @@ public sealed partial class MainWindow : Window
             });
     }
 
-    private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
+    private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false, bool autoplayNext = false)
     {
         var startedAt = Stopwatch.GetTimestamp();
         LaunchDiagnostics.Write("event=episode.open.start ms=0");
@@ -2020,7 +2030,8 @@ public sealed partial class MainWindow : Window
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             UpdateEpisodeNavigationButtons();
             if (!preserveCompact) ShowPage(ShellPage.Player);
-            _ = StartPlaybackAsync(episode.Source, preserveCompact);
+            _ = StartPlaybackAsync(episode.Source, preserveCompact,
+                entryKind: autoplayNext ? PlayerResetEntryKind.AutoplayNext : PlayerResetEntryKind.NewItem);
             LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=ok");
             return true;
         }
@@ -2378,14 +2389,126 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage.NotifyVisitRecorded();
     }
 
+    private (long Generation, CancellationTokenSource SessionCts, Task StopTask) ResetPlayerForNewPlayback(
+        PlayerResetEntryKind reason,
+        bool keepFrame = false)
+    {
+        var generation = Interlocked.Increment(ref _playbackSessionGeneration);
+        var previousCts = Interlocked.Exchange(ref _playbackSessionCts, null);
+        previousCts?.Cancel();
+        previousCts?.Dispose();
+        var sessionCts = new CancellationTokenSource();
+        Volatile.Write(ref _playbackSessionCts, sessionCts);
+
+        if (keepFrame)
+        {
+            if (reason != PlayerResetEntryKind.SameMediaRecovery || PlayerResetPolicy.RequiresReset(reason))
+                throw new ArgumentException("Only same-media recovery may keep the current frame.", nameof(keepFrame));
+            SetPlayerLoadingArtState(PlayerLoadingArtState.KeepFrameRecovery);
+            return (generation, sessionCts, Task.CompletedTask);
+        }
+
+        if (!PlayerResetPolicy.RequiresReset(reason))
+            throw new ArgumentException("A reset requires a fresh playback entry.", nameof(reason));
+
+        SetPlayerLoadingArtState(PlayerLoadingArtState.Loading);
+        SetPlaybackSurfaceVisibility(false);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
+        UpdatePlayerLoadingArtVisibility();
+        var surfaceCleared = VideoView.Visibility == Visibility.Collapsed &&
+            NativePlayerElement.Visibility == Visibility.Collapsed &&
+            PlayerVideoCurtain.Visibility == Visibility.Visible;
+        LaunchDiagnostics.Write($"event=player.reset reason={reason} generation={generation} surfaceCleared={surfaceCleared.ToString().ToLowerInvariant()}");
+
+        _terminalPlaybackFailure = false;
+        _playbackFailurePolicy.ClearFailure(generation);
+        _resumeReady = false;
+        _pendingResumePosition = null;
+        _movieCompletionRecorded = false;
+        _unverifiedPlaybackEndHandled = false;
+        _playbackCompletionShown = false;
+        _hasPlaybackAdvancedThisSession = false;
+        _lastGoodPlaybackPositionMilliseconds = 0;
+        _lastInterruptionObservedPosition = 0;
+        _diagnosticLastPosition = 0;
+        _diagnosticFirstProgressReported = false;
+        _isDraggingProgress = false;
+        _isUpdatingProgress = false;
+        ClearPlaybackStatus();
+        SetPlaybackStatus("Starting playback…");
+        PauseButton.IsEnabled = true;
+        SetPauseButtonState("Play");
+        ElapsedText.Text = FormatTime(0);
+        DurationText.Text = "—:—";
+        CompactElapsedText.Text = FormatTime(0);
+        CompactDurationText.Text = "—:—";
+        _isUpdatingProgress = true;
+        try
+        {
+            ProgressSlider.Minimum = 0;
+            ProgressSlider.Maximum = 1;
+            ProgressSlider.Value = 0;
+            ProgressSlider.IsEnabled = false;
+            CompactProgressSlider.Minimum = 0;
+            CompactProgressSlider.Maximum = 1;
+            CompactProgressSlider.Value = 0;
+            CompactProgressSlider.IsEnabled = false;
+        }
+        finally
+        {
+            _isUpdatingProgress = false;
+        }
+        RewindButton.IsEnabled = false;
+        ForwardButton.IsEnabled = false;
+        CompactRewindButton.IsEnabled = false;
+        CompactForwardButton.IsEnabled = false;
+
+        var stopTask = QueueBothPlaybackEnginesStop(generation);
+        _playbackStopTask = stopTask;
+        return (generation, sessionCts, stopTask);
+    }
+
+    private void PlayerVideoCurtain_SizeChanged(object sender, SizeChangedEventArgs args) =>
+        UpdatePlayerLoadingArtVisibility();
+
+    private void SetPlayerLoadingArtState(PlayerLoadingArtState state)
+    {
+        _playerLoadingArtActive = PlayerResetPolicy.ShowsLoadingArt(state);
+        UpdatePlayerLoadingArtVisibility();
+    }
+
+    private void UpdatePlayerLoadingArtVisibility() =>
+        PlayerLoadingArt.Visibility = _playerLoadingArtActive && PlayerVideoCurtain.ActualHeight >= 300
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private Task<bool> QueueBothPlaybackEnginesStop(long? onlyIfCurrentGeneration = null) =>
+        _playbackHandoff.RunAsync(
+            _ => OnUiAsync(async () =>
+            {
+                if (onlyIfCurrentGeneration is null ||
+                    onlyIfCurrentGeneration == Volatile.Read(ref _playbackSessionGeneration))
+                    await StopBothPlaybackEnginesAsync();
+                return true;
+            }),
+            _ => Task.FromResult(true),
+            CancellationToken.None);
+
     private async Task StartPlaybackAsync(
         StreamSource source,
         bool preserveCompact = false,
         bool isRecovery = false,
         long? recoveryPositionMs = null,
         bool engineFallbackAttempt = false,
-        Stopwatch? retryBudgetStopwatch = null)
+        Stopwatch? retryBudgetStopwatch = null,
+        PlayerResetEntryKind entryKind = PlayerResetEntryKind.FreshStart)
     {
+        var resetKind = isRecovery
+            ? PlayerResetEntryKind.SameMediaRecovery
+            : engineFallbackAttempt ? PlayerResetEntryKind.EngineFallback : entryKind;
+        var playbackStart = ResetPlayerForNewPlayback(resetKind, keepFrame: isRecovery);
+        var generation = playbackStart.Generation;
+        var sessionCts = playbackStart.SessionCts;
         if (!isRecovery)
             _interruptionBudget.Reset();
         if (!isRecovery)
@@ -2437,15 +2560,10 @@ public sealed partial class MainWindow : Window
         var playSource = openAtResume ? source with { StartPositionMilliseconds = requestedStartPosition } : source;
         _copyDiagnosticsNoteVersion++;
         CopyDiagnosticsStatus.Text = string.Empty;
-        var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
         _diagnosticLastPosition = 0;
         _diagnosticFirstProgressReported = false;
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
-        var sessionCts = new CancellationTokenSource();
-        var previousCts = Interlocked.Exchange(ref _playbackSessionCts, sessionCts);
-        previousCts?.Cancel();
-        previousCts?.Dispose();
         _currentSource = source;
         ResetTrackSelectionForSession();
         ClearPlayerNowNext();
@@ -2455,14 +2573,13 @@ public sealed partial class MainWindow : Window
             PlayerTitleText.Text = selectedChannel.DisplayName;
             CompactTitleText.Text = selectedChannel.DisplayName;
         }
-        PlayerVideoCurtain.Visibility = Visibility.Visible;
         if (!preserveCompact) ShowPage(ShellPage.Player);
         if (source.Kind == StreamKind.Live)
         {
             StartPlayerEpgUpdates();
             _ = RefreshPlayerNowNextAsync();
         }
-        StatusText.Text = "Starting playback…";
+        SetPlaybackStatus(isRecovery ? "Reconnecting…" : "Starting playback…");
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
         var targetChannel = _nowPlayingChannel;
         string? category = null;
@@ -2503,6 +2620,9 @@ public sealed partial class MainWindow : Window
         var sawNotFound = false;
         try
         {
+            await playbackStart.StopTask;
+            if (!IsCurrentPlaybackStart(generation, sessionCts))
+                return;
             while (true)
             {
                 if (isRecovery && !_interruptionBudget.TryConsume(_playbackAttempts))
@@ -2534,12 +2654,6 @@ public sealed partial class MainWindow : Window
                         // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
                         // while stopping) shows up here as a large gateWaitMs.
                         LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
-                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                        var pendingStopStartedAt = Stopwatch.GetTimestamp();
-                        await _playbackStopTask;
-                        var pendingStopMs = Stopwatch.GetElapsedTime(pendingStopStartedAt).TotalMilliseconds;
-                        if (pendingStopMs >= 500)
-                            LaunchDiagnostics.Write($"event=playback.handoff stage=previous-stop-wait generation={generation} elapsedMs={pendingStopMs:0}");
                         if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
                         await StopBothPlaybackEnginesAsync();
                         if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
@@ -2612,6 +2726,19 @@ public sealed partial class MainWindow : Window
             TraceClickAway(playerEntryTraceId, $"playback-completion-discarded generation={generation} currentGeneration={Volatile.Read(ref _playbackSessionGeneration)} page={_currentPage}");
             return;
         }
+        if (result != PlaybackAttemptResult.FirstFrame && result != PlaybackAttemptResult.Cancelled)
+        {
+            try
+            {
+                await QueueBothPlaybackEnginesStop(generation);
+            }
+            catch (Exception exception)
+            {
+                LaunchDiagnostics.WriteException("Stopping both playback engines after startup failure failed", exception);
+            }
+            if (!IsCurrentPlaybackStart(generation, sessionCts))
+                return;
+        }
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
         if (result == PlaybackAttemptResult.FirstFrame && sawNotFound)
             LaunchDiagnostics.Write($"event=playback.recovered attempts={attemptCount}");
@@ -2658,6 +2785,7 @@ public sealed partial class MainWindow : Window
             ShowCinemaControls();
         if (result == PlaybackAttemptResult.FirstFrame)
         {
+            SetPlayerLoadingArtState(PlayerLoadingArtState.FirstFrame);
             ClearPlaybackStatus();
             if (engineFallbackAttempt)
                 SetPlaybackStatus("Playing with the other player");
@@ -2670,7 +2798,9 @@ public sealed partial class MainWindow : Window
             {
                 LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={_lastGoodPlaybackPositionMilliseconds}");
             }
+            SetPlaybackSurfaceVisibility(true, allowCurtain: true);
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
+            LaunchDiagnostics.Write($"event=player.curtain-lowered generation={generation}");
             _pendingResumePosition = openAtResume ? null
                 : isRecovery && recoveryPositionMs is > 0
                 ? recoveryPositionMs
@@ -2696,7 +2826,7 @@ public sealed partial class MainWindow : Window
             _isUpdatingVolume = false;
         }
         if (result != PlaybackAttemptResult.FirstFrame && result != PlaybackAttemptResult.Cancelled)
-            ShowFinalPlaybackFailure(result);
+            ShowFinalPlaybackFailure(result, expectedGeneration: generation);
     }
 
     private static string SanitizePlaybackLabel(string value)
@@ -2814,7 +2944,7 @@ public sealed partial class MainWindow : Window
         _playerEntries.Clear();
         SetCinemaMode(false, animate: false);
 
-        _playbackStopTask = StopBothPlaybackEnginesAsync();
+        _playbackStopTask = QueueBothPlaybackEnginesStop();
         TraceBackTransition($"player-stop-return asyncStopStarted={!_playbackStopTask.IsCompleted} video={VideoSurfaceState()} curtain={PlayerVideoCurtain.Visibility}");
     }
 
@@ -3305,9 +3435,9 @@ public sealed partial class MainWindow : Window
             _nextEpisodeAdvanceStarted = true;
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             if (endedNextItem.Source.Kind == StreamKind.Episode)
-                OpenSeriesEpisode(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
+                OpenSeriesEpisode(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact, autoplayNext: true);
             else
-                PlayRelatedChannel(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
+                PlayRelatedChannel(endedNextItem, preserveCompact: _playerPresentation == PlayerPresentation.Compact, autoplayNext: true);
             return;
         }
         if (_windowState.IsWindowMini && !_terminalPlaybackFailure && (_engine.IsEnded ||
@@ -3440,6 +3570,7 @@ public sealed partial class MainWindow : Window
             interruption, source.Kind, _engine.HasMedia,
             _interruptionBudget.AttemptsUsed, _playbackAttempts, status,
             connectionLimit: status is 403 or 429, failure: failure);
+        var expectedGeneration = generation;
         LaunchDiagnostics.Write($"event=playback.interrupt reason={interruption} engine={engineName} positionMs={position}");
         _nextEpisodeAutoPlaySuppressed = true;
         _nextEpisodeAdvanceStarted = true;
@@ -3495,6 +3626,7 @@ public sealed partial class MainWindow : Window
                     isRecovery: true,
                     recoveryPositionMs: source.Kind == StreamKind.Live ? null : Math.Max(0, position - 2_000));
                 var reopenGeneration = Volatile.Read(ref _playbackSessionGeneration);
+                expectedGeneration = reopenGeneration;
                 await reopenTask;
                 if (reopenGeneration != Volatile.Read(ref _playbackSessionGeneration))
                     return;
@@ -3512,7 +3644,7 @@ public sealed partial class MainWindow : Window
                 LaunchDiagnostics.Write($"event=playback.resume.failed attempts={_interruptionBudget.AttemptsUsed} of {_playbackAttempts}");
                 var finalReason = PlaybackFailureClassifier.RefineHttpStatus(
                     PlaybackAttemptResult.UnknownFailure, _engine.HttpStatus);
-                ShowFinalPlaybackFailure(finalReason, "Couldn't reconnect");
+                ShowFinalPlaybackFailure(finalReason, "Couldn't reconnect", expectedGeneration);
             }
         }
         catch (OperationCanceledException)
@@ -3522,7 +3654,7 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             LaunchDiagnostics.Write($"event=playback.resume.failed error={exception.GetType().Name}");
-            ShowFinalPlaybackFailure(PlaybackFailureClassifier.FromOpenException(exception), "Couldn't reconnect");
+            ShowFinalPlaybackFailure(PlaybackFailureClassifier.FromOpenException(exception), "Couldn't reconnect", expectedGeneration);
         }
         finally
         {
@@ -4005,7 +4137,7 @@ public sealed partial class MainWindow : Window
             RestorePlayerListScrollOffset(pressOffset.Value);
     }
 
-    private void PlayRelatedChannel(Channel channel, bool preserveCompact = false)
+    private void PlayRelatedChannel(Channel channel, bool preserveCompact = false, bool autoplayNext = false)
     {
         if (channel.Source.DirectUri is null || channel.Source.Kind is not (StreamKind.Movie or StreamKind.Live)) return;
         SaveResumePosition(force: true);
@@ -4049,7 +4181,8 @@ public sealed partial class MainWindow : Window
         SetCurrentPlayerEntry(channel);
         _ = LoadPlayerMetadataAsync(channel,
             channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live);
-        _ = StartPlaybackAsync(channel.Source, preserveCompact);
+        _ = StartPlaybackAsync(channel.Source, preserveCompact,
+            entryKind: autoplayNext ? PlayerResetEntryKind.AutoplayNext : PlayerResetEntryKind.NewItem);
         if (channel.Source.Kind == StreamKind.Movie && _playerSiblings.Count <= 1)
             _ = LoadMovieCategorySiblingsAsync(channel, Volatile.Read(ref _itemSelectionGeneration));
     }
@@ -4607,8 +4740,7 @@ public sealed partial class MainWindow : Window
 
     private void CinemaPointerPollTimer_Tick(object? sender, object args)
     {
-        if (!_cinemaCursorHidden || !_cinemaCursorController.HasMovedSinceHide()) return;
-        ShowCinemaControls("pointer-poll", resetIdleDeadline: true);
+        if (_cinemaCursorHidden) _cinemaCursorController.TryWakeFromPoll();
     }
 
     private void ShowCinemaControls(string reason = "interaction", bool resetIdleDeadline = false)

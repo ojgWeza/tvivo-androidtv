@@ -26,7 +26,6 @@ internal sealed class CinemaCursorController : IDisposable
     private const uint SwpShowWindow = 0x0040;
     private const int SwShownNoActivate = 4;
     private const uint LwaAlpha = 0x00000002;
-    private const uint TmeLeave = 0x00000002;
     private const uint ErrorClassAlreadyExists = 1410;
     private const int PopupSize = 2;
     private const string WindowClassName = "Tvivo.CinemaCursorHitTarget";
@@ -40,7 +39,7 @@ internal sealed class CinemaCursorController : IDisposable
     private bool _hidden;
     private bool _loggedPopupProbe;
     private bool _disposed;
-    private long _hiddenAtTick;
+    private long _popupCreatedAtTick;
     private NativePoint _hideBaseline;
     private nint _popupHwnd;
 
@@ -55,7 +54,6 @@ internal sealed class CinemaCursorController : IDisposable
         if (_disposed) return;
         _hidden = hidden;
         _loggedPopupProbe = false;
-        _hiddenAtTick = Environment.TickCount64;
         LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
 
         if (!hidden)
@@ -70,18 +68,27 @@ internal sealed class CinemaCursorController : IDisposable
             CreatePopupAt(_hideBaseline);
     }
 
-    internal bool HasMovedSinceHide(int thresholdPixels = 2)
+    internal bool TryWakeFromPoll(int thresholdPixels = 2)
     {
-        if (!_hidden || !GetCursorPos(out var current)) return false;
-
-        if (!_loggedPopupProbe && Environment.TickCount64 - _hiddenAtTick >= 300)
+        if (!_hidden || _popupHwnd == 0 || !GetCursorPos(out var current)) return false;
+        var elapsedMilliseconds = Environment.TickCount64 - _popupCreatedAtTick;
+        if (!_loggedPopupProbe && elapsedMilliseconds >= 300)
         {
             _loggedPopupProbe = true;
             WritePopupDiagnostics();
         }
 
-        return CinemaPointerMovementPolicy.HasMoved(
-            _hideBaseline.X, _hideBaseline.Y, current.X, current.Y, thresholdPixels);
+        var rect = new NativeRect();
+        if (!GetWindowRect(_popupHwnd, out rect)) return false;
+        var outsidePopup = current.X < rect.Left || current.X >= rect.Right ||
+                           current.Y < rect.Top || current.Y >= rect.Bottom;
+        if (!CinemaPointerMovementPolicy.ShouldWakeForPointerPoll(
+            elapsedMilliseconds,
+            outsidePopup,
+            _hideBaseline.X, _hideBaseline.Y, current.X, current.Y, thresholdPixels)) return false;
+
+        RequestShow("pointer-poll");
+        return true;
     }
 
     private void CreatePopupAt(NativePoint point)
@@ -118,8 +125,10 @@ internal sealed class CinemaCursorController : IDisposable
             return;
         }
 
+        SetCursor(0);
         _popupHwnd = hwnd;
         PopupOwners[hwnd] = this;
+        _popupCreatedAtTick = Environment.TickCount64;
         if (!SetLayeredWindowAttributes(hwnd, 0, 1, LwaAlpha) ||
             !SetWindowPos(hwnd, 0, point.X, point.Y, PopupSize, PopupSize, SwpNoActivate | SwpShowWindow))
         {
@@ -131,13 +140,6 @@ internal sealed class CinemaCursorController : IDisposable
 
         ShowWindow(hwnd, SwShownNoActivate);
         SetCursor(0);
-        var tracking = new TrackMouseEventData
-        {
-            Size = (uint)Marshal.SizeOf<TrackMouseEventData>(),
-            Flags = TmeLeave,
-            TrackWindow = hwnd
-        };
-        TrackMouseEvent(ref tracking);
         WritePopupDiagnostics();
     }
 
@@ -169,11 +171,11 @@ internal sealed class CinemaCursorController : IDisposable
 
     private void RequestShow(string reason)
     {
-        DestroyPopup();
+        DestroyPopup(reason);
         _showControls(reason);
     }
 
-    private void DestroyPopup()
+    private void DestroyPopup(string? reason = null)
     {
         var hwnd = _popupHwnd;
         if (hwnd == 0) return;
@@ -181,6 +183,8 @@ internal sealed class CinemaCursorController : IDisposable
         _popupHwnd = 0;
         PopupOwners.Remove(hwnd);
         if (IsWindow(hwnd)) DestroyWindow(hwnd);
+        if (reason is not null)
+            LaunchDiagnostics.Write($"event=cinema.cursor-popup-destroyed reason={reason}");
     }
 
     private void RestoreCursorAtPointer()
@@ -212,35 +216,32 @@ internal sealed class CinemaCursorController : IDisposable
             if (message == WmSetCursor)
             {
                 SetCursor(0);
-                controller.WritePopupDiagnostics();
                 return 1;
             }
 
             if (message == WmMouseMove)
             {
-                var tracking = new TrackMouseEventData
-                {
-                    Size = (uint)Marshal.SizeOf<TrackMouseEventData>(),
-                    Flags = TmeLeave,
-                    TrackWindow = hwnd
-                };
-                TrackMouseEvent(ref tracking);
-                controller.RequestShow("pointer-popup-move");
+                if (GetCursorPos(out var point) &&
+                    CinemaPointerMovementPolicy.ShouldWakeForPointerMove(
+                        Environment.TickCount64 - controller._popupCreatedAtTick,
+                        controller._hideBaseline.X, controller._hideBaseline.Y,
+                        point.X, point.Y))
+                    controller.RequestShow("pointer-move");
                 return 0;
             }
 
-            if (message == WmMouseLeave)
-            {
-                controller.RequestShow("pointer-popup-leave");
+            if (message == WmMouseLeave) // Popup transitions can synthesize leave immediately after creation.
                 return 0;
-            }
 
             if (message == WmMouseActivate)
                 return MaNoActivate;
 
             if (message is WmLButtonDown or WmRButtonDown or WmMouseWheel or WmXButtonDown)
             {
-                controller.RequestShow("pointer-popup-input");
+                var reason = CinemaPointerMovementPolicy.GetInputWakeReason(
+                    Environment.TickCount64 - controller._popupCreatedAtTick,
+                    message == WmMouseWheel);
+                if (reason is not null) controller.RequestShow(reason);
                 return 0;
             }
 
@@ -300,12 +301,12 @@ internal sealed class CinemaCursorController : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct TrackMouseEventData
+    private struct NativeRect
     {
-        internal uint Size;
-        internal uint Flags;
-        internal nint TrackWindow;
-        internal uint HoverTime;
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
     }
 
     [DllImport("user32.dll", EntryPoint = "RegisterClassExW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -326,10 +327,6 @@ internal sealed class CinemaCursorController : IDisposable
     [DllImport("user32.dll", EntryPoint = "ShowWindow")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(nint hwnd, int command);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TrackMouseEvent(ref TrackMouseEventData tracking);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -357,6 +354,10 @@ internal sealed class CinemaCursorController : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowRect", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hwnd, out NativeRect rect);
 
     [DllImport("user32.dll", EntryPoint = "GetCursorInfo", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
