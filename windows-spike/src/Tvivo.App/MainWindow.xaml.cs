@@ -4773,8 +4773,8 @@ public sealed partial class MainWindow : Window
     {
         if (_cinemaCursorHidden == !visible) return;
         _cinemaCursorHidden = !visible;
-        _cinemaCursorController.SetHidden(_cinemaCursorHidden);
         CinemaCursorZone.SetCinemaCursorHidden(_cinemaCursorHidden);
+        _cinemaCursorController.SetHidden(_cinemaCursorHidden);
         if (_cinemaCursorHidden)
         {
             foreach (var button in new[] { ForwardButton, RewindButton, PreviousEpisodeButton, NextEpisodeButton })
