@@ -37,6 +37,8 @@ internal sealed class CinemaCursorController : IDisposable
         _hidden = hidden;
         _loggedHide = false;
         LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
+        _loggedPostHide = false;
+        _hiddenAtTick = Environment.TickCount64;
         if (hidden && GetCursorPos(out _hideBaseline))
             WriteHideDiagnostics(_hideBaseline);
         RefreshChildWindows();
@@ -50,6 +52,14 @@ internal sealed class CinemaCursorController : IDisposable
     internal bool HasMovedSinceHide(int thresholdPixels = 2)
     {
         if (!_hidden || !GetCursorPos(out var current)) return false;
+        if (!_loggedPostHide && Environment.TickCount64 - _hiddenAtTick >= 300)
+        {
+            // Probe from the UI thread that owns the ShowCursor count: an external probe cannot see it.
+            _loggedPostHide = true;
+            var probe = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+            GetCursorInfo(ref probe);
+            LaunchDiagnostics.Write($"event=cinema.cursor-posthide flags=0x{probe.Flags:X} hCursor=0x{probe.Cursor:X}");
+        }
         var dx = (long)current.X - _hideBaseline.X;
         var dy = (long)current.Y - _hideBaseline.Y;
         return dx * dx + dy * dy >= (long)thresholdPixels * thresholdPixels;
@@ -125,6 +135,8 @@ internal sealed class CinemaCursorController : IDisposable
     // The robust, shape-independent hide: one balanced ShowCursor(FALSE) while hidden, one ShowCursor(TRUE)
     // on show/dispose. The island re-applies its own arrow after a nudge, but a negative display count wins.
     private bool _displayCountLowered;
+    private bool _loggedPostHide;
+    private long _hiddenAtTick;
 
     private void ApplySystemCursorVisibility(bool hidden)
     {
