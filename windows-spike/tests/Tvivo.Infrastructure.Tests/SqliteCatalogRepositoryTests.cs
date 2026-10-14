@@ -289,6 +289,62 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Spotlight_excludes_two_most_visited_categories_per_account_and_type()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var movies = new[]
+            {
+                ChannelAdded(account, CatalogItemType.Movie, "a-visited", DateTimeOffset.UtcNow),
+                ChannelAdded(account, CatalogItemType.Movie, "a-candidate", DateTimeOffset.UtcNow.AddDays(-1)) with { GroupId = "a" },
+                ChannelAdded(account, CatalogItemType.Movie, "b-visited", DateTimeOffset.UtcNow.AddDays(-2)) with { GroupId = "b" },
+                ChannelAdded(account, CatalogItemType.Movie, "b-candidate", DateTimeOffset.UtcNow.AddDays(-3)) with { GroupId = "b" },
+                ChannelAdded(account, CatalogItemType.Movie, "c-candidate", DateTimeOffset.UtcNow.AddDays(-4)) with { GroupId = "c" },
+            };
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "a", "A"), Group(account, "b", "B"), Group(account, "c", "C") },
+                movies.Select(channel => channel with { GroupId = channel.Id.StartsWith("a-", StringComparison.Ordinal) ? "a" : channel.Id.StartsWith("b-", StringComparison.Ordinal) ? "b" : "c" }).ToArray());
+            repo.RecordVisit(account, CatalogItemType.Movie, "a-visited");
+            repo.RecordVisit(account, CatalogItemType.Movie, "a-visited");
+            repo.RecordVisit(account, CatalogItemType.Movie, "a-visited");
+            repo.RecordVisit(account, CatalogItemType.Movie, "b-visited");
+            repo.RecordVisit(account, CatalogItemType.Movie, "b-visited");
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, new[] { Group(account, "a", "A") },
+                new[] { ChannelAdded(account, CatalogItemType.Series, "series-a", DateTimeOffset.UtcNow) with { GroupId = "a" } });
+
+            var movieCandidates = repo.GetSpotlightCandidates(account, CatalogItemType.Movie, null, Array.Empty<string>());
+            var seriesCandidates = repo.GetSpotlightCandidates(account, CatalogItemType.Series, null, Array.Empty<string>());
+
+            Assert.DoesNotContain(movieCandidates, channel => channel.GroupId is "a" or "b");
+            Assert.Contains(movieCandidates, channel => channel.Id == "c-candidate");
+            Assert.Contains(seriesCandidates, channel => channel.GroupId == "a");
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Get_channel_rebuilds_direct_stream_uri_from_saved_catalog_metadata()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "movies", "Movies") },
+                new[] { ChannelAdded(account, CatalogItemType.Movie, "movie-7", DateTimeOffset.UtcNow) with { GroupId = "movies" } });
+            var connection = new ProviderConnection(new ProviderEndpoint("http", "fixture.invalid", 8080), "user", "secret");
+
+            var resolved = repo.GetChannel(account, connection, CatalogItemType.Movie, "movie-7");
+
+            Assert.NotNull(resolved);
+            Assert.Equal("movie-7", resolved!.Source.StreamId);
+            Assert.Equal("mkv", resolved.Source.ContainerExtension);
+            Assert.Equal(new Uri("http://fixture.invalid:8080/movie/user/secret/movie-7.mkv"), resolved.Source.DirectUri);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Artwork_uri_survives_catalog_snapshot_write_and_browse_projection()
     {
         using var repo = Create(out var dir); var account = Account();

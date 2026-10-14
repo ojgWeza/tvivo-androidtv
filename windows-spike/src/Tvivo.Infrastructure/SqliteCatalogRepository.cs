@@ -395,6 +395,25 @@ public sealed class SqliteCatalogRepository : IDisposable
         CatalogItemSortOrder? sortOrder = null)
         => GetChannels(account, null, type, groupId, filter, offset, limit, mostVisited, sortOrder);
 
+    public Channel? GetChannel(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND id=$id LIMIT 1";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var resolvedId = reader.GetString(0);
+        Uri? artwork = Uri.TryCreate(reader.IsDBNull(3) ? null : reader.GetString(3), UriKind.Absolute, out var uri) ? uri : null;
+        DateTimeOffset? added = reader.IsDBNull(5) || reader.GetInt64(5) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(5));
+        var title = CleanTitle(reader.GetString(2));
+        var extension = reader.IsDBNull(4) ? null : reader.GetString(4);
+        return new Channel(account.AccountId, resolvedId, reader.IsDBNull(1) ? null : reader.GetString(1), title, title,
+            artwork, added, null, StreamSourceFor(providerConnection, type, resolvedId, extension), ReadChannelMetadata(reader, 6));
+    }
+
     public CatalogPage GetChannels(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string? groupId = null, string? filter = null, int offset = 0, int limit = 100, bool mostVisited = false,
         CatalogItemSortOrder? sortOrder = null)
     {
@@ -588,7 +607,11 @@ public sealed class SqliteCatalogRepository : IDisposable
         var excludedClause = excluded.Length == 0 ? string.Empty :
             " AND i.category_id NOT IN (" + string.Join(",", excluded.Select((_, index) => "$visited" + index)) + ")";
         command.CommandText = $"""
-            WITH eligible AS (
+            WITH most_visited_categories AS (
+                SELECT category_id FROM items WHERE account_id=$a AND type=$type
+                GROUP BY category_id HAVING SUM(visit_count) > 0
+                ORDER BY SUM(visit_count) DESC, category_id LIMIT 2
+            ), eligible AS (
                 SELECT i.id, i.category_id, i.title, i.artwork, i.extension, i.added_at, i.year,
                        i.rating, i.genre, i.plot, i.[cast],
                        CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END AS effective_added,
@@ -601,7 +624,8 @@ public sealed class SqliteCatalogRepository : IDisposable
                       AND mp.kind=CASE i.type WHEN 'Movie' THEN 'movie' WHEN 'Series' THEN 'series' ELSE 'live' END
                       AND mp.item_id=i.id AND mp.finished=1)
                   AND NOT EXISTS (SELECT 1 FROM series_playback sp WHERE sp.account_id=i.account_id
-                      AND sp.series_id=i.id AND sp.finished=1){excludedClause}
+                      AND sp.series_id=i.id AND sp.finished=1)
+                  AND NOT EXISTS (SELECT 1 FROM most_visited_categories mvc WHERE mvc.category_id=i.category_id){excludedClause}
             ), selected_categories AS (
                 SELECT category_id, MAX(effective_added) AS newest
                 FROM eligible GROUP BY category_id ORDER BY newest DESC, category_id LIMIT $categoryLimit

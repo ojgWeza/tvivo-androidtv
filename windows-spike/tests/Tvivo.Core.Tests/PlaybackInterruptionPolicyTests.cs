@@ -9,7 +9,7 @@ public sealed class PlaybackInterruptionPolicyTests
     [InlineData(PlaybackEngineState.Failed, PlaybackInterruption.Error)]
     [InlineData(PlaybackEngineState.Ended, PlaybackInterruption.UnexpectedEnd)]
     [InlineData(PlaybackEngineState.Stopped, PlaybackInterruption.UnexpectedEnd)]
-    [InlineData(PlaybackEngineState.Paused, PlaybackInterruption.UnexpectedEnd)]
+    [InlineData(PlaybackEngineState.Paused, PlaybackInterruption.None)]
     [InlineData(PlaybackEngineState.Playing, PlaybackInterruption.Stall)]
     [InlineData(PlaybackEngineState.Buffering, PlaybackInterruption.Stall)]
     public void Classifies_engine_interruptions(PlaybackEngineState state, PlaybackInterruption expected)
@@ -30,10 +30,82 @@ public sealed class PlaybackInterruptionPolicyTests
     }
 
     [Fact]
-    public void Explicit_user_action_suppresses_recovery()
+    public void Paused_intent_suppresses_callbacks_even_when_the_engine_lags_or_stops()
     {
+        var intent = PlaybackInterruptionPolicy.ToggleIntent(PlaybackUserIntent.Playing);
+        Assert.Equal(PlaybackUserIntent.Paused, intent);
+        foreach (var state in new[] { PlaybackEngineState.Playing, PlaybackEngineState.Paused,
+                     PlaybackEngineState.Stopped, PlaybackEngineState.Ended, PlaybackEngineState.Failed })
+        {
+            Assert.Equal(PlaybackInterruption.None,
+                PlaybackInterruptionPolicy.Classify(Snapshot(state) with { Intent = intent }));
+        }
+    }
+
+    [Fact]
+    public void Explicit_resume_suppresses_recovery_until_forward_progress_then_real_stall_recovers()
+    {
+        var intent = PlaybackInterruptionPolicy.ToggleIntent(PlaybackUserIntent.Paused);
+        Assert.Equal(PlaybackUserIntent.Playing, intent);
+        var awaitingProgress = PlaybackInterruptionPolicy.ShouldAwaitForwardProgress(intent);
         Assert.Equal(PlaybackInterruption.None,
-            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Paused) with { ExplicitUserAction = true }));
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Playing) with
+            {
+                Intent = intent,
+                AwaitingForwardProgress = awaitingProgress,
+            }));
+
+        // A confirmed position advance is the only event that releases post-action suppression.
+        awaitingProgress = false;
+        Assert.Equal(PlaybackInterruption.Stall,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Playing) with
+            {
+                Intent = intent,
+                AwaitingForwardProgress = awaitingProgress,
+            }));
+    }
+
+    [Fact]
+    public void Seek_preserves_pause_or_resumes_playing_intent_and_waits_for_progress()
+    {
+        Assert.Equal(PlaybackUserIntent.Paused,
+            PlaybackInterruptionPolicy.IntentAfterSeek(PlaybackUserIntent.Paused));
+        var playingIntent = PlaybackInterruptionPolicy.IntentAfterSeek(PlaybackUserIntent.Playing);
+        Assert.True(PlaybackInterruptionPolicy.ShouldAwaitForwardProgress(playingIntent));
+        Assert.Equal(PlaybackInterruption.None,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Stopped) with
+            {
+                Intent = PlaybackUserIntent.StoppedByUser,
+            }));
+    }
+
+    [Fact]
+    public void Back_and_stop_intent_are_set_before_engine_stop_callbacks()
+    {
+        var intent = PlaybackUserIntent.Playing;
+        intent = PlaybackUserIntent.StoppedByUser; // Back/navigation writes intent before engine.Stop.
+        Assert.Equal(PlaybackInterruption.None,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Stopped) with { Intent = intent }));
+        Assert.Equal(PlaybackInterruption.None,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Ended) with { Intent = intent }));
+    }
+
+    [Fact]
+    public void Playing_intent_recovers_from_error_early_end_and_frozen_position()
+    {
+        Assert.Equal(PlaybackInterruption.Error,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Failed) with
+            {
+                Failure = PlaybackAttemptResult.NetworkFailure,
+            }));
+        Assert.Equal(PlaybackInterruption.UnexpectedEnd,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Ended) with
+            {
+                PositionMilliseconds = 10_000,
+                DurationMilliseconds = 100_000,
+            }));
+        Assert.Equal(PlaybackInterruption.Stall,
+            PlaybackInterruptionPolicy.Classify(Snapshot(PlaybackEngineState.Buffering)));
     }
 
     [Fact]
@@ -109,7 +181,8 @@ public sealed class PlaybackInterruptionPolicyTests
         HasForwardProgress: true,
         PositionMilliseconds: 10_000,
         DurationMilliseconds: 100_000,
-        ExplicitUserAction: false,
+        Intent: PlaybackUserIntent.Playing,
+        AwaitingForwardProgress: false,
         SessionGeneration: 4,
         CurrentGeneration: 4);
 }

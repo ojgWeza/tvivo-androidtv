@@ -135,6 +135,9 @@ public sealed partial class MainWindow : Window
     private bool _compactPointerOverControls;
     private bool _cinemaPointerMoveDiagnosticWritten;
     private DateTimeOffset _cinemaLastMouseActivityAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _cinemaLastHideAt = DateTimeOffset.MinValue;
+    private Windows.Foundation.Point _lastCinemaPointerPosition;
+    private bool _hasCinemaPointerPosition;
     private bool _cinemaWindowActive = true;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
@@ -173,8 +176,8 @@ public sealed partial class MainWindow : Window
     private long _lastInterruptionObservedPosition;
     private bool _hasPlaybackAdvancedThisSession;
     private TimeSpan _lastForwardProgressAt;
-    private long _explicitPlaybackActionGeneration = -1;
-    private bool _playbackRecoverySuppressed;
+    private PlaybackUserIntent _playbackIntent = PlaybackUserIntent.StoppedByUser;
+    private bool _awaitingForwardProgressAfterAction;
     private long _recoveryGeneration = -1;
     private bool _recoveryInFlight;
     private bool _resumeReady;
@@ -1042,7 +1045,10 @@ public sealed partial class MainWindow : Window
                 _playerPresentation, ToPlayerPageKind(currentPage), ToPlayerPageKind(page));
 
         if (shouldStopPlayback)
+        {
+            SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
             StopHeldSeek(commit: true, released: false);
+        }
 
         var returningFromPlayer = page == ShellPage.Catalog && _currentPage == ShellPage.Player;
 
@@ -1588,11 +1594,12 @@ public sealed partial class MainWindow : Window
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
-        if (args.Source.Kind == StreamKind.Series &&
-            _seriesOpeningId == args.Channel.Id &&
+        var selectedChannel = args.Channel;
+        if (selectedChannel.Source.Kind == StreamKind.Series &&
+            _seriesOpeningId == selectedChannel.Id &&
             _seriesOpenCancellation is { IsCancellationRequested: false })
         {
-            LogSeriesOpenExit(Stopwatch.GetTimestamp(), args.Channel, "duplicate-in-flight");
+            LogSeriesOpenExit(Stopwatch.GetTimestamp(), selectedChannel, "duplicate-in-flight");
             return;
         }
 
@@ -1605,26 +1612,42 @@ public sealed partial class MainWindow : Window
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
         var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
         Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
-        LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={playerEntryTraceId} event=content-selected kind={args.Source.Kind}");
+        LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={playerEntryTraceId} event=content-selected kind={selectedChannel.Source.Kind}");
         Interlocked.Increment(ref _metadataGeneration);
 
-        if (args.Source.Kind == StreamKind.Series)
+        if (selectedChannel.Source.Kind == StreamKind.Series)
         {
-            await OpenSeriesAsync(args.Channel, selectionGeneration);
+            LaunchDiagnostics.Write("event=content-selected outcome=opened-series kind=Series");
+            await OpenSeriesAsync(selectedChannel, selectionGeneration);
             return;
         }
 
-        if (args.Source.Kind == StreamKind.Episode)
+        if (selectedChannel.Source.Kind == StreamKind.Episode)
         {
-            OpenSeriesEpisode(args.Channel);
+            if (selectedChannel.Source.DirectUri is null && _catalogLandingPage.Connection is { } episodeConnection)
+                selectedChannel = selectedChannel with { Source = selectedChannel.Source with
+                {
+                    DirectUri = new Uri(StreamUrlBuilder.Series(episodeConnection.Endpoint, episodeConnection.Username,
+                        episodeConnection.Password, selectedChannel.Source.StreamId, selectedChannel.Source.ContainerExtension))
+                } };
+            if (!OpenSeriesEpisode(selectedChannel))
+                ShowContentSelectionError(selectedChannel.Source.Kind, "unavailable");
+            else
+                LaunchDiagnostics.Write("event=content-selected outcome=started kind=Episode");
             return;
         }
 
-        if (args.Source.DirectUri is null)
+        if (selectedChannel.Source.DirectUri is null)
         {
-            StatusText.Text = _catalogLandingPage.PlaybackUnavailableMessage;
-            return;
+            var resolvedChannel = await _catalogLandingPage.ResolvePlayableChannelAsync(selectedChannel);
+            if (resolvedChannel?.Source.DirectUri is null)
+            {
+                ShowContentSelectionError(args.Channel.Source.Kind, "unavailable");
+                return;
+            }
+            selectedChannel = resolvedChannel;
         }
+        LaunchDiagnostics.Write($"event=content-selected outcome=resolved kind={selectedChannel.Source.Kind}");
 
         _currentSeriesId = null;
         _currentSeriesTitle = null;
@@ -1638,26 +1661,26 @@ public sealed partial class MainWindow : Window
         PlayerSeasonComboBox.ItemsSource = null;
         if (_currentPage != ShellPage.Player)
             _playerReturnPage = _currentPage ?? ShellPage.Catalog;
-        var type = args.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live;
+        var type = selectedChannel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live;
         if (_catalogLandingPage.Account is { } account)
         {
-            QueueVisit(account, type, args.Channel.Id);
+            QueueVisit(account, type, selectedChannel.Id);
         }
-        _playerSiblings = args.Source.Kind == StreamKind.Movie
-            ? new[] { args.Channel }
-            : args.Source.Kind == StreamKind.Live
+        _playerSiblings = selectedChannel.Source.Kind == StreamKind.Movie
+            ? new[] { selectedChannel }
+            : selectedChannel.Source.Kind == StreamKind.Live
                 ? args.RelatedChannels.Where(channel => channel.Source.Kind == StreamKind.Live)
-                    .Append(args.Channel).DistinctBy(channel => channel.Id).ToArray()
+                    .Append(selectedChannel).DistinctBy(channel => channel.Id).ToArray()
                 : Array.Empty<Channel>();
-        _currentSource = args.Source;
+        _currentSource = selectedChannel.Source;
         _resumePositionOnStart = null;
-        _nowPlayingChannel = args.Channel;
-        UpdatePlaylistOptionControls(args.Source.Kind);
-        PlayerTitleText.Text = args.Channel.DisplayName;
-        PlayerSideTitle.Text = args.Source.Kind is StreamKind.Movie or StreamKind.Live
+        _nowPlayingChannel = selectedChannel;
+        UpdatePlaylistOptionControls(selectedChannel.Source.Kind);
+        PlayerTitleText.Text = selectedChannel.DisplayName;
+        PlayerSideTitle.Text = selectedChannel.Source.Kind is StreamKind.Movie or StreamKind.Live
             ? "Loading category…"
             : "Now playing";
-        PlayerSideSubtitle.Text = args.Source.Kind switch
+        PlayerSideSubtitle.Text = selectedChannel.Source.Kind switch
         {
             StreamKind.Movie => _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category",
             StreamKind.Live => _playerSiblings.Count <= 1 ? "No other channels are available." : "Other channels in this shelf",
@@ -1667,15 +1690,27 @@ public sealed partial class MainWindow : Window
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         _playbackCompletionShown = false;
-        SetPlayerList(_playerSiblings, args.Channel);
+        SetPlayerList(_playerSiblings, selectedChannel);
         UpdateEpisodeNavigationButtons();
         ShowPage(ShellPage.Player);
-        if (args.Source.Kind == StreamKind.Movie)
-            _ = LoadMovieCategorySiblingsAsync(args.Channel, selectionGeneration);
-        else if (args.Source.Kind == StreamKind.Live)
-            _ = LoadPlayerCategoryTitleAsync(args.Channel, selectionGeneration, "Live TV");
-        _ = LoadPlayerMetadataAsync(args.Channel, type);
-        _ = StartPlaybackAsync(args.Source);
+        if (selectedChannel.Source.Kind == StreamKind.Movie)
+            _ = LoadMovieCategorySiblingsAsync(selectedChannel, selectionGeneration);
+        else if (selectedChannel.Source.Kind == StreamKind.Live)
+            _ = LoadPlayerCategoryTitleAsync(selectedChannel, selectionGeneration, "Live TV");
+        _ = LoadPlayerMetadataAsync(selectedChannel, type);
+        LaunchDiagnostics.Write($"event=content-selected outcome=started kind={selectedChannel.Source.Kind}");
+        _ = StartPlaybackAsync(selectedChannel.Source);
+    }
+
+    private void ShowContentSelectionError(StreamKind kind, string outcome)
+    {
+        var message = _catalogLandingPage.PlaybackUnavailableMessage;
+        StatusText.Text = message;
+        WindowInfoBar.Message = message;
+        AutomationProperties.SetName(WindowInfoBar, message);
+        WindowInfoBar.Severity = InfoBarSeverity.Error;
+        WindowInfoBar.IsOpen = true;
+        LaunchDiagnostics.Write($"event=content-selected outcome={outcome} kind={kind}");
     }
 
     private async Task LoadMovieCategorySiblingsAsync(Channel selected, long selectionGeneration)
@@ -2328,9 +2363,7 @@ public sealed partial class MainWindow : Window
         if (!isRecovery)
             _interruptionBudget.Reset();
         if (!isRecovery)
-            _explicitPlaybackActionGeneration = -1;
-        if (!isRecovery)
-            _playbackRecoverySuppressed = false;
+            SetPlaybackIntent(PlaybackUserIntent.Playing, awaitForwardProgress: false);
         if (!isRecovery)
             ClearPlaybackRetryInfoBar();
         var totalRetryDelay = retryDelayElapsed ?? TimeSpan.Zero;
@@ -2342,6 +2375,8 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(wantedEngine, _engine))
                 SwitchEngineForPlayback(wantedEngine);
         }
+        if (!isRecovery)
+            SetPlaybackIntent(PlaybackUserIntent.Playing, awaitForwardProgress: false);
         StopHeldSeek(commit: true, released: false);
         _engine.IsMuted = _playbackMuteState.IsMuted;
         var resumePosition = source.Kind switch
@@ -2598,6 +2633,11 @@ public sealed partial class MainWindow : Window
         }
         if (result == PlaybackAttemptResult.FirstFrame)
         {
+            if (_playbackIntent == PlaybackUserIntent.Paused && (_engine.IsPlaying || _engine.IsBuffering))
+            {
+                _engine.TogglePause();
+                _awaitingForwardProgressAfterAction = false;
+            }
             if (isRecovery)
             {
                 ClearPlaybackRetryInfoBar();
@@ -2612,7 +2652,7 @@ public sealed partial class MainWindow : Window
             _resumeReady = true;
         }
         SetPauseButtonState(result == PlaybackAttemptResult.FirstFrame
-            ? "Pause"
+            ? (_playbackIntent == PlaybackUserIntent.Paused ? "Play" : "Pause")
             : result is PlaybackAttemptResult.Cancelled or PlaybackAttemptResult.NotFound ? "Play" : "Retry");
         _isUpdatingVolume = true;
         try
@@ -2665,6 +2705,7 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         SaveResumePosition(force: true);
         if (_currentSource is { } stoppingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={stoppingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
@@ -2820,6 +2861,8 @@ public sealed partial class MainWindow : Window
     // Switches the engine for the current item only; unlike the settings toggle it does not touch the saved preference.
     private void SwitchEngineForPlayback(IPlaybackEngine target)
     {
+        SetPlaybackIntent(_playbackIntent, awaitForwardProgress: _playbackIntent == PlaybackUserIntent.Playing,
+            baselinePosition: _engine.Timeline.PositionMilliseconds);
         target.IsMuted = _playbackMuteState.IsMuted;
         Volatile.Write(ref _engine, target);
         LaunchDiagnostics.SetAppContext(EngineLabel(_engine), _selectedTheme.ToString());
@@ -3111,24 +3154,35 @@ public sealed partial class MainWindow : Window
         {
             // A start is still in flight. Space or a click on the video must not restart it: that cancels
             // the open in progress and queues a second one behind the handoff gate.
-            LaunchDiagnostics.Write("event=playback.toggle-ignored reason=start-in-flight");
+            var nextIntent = PlaybackInterruptionPolicy.ToggleIntent(_playbackIntent);
+            SetPlaybackIntent(nextIntent, awaitForwardProgress: nextIntent == PlaybackUserIntent.Playing,
+                baselinePosition: _engine.Timeline.PositionMilliseconds);
+            LaunchDiagnostics.Write($"event=playback.toggle-deferred intent={nextIntent}");
             return;
         }
         if (!_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused))
         {
-            _explicitPlaybackActionGeneration = Volatile.Read(ref _playbackSessionGeneration);
+            var nextIntent = PlaybackInterruptionPolicy.ToggleIntent(_playbackIntent);
+            SetPlaybackIntent(nextIntent, awaitForwardProgress: nextIntent == PlaybackUserIntent.Playing,
+                baselinePosition: _engine.Timeline.PositionMilliseconds);
             _engine.TogglePause();
-            if (_engine.IsPlaying || _engine.IsBuffering)
-                _explicitPlaybackActionGeneration = -1;
-            SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
+            SetPauseButtonState(nextIntent == PlaybackUserIntent.Playing ? "Pause" : "Play");
             if (_isCinemaMode)
             {
-                if (_engine.IsPlaying || _engine.IsBuffering) ShowCinemaControls(resetIdleDeadline: true);
+                if (nextIntent == PlaybackUserIntent.Playing) ShowCinemaControls("user-resume", resetIdleDeadline: true);
                 else StopCinemaCursorIdleTimer(showCursor: true);
             }
         }
         else
             await StartPlaybackAsync(_currentSource, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
+    }
+
+    private void SetPlaybackIntent(PlaybackUserIntent intent, bool awaitForwardProgress, long? baselinePosition = null)
+    {
+        _playbackIntent = intent;
+        _awaitingForwardProgressAfterAction = awaitForwardProgress;
+        if (baselinePosition is { } position)
+            _lastInterruptionObservedPosition = Math.Max(0, position);
     }
 
     private void PlaybackUiTimer_Tick(object? sender, object args)
@@ -3140,15 +3194,18 @@ public sealed partial class MainWindow : Window
         }
         if (_engine.IsEnded)
             StopHeldSeek(commit: true, released: false);
+        var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
+        var playbackFailed = sessionIsCurrent && _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
         if (_isCinemaMode)
         {
             if (_engine.IsPlaying || _engine.IsBuffering)
             {
                 // Resumed after a pause: start hiding the overlay again.
                 if (_cinemaControlsVisible && !_cinemaCursorIdleTimer.IsEnabled)
-                    ShowCinemaControls(resetIdleDeadline: true);
+                    ShowCinemaControls("resume", resetIdleDeadline: true);
             }
-            else ShowCinemaControls(); // paused, ended or failed: keep the controls up
+            else if (_engine.IsPaused || _engine.IsEnded || playbackFailed)
+                ShowCinemaControls("paused-or-terminal");
         }
         else if (_playerPresentation == PlayerPresentation.Compact)
         {
@@ -3165,8 +3222,6 @@ public sealed partial class MainWindow : Window
             }
         }
         var timeline = _engine.Timeline;
-        var sessionIsCurrent = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
-        var playbackFailed = sessionIsCurrent && _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
         var ended = _engine.IsEnded;
         var endDuration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
         var endPosition = ended ? _lastGoodPlaybackPositionMilliseconds : timeline.PositionMilliseconds;
@@ -3180,11 +3235,11 @@ public sealed partial class MainWindow : Window
                 _hasPlaybackAdvancedThisSession = true;
                 _lastForwardProgressAt = Stopwatch.GetElapsedTime(_stallClockStart);
                 _interruptionBudget.RecordForwardProgress(_lastForwardProgressAt);
+                _awaitingForwardProgressAfterAction = false;
             }
             if (lastObservedPosition > _lastGoodPlaybackPositionMilliseconds)
             {
                 _lastGoodPlaybackPositionMilliseconds = lastObservedPosition;
-                _explicitPlaybackActionGeneration = -1;
             }
         }
         if (sessionIsCurrent && !_isHeldSeeking && !_isDraggingProgress && !_recoveryInFlight)
@@ -3203,7 +3258,8 @@ public sealed partial class MainWindow : Window
                 _hasPlaybackAdvancedThisSession,
                 _lastGoodPlaybackPositionMilliseconds,
                 endDuration,
-                _explicitPlaybackActionGeneration == _activePlaybackSessionGeneration,
+                _playbackIntent,
+                _awaitingForwardProgressAfterAction,
                 _activePlaybackSessionGeneration,
                 Volatile.Read(ref _playbackSessionGeneration),
                 _engine.HttpStatus));
@@ -3354,8 +3410,8 @@ public sealed partial class MainWindow : Window
     {
         if (_recoveryInFlight || generation != Volatile.Read(ref _playbackSessionGeneration) ||
             generation != _activePlaybackSessionGeneration || !_resumeReady ||
-            _playbackRecoverySuppressed ||
-            _explicitPlaybackActionGeneration == generation || _currentSource is not { } source)
+            _playbackIntent != PlaybackUserIntent.Playing || _awaitingForwardProgressAfterAction ||
+            _currentSource is not { } source)
             return;
 
         _recoveryInFlight = true;
@@ -3387,8 +3443,8 @@ public sealed partial class MainWindow : Window
                     if (_engine.TryResume(target))
                     {
                         await Task.Delay(TimeSpan.FromSeconds(3));
-                        if (generation != Volatile.Read(ref _playbackSessionGeneration) || _playbackRecoverySuppressed ||
-                            _explicitPlaybackActionGeneration != -1) return;
+                        if (generation != Volatile.Read(ref _playbackSessionGeneration) ||
+                            _playbackIntent != PlaybackUserIntent.Playing || _awaitingForwardProgressAfterAction) return;
                         var resumed = _engine.Timeline.PositionMilliseconds;
                         if (resumed > Math.Max(target, before))
                         {
@@ -3415,8 +3471,8 @@ public sealed partial class MainWindow : Window
                 LaunchDiagnostics.Write($"event=playback.resume attempt={nextAttempt} of {_playbackAttempts} positionMs={Math.Max(0, position - 2_000)}");
                 if (_interruptionBudget.AttemptsUsed > 0)
                     await Task.Delay(PlaybackRetryPolicy.InterruptionDelay(_interruptionBudget.AttemptsUsed));
-                if (generation != Volatile.Read(ref _playbackSessionGeneration) || _playbackRecoverySuppressed ||
-                    _explicitPlaybackActionGeneration != -1) return;
+                if (generation != Volatile.Read(ref _playbackSessionGeneration) ||
+                    _playbackIntent != PlaybackUserIntent.Playing || _awaitingForwardProgressAfterAction) return;
                 var reopenTask = StartPlaybackAsync(
                     source,
                     preserveCompact: _playerPresentation == PlayerPresentation.Compact,
@@ -3426,7 +3482,7 @@ public sealed partial class MainWindow : Window
                 await reopenTask;
                 if (reopenGeneration != Volatile.Read(ref _playbackSessionGeneration))
                     return;
-                if (_playbackRecoverySuppressed || _explicitPlaybackActionGeneration != -1)
+                if (_playbackIntent != PlaybackUserIntent.Playing || _awaitingForwardProgressAfterAction)
                     return;
                 if (_resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration))
                     return;
@@ -3679,7 +3735,8 @@ public sealed partial class MainWindow : Window
                 _lastGoodPlaybackPositionMilliseconds > 0,
                 _lastGoodPlaybackPositionMilliseconds,
                 timeline.DurationMilliseconds,
-                _explicitPlaybackActionGeneration == callbackGeneration,
+                _playbackIntent,
+                _awaitingForwardProgressAfterAction,
                 callbackGeneration,
                 Volatile.Read(ref _playbackSessionGeneration),
                 _engine.HttpStatus));
@@ -3718,6 +3775,9 @@ public sealed partial class MainWindow : Window
                 _heldSeekLastStepAt = now;
                 _heldSeekDidScrub = true;
                 _isHeldSeeking = true;
+                var seekIntent = PlaybackInterruptionPolicy.IntentAfterSeek(_playbackIntent);
+                SetPlaybackIntent(seekIntent, awaitForwardProgress: seekIntent == PlaybackUserIntent.Playing,
+                    baselinePosition: _heldSeekTarget);
                 _engine.Seek(_heldSeekTarget);
             }
             if (_heldSeekDidScrub)
@@ -3797,6 +3857,9 @@ public sealed partial class MainWindow : Window
 
         if (timeline.ClampSeekTarget(targetMilliseconds) is { } target)
         {
+            var seekIntent = PlaybackInterruptionPolicy.IntentAfterSeek(_playbackIntent);
+            SetPlaybackIntent(seekIntent, awaitForwardProgress: seekIntent == PlaybackUserIntent.Playing,
+                baselinePosition: target);
             _engine.Seek(target);
             if (timeline.DurationMilliseconds is { } duration &&
                 duration - target > NextPrompt.LeadMilliseconds(_nowPlayingChannel?.Source.Kind ?? StreamKind.Live, duration))
@@ -3985,8 +4048,7 @@ public sealed partial class MainWindow : Window
 
     private void ReturnFromPlayer()
     {
-        _explicitPlaybackActionGeneration = Volatile.Read(ref _playbackSessionGeneration);
-        _playbackRecoverySuppressed = true;
+        SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_playerReturnPage == ShellPage.Catalog)
         {
@@ -4455,23 +4517,34 @@ public sealed partial class MainWindow : Window
             return;
         }
         if (!_isCinemaMode) return;
-        HandleCinemaPointerMoved("PlayerPage");
+        HandleCinemaPointerMoved("PlayerPage", args);
     }
 
     private void VideoSurface_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
         if (!_isCinemaMode) return;
-        HandleCinemaPointerMoved(sender is FrameworkElement element ? element.Name : "VideoSurface");
+        HandleCinemaPointerMoved(sender is FrameworkElement element ? element.Name : "VideoSurface", args);
     }
 
-    private void HandleCinemaPointerMoved(string source)
+    private void HandleCinemaPointerMoved(string source, PointerRoutedEventArgs args)
     {
+        var position = args.GetCurrentPoint(WindowRoot).Position;
+        var previous = _lastCinemaPointerPosition;
+        _lastCinemaPointerPosition = position;
+        var hadPrevious = _hasCinemaPointerPosition;
+        _hasCinemaPointerPosition = true;
+        if (!hadPrevious || DateTimeOffset.UtcNow - _cinemaLastHideAt < TimeSpan.FromMilliseconds(100))
+            return;
+        var dx = position.X - previous.X;
+        var dy = position.Y - previous.Y;
+        if (dx * dx + dy * dy < 4)
+            return;
         if (!_cinemaPointerMoveDiagnosticWritten)
         {
             _cinemaPointerMoveDiagnosticWritten = true;
             LaunchDiagnostics.Write($"event=cinema.pointer-move source={source}");
         }
-        ShowCinemaControls(resetIdleDeadline: true);
+        ShowCinemaControls("pointer-move", resetIdleDeadline: true);
     }
 
     private void CinemaCursorIdleTimer_Tick(object? sender, object args)
@@ -4488,9 +4561,20 @@ public sealed partial class MainWindow : Window
             return;
         }
         if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
-        if (!_cinemaWindowActive || !(_engine.IsPlaying || _engine.IsBuffering))
+        if (!_cinemaWindowActive)
         {
             StopCinemaCursorIdleTimer(showCursor: true);
+            return;
+        }
+        var playbackFailed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
+        if (_playbackIntent != PlaybackUserIntent.Playing || _engine.IsEnded || playbackFailed)
+        {
+            StopCinemaCursorIdleTimer(showCursor: true);
+            return;
+        }
+        if (!(_engine.IsPlaying || _engine.IsBuffering))
+        {
+            _cinemaCursorIdleTimer.Stop();
             return;
         }
         var idleFor = DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt;
@@ -4504,11 +4588,15 @@ public sealed partial class MainWindow : Window
         }
         SetCinemaControlsVisible(false);
         SetCinemaCursorVisible(false);
+        _cinemaLastHideAt = DateTimeOffset.UtcNow;
+        LaunchDiagnostics.Write("event=cinema.hide");
     }
 
-    private void ShowCinemaControls(bool resetIdleDeadline = false)
+    private void ShowCinemaControls(string reason = "interaction", bool resetIdleDeadline = false)
     {
         if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
+        if (!_cinemaControlsVisible || _cinemaCursorHidden)
+            LaunchDiagnostics.Write($"event=cinema.show reason={reason}");
         if (resetIdleDeadline) _cinemaLastMouseActivityAt = DateTimeOffset.UtcNow;
         SetCinemaControlsVisible(true);
         SetCinemaCursorVisible(true);
@@ -4608,7 +4696,10 @@ public sealed partial class MainWindow : Window
     private void StopCinemaCursorIdleTimer(bool showCursor)
     {
         _cinemaCursorIdleTimer.Stop();
+        var wasHidden = !_cinemaControlsVisible || _cinemaCursorHidden;
         if (showCursor) SetCinemaCursorVisible(true);
+        if (showCursor && wasHidden)
+            LaunchDiagnostics.Write("event=cinema.show reason=state-change");
         SetCinemaControlsVisible(true);
     }
 
@@ -4722,6 +4813,7 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         if (_windowState.IsWindowMini)
         {
             _windowMiniGeometry = _windowState.GetCurrentWindowMiniGeometry();

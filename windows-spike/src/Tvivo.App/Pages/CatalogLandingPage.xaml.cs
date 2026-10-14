@@ -236,6 +236,17 @@ public sealed partial class CatalogLandingPage : UserControl
             .FirstOrDefault(group => group.Id == groupId)?.DisplayName);
     }
 
+    public Task<Channel?> ResolvePlayableChannelAsync(Channel channel)
+    {
+        if (channel.Source.DirectUri is not null)
+            return Task.FromResult<Channel?>(channel);
+        if (_account is not { } account || _connection is not { } connection ||
+            !StringComparer.Ordinal.Equals(account.AccountId, channel.ProviderAccountId))
+            return Task.FromResult<Channel?>(null);
+        var type = TypeForSource(channel.Source.Kind);
+        return Task.Run(() => _repository.GetChannel(account, connection, type, channel.Id));
+    }
+
     public Task<IReadOnlyList<Channel>> GetFullCategoryChannelsForAsync(Channel channel)
     {
         if (_account is not { } account || string.IsNullOrWhiteSpace(channel.GroupId))

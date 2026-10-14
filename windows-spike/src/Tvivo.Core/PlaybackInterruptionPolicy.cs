@@ -27,6 +27,13 @@ public enum PlaybackRecoveryAction
     Stop,
 }
 
+public enum PlaybackUserIntent
+{
+    Playing,
+    Paused,
+    StoppedByUser,
+}
+
 public sealed record PlaybackInterruptionSnapshot(
     PlaybackEngineState State,
     PlaybackAttemptResult? Failure,
@@ -34,7 +41,8 @@ public sealed record PlaybackInterruptionSnapshot(
     bool HasForwardProgress,
     long PositionMilliseconds,
     long? DurationMilliseconds,
-    bool ExplicitUserAction,
+    PlaybackUserIntent Intent,
+    bool AwaitingForwardProgress,
     long SessionGeneration,
     long CurrentGeneration,
     int? HttpStatus = null,
@@ -47,7 +55,8 @@ public static class PlaybackInterruptionPolicy
 
     public static PlaybackInterruption Classify(PlaybackInterruptionSnapshot snapshot)
     {
-        if (snapshot.SessionGeneration != snapshot.CurrentGeneration || snapshot.ExplicitUserAction)
+        if (snapshot.SessionGeneration != snapshot.CurrentGeneration ||
+            snapshot.Intent != PlaybackUserIntent.Playing || snapshot.AwaitingForwardProgress)
             return PlaybackInterruption.None;
 
         if (snapshot.State == PlaybackEngineState.Failed || snapshot.Failure is not null)
@@ -59,7 +68,7 @@ public static class PlaybackInterruptionPolicy
                 ? PlaybackInterruption.None
                 : PlaybackInterruption.UnexpectedEnd;
 
-        if (snapshot.State is PlaybackEngineState.Stopped or PlaybackEngineState.Paused)
+        if (snapshot.State == PlaybackEngineState.Stopped)
             return PlaybackInterruption.UnexpectedEnd;
 
         if (snapshot.State is PlaybackEngineState.Playing or PlaybackEngineState.Buffering &&
@@ -68,6 +77,14 @@ public static class PlaybackInterruptionPolicy
 
         return PlaybackInterruption.None;
     }
+
+    public static PlaybackUserIntent ToggleIntent(PlaybackUserIntent current) =>
+        current == PlaybackUserIntent.Playing ? PlaybackUserIntent.Paused : PlaybackUserIntent.Playing;
+
+    public static PlaybackUserIntent IntentAfterSeek(PlaybackUserIntent current) => current;
+
+    public static bool ShouldAwaitForwardProgress(PlaybackUserIntent intent) =>
+        intent == PlaybackUserIntent.Playing;
 
     public static PlaybackRecoveryAction NextAction(
         PlaybackInterruption interruption,
