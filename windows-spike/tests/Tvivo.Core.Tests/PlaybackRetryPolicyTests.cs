@@ -21,11 +21,11 @@ public sealed class PlaybackRetryPolicyTests
         Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 1, 5, TimeSpan.Zero));
         Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 4, 5, TimeSpan.Zero));
         Assert.False(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 5, 5, TimeSpan.Zero));
-        Assert.Equal(TimeSpan.FromMilliseconds(400), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 1));
-        Assert.Equal(TimeSpan.FromMilliseconds(800), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 2));
-        Assert.Equal(TimeSpan.FromMilliseconds(1200), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 3));
-        Assert.Equal(TimeSpan.FromMilliseconds(1600), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 4));
-        Assert.Equal(TimeSpan.FromMilliseconds(1600), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 8));
+        Assert.Equal(TimeSpan.FromMilliseconds(500), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 1));
+        Assert.Equal(TimeSpan.FromSeconds(1), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 2));
+        Assert.Equal(TimeSpan.FromSeconds(2), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 3));
+        Assert.Equal(TimeSpan.FromSeconds(3), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 4));
+        Assert.Equal(TimeSpan.FromSeconds(3), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 8));
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public sealed class PlaybackRetryPolicyTests
             PlaybackAttemptResult.NotFound,
             1,
             10,
-            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(399)));
+            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(499)));
     }
 
     [Fact]
@@ -45,13 +45,13 @@ public sealed class PlaybackRetryPolicyTests
         var attempt = 0;
         while (PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, ++attempt, 10, elapsed))
         {
-            elapsed += TimeSpan.FromSeconds(1.2); // fake open duration
+            elapsed += TimeSpan.FromMilliseconds(100); // fake open duration
             elapsed += PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, attempt);
         }
 
         Assert.True(elapsed <= PlaybackRetryPolicy.MaximumNotFoundHardElapsed);
         Assert.False(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 1, 10,
-            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(399)));
+            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(499)));
         Assert.False(EngineFallbackPolicy.ShouldFallback(PlaybackAttemptResult.NotFound, alreadyTried: false));
     }
 
@@ -74,12 +74,58 @@ public sealed class PlaybackRetryPolicyTests
         Assert.False(PlaybackRetryPolicy.ShouldRetry(result, 1, 5, TimeSpan.Zero));
 
     [Fact]
-    public void Retry_delay_and_elapsed_time_respect_the_overall_cap()
+    public void Timeout_attempts_are_not_cut_off_by_an_elapsed_time_cap()
     {
-        Assert.Equal(TimeSpan.FromSeconds(1), PlaybackRetryPolicy.Delay(1));
-        Assert.Equal(TimeSpan.FromSeconds(4), PlaybackRetryPolicy.Delay(9));
+        Assert.Equal(TimeSpan.FromMilliseconds(500), PlaybackRetryPolicy.Delay(1));
+        Assert.Equal(TimeSpan.FromSeconds(3), PlaybackRetryPolicy.Delay(9));
+        Assert.True(PlaybackRetryPolicy.ShouldRetry(
+            PlaybackAttemptResult.Timeout, 4, 5, TimeSpan.FromMinutes(10)));
         Assert.False(PlaybackRetryPolicy.ShouldRetry(
-            PlaybackAttemptResult.Timeout, 1, 5, PlaybackRetryPolicy.MaximumElapsed - TimeSpan.FromMilliseconds(500)));
+            PlaybackAttemptResult.Timeout, 5, 5, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void Five_timeout_attempts_run_before_fallback_and_fallback_has_a_fresh_budget()
+    {
+        var configuredAttempts = 5;
+        var elapsed = TimeSpan.Zero;
+        var primaryAttempts = 1;
+        while (PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.Timeout, primaryAttempts, configuredAttempts, elapsed))
+        {
+            elapsed += PlaybackRetryPolicy.Delay(PlaybackAttemptResult.Timeout, primaryAttempts);
+            primaryAttempts++;
+        }
+
+        Assert.Equal(5, primaryAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(6.5), elapsed);
+
+        var fallbackAttempts = 1;
+        Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.Timeout, fallbackAttempts, configuredAttempts, TimeSpan.Zero));
+        Assert.Equal(5, PlaybackRetryPolicy.ClampAttempts(configuredAttempts));
+    }
+
+    [Fact]
+    public void Five_not_found_attempts_fit_the_separate_not_found_budget_before_fallback()
+    {
+        var elapsed = TimeSpan.Zero;
+        var attempts = 1;
+        while (PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, attempts, 5, elapsed))
+        {
+            elapsed += TimeSpan.FromMilliseconds(100);
+            elapsed += PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, attempts);
+            attempts++;
+        }
+
+        Assert.Equal(5, attempts);
+        Assert.True(elapsed < PlaybackRetryPolicy.MaximumNotFoundElapsed);
+    }
+
+    [Fact]
+    public void Host_not_ready_is_retried_as_a_distinct_pre_open_failure()
+    {
+        Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.HostNotReady, 1, 5, TimeSpan.Zero));
+        Assert.False(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.HostNotReady, 5, 5, TimeSpan.Zero));
+        Assert.True(EngineFallbackPolicy.ShouldFallback(PlaybackAttemptResult.HostNotReady, alreadyTried: false));
     }
 
     [Fact]

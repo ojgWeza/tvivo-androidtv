@@ -109,5 +109,6 @@ public static class EngineFallbackPolicy
             or PlaybackAttemptResult.UnknownFailure
             or PlaybackAttemptResult.NetworkFailure
             or PlaybackAttemptResult.Timeout
-            or PlaybackAttemptResult.HostFailure;
+            or PlaybackAttemptResult.HostFailure
+            or PlaybackAttemptResult.HostNotReady;
 }

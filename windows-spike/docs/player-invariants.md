@@ -4,6 +4,12 @@ Starting any new playback clears the previous picture immediately; a failure nev
 
 The black curtain shows static, non-interactive popcorn loading art until the current generation reaches its first frame; it is hidden for compact player areas under 300 px and on final failure.
 
+The selected video host must be visible and loaded at a non-zero size under the opaque curtain before an engine opens; collapsing it breaks LibVLC swap-chain initialization. Each attempt stops both engines, exposes the selected host beneath the curtain, forces layout, then waits up to 3 seconds for `Visible`, `IsLoaded`, and positive actual width/height. This host wait has its own budget and is not an engine/network timeout. Failure logs `playback.host-not-ready` with generation, host visibility/load/size, player page visibility and curtain state, then passes `HostNotReady` through the same retry decision.
+
+New playback clears/stops both engines before exposing the host, and the curtain stays up until that generation's first frame. `player.reset` is logged at the point the old surface is cleared; `player.host-ready` is a separate readiness diagnostic. After stopping both engines, `playback.handoff-stopped` records stop duration and the selected host/page state before visibility is changed.
+
+The configured **Playback attempts** value (default 5) is the per-engine attempt budget, including the first open. Each engine gets a fresh budget. An engine open has a 10-second per-attempt cancellation; that timeout is classified inside the attempt loop and goes through the retry policy. Timeout and network failures can use the full configured budget without a cumulative elapsed cap. Retries wait 0.5, 1, 2, then 3 seconds. Not Found uses the same attempt count and backoff, with an 8-second retry-decision cap and a 10-second hard stop. HTTP 403 is never retried. Once the selected engine exhausts its budget, supported transient failures may fall back once to the other engine with a fresh budget; Not Found does not currently trigger engine fallback. Pressing Retry starts a fresh budget and logs `player.reset reason=Retry`.
+
 ## Regression checklist
 
 - Movie → pause → failing Live item → another movie: no old frame at any time.

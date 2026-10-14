@@ -171,7 +171,7 @@ public interface IMovieInfoProvider
 public enum PlaybackAttemptResult
 {
     Started, FirstFrame, Cancelled, NetworkFailure, UnsupportedMedia, DecodeFailure,
-    Timeout, HostFailure, UnknownFailure, NotFound, Forbidden
+    Timeout, HostFailure, HostNotReady, UnknownFailure, NotFound, Forbidden
 }
 
 public readonly record struct PlaybackSessionToken(long Generation, Guid SessionId);

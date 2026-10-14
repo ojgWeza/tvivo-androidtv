@@ -18,6 +18,26 @@ public sealed class PlayerResetPolicyTests
     public void Same_media_recovery_keeps_the_current_frame() =>
         Assert.False(PlayerResetPolicy.RequiresReset(PlayerResetEntryKind.SameMediaRecovery));
 
+    [Theory]
+    [InlineData(PlayerResetEntryKind.FreshStart, true)]
+    [InlineData(PlayerResetEntryKind.Retry, true)]
+    [InlineData(PlayerResetEntryKind.EngineFallback, true)]
+    [InlineData(PlayerResetEntryKind.NewItem, true)]
+    [InlineData(PlayerResetEntryKind.AutoplayNext, true)]
+    [InlineData(PlayerResetEntryKind.SameMediaRecovery, false)]
+    [InlineData(PlayerResetEntryKind.FinalFailure, false)]
+    public void Fresh_opens_require_the_selected_host_visible_under_the_curtain(
+        PlayerResetEntryKind entryKind,
+        bool expected) =>
+        Assert.Equal(expected, PlayerResetPolicy.MustShowHostUnderCurtainBeforeOpen(entryKind));
+
+    [Theory]
+    [InlineData(PlayerResetEntryKind.NewItem)]
+    [InlineData(PlayerResetEntryKind.Retry)]
+    [InlineData(PlayerResetEntryKind.EngineFallback)]
+    public void New_item_retry_and_fallback_each_start_a_surface_reset(PlayerResetEntryKind entryKind) =>
+        Assert.True(PlayerResetPolicy.RequiresReset(entryKind));
+
     [Fact]
     public void Final_failure_never_reveals_a_previous_picture()
     {

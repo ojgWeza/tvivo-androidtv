@@ -246,7 +246,7 @@
                                        FontFamily="Segoe UI Emoji" IsColorFontEnabled="True" FontSize="132"
                                        Foreground="#FFFFFFFF" Text="🍿" IsHitTestVisible="False" />
                             <TextBlock x:Name="PlayerLoadingText" Grid.Row="1" HorizontalAlignment="Center"
-                                       Foreground="#FFFFFFFF" FontSize="24" Text="Loading…"
+                                       Foreground="#FFFFFFFF" FontSize="24" Text="Loading..."
                                        AutomationProperties.Name="Loading" IsHitTestVisible="False" />
                         </Grid>
                     </Grid>

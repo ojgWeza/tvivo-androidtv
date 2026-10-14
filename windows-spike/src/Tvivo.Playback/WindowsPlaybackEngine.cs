@@ -232,6 +232,11 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
                 Log($"Timed out waiting for LibVLC readiness after {StartupDeadline.TotalSeconds:0.###} seconds. {exception.GetType().Name}");
                 return PlaybackAttemptResult.Timeout;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Log("Cancelled while waiting for LibVLC readiness.");
+                return PlaybackAttemptResult.Cancelled;
+            }
             catch (Exception exception)
             {
                 Log($"LibVLC readiness failed before playback could start. {exception.GetType().Name}");

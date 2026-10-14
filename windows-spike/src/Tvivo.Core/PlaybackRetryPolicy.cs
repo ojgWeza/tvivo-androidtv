@@ -5,7 +5,6 @@ public static class PlaybackRetryPolicy
     public const int DefaultAttempts = 5;
     public const int MinimumAttempts = 1;
     public const int MaximumAttempts = 10;
-    public static readonly TimeSpan MaximumElapsed = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan MaximumNotFoundElapsed = TimeSpan.FromSeconds(8);
     public static readonly TimeSpan MaximumNotFoundHardElapsed = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan MinimumNotFoundOpenWindow = TimeSpan.FromSeconds(1);
@@ -17,27 +16,26 @@ public static class PlaybackRetryPolicy
         if (attemptIndex < 1 || attemptIndex >= ClampAttempts(maxAttempts))
             return false;
 
+        var retryable = result is PlaybackAttemptResult.NotFound
+            or PlaybackAttemptResult.NetworkFailure
+            or PlaybackAttemptResult.Timeout
+            or PlaybackAttemptResult.HostNotReady
+            or PlaybackAttemptResult.UnknownFailure;
+        if (!retryable)
+            return false;
+
+        if (result != PlaybackAttemptResult.NotFound)
+            return true;
+
         var delay = Delay(result, attemptIndex);
-        var maximumElapsed = result == PlaybackAttemptResult.NotFound
-            ? MaximumNotFoundElapsed
-            : MaximumElapsed;
-        var viableOpenWindow = result == PlaybackAttemptResult.NotFound
-            ? MinimumNotFoundOpenWindow
-            : TimeSpan.Zero;
-        return elapsed + delay + viableOpenWindow <= maximumElapsed &&
-            result is PlaybackAttemptResult.NotFound
-                or PlaybackAttemptResult.NetworkFailure
-                or PlaybackAttemptResult.Timeout
-                or PlaybackAttemptResult.UnknownFailure;
+        return elapsed + delay + MinimumNotFoundOpenWindow <= MaximumNotFoundElapsed;
     }
 
     public static TimeSpan Delay(PlaybackAttemptResult result, int attemptIndex) =>
-        result == PlaybackAttemptResult.NotFound
-            ? TimeSpan.FromMilliseconds(Math.Clamp(attemptIndex, 1, 4) * 400)
-            : Delay(attemptIndex);
+        Delay(attemptIndex);
 
     public static TimeSpan Delay(int attemptIndex) =>
-        TimeSpan.FromSeconds(Math.Clamp(attemptIndex, 1, 4));
+        InterruptionDelay(attemptIndex);
 
     public static TimeSpan InterruptionDelay(int attemptIndex) => attemptIndex switch
     {

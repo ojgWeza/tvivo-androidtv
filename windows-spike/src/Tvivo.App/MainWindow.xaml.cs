@@ -2412,14 +2412,14 @@ public sealed partial class MainWindow : Window
             throw new ArgumentException("A reset requires a fresh playback entry.", nameof(reason));
 
         SetPlayerLoadingArtState(PlayerLoadingArtState.Loading);
-        SetPlaybackSurfaceVisibility(false);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         UpdatePlayerLoadingArtVisibility();
+        SetPlaybackSurfaceVisibility(false);
         var surfaceCleared = VideoView.Visibility == Visibility.Collapsed &&
             NativePlayerElement.Visibility == Visibility.Collapsed &&
             PlayerVideoCurtain.Visibility == Visibility.Visible;
-        LaunchDiagnostics.Write($"event=player.reset reason={reason} generation={generation} surfaceCleared={surfaceCleared.ToString().ToLowerInvariant()}");
-
+        LaunchDiagnostics.Write(
+            $"event=player.reset reason={reason} generation={generation} surfaceCleared={surfaceCleared.ToString().ToLowerInvariant()}");
         _terminalPlaybackFailure = false;
         _playbackFailurePolicy.ClearFailure(generation);
         _resumeReady = false;
@@ -2482,6 +2482,63 @@ public sealed partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
 
+    private FrameworkElement SelectedPlaybackHost => ReferenceEquals(_engine, _vlcEngine)
+        ? VideoView
+        : NativePlayerElement;
+
+    private string SelectedPlaybackHostSize() =>
+        $"{SelectedPlaybackHost.ActualWidth:0.0}x{SelectedPlaybackHost.ActualHeight:0.0}";
+
+    private async Task<bool> EnsureSelectedPlaybackHostReadyAsync(CancellationToken cancellationToken)
+    {
+        var host = SelectedPlaybackHost;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void CheckReady()
+        {
+            host.UpdateLayout();
+            if (host.Visibility == Visibility.Visible && host.IsLoaded &&
+                host.ActualWidth > 0 && host.ActualHeight > 0)
+                ready.TrySetResult();
+        }
+
+        RoutedEventHandler loadedHandler = (_, _) => CheckReady();
+        SizeChangedEventHandler sizeChangedHandler = (_, _) => CheckReady();
+        host.Loaded += loadedHandler;
+        host.SizeChanged += sizeChangedHandler;
+        try
+        {
+            PlayerPage.UpdateLayout();
+            CheckReady();
+            await ready.Task.WaitAsync(cancellationToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        finally
+        {
+            host.Loaded -= loadedHandler;
+            host.SizeChanged -= sizeChangedHandler;
+        }
+    }
+
+    private void LogPlaybackHostNotReady(long generation)
+    {
+        var host = SelectedPlaybackHost;
+        LaunchDiagnostics.Write(
+            $"event=playback.host-not-ready generation={generation} visibility={host.Visibility} loaded={host.IsLoaded.ToString().ToLowerInvariant()} size={SelectedPlaybackHostSize()} playerPage={PlayerPage.Visibility} curtain={PlayerVideoCurtain.Visibility}");
+    }
+
+    private async Task<PlaybackAttemptResult> OpenPlaybackWithTimeoutAsync(
+        StreamSource source,
+        CancellationToken sessionToken)
+    {
+        using var openCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
+        openCts.CancelAfter(TimeSpan.FromSeconds(10));
+        return await _playback.PlayAsync(source, openCts.Token);
+    }
+
     private Task<bool> QueueBothPlaybackEnginesStop(long? onlyIfCurrentGeneration = null) =>
         _playbackHandoff.RunAsync(
             _ => OnUiAsync(async () =>
@@ -2500,7 +2557,6 @@ public sealed partial class MainWindow : Window
         bool isRecovery = false,
         long? recoveryPositionMs = null,
         bool engineFallbackAttempt = false,
-        Stopwatch? retryBudgetStopwatch = null,
         PlayerResetEntryKind entryKind = PlayerResetEntryKind.FreshStart)
     {
         var resetKind = isRecovery
@@ -2518,7 +2574,7 @@ public sealed partial class MainWindow : Window
             ClearPlaybackStatus();
             SetPlaybackStatus("Starting playback…");
         }
-        var retryClock = retryBudgetStopwatch ?? Stopwatch.StartNew();
+        var retryClock = new Stopwatch();
         var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
         if (!engineFallbackAttempt)
@@ -2623,6 +2679,7 @@ public sealed partial class MainWindow : Window
             await playbackStart.StopTask;
             if (!IsCurrentPlaybackStart(generation, sessionCts))
                 return;
+            retryClock.Start();
             while (true)
             {
                 if (isRecovery && !_interruptionBudget.TryConsume(_playbackAttempts))
@@ -2635,46 +2692,72 @@ public sealed partial class MainWindow : Window
                 // native/network state independently, so stopping only the selected
                 // PlaybackService can leave the previous provider connection alive.
                 var handoffStartedAt = Stopwatch.GetTimestamp();
-                var budgetLimit = sawNotFound
-                    ? PlaybackRetryPolicy.MaximumNotFoundHardElapsed
-                    : PlaybackRetryPolicy.MaximumElapsed;
-                var remaining = budgetLimit - retryClock.Elapsed;
-                if (remaining <= TimeSpan.Zero)
+                if (sawNotFound && retryClock.Elapsed >= PlaybackRetryPolicy.MaximumNotFoundHardElapsed)
                 {
-                    result = sawNotFound ? PlaybackAttemptResult.NotFound : PlaybackAttemptResult.Timeout;
+                    result = PlaybackAttemptResult.NotFound;
                     break;
                 }
-                using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(sessionCts.Token);
-                attemptCts.CancelAfter(remaining < PlaybackRetryPolicy.MaximumNotFoundHardElapsed
-                    ? remaining
-                    : PlaybackRetryPolicy.MaximumNotFoundHardElapsed);
-                result = await _playbackHandoff.RunAsync(
-                    _ => OnUiAsync(async () =>
-                    {
-                        // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
-                        // while stopping) shows up here as a large gateWaitMs.
-                        LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
-                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                        await StopBothPlaybackEnginesAsync();
-                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                        await Task.Yield();
-                        // PlaybackHandoff's delay resumes on a pool thread. Keep UI
-                        // layout and both engine lifecycle calls on the window's STA.
-                        if (IsCurrentPlaybackStart(generation, sessionCts))
+                PlaybackAttemptResult? preOpenFailure = null;
+                try
+                {
+                    result = await _playbackHandoff.RunAsync(
+                        _ => OnUiAsync(async () =>
+                        {
+                            // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
+                            // while stopping) shows up here as a large gateWaitMs.
+                            LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
+                            if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                            var stopStartedAt = Stopwatch.GetTimestamp();
+                            await StopBothPlaybackEnginesAsync();
+                            LaunchDiagnostics.Write(
+                                $"event=playback.handoff-stopped generation={generation} stopMs={Stopwatch.GetElapsedTime(stopStartedAt).TotalMilliseconds:0} hostVisible={SelectedPlaybackHost.Visibility} hostLoaded={SelectedPlaybackHost.IsLoaded.ToString().ToLowerInvariant()} hostSize={SelectedPlaybackHostSize()} playerPage={PlayerPage.Visibility}");
+                            if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                            // Keep the opaque curtain over the selected host while LibVLC
+                            // initializes its swap-chain device.
+                            SetPlaybackSurfaceVisibility(true, allowCurtain: true);
                             PlayerPage.UpdateLayout();
-                    }),
-                    token => OnUiAsync(() =>
-                    {
-                        if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
-                            return Task.FromResult(PlaybackAttemptResult.Cancelled);
-                        LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
-                        _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
-                        return _playback.PlayAsync(playSource, token);
-                    }),
-                    attemptCts.Token);
-                if (result == PlaybackAttemptResult.Cancelled && attemptCts.IsCancellationRequested && !sessionCts.IsCancellationRequested)
-                    result = sawNotFound ? PlaybackAttemptResult.NotFound : PlaybackAttemptResult.Timeout;
-                result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
+                            SelectedPlaybackHost.UpdateLayout();
+                            using var hostWaitCts = CancellationTokenSource.CreateLinkedTokenSource(sessionCts.Token);
+                            hostWaitCts.CancelAfter(TimeSpan.FromSeconds(3));
+                            var hostReady = await EnsureSelectedPlaybackHostReadyAsync(hostWaitCts.Token);
+                            if (!hostReady)
+                            {
+                                if (!sessionCts.IsCancellationRequested)
+                                {
+                                    LogPlaybackHostNotReady(generation);
+                                    preOpenFailure = PlaybackAttemptResult.HostNotReady;
+                                }
+                                return;
+                            }
+                            if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                            LaunchDiagnostics.Write(
+                                $"event=player.host-ready generation={generation} visibility={SelectedPlaybackHost.Visibility} loaded={SelectedPlaybackHost.IsLoaded.ToString().ToLowerInvariant()} size={SelectedPlaybackHostSize()} playerPage={PlayerPage.Visibility} curtain={PlayerVideoCurtain.Visibility}");
+                        }),
+                        token => OnUiAsync(() =>
+                        {
+                            if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
+                                return Task.FromResult(PlaybackAttemptResult.Cancelled);
+                            if (preOpenFailure is { } failure)
+                                return Task.FromResult(failure);
+                            LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
+                            _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
+                            return OpenPlaybackWithTimeoutAsync(playSource, sessionCts.Token);
+                        }),
+                        sessionCts.Token);
+                }
+                catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
+                {
+                    LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason=user-cancelled");
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Per-open cancellation is a timeout for this attempt. Keep it inside
+                    // the loop so ShouldRetry and the normal retry diagnostic still run.
+                    result = PlaybackAttemptResult.Timeout;
+                }
+                if (result != PlaybackAttemptResult.HostNotReady)
+                    result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
                 sawNotFound |= result == PlaybackAttemptResult.NotFound;
                 var canRetry = isRecovery
                     ? _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts) &&
@@ -2768,7 +2851,7 @@ public sealed partial class MainWindow : Window
             SwitchEngineForPlayback(otherEngine);
             _resumePositionOnStart = resumeOnStartForFallback;
             await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs,
-                engineFallbackAttempt: true, retryBudgetStopwatch: retryClock);
+                engineFallbackAttempt: true);
             return;
         }
         if (engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame)

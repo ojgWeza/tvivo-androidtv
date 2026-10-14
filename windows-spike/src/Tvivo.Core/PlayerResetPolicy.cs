@@ -22,6 +22,9 @@ public enum PlayerResetEntryKind
 
 public static class PlayerResetPolicy
 {
+    public static bool MustShowHostUnderCurtainBeforeOpen(PlayerResetEntryKind entryKind) =>
+        RequiresReset(entryKind);
+
     public static bool ShowsLoadingArt(PlayerLoadingArtState state) => state is
         PlayerLoadingArtState.Loading or
         PlayerLoadingArtState.Retrying;
