@@ -1839,7 +1839,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowPlaybackRetryInfoBar(int nextAttempt, int maxAttempts)
     {
-        var message = $"Trying again ({nextAttempt} of {maxAttempts})...";
+        var message = $"Trying again ({nextAttempt} of {maxAttempts})…";
         WindowInfoBar.Message = message;
         AutomationProperties.SetName(WindowInfoBar, message);
         WindowInfoBar.Severity = InfoBarSeverity.Informational;
@@ -2404,6 +2404,7 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"event=playback.attempt generation={generation} engine={engineName} kind={source.Kind} extensionPresent={(string.IsNullOrWhiteSpace(source.ContainerExtension) ? "no" : "yes")} resume={(resumePosition > 0 || isRecovery && recoveryPositionMs > 0 ? "yes" : "no")} httpStatus=unknown redirect=unknown");
         PlaybackAttemptResult result;
         var attemptCount = 0;
+        var sawNotFound = false;
         try
         {
             while (true)
@@ -2444,10 +2445,11 @@ public sealed partial class MainWindow : Window
                     }),
                     sessionCts.Token);
                 result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
+                sawNotFound |= result == PlaybackAttemptResult.NotFound;
                 if (!PlaybackRetryPolicy.ShouldRetry(result, attemptCount, _playbackAttempts, totalRetryDelay))
                     break;
 
-                var delay = PlaybackRetryPolicy.Delay(attemptCount);
+                var delay = PlaybackRetryPolicy.Delay(result, attemptCount);
                 LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
                 ShowPlaybackRetryInfoBar(attemptCount + 1, _playbackAttempts);
                 await Task.Delay(delay, sessionCts.Token);
@@ -2480,6 +2482,8 @@ public sealed partial class MainWindow : Window
             return;
         }
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
+        if (result == PlaybackAttemptResult.FirstFrame && sawNotFound)
+            LaunchDiagnostics.Write($"event=playback.recovered attempts={attemptCount}");
         if (result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.DecodeFailure or
             PlaybackAttemptResult.NetworkFailure or PlaybackAttemptResult.UnsupportedMedia or
             PlaybackAttemptResult.HostFailure or PlaybackAttemptResult.Timeout or PlaybackAttemptResult.Forbidden or

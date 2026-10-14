@@ -15,14 +15,36 @@ public sealed class PlaybackRetryPolicyTests
         Assert.False(PlaybackRetryPolicy.ShouldRetry(result, 5, 5, TimeSpan.Zero));
     }
 
+    [Fact]
+    public void Not_found_retries_with_fast_delays_within_the_attempt_budget()
+    {
+        Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 1, 5, TimeSpan.Zero));
+        Assert.True(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 4, 5, TimeSpan.Zero));
+        Assert.False(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 5, 5, TimeSpan.Zero));
+        Assert.Equal(TimeSpan.FromMilliseconds(400), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 1));
+        Assert.Equal(TimeSpan.FromMilliseconds(800), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 2));
+        Assert.Equal(TimeSpan.FromMilliseconds(1200), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 3));
+        Assert.Equal(TimeSpan.FromMilliseconds(1600), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 4));
+        Assert.Equal(TimeSpan.FromMilliseconds(1600), PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, 8));
+    }
+
+    [Fact]
+    public void Not_found_retry_time_is_capped()
+    {
+        Assert.False(PlaybackRetryPolicy.ShouldRetry(
+            PlaybackAttemptResult.NotFound,
+            1,
+            10,
+            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(399)));
+    }
+
     [Theory]
-    [InlineData(PlaybackAttemptResult.NotFound)]
     [InlineData(PlaybackAttemptResult.Forbidden)]
     [InlineData(PlaybackAttemptResult.UnsupportedMedia)]
     [InlineData(PlaybackAttemptResult.DecodeFailure)]
     [InlineData(PlaybackAttemptResult.HostFailure)]
     [InlineData(PlaybackAttemptResult.Cancelled)]
-    public void Non_transient_failures_do_not_retry(PlaybackAttemptResult result) =>
+    public void Forbidden_403_and_unsupported_failures_do_not_retry(PlaybackAttemptResult result) =>
         Assert.False(PlaybackRetryPolicy.ShouldRetry(result, 1, 5, TimeSpan.Zero));
 
     [Fact]
