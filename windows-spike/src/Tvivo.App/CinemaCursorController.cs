@@ -63,8 +63,8 @@ internal sealed class CinemaCursorController : IDisposable
 
         _subclassedWindows.Remove(hwnd);
         var error = Marshal.GetLastWin32Error();
+        LaunchDiagnostics.Write($"event=cinema.cursor.hook.failed hwnd=0x{hwnd:X} error={error} required={required}");
         if (required) throw new Win32Exception(error, "Could not install the cinema cursor window hook.");
-        LaunchDiagnostics.Write($"Cinema cursor child hook failed: hwnd=0x{hwnd:X}; error={error}");
     }
 
     private nint WindowSubclassProc(nint hwnd, uint message, nint wParam, nint lParam,

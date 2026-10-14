@@ -72,6 +72,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<PlayerListEntry> _playerEntries = new();
     private readonly NextPlaybackSelector _nextPlaybackSelector = new();
     private readonly PlaybackFailurePolicy _playbackFailurePolicy = new();
+    private readonly PlaybackInterruptionBudget _interruptionBudget = new();
     private string[] _shufflePlaylistIds = Array.Empty<string>();
     private string? _preparedNextItemId;
     private string? _preparedNextForItemId;
@@ -131,9 +132,10 @@ public sealed partial class MainWindow : Window
     private readonly CinemaCursorController _cinemaCursorController;
     // Cinema mode shows the transport as an overlay that fades out while playing and the mouse is idle.
     private bool _cinemaControlsVisible = true;
-    private bool _cinemaPointerOverControls;
     private bool _compactPointerOverControls;
     private bool _cinemaPointerMoveDiagnosticWritten;
+    private DateTimeOffset _cinemaLastMouseActivityAt = DateTimeOffset.UtcNow;
+    private bool _cinemaWindowActive = true;
     private WindowStateController.WindowMode _preCinemaWindowMode;
     private FrameworkElement? _preCinemaFocus;
     private DateTimeOffset _lastVideoTapAt;
@@ -168,13 +170,18 @@ public sealed partial class MainWindow : Window
     private readonly HashSet<string> _engineFallbackTried = new();
     private long? _pendingResumePosition;
     private long _lastGoodPlaybackPositionMilliseconds;
+    private long _lastInterruptionObservedPosition;
+    private bool _hasPlaybackAdvancedThisSession;
+    private TimeSpan _lastForwardProgressAt;
+    private long _explicitPlaybackActionGeneration = -1;
+    private bool _playbackRecoverySuppressed;
+    private long _recoveryGeneration = -1;
+    private bool _recoveryInFlight;
     private bool _resumeReady;
     private long _diagnosticOpenStartedAt;
     private long _diagnosticLastPosition;
     private bool _diagnosticFirstProgressReported;
     private DateTimeOffset _lastResumeSavedAt;
-    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(12);
-    private readonly StallRecoveryPolicy _stallPolicy = new(StallTimeout);
     private readonly long _stallClockStart = Stopwatch.GetTimestamp();
     private readonly DispatcherTimer _playbackUiTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer _cinemaCursorIdleTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -559,6 +566,7 @@ public sealed partial class MainWindow : Window
 
     private void AudioSubtitlesFlyout_Opened(object? sender, object args)
     {
+        if (_isCinemaMode) ShowCinemaControls();
         if (_trackSelectingEngine is { } engine)
             _trackSnapshot = engine.GetTracks();
         RefreshAudioSubtitlesButton();
@@ -581,6 +589,7 @@ public sealed partial class MainWindow : Window
                 : PauseButton;
             focusTarget.Focus(FocusState.Programmatic);
         }
+        if (_isCinemaMode) ScheduleCinemaIdleCheck();
     }
 
     private void RefreshAudioSubtitlesButton()
@@ -1846,9 +1855,20 @@ public sealed partial class MainWindow : Window
         WindowInfoBar.IsOpen = true;
     }
 
+    private void ShowReconnectingInfoBar(int nextAttempt, int maxAttempts)
+    {
+        var message = $"Reconnecting ({nextAttempt} of {maxAttempts})…";
+        WindowInfoBar.Message = message;
+        AutomationProperties.SetName(WindowInfoBar, message);
+        WindowInfoBar.Severity = InfoBarSeverity.Informational;
+        WindowInfoBar.IsOpen = true;
+    }
+
     private void ClearPlaybackRetryInfoBar()
     {
-        if (WindowInfoBar.Message.StartsWith("Trying again (", StringComparison.Ordinal))
+        if (WindowInfoBar.Message.StartsWith("Trying again (", StringComparison.Ordinal) ||
+            WindowInfoBar.Message.StartsWith("Reconnecting (", StringComparison.Ordinal) ||
+            WindowInfoBar.Message.StartsWith("Playback couldn't reconnect.", StringComparison.Ordinal))
             WindowInfoBar.IsOpen = false;
     }
 
@@ -2305,7 +2325,14 @@ public sealed partial class MainWindow : Window
         bool engineFallbackAttempt = false,
         TimeSpan? retryDelayElapsed = null)
     {
-        ClearPlaybackRetryInfoBar();
+        if (!isRecovery)
+            _interruptionBudget.Reset();
+        if (!isRecovery)
+            _explicitPlaybackActionGeneration = -1;
+        if (!isRecovery)
+            _playbackRecoverySuppressed = false;
+        if (!isRecovery)
+            ClearPlaybackRetryInfoBar();
         var totalRetryDelay = retryDelayElapsed ?? TimeSpan.Zero;
         var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
@@ -2331,20 +2358,25 @@ public sealed partial class MainWindow : Window
         _pendingResumePosition = null;
         _resumeReady = false;
         _unverifiedPlaybackEndHandled = false;
-        _lastGoodPlaybackPositionMilliseconds = Math.Max(0, isRecovery
+        var requestedStartPosition = Math.Max(0, isRecovery
             ? recoveryPositionMs ?? resumePosition
             : resumePosition);
+        _lastGoodPlaybackPositionMilliseconds = isRecovery
+            ? Math.Max(_lastGoodPlaybackPositionMilliseconds, requestedStartPosition)
+            : requestedStartPosition;
+        _lastForwardProgressAt = Stopwatch.GetElapsedTime(_stallClockStart);
+        _lastInterruptionObservedPosition = requestedStartPosition;
+        _hasPlaybackAdvancedThisSession = false;
         // LibVLC can open straight at the resume point; the player then skips the seek-after-first-frame.
         var openAtResume = ReferenceEquals(_engine, _vlcEngine) && source.Kind != StreamKind.Live &&
-            _lastGoodPlaybackPositionMilliseconds > 5_000;
-        var playSource = openAtResume ? source with { StartPositionMilliseconds = _lastGoodPlaybackPositionMilliseconds } : source;
+            requestedStartPosition > 5_000;
+        var playSource = openAtResume ? source with { StartPositionMilliseconds = requestedStartPosition } : source;
         _copyDiagnosticsNoteVersion++;
         CopyDiagnosticsStatus.Text = string.Empty;
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
         _diagnosticLastPosition = 0;
         _diagnosticFirstProgressReported = false;
-        _stallPolicy.BeginSession(generation, isRecovery);
         var playerEntryTraceId = Volatile.Read(ref _playerEntryTraceId);
         var sessionCts = new CancellationTokenSource();
         var previousCts = Interlocked.Exchange(ref _playbackSessionCts, sessionCts);
@@ -2409,6 +2441,11 @@ public sealed partial class MainWindow : Window
         {
             while (true)
             {
+                if (isRecovery && !_interruptionBudget.TryConsume(_playbackAttempts))
+                {
+                    result = PlaybackAttemptResult.Timeout;
+                    break;
+                }
                 attemptCount++;
                 // Stop both backends before opening a replacement. Each backend owns
                 // native/network state independently, so stopping only the selected
@@ -2446,12 +2483,25 @@ public sealed partial class MainWindow : Window
                     sessionCts.Token);
                 result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
                 sawNotFound |= result == PlaybackAttemptResult.NotFound;
-                if (!PlaybackRetryPolicy.ShouldRetry(result, attemptCount, _playbackAttempts, totalRetryDelay))
-                    break;
+                var canRetry = isRecovery
+                    ? _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts) &&
+                      result is PlaybackAttemptResult.NetworkFailure or PlaybackAttemptResult.Timeout or PlaybackAttemptResult.UnknownFailure
+                    : PlaybackRetryPolicy.ShouldRetry(result, attemptCount, _playbackAttempts, totalRetryDelay);
+                if (!canRetry) break;
 
-                var delay = PlaybackRetryPolicy.Delay(result, attemptCount);
-                LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
-                ShowPlaybackRetryInfoBar(attemptCount + 1, _playbackAttempts);
+                var delay = isRecovery
+                    ? PlaybackRetryPolicy.InterruptionDelay(_interruptionBudget.AttemptsUsed)
+                    : PlaybackRetryPolicy.Delay(result, attemptCount);
+                if (isRecovery)
+                {
+                    LaunchDiagnostics.Write($"event=playback.resume attempt={_interruptionBudget.AttemptsUsed + 1} of {_playbackAttempts} positionMs={_lastGoodPlaybackPositionMilliseconds}");
+                    ShowReconnectingInfoBar(_interruptionBudget.AttemptsUsed + 1, _playbackAttempts);
+                }
+                else
+                {
+                    LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
+                    ShowPlaybackRetryInfoBar(attemptCount + 1, _playbackAttempts);
+                }
                 await Task.Delay(delay, sessionCts.Token);
                 totalRetryDelay += delay;
                 if (!IsCurrentPlaybackStart(generation, sessionCts))
@@ -2470,7 +2520,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            ClearPlaybackRetryInfoBar();
+            if (!isRecovery)
+                ClearPlaybackRetryInfoBar();
             if (ReferenceEquals(Interlocked.CompareExchange(ref _playbackSessionCts, null, sessionCts), sessionCts))
                 sessionCts.Dispose();
         }
@@ -2488,18 +2539,24 @@ public sealed partial class MainWindow : Window
             PlaybackAttemptResult.NetworkFailure or PlaybackAttemptResult.UnsupportedMedia or
             PlaybackAttemptResult.HostFailure or PlaybackAttemptResult.Timeout or PlaybackAttemptResult.Forbidden or
             PlaybackAttemptResult.NotFound)
-            WritePendingPlaybackTarget(generation);
+        {
+            if (!isRecovery)
+                WritePendingPlaybackTarget(generation);
+        }
         if (result != PlaybackAttemptResult.FirstFrame)
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", PlaybackAttemptResult.Forbidden => "forbidden", _ => "error" }}");
         if (result == PlaybackAttemptResult.NotFound)
             LaunchDiagnostics.Write("event=playback.notfound");
-        if (!engineFallbackAttempt && EngineFallbackPolicy.ShouldFallback(result, _engineFallbackTried.Contains(itemKey)))
+        if (!engineFallbackAttempt &&
+            (!isRecovery || _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts)) &&
+            EngineFallbackPolicy.ShouldFallback(result, _engineFallbackTried.Contains(itemKey)))
         {
             // The selected engine exhausted its attempts; the other player may handle the format or connection.
             _engineFallbackTried.Add(itemKey);
             var failedLabel = EngineLabel(_engine);
             var otherEngine = ReferenceEquals(_engine, _vlcEngine) ? (IPlaybackEngine)_nativeEngine : _vlcEngine;
-            WritePendingPlaybackTarget(generation);
+            if (!isRecovery)
+                WritePendingPlaybackTarget(generation);
             LaunchDiagnostics.Write($"event=playback.fallback from={engineName} to={EngineLabel(otherEngine)} reason={result}");
             StatusText.Text = $"The {failedLabel} player couldn't play this ({DescribeFailure(result)}). Trying the {EngineLabel(otherEngine)} player…";
             SwitchEngineForPlayback(otherEngine);
@@ -2541,6 +2598,11 @@ public sealed partial class MainWindow : Window
         }
         if (result == PlaybackAttemptResult.FirstFrame)
         {
+            if (isRecovery)
+            {
+                ClearPlaybackRetryInfoBar();
+                LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={_lastGoodPlaybackPositionMilliseconds}");
+            }
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
             _pendingResumePosition = openAtResume ? null
                 : isRecovery && recoveryPositionMs is > 0
@@ -3054,47 +3116,19 @@ public sealed partial class MainWindow : Window
         }
         if (!_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused))
         {
+            _explicitPlaybackActionGeneration = Volatile.Read(ref _playbackSessionGeneration);
             _engine.TogglePause();
+            if (_engine.IsPlaying || _engine.IsBuffering)
+                _explicitPlaybackActionGeneration = -1;
             SetPauseButtonState(_engine.IsPlaying || _engine.IsBuffering ? "Pause" : "Play");
+            if (_isCinemaMode)
+            {
+                if (_engine.IsPlaying || _engine.IsBuffering) ShowCinemaControls(resetIdleDeadline: true);
+                else StopCinemaCursorIdleTimer(showCursor: true);
+            }
         }
         else
             await StartPlaybackAsync(_currentSource, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
-    }
-
-    private const int AutoResumeMaxAttempts = 3;
-    private static readonly TimeSpan AutoResumeResetAfter = TimeSpan.FromMinutes(2);
-    private string? _autoResumeItemKey;
-    private int _autoResumeAttempts;
-    private DateTime _autoResumeLastAt;
-
-    /// <summary>
-    /// A film or episode whose stream is cut short (providers drop connections) is reopened at the saved
-    /// position after a short pause instead of waiting for a manual Retry. Gives up after a few quick cuts.
-    /// </summary>
-    private bool TryBeginAutoResumeAfterCut()
-    {
-        if (_currentSource is not { } source) return false;
-        var key = PlaybackItemKey(source);
-        if (key != _autoResumeItemKey || DateTime.UtcNow - _autoResumeLastAt > AutoResumeResetAfter)
-            _autoResumeAttempts = 0;
-        if (_autoResumeAttempts >= AutoResumeMaxAttempts) return false;
-        _autoResumeItemKey = key;
-        _autoResumeAttempts++;
-        _autoResumeLastAt = DateTime.UtcNow;
-        var generation = Volatile.Read(ref _playbackSessionGeneration);
-        LaunchDiagnostics.Write($"event=playback.auto-resume attempt={_autoResumeAttempts} positionMs={_lastGoodPlaybackPositionMilliseconds}");
-        StatusText.Text = "The stream was interrupted. Reconnecting…";
-        _ = ResumeAfterCutAsync(source, generation);
-        return true;
-    }
-
-    private async Task ResumeAfterCutAsync(StreamSource source, long generation)
-    {
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        if (generation != Volatile.Read(ref _playbackSessionGeneration) || !IsPlaybackUiActive ||
-            Volatile.Read(ref _playbackSessionCts) is not null)
-            return;
-        await StartPlaybackAsync(source, preserveCompact: _playerPresentation == PlayerPresentation.Compact);
     }
 
     private void PlaybackUiTimer_Tick(object? sender, object args)
@@ -3111,8 +3145,8 @@ public sealed partial class MainWindow : Window
             if (_engine.IsPlaying || _engine.IsBuffering)
             {
                 // Resumed after a pause: start hiding the overlay again.
-                if (_cinemaControlsVisible && !_cinemaCursorIdleTimer.IsEnabled && !_cinemaPointerOverControls)
-                    _cinemaCursorIdleTimer.Start();
+                if (_cinemaControlsVisible && !_cinemaCursorIdleTimer.IsEnabled)
+                    ShowCinemaControls(resetIdleDeadline: true);
             }
             else ShowCinemaControls(); // paused, ended or failed: keep the controls up
         }
@@ -3140,8 +3174,44 @@ public sealed partial class MainWindow : Window
         if (sessionIsCurrent && !ended && !_isHeldSeeking)
         {
             var lastObservedPosition = ClampPosition(timeline.PositionMilliseconds, endDuration);
-            if (lastObservedPosition > 0 || _lastGoodPlaybackPositionMilliseconds == 0)
+            if (lastObservedPosition > _lastInterruptionObservedPosition)
+            {
+                _lastInterruptionObservedPosition = lastObservedPosition;
+                _hasPlaybackAdvancedThisSession = true;
+                _lastForwardProgressAt = Stopwatch.GetElapsedTime(_stallClockStart);
+                _interruptionBudget.RecordForwardProgress(_lastForwardProgressAt);
+            }
+            if (lastObservedPosition > _lastGoodPlaybackPositionMilliseconds)
+            {
                 _lastGoodPlaybackPositionMilliseconds = lastObservedPosition;
+                _explicitPlaybackActionGeneration = -1;
+            }
+        }
+        if (sessionIsCurrent && !_isHeldSeeking && !_isDraggingProgress && !_recoveryInFlight)
+        {
+            var nowElapsed = Stopwatch.GetElapsedTime(_stallClockStart);
+            var state = ended ? PlaybackEngineState.Ended
+                : _engine.IsPaused ? PlaybackEngineState.Paused
+                : _engine.IsStopped ? PlaybackEngineState.Stopped
+                : _engine.IsBuffering ? PlaybackEngineState.Buffering
+                : _engine.IsPlaying ? PlaybackEngineState.Playing
+                : PlaybackEngineState.Other;
+            var interruption = PlaybackInterruptionPolicy.Classify(new PlaybackInterruptionSnapshot(
+                state,
+                null,
+                nowElapsed - _lastForwardProgressAt,
+                _hasPlaybackAdvancedThisSession,
+                _lastGoodPlaybackPositionMilliseconds,
+                endDuration,
+                _explicitPlaybackActionGeneration == _activePlaybackSessionGeneration,
+                _activePlaybackSessionGeneration,
+                Volatile.Read(ref _playbackSessionGeneration),
+                _engine.HttpStatus));
+            if (interruption != PlaybackInterruption.None)
+            {
+                _ = RecoverPlaybackAsync(interruption, _activePlaybackSessionGeneration);
+                return;
+            }
         }
         if (sessionIsCurrent && !playbackFailed && !_isHeldSeeking && _nowPlayingChannel?.Source.Kind == StreamKind.Episode &&
             _currentSeriesId is not null && _currentSeriesAccount is not null)
@@ -3185,8 +3255,6 @@ public sealed partial class MainWindow : Window
         {
             SaveResumePosition(force: true);
             _unverifiedPlaybackEndHandled = true;
-            if (TryBeginAutoResumeAfterCut())
-                return;
             StatusText.Text = "Playback ended before completion could be verified. Select Retry to resume.";
             SetPauseButtonState("Retry");
         }
@@ -3243,18 +3311,6 @@ public sealed partial class MainWindow : Window
         }
         else
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
-        var stallEligible = !playbackFailed && _currentSource is not null && !_isDraggingProgress && !_isHeldSeeking &&
-            !_engine.IsPaused && !_engine.IsEnded && (_engine.IsPlaying || _engine.IsBuffering);
-        var stallDecision = _stallPolicy.Observe(
-            Volatile.Read(ref _playbackSessionGeneration),
-            sessionIsCurrent,
-            stallEligible,
-            time,
-            Stopwatch.GetElapsedTime(_stallClockStart));
-        if (stallDecision == StallDecision.Recover)
-            HandleStall(time);
-        else if (stallDecision == StallDecision.GiveUp)
-            ShowStallRetry(time);
         var seekEnabled = timeline.CanSeek && _currentSource is not null &&
             (_engine.IsPlaying || _engine.IsBuffering || _engine.IsPaused || _engine.IsEnded);
         _isUpdatingProgress = true;
@@ -3294,27 +3350,119 @@ public sealed partial class MainWindow : Window
             SaveResumePosition(force: true);
     }
 
-    private async void HandleStall(long lastPositionMs)
+    private async Task RecoverPlaybackAsync(PlaybackInterruption interruption, long generation)
     {
-        if (_currentSource is not { } source) return;
-        var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
-        WritePendingPlaybackTarget(Volatile.Read(ref _playbackSessionGeneration));
-        LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=reconnecting");
-        await StartPlaybackAsync(
-            source,
-            preserveCompact: _playerPresentation == PlayerPresentation.Compact,
-            isRecovery: true,
-            recoveryPositionMs: source.Kind == StreamKind.Live ? null : lastPositionMs);
-    }
+        if (_recoveryInFlight || generation != Volatile.Read(ref _playbackSessionGeneration) ||
+            generation != _activePlaybackSessionGeneration || !_resumeReady ||
+            _playbackRecoverySuppressed ||
+            _explicitPlaybackActionGeneration == generation || _currentSource is not { } source)
+            return;
 
-    private void ShowStallRetry(long lastPositionMs)
-    {
-        if (_currentSource is not { } source) return;
-        var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
-        WritePendingPlaybackTarget(Volatile.Read(ref _playbackSessionGeneration));
-        LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
-        StatusText.Text = "Playback stalled. Select Retry to resume.";
-        SetPauseButtonState("Retry");
+        _recoveryInFlight = true;
+        _recoveryGeneration = generation;
+        var engineName = EngineLabel(_engine);
+        var position = _lastGoodPlaybackPositionMilliseconds;
+        var status = _engine.HttpStatus;
+        var failure = status == 403 ? (PlaybackAttemptResult?)PlaybackAttemptResult.Forbidden : null;
+        var action = PlaybackInterruptionPolicy.NextAction(
+            interruption, source.Kind, _engine.HasMedia,
+            _interruptionBudget.AttemptsUsed, _playbackAttempts, status,
+            connectionLimit: status is 403 or 429, failure: failure);
+        LaunchDiagnostics.Write($"event=playback.interrupt reason={interruption} engine={engineName} positionMs={position}");
+        _nextEpisodeAutoPlaySuppressed = true;
+        _nextEpisodeAdvanceStarted = true;
+        SaveResumePosition(force: true, positionOverride: position);
+        try
+        {
+            if (action == PlaybackRecoveryAction.ResumeSameMedia)
+            {
+                if (!_interruptionBudget.TryConsume(_playbackAttempts))
+                    action = PlaybackRecoveryAction.Stop;
+                else
+                {
+                    var target = Math.Max(0, position - 2_000);
+                    var before = _engine.Timeline.PositionMilliseconds;
+                    ShowReconnectingInfoBar(_interruptionBudget.AttemptsUsed, _playbackAttempts);
+                    LaunchDiagnostics.Write($"event=playback.resume attempt={_interruptionBudget.AttemptsUsed} of {_playbackAttempts} positionMs={target}");
+                    if (_engine.TryResume(target))
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(3));
+                        if (generation != Volatile.Read(ref _playbackSessionGeneration) || _playbackRecoverySuppressed ||
+                            _explicitPlaybackActionGeneration != -1) return;
+                        var resumed = _engine.Timeline.PositionMilliseconds;
+                        if (resumed > Math.Max(target, before))
+                        {
+                            _lastGoodPlaybackPositionMilliseconds = Math.Max(_lastGoodPlaybackPositionMilliseconds, resumed);
+                            _lastInterruptionObservedPosition = Math.Max(_lastInterruptionObservedPosition, resumed);
+                            _hasPlaybackAdvancedThisSession = true;
+                            _lastForwardProgressAt = Stopwatch.GetElapsedTime(_stallClockStart);
+                            _interruptionBudget.RecordForwardProgress(_lastForwardProgressAt);
+                            _playbackFailurePolicy.ClearFailure(generation);
+                            ClearPlaybackRetryInfoBar();
+                            LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={resumed}");
+                            return;
+                        }
+                    }
+                    LaunchDiagnostics.Write($"event=playback.resume.failed positionMs={target}");
+                    action = PlaybackRecoveryAction.Reopen;
+                }
+            }
+
+            if (action == PlaybackRecoveryAction.Reopen && _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts))
+            {
+                var nextAttempt = _interruptionBudget.AttemptsUsed + 1;
+                ShowReconnectingInfoBar(nextAttempt, _playbackAttempts);
+                LaunchDiagnostics.Write($"event=playback.resume attempt={nextAttempt} of {_playbackAttempts} positionMs={Math.Max(0, position - 2_000)}");
+                if (_interruptionBudget.AttemptsUsed > 0)
+                    await Task.Delay(PlaybackRetryPolicy.InterruptionDelay(_interruptionBudget.AttemptsUsed));
+                if (generation != Volatile.Read(ref _playbackSessionGeneration) || _playbackRecoverySuppressed ||
+                    _explicitPlaybackActionGeneration != -1) return;
+                var reopenTask = StartPlaybackAsync(
+                    source,
+                    preserveCompact: _playerPresentation == PlayerPresentation.Compact,
+                    isRecovery: true,
+                    recoveryPositionMs: source.Kind == StreamKind.Live ? null : Math.Max(0, position - 2_000));
+                var reopenGeneration = Volatile.Read(ref _playbackSessionGeneration);
+                await reopenTask;
+                if (reopenGeneration != Volatile.Read(ref _playbackSessionGeneration))
+                    return;
+                if (_playbackRecoverySuppressed || _explicitPlaybackActionGeneration != -1)
+                    return;
+                if (_resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration))
+                    return;
+                action = PlaybackRecoveryAction.Stop;
+            }
+
+            if (action == PlaybackRecoveryAction.Stop || _interruptionBudget.AttemptsUsed >= PlaybackRetryPolicy.ClampAttempts(_playbackAttempts))
+            {
+                LaunchDiagnostics.Write($"event=playback.resume.failed attempts={_interruptionBudget.AttemptsUsed} of {_playbackAttempts}");
+                const string message = "Playback couldn't reconnect. Select Retry to resume.";
+                StatusText.Text = message;
+                SetPauseButtonState("Retry");
+                WindowInfoBar.Message = message;
+                AutomationProperties.SetName(WindowInfoBar, message);
+                WindowInfoBar.Severity = InfoBarSeverity.Error;
+                WindowInfoBar.IsOpen = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A new playback session or explicit navigation superseded this recovery.
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"event=playback.resume.failed error={exception.GetType().Name}");
+            StatusText.Text = "Playback couldn't reconnect. Select Retry to resume.";
+            SetPauseButtonState("Retry");
+        }
+        finally
+        {
+            if (_recoveryGeneration == generation)
+            {
+                _recoveryInFlight = false;
+                _recoveryGeneration = -1;
+            }
+        }
     }
 
     private void SaveResumePosition(bool force = false, long? positionOverride = null)
@@ -3351,7 +3499,8 @@ public sealed partial class MainWindow : Window
             ? positionOverride is { } endPosition
                 ? ClampPosition(endPosition, duration)
                 : _lastGoodPlaybackPositionMilliseconds
-            : ClampPosition(positionOverride ?? timeline.PositionMilliseconds, duration);
+            : Math.Max(_lastGoodPlaybackPositionMilliseconds,
+                ClampPosition(positionOverride ?? timeline.PositionMilliseconds, duration));
         if (!ended || positionOverride.HasValue)
             _lastGoodPlaybackPositionMilliseconds = position;
         if (type == CatalogItemType.Movie)
@@ -3497,56 +3646,60 @@ public sealed partial class MainWindow : Window
             _windowState.EnsureWindowMiniTopmost();
         if (args.WindowActivationState == WindowActivationState.Deactivated)
         {
+            _cinemaWindowActive = false;
             StopHeldSeek(commit: true, released: false);
             if (_isCinemaMode) StopCinemaCursorIdleTimer(showCursor: true);
         }
-        else if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
-            ShowCinemaControls();
+        else
+        {
+            _cinemaWindowActive = true;
+            if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
+                ShowCinemaControls(resetIdleDeadline: true);
+        }
     }
 
     private void VlcEngine_StateChanged(object? sender, VlcPlaybackStateChangedEventArgs args)
     {
-        if (args.State != VlcPlaybackState.Failed || !ReferenceEquals(sender, _vlcEngine) ||
-            !ReferenceEquals(_engine, _vlcEngine)) return;
-        var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
+        if (args.State is not (VlcPlaybackState.Failed or VlcPlaybackState.Completed) ||
+            !ReferenceEquals(sender, _vlcEngine) || !ReferenceEquals(_engine, _vlcEngine) ||
+            _vlcEngine.CurrentSession != args.Session) return;
+        var callbackGeneration = Volatile.Read(ref _activePlaybackSessionGeneration);
         WindowRoot.DispatcherQueue.TryEnqueue(() =>
         {
-            using var perfScope = PerfScope.Begin("LatePlaybackFailureUiUpdate");
-            HandleLatePlaybackFailure(callbackGeneration);
-            if (_windowState.IsWindowMini) ExitWindowMiniPlayer(expandToPlayer: false);
+            if (_vlcEngine.CurrentSession != args.Session ||
+                callbackGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
+                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady) return;
+            if (args.State == VlcPlaybackState.Failed && !_playbackFailurePolicy.TryHandle(
+                    callbackGeneration, callbackGeneration, _activePlaybackSessionGeneration, _resumeReady)) return;
+            var timeline = _engine.Timeline;
+            var interruption = PlaybackInterruptionPolicy.Classify(new PlaybackInterruptionSnapshot(
+                args.State == VlcPlaybackState.Failed ? PlaybackEngineState.Failed : PlaybackEngineState.Ended,
+                args.State == VlcPlaybackState.Failed ? PlaybackAttemptResult.UnknownFailure : null,
+                Stopwatch.GetElapsedTime(_stallClockStart) - _lastForwardProgressAt,
+                _lastGoodPlaybackPositionMilliseconds > 0,
+                _lastGoodPlaybackPositionMilliseconds,
+                timeline.DurationMilliseconds,
+                _explicitPlaybackActionGeneration == callbackGeneration,
+                callbackGeneration,
+                Volatile.Read(ref _playbackSessionGeneration),
+                _engine.HttpStatus));
+            if (interruption != PlaybackInterruption.None)
+                _ = RecoverPlaybackAsync(interruption, callbackGeneration);
         });
     }
 
     private void NativeEngine_PlaybackFailed(PlaybackSessionToken session)
     {
-        if (!ReferenceEquals(_engine, _nativeEngine)) return;
-        var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
+        if (!ReferenceEquals(_engine, _nativeEngine) || _nativeEngine.CurrentSession != session) return;
+        var callbackGeneration = Volatile.Read(ref _activePlaybackSessionGeneration);
         WindowRoot.DispatcherQueue.TryEnqueue(() =>
         {
-            using var perfScope = PerfScope.Begin("LatePlaybackFailureUiUpdate");
-            HandleLatePlaybackFailure(callbackGeneration);
+            if (callbackGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
+                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady) return;
+            if (!_playbackFailurePolicy.TryHandle(
+                    callbackGeneration, callbackGeneration, _activePlaybackSessionGeneration, _resumeReady)) return;
+            _ = RecoverPlaybackAsync(PlaybackInterruption.Error, callbackGeneration);
         });
-    }
-
-    private void HandleLatePlaybackFailure(long callbackGeneration)
-    {
-        var currentGeneration = Volatile.Read(ref _playbackSessionGeneration);
-        if (!_playbackFailurePolicy.TryHandle(
-                callbackGeneration, currentGeneration, _activePlaybackSessionGeneration, _resumeReady))
-            return;
-
-        var timeline = _engine.Timeline;
-        var duration = timeline.DurationMilliseconds is > 0 ? timeline.DurationMilliseconds : null;
-        var position = ClampPosition(timeline.PositionMilliseconds, duration);
-        if (position > _lastGoodPlaybackPositionMilliseconds)
-            _lastGoodPlaybackPositionMilliseconds = position;
-        _nextEpisodeAutoPlaySuppressed = true;
-        _nextEpisodeAdvanceStarted = true;
-        SaveResumePosition(force: true, positionOverride: _lastGoodPlaybackPositionMilliseconds);
-        StatusText.Text = "Playback failed. Select Retry to resume.";
-        SetPauseButtonState("Retry");
-        WritePendingPlaybackTarget(currentGeneration);
-        LaunchDiagnostics.Write($"event=playback.failure engine={(_engine == _vlcEngine ? "LibVLC" : "Native")} generation={currentGeneration} positionMs={_lastGoodPlaybackPositionMilliseconds} httpStatus={_engine.HttpStatus?.ToString() ?? "unknown"} outcome=retry");
     }
 
     private void HeldSeekTimer_Tick(object? sender, object args)
@@ -3675,7 +3828,11 @@ public sealed partial class MainWindow : Window
 
     private long _volumeFlyoutOpenedAtTick;
 
-    private void VolumeFlyout_Opened(object? sender, object args) => _volumeFlyoutOpenedAtTick = Environment.TickCount64;
+    private void VolumeFlyout_Opened(object? sender, object args)
+    {
+        _volumeFlyoutOpenedAtTick = Environment.TickCount64;
+        if (_isCinemaMode) ShowCinemaControls();
+    }
 
     // The first click of a double-click opens the flyout and its light-dismiss layer swallows the second
     // click, so DoubleTapped never fires on the button. A flyout dismissed by a click on the button within
@@ -3684,6 +3841,7 @@ public sealed partial class MainWindow : Window
     {
         if (Environment.TickCount64 - _volumeFlyoutOpenedAtTick <= GetDoubleClickTime() && CursorIsOverVolumeButton())
             ToggleMute();
+        if (_isCinemaMode) ScheduleCinemaIdleCheck();
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -3827,6 +3985,8 @@ public sealed partial class MainWindow : Window
 
     private void ReturnFromPlayer()
     {
+        _explicitPlaybackActionGeneration = Volatile.Read(ref _playbackSessionGeneration);
+        _playbackRecoverySuppressed = true;
         BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_playerReturnPage == ShellPage.Catalog)
         {
@@ -4084,6 +4244,7 @@ public sealed partial class MainWindow : Window
             : null;
         if (presentation == PlayerPresentation.Compact)
         {
+            _cinemaCursorIdleTimer.Interval = TimeSpan.FromSeconds(3);
             ClampAndApplyCompactGeometry();
             CompactTitleText.Text = PlayerTitleText.Text;
             RefreshAudioSubtitlesButton();
@@ -4254,7 +4415,6 @@ public sealed partial class MainWindow : Window
 
         _isCinemaMode = enabled;
         _playerPresentation = enabled ? PlayerPresentation.Cinema : PlayerPresentation.Full;
-        _cinemaPointerOverControls = false;
         _cinemaPointerMoveDiagnosticWritten = false;
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
@@ -4270,7 +4430,7 @@ public sealed partial class MainWindow : Window
             ToolTipService.SetToolTip(button, cinemaLabel);
         }
         ApplyPlayerLayout();
-        if (enabled) ShowCinemaControls();
+        if (enabled) ShowCinemaControls(resetIdleDeadline: true);
         else StopCinemaCursorIdleTimer(showCursor: true);
 
         if (!enabled)
@@ -4311,16 +4471,7 @@ public sealed partial class MainWindow : Window
             _cinemaPointerMoveDiagnosticWritten = true;
             LaunchDiagnostics.Write($"event=cinema.pointer-move source={source}");
         }
-        ShowCinemaControls();
-    }
-
-    private void VlcTransportBar_PointerEntered(object sender, PointerRoutedEventArgs args) =>
-        _cinemaPointerOverControls = true;
-
-    private void VlcTransportBar_PointerExited(object sender, PointerRoutedEventArgs args)
-    {
-        _cinemaPointerOverControls = false;
-        if (_isCinemaMode && (_engine.IsPlaying || _engine.IsBuffering)) ShowCinemaControls();
+        ShowCinemaControls(resetIdleDeadline: true);
     }
 
     private void CinemaCursorIdleTimer_Tick(object? sender, object args)
@@ -4336,24 +4487,59 @@ public sealed partial class MainWindow : Window
             SetCompactControlsVisible(keepVisible);
             return;
         }
-        if (!_isCinemaMode || _currentPage != ShellPage.Player || !(_engine.IsPlaying || _engine.IsBuffering)) return;
-        // Keep the overlay while it is being used.
-        if (_cinemaPointerOverControls || IsTrackFlyoutOpen || VolumeFlyout.IsOpen || _isDraggingProgress)
+        if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
+        if (!_cinemaWindowActive || !(_engine.IsPlaying || _engine.IsBuffering))
         {
-            _cinemaCursorIdleTimer.Start();
+            StopCinemaCursorIdleTimer(showCursor: true);
+            return;
+        }
+        var idleFor = DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt;
+        var flyoutOpen = IsTrackFlyoutOpen || VolumeFlyout.IsOpen;
+        if (!CinemaIdlePolicy.ShouldHideControls(
+                idleFor, isPlaying: true, flyoutOpen: flyoutOpen, dragging: _isDraggingProgress,
+                keyboardInteractionActive: HasCinemaKeyboardInteractionFocus()))
+        {
+            ScheduleCinemaIdleCheck();
             return;
         }
         SetCinemaControlsVisible(false);
         SetCinemaCursorVisible(false);
     }
 
-    private void ShowCinemaControls()
+    private void ShowCinemaControls(bool resetIdleDeadline = false)
     {
         if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
+        if (resetIdleDeadline) _cinemaLastMouseActivityAt = DateTimeOffset.UtcNow;
         SetCinemaControlsVisible(true);
         SetCinemaCursorVisible(true);
+        if (_engine.IsPlaying || _engine.IsBuffering) ScheduleCinemaIdleCheck();
+        else _cinemaCursorIdleTimer.Stop();
+    }
+
+    private void ScheduleCinemaIdleCheck()
+    {
         _cinemaCursorIdleTimer.Stop();
-        if (_engine.IsPlaying || _engine.IsBuffering) _cinemaCursorIdleTimer.Start();
+        if (!_isCinemaMode || _currentPage != ShellPage.Player || !_cinemaWindowActive || _isClosing ||
+            !(_engine.IsPlaying || _engine.IsBuffering)) return;
+
+        var remaining = CinemaIdlePolicy.HideDelay - (DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt);
+        _cinemaCursorIdleTimer.Interval = remaining > TimeSpan.Zero
+            ? remaining
+            : TimeSpan.FromMilliseconds(150);
+        _cinemaCursorIdleTimer.Start();
+    }
+
+    private bool HasCinemaKeyboardInteractionFocus()
+    {
+        if (FocusManager.GetFocusedElement(WindowRoot.XamlRoot) is not Control { FocusState: FocusState.Keyboard } focused)
+            return false;
+        DependencyObject? current = focused;
+        while (current is not null)
+        {
+            if (ReferenceEquals(current, PlayerPage)) return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private void CompactChrome_PointerMoved(object sender, PointerRoutedEventArgs args)
@@ -4561,9 +4747,8 @@ public sealed partial class MainWindow : Window
         StopPlayerEpgUpdates();
         _playerEpgTimer.Tick -= PlayerEpgTimer_Tick;
         _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
-        _cinemaCursorIdleTimer.Stop();
+        StopCinemaCursorIdleTimer(showCursor: true);
         _cinemaCursorIdleTimer.Tick -= CinemaCursorIdleTimer_Tick;
-        SetCinemaCursorVisible(true);
         _cinemaCursorController.Dispose();
         _windowState.ClearFullscreenHint();
         _catalogLandingPage.Shutdown();

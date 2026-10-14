@@ -68,6 +68,8 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public VideoView View => _view ?? throw new InvalidOperationException("The XAML VideoView has not initialized.");
 
     public bool HasPlayer => _player is not null;
+    public bool HasMedia => _media is not null;
+    public PlaybackSessionToken? CurrentSession => _currentSession;
     public void PublishPendingWarnings()
     {
         if (_warnings is { } warnings)
@@ -120,6 +122,15 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     {
         if (_player is { } player && Timeline.ClampSeekTarget(timeMilliseconds) is { } target)
             player.Time = target;
+    }
+
+    public bool TryResume(long positionMilliseconds)
+    {
+        if (_player is not { } player || _media is null || _disposed)
+            return false;
+        if (Timeline.ClampSeekTarget(positionMilliseconds) is { } target && target > 0)
+            player.Time = target;
+        return player.Play();
     }
 
     // Diagnostic-only escape hatch. A live input has no finite Timeline, so Seek remains gated.

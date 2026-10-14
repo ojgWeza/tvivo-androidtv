@@ -285,7 +285,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     private static string CleanTitle(string? title)
     {
         var cleaned = Whitespace.Replace(EmptyBrackets.Replace(CatalogTitleFormatter.Clean(title), " "), " ").Trim();
-        return string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned;
+        return string.IsNullOrWhiteSpace(cleaned) || !cleaned.Any(char.IsLetterOrDigit) ? "Untitled" : cleaned;
     }
 
     // Tie-break keys group Unicode letters first, digits second, and punctuation/symbols last.
@@ -570,6 +570,71 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (candidates.Count < fetchLimit || fetchLimit > int.MaxValue / 2) return distinct;
             fetchLimit *= 2;
         }
+    }
+
+    public IReadOnlyList<Channel> GetSpotlightCandidates(
+        ProviderAccount account,
+        CatalogItemType type,
+        ProviderConnection? connection,
+        IReadOnlyCollection<string> recentlyOpenedCategoryIds,
+        int categoryLimit = 6,
+        int itemsPerCategory = 3)
+    {
+        var categories = Math.Clamp(categoryLimit, 1, 12);
+        var perCategory = Math.Clamp(itemsPerCategory, 1, 6);
+        using var sqliteConnection = Open();
+        using var command = sqliteConnection.CreateCommand();
+        var excluded = recentlyOpenedCategoryIds.Distinct(StringComparer.Ordinal).ToArray();
+        var excludedClause = excluded.Length == 0 ? string.Empty :
+            " AND i.category_id NOT IN (" + string.Join(",", excluded.Select((_, index) => "$visited" + index)) + ")";
+        command.CommandText = $"""
+            WITH eligible AS (
+                SELECT i.id, i.category_id, i.title, i.artwork, i.extension, i.added_at, i.year,
+                       i.rating, i.genre, i.plot, i.[cast],
+                       CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END AS effective_added,
+                       ROW_NUMBER() OVER (PARTITION BY i.category_id ORDER BY
+                           CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END DESC, i.id) AS item_rank
+                FROM items i
+                WHERE i.account_id=$a AND i.type=$type AND i.visit_count=0 AND i.favourite=0 AND i.resume_ms=0
+                  AND NOT EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=i.account_id AND f.type=i.type AND f.item_id=i.id)
+                  AND NOT EXISTS (SELECT 1 FROM media_progress mp WHERE mp.account_id=i.account_id
+                      AND mp.kind=CASE i.type WHEN 'Movie' THEN 'movie' WHEN 'Series' THEN 'series' ELSE 'live' END
+                      AND mp.item_id=i.id AND mp.finished=1)
+                  AND NOT EXISTS (SELECT 1 FROM series_playback sp WHERE sp.account_id=i.account_id
+                      AND sp.series_id=i.id AND sp.finished=1){excludedClause}
+            ), selected_categories AS (
+                SELECT category_id, MAX(effective_added) AS newest
+                FROM eligible GROUP BY category_id ORDER BY newest DESC, category_id LIMIT $categoryLimit
+            )
+            SELECT e.id,e.category_id,e.title,e.artwork,e.extension,e.added_at,
+                   e.year,e.rating,e.genre,e.plot,e.[cast],e.effective_added,e.item_rank
+            FROM eligible e JOIN selected_categories c ON c.category_id=e.category_id
+            WHERE e.item_rank <= $itemsPerCategory
+            ORDER BY e.effective_added DESC,e.category_id,e.id;
+            """;
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$categoryLimit", categories);
+        command.Parameters.AddWithValue("$itemsPerCategory", perCategory);
+        for (var index = 0; index < excluded.Length; index++)
+            command.Parameters.AddWithValue("$visited" + index, excluded[index]);
+
+        var rows = new List<Channel>(categories * perCategory);
+        var seenTitles = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            var categoryId = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            var title = CleanTitle(reader.GetString(2));
+            var effectiveAddedMilliseconds = reader.IsDBNull(11) ? 0 : reader.GetInt64(11);
+            var channel = new Channel(account.AccountId, id, categoryId, title, title,
+                Uri.TryCreate(reader.IsDBNull(3) ? null : reader.GetString(3), UriKind.Absolute, out var artwork) ? artwork : null,
+                effectiveAddedMilliseconds == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(effectiveAddedMilliseconds),
+                null, StreamSourceFor(connection, type, id, reader.IsDBNull(4) ? null : reader.GetString(4)), ReadChannelMetadata(reader, 6));
+            if (seenTitles.Add(channel.DisplayName.Trim().ToLowerInvariant())) rows.Add(channel);
+        }
+        return rows;
     }
 
     private static string DuplicateTitleKey(Channel item) =>

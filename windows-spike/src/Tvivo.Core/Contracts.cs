@@ -187,6 +187,7 @@ public readonly record struct PlaybackTimeline(long PositionMilliseconds, long? 
 
 public interface IPlaybackEngine
 {
+    bool HasMedia => false;
     bool IsPlaying { get; }
     bool IsBuffering => false;
     bool IsPaused => false;
@@ -200,6 +201,7 @@ public interface IPlaybackEngine
     bool IsMuted { get; set; }
     void TogglePause();
     void Seek(long timeMilliseconds);
+    bool TryResume(long positionMilliseconds) => false;
     Task<PlaybackAttemptResult> StartAsync(StreamSource source, PlaybackSessionToken session, CancellationToken cancellationToken = default);
     Task StopAsync(PlaybackSessionToken session, CancellationToken cancellationToken = default);
 }

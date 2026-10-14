@@ -178,6 +178,117 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Cached_titles_are_cleaned_on_read_and_new_sort_keys_use_the_clean_title()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[]
+            {
+                ChannelFor(account, "clean", "g", "— Alpha"),
+                ChannelFor(account, "symbols", "g", "!!!"),
+            });
+
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")}"))
+            {
+                connection.Open();
+                using (var sortKey = connection.CreateCommand())
+                {
+                    sortKey.CommandText = "SELECT title_sort FROM items WHERE id='clean'";
+                    Assert.Equal("0Alpha", sortKey.ExecuteScalar());
+                }
+                using var update = connection.CreateCommand();
+                update.CommandText = "UPDATE items SET title=': Cached title',title_sort='2: Cached title' WHERE id='clean'";
+                update.ExecuteNonQuery();
+            }
+
+            var cached = Assert.Single(repo.GetChannels(account, CatalogItemType.Movie, limit: 1).Items);
+            Assert.Equal("Cached title", cached.DisplayName);
+            var fallback = repo.GetChannels(account, CatalogItemType.Movie, limit: 2).Items.Single(item => item.Id == "symbols");
+            Assert.Equal("Untitled", fallback.DisplayName);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Spotlight_candidates_exclude_recent_categories_and_used_items_deduplicate_and_stay_bounded()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        Channel Movie(string id, string category, string title, int daysOld) =>
+            new(account.AccountId, id, category, title, title, null, now.AddDays(-daysOld), null,
+                new(id, StreamKind.Movie, "mkv"), new Dictionary<string, string>());
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "recent", "Recent"), Group(account, "a", "A"), Group(account, "b", "B"), Group(account, "c", "C") },
+                new[]
+                {
+                    Movie("recent-item", "recent", "Recent category title", 0),
+                    Movie("visited", "a", "Opened title", 1),
+                    Movie("favorite", "a", "Favorite title", 2),
+                    Movie("progress", "a", "In progress title", 3),
+                    Movie("watched", "a", "Watched title", 4),
+                    Movie("duplicate-old", "b", "Duplicate title", 6),
+                    Movie("eligible", "b", "Eligible title", 5),
+                    Movie("duplicate-new", "c", "Duplicate title", 0),
+                });
+            repo.RecordVisit(account, CatalogItemType.Movie, "visited");
+            repo.AddFavorite(account, CatalogItemType.Movie, "favorite");
+            repo.SaveProgress(account, "movie", "progress", null, 1_000, 10_000, false);
+            repo.SaveProgress(account, "movie", "watched", null, 10_000, 10_000, true);
+
+            var candidates = repo.GetSpotlightCandidates(account, CatalogItemType.Movie, null,
+                new[] { "recent" }, categoryLimit: 2, itemsPerCategory: 2);
+
+            Assert.DoesNotContain(candidates, item => item.GroupId == "recent");
+            Assert.DoesNotContain(candidates, item => item.Id is "visited" or "favorite" or "progress" or "watched");
+            Assert.Equal(1, candidates.Count(item => item.DisplayName == "Duplicate title"));
+            Assert.Equal("duplicate-new", candidates.First(item => item.DisplayName == "Duplicate title").Id);
+            Assert.True(candidates.Count <= 4);
+            Assert.Equal(candidates.OrderByDescending(item => item.AddedAt).Select(item => item.Id), candidates.Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Spotlight_candidates_fall_back_to_first_indexed_when_added_date_is_missing_and_are_account_scoped()
+    {
+        using var repo = Create(out var dir); var account = Account(); var other = Account("account-b");
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[]
+            {
+                ChannelFor(account, "fallback-date", "g", "Indexed title"),
+                ChannelFor(account, "no-dates", "g", "Undated title"),
+                ChannelFor(account, "account-a-only", "g", "Only A"),
+            });
+            repo.ReplaceSnapshot(other, CatalogItemType.Movie, new[] { Group(other, "g", "Movies") }, new[]
+            {
+                ChannelFor(other, "account-b-only", "g", "Only B"),
+            });
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")}"))
+            {
+                connection.Open();
+                using var update = connection.CreateCommand();
+                update.CommandText = "UPDATE items SET added_at=0 WHERE id='fallback-date' AND account_id='account-a'; UPDATE items SET added_at=0,first_indexed_at=NULL WHERE id='no-dates' AND account_id='account-a'";
+                update.ExecuteNonQuery();
+            }
+
+            var aItems = repo.GetSpotlightCandidates(account, CatalogItemType.Movie, null, Array.Empty<string>());
+            var bItems = repo.GetSpotlightCandidates(other, CatalogItemType.Movie, null, Array.Empty<string>());
+
+            Assert.Contains(aItems, item => item.Id == "fallback-date" && item.AddedAt.HasValue);
+            Assert.Contains(aItems, item => item.Id == "no-dates" && item.AddedAt is null);
+            Assert.Contains(aItems, item => item.Id == "account-a-only");
+            Assert.DoesNotContain(aItems, item => item.Id == "account-b-only");
+            Assert.Contains(bItems, item => item.Id == "account-b-only");
+            Assert.DoesNotContain(bItems, item => item.Id == "account-a-only");
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Artwork_uri_survives_catalog_snapshot_write_and_browse_projection()
     {
         using var repo = Create(out var dir); var account = Account();

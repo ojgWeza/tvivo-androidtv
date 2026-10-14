@@ -56,6 +56,15 @@ public sealed class PlaybackRetryPolicyTests
             PlaybackAttemptResult.Timeout, 1, 5, PlaybackRetryPolicy.MaximumElapsed - TimeSpan.FromMilliseconds(500)));
     }
 
+    [Fact]
+    public void Interruption_retries_use_the_short_recovery_backoff()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(500), PlaybackRetryPolicy.InterruptionDelay(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), PlaybackRetryPolicy.InterruptionDelay(2));
+        Assert.Equal(TimeSpan.FromSeconds(2), PlaybackRetryPolicy.InterruptionDelay(3));
+        Assert.Equal(TimeSpan.FromSeconds(3), PlaybackRetryPolicy.InterruptionDelay(4));
+    }
+
     [Theory]
     [InlineData(-2, 1)]
     [InlineData(1, 1)]

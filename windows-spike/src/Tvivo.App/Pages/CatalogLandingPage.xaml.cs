@@ -53,7 +53,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private string? _openShelfId;
     private CatalogItemType? _openShelfType;
     private CatalogMode _activeMode = CatalogMode.MyTvivo;
-    private const CategorySort SpotlightSort = CategorySort.Visited;
     private CategorySort _categorySort = CategorySort.Visited;
     private CategorySort _renderedShelfSort = CategorySort.Visited;
     private int _offset;
@@ -91,19 +90,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<(CatalogMode Mode, string ShelfId), BrowsePosition> _browsePositions = new();
     private IReadOnlyDictionary<string, PlaybackProgress> _movieProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
-    private readonly HashSet<string> _recentSpotlightIds = new(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
+    private readonly Dictionary<CatalogMode, DateOnly> _spotlightSelectionDateByMode = new();
     private readonly HashSet<string> _spotlightWarmUrls = new(StringComparer.Ordinal);
-    private readonly object _spotlightShelvesLock = new();
-    private readonly Dictionary<(string AccountId, CatalogMode Mode), IReadOnlyList<CatalogShelf>> _spotlightShelvesCache = new();
-    private readonly Queue<(string AccountId, CatalogMode Mode)> _spotlightShelvesCacheOrder = new();
-    private long _spotlightShelvesCacheBytes;
-    private static readonly string SpotlightSessionId = Guid.NewGuid().ToString("N");
     // Managed-retention estimates; decoded artwork has a separate 128-entry / 96 MiB budget.
     private const int SnapshotCacheCapacity = 8;
     private const long SnapshotCacheByteLimit = 64L * 1024 * 1024;
-    private const int SpotlightShelvesCacheCapacity = 8;
-    private const long SpotlightShelvesCacheByteLimit = 32L * 1024 * 1024;
     private const int SpotlightWarmUrlCapacity = 256;
     private const int BrowsePositionCapacity = 64;
     private const int ArtworkFailureCategoryCapacity = 64;
@@ -365,12 +357,11 @@ public sealed partial class CatalogLandingPage : UserControl
         _browsePositions.Clear();
         SetSearchTextWithoutReload(string.Empty);
         _spotlightByMode.Clear();
-        ClearSpotlightShelvesCache();
+        _spotlightSelectionDateByMode.Clear();
         _spotlightWarmUrls.Clear();
         _scheduledRetries.Clear();
         _activityDataDirty = false;
         _favoriteDataDirty = false;
-        _recentSpotlightIds.Clear();
         InvalidateCatalogSnapshots();
         ShelvesItems.ItemsSource = null;
         ClearRenderedShelves();
@@ -928,6 +919,7 @@ public sealed partial class CatalogLandingPage : UserControl
             _modeStates.Clear();
             _browsePositions.Clear();
             _spotlightByMode.Clear();
+            _spotlightSelectionDateByMode.Clear();
             _selectedGroupId = null;
             _openShelfId = null;
             _openShelfType = null;
@@ -983,7 +975,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 if (!IsCurrentLoad(generation)) return;
                 if (_renderedSnapshot is not null && HasCatalogData(_renderedSnapshot))
                 {
-                    ShowRefreshingStatus();
+                    ShowCheckingAccountStatus();
                     var authCts = new CancellationTokenSource();
                     _savedStartupAuthCts = authCts;
                     _ = AuthenticateSavedAccountAndRefreshAsync(connection, cachedAccount, authCts);
@@ -1002,6 +994,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task AuthenticateSavedAccountNetworkFirstAsync(ProviderConnection connection, long generation)
     {
+        ShowCheckingAccountStatus();
         AuthenticationResult result;
         try
         {
@@ -1140,12 +1133,8 @@ public sealed partial class CatalogLandingPage : UserControl
             if (dueTypes.Length == 0)
             {
                 StartEpgIfVisible();
-                if (_cachedStartupCatalogActive)
-                {
-                    _cachedStartupCatalogActive = false;
-                    ShowUpdatedStatus();
-                }
-                else RefreshInfoBar.IsOpen = false;
+                _cachedStartupCatalogActive = false;
+                ShowPersistedRefreshStatus();
                 DismissFirstLoadTakeover();
                 if (!HasCatalogData(cached)) SetState(empty: true);
                 return;
@@ -1193,7 +1182,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 else if (_cachedStartupCatalogActive)
                 {
                     _cachedStartupCatalogActive = false;
-                    ShowUpdatedStatus();
+                    ShowPersistedRefreshStatus();
                 }
                 else RefreshInfoBar.IsOpen = false;
                 DismissFirstLoadTakeover();
@@ -1216,7 +1205,7 @@ public sealed partial class CatalogLandingPage : UserControl
             else
             {
                 _cachedStartupCatalogActive = false;
-                ShowUpdatedStatus();
+                ShowPersistedRefreshStatus();
             }
         }
         catch (Exception exception)
@@ -1380,25 +1369,40 @@ public sealed partial class CatalogLandingPage : UserControl
             return new CatalogSnapshot(mode, groups, groupId, offset, page, shelves);
         });
 
-        if (string.IsNullOrWhiteSpace(filter) && sort == SpotlightSort)
-        {
-            CacheSpotlightShelves(account.AccountId, mode, snapshot.Shelves);
-            return snapshot;
-        }
-
-        var spotlight = await Task.Run(() =>
-        {
-            lock (_spotlightShelvesLock)
-            {
-                if (_spotlightShelvesCache.TryGetValue((account.AccountId, mode), out var cached)) return cached;
-            }
-            var spotlightDescriptors = _repository.GetCategoryShelfDescriptors(account, TypeForMode(mode));
-            var built = BuildShelves(account, snapshot.Groups, null, mode, SpotlightSort, spotlightDescriptors);
-            CacheSpotlightShelves(account.AccountId, mode, built);
-            return built;
-        });
+        var spotlight = await Task.Run(() => BuildSpotlightShelves(account, mode, snapshot.Shelves));
         return snapshot with { SpotlightSource = spotlight };
     }
+
+    private IReadOnlyList<CatalogShelf> BuildSpotlightShelves(
+        ProviderAccount account, CatalogMode mode, IReadOnlyList<CatalogShelf> fallback)
+    {
+        var types = mode == CatalogMode.MyTvivo
+            ? AllRefreshTypes
+            : new[] { TypeForMode(mode) };
+        var channels = new List<Channel>();
+        foreach (var type in types)
+        {
+            var recentCategories = GetRecentlyOpenedCategoryIds(account, type, DateTimeOffset.UtcNow);
+            channels.AddRange(_repository.GetSpotlightCandidates(account, type, _connection,
+                recentCategories, categoryLimit: 6, itemsPerCategory: 3));
+        }
+        var distinct = channels
+            .OrderByDescending(channel => channel.AddedAt)
+            .ThenBy(channel => channel.Source.Kind)
+            .ThenBy(channel => channel.Id, StringComparer.Ordinal)
+            .GroupBy(SpotlightTitleKey, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        if (!SpotlightSelection.ShouldUseDiscovery(distinct.Length)) return fallback;
+
+        var cards = distinct.Select(channel => ToCard(channel, TypeForSource(channel.Source.Kind))).ToArray();
+        return new[] { CreateShelf(account, "__spotlight_discovery", "Explore",
+            CountLabel(cards.Length, "title"), cards, TypeForSource(distinct[0].Source.Kind), null, false,
+            distinct.Where(channel => channel.AddedAt.HasValue).Select(channel => channel.AddedAt).Max()) };
+    }
+
+    private static string SpotlightTitleKey(Channel channel) =>
+        channel.DisplayName.Trim().ToLowerInvariant();
 
     private async Task<CatalogSnapshot?> ReadCurrentCatalogSnapshotAsync(ProviderAccount account, long generation)
     {
@@ -1459,14 +1463,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private void RaiseRefreshStateChanged() => RefreshStateChanged?.Invoke(this, EventArgs.Empty);
 
     public static string FormatUpdated(DateTimeOffset? refreshed, DateTimeOffset now)
-    {
-        if (refreshed is null) return "Updated never";
-        var age = now - refreshed.Value;
-        if (age < TimeSpan.FromMinutes(1)) return "Updated just now";
-        if (age < TimeSpan.FromHours(1)) return $"Updated {(int)age.TotalMinutes} min ago";
-        if (age < TimeSpan.FromDays(1)) return $"Updated {(int)age.TotalHours} hr ago";
-        return $"Updated {(int)age.TotalDays} days ago";
-    }
+        => CatalogStartupStatus.FormatUpdated(refreshed, now);
 
     private void ScheduleRefreshRetry(ProviderAccount account, CatalogItemType type, DateTimeOffset retryAt)
     {
@@ -1848,6 +1845,19 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
+    private static IReadOnlyCollection<string> GetRecentlyOpenedCategoryIds(
+        ProviderAccount account, CatalogItemType type, DateTimeOffset now)
+    {
+        const int recentDays = 14;
+        var prefix = $"catalog.shelf.last-visited.{account.AccountId}.{type}.";
+        var cutoff = now.AddDays(-recentDays).ToUnixTimeMilliseconds();
+        lock (ShelfVisitsLock)
+            return ReadShelfVisits()
+                .Where(pair => pair.Key.StartsWith(prefix, StringComparison.Ordinal) && pair.Value >= cutoff)
+                .Select(pair => pair.Key[prefix.Length..])
+                .ToArray();
+    }
+
     private static void RecordShelfVisit(ProviderAccount account, CatalogItemType type, string shelfId)
     {
         lock (ShelfVisitsLock)
@@ -1930,7 +1940,8 @@ public sealed partial class CatalogLandingPage : UserControl
         if (badge is null) return (title, null);
         var clean = CodecToken.Replace(QualityToken.Replace(title, " "), " ");
         clean = EmptyBrackets.Replace(clean, " ");
-        clean = RepeatedSpaces.Replace(clean, " ").Trim(' ', '-', '|', '_', '.', ',', ':', '–', '—');
+        clean = RepeatedSpaces.Replace(clean, " ").Trim();
+        clean = CatalogTitleFormatter.StripLeadingDelimiters(clean);
         return string.IsNullOrWhiteSpace(clean) ? (title, null) : (clean, badge);
     }
 
@@ -2653,18 +2664,19 @@ public sealed partial class CatalogLandingPage : UserControl
             WarmSpotlightCandidates(candidates.Take(SpotlightWarmCandidateLimit));
         SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
-        var card = candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var hasTodaySelection = _spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) && selectedDate == today;
+        var card = hasTodaySelection
+            ? candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id)
+            : null;
         if (card is null && candidates.Length > 0)
         {
-            var seed = $"{SpotlightSessionId}:{DateTime.UtcNow:yyyy-MM-dd}:{_account?.AccountId}:{_activeMode}";
             var warmCount = SpotlightWarmCount(candidates.Length);
-            var candidateIndex = (int)((uint)StringComparer.Ordinal.GetHashCode(seed) % (uint)warmCount);
+            var typeKey = _activeMode == CatalogMode.MyTvivo ? _activeMode.ToString() : TypeForMode(_activeMode).ToString();
+            var candidateIndex = SpotlightSelection.Index(_account?.AccountId ?? string.Empty, typeKey, today, warmCount);
             card = candidates[candidateIndex];
-            if (_recentSpotlightIds.Contains(card.Id) && candidates.Length > 1)
-                card = candidates[(candidateIndex + 1) % warmCount];
-            _recentSpotlightIds.Add(card.Id);
             _spotlightByMode[_activeMode] = card;
-            if (_recentSpotlightIds.Count > 64) _recentSpotlightIds.Clear();
+            _spotlightSelectionDateByMode[_activeMode] = today;
         }
         var unchanged = card is not null && previousCard?.Id == card.Id && SpotlightArtwork.Source is not null;
         _spotlightCard = card;
@@ -2703,6 +2715,11 @@ public sealed partial class CatalogLandingPage : UserControl
     // ahead of Movie and Series, so the auto-rotation only ever showed live channels.
     private static CatalogCard[] GetSpotlightCandidates(IReadOnlyList<CatalogShelf> shelves)
     {
+        if (shelves.Any(shelf => shelf.Id == "__spotlight_discovery"))
+            return shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null)
+                .OrderByDescending(card => card.Channel!.AddedAt)
+                .ThenBy(card => card.Id, StringComparer.Ordinal).ToArray();
+
         var byKind = shelves.SelectMany(shelf => shelf.Cards)
             .Where(card => card.Channel is not null)
             .GroupBy(card => card.Id, StringComparer.Ordinal)
@@ -2723,6 +2740,12 @@ public sealed partial class CatalogLandingPage : UserControl
         using var perfScope = PerfScope.Begin("SpotlightTimerTick");
         if (_openShelfId is not null || _renderedSnapshot is not { } snapshot ||
             ContentState.Visibility != Visibility.Visible) return;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (!_spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) || selectedDate != today)
+        {
+            RenderSpotlight(snapshot.SpotlightShelves);
+            return;
+        }
         AdvanceSpotlight(1, snapshot, automatic: true);
     }
 
@@ -2740,6 +2763,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var nextIndex = NextSpotlightIndex(candidates.Length, index, delta, automatic);
         if (nextIndex < 0) return;
         _spotlightByMode[_activeMode] = candidates[nextIndex];
+        _spotlightSelectionDateByMode[_activeMode] = DateOnly.FromDateTime(DateTime.UtcNow);
         RenderSpotlight(snapshot.SpotlightShelves);
     }
 
@@ -2835,6 +2859,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
         if (index < 0 || index >= candidates.Length) return;
         _spotlightByMode[_activeMode] = candidates[index];
+        _spotlightSelectionDateByMode[_activeMode] = DateOnly.FromDateTime(DateTime.UtcNow);
         RenderSpotlight(snapshot.SpotlightShelves);
     }
 
@@ -2899,62 +2924,11 @@ public sealed partial class CatalogLandingPage : UserControl
             RemoveCachedSnapshot(key);
         _snapshotCacheOrder.Clear();
         foreach (var key in _snapshotCache.Keys) _snapshotCacheOrder.Enqueue(key);
-        lock (_spotlightShelvesLock)
-        {
-            foreach (var key in _spotlightShelvesCache.Keys.Where(key => key.AccountId == accountId).ToArray())
-            {
-                if (_spotlightShelvesCache.Remove(key, out var removed))
-                    _spotlightShelvesCacheBytes -= EstimateShelvesBytes(removed);
-            }
-            RebuildSpotlightCacheOrder();
-        }
     }
 
     private void RemoveCachedSnapshot(CatalogSnapshotKey key)
     {
         if (_snapshotCache.Remove(key, out var removed)) _snapshotCacheBytes -= removed.EstimatedBytes;
-    }
-
-    private void CacheSpotlightShelves(string accountId, CatalogMode mode, IReadOnlyList<CatalogShelf> shelves)
-    {
-        var key = (accountId, mode);
-        var retainedShelves = shelves.Select(shelf => mode != CatalogMode.MyTvivo && shelf.OpensPagedGrid && shelf.Cards.Count > 0
-            ? shelf with { Cards = Array.Empty<CatalogCard>() }
-            : shelf).ToArray();
-        var estimatedBytes = EstimateShelvesBytes(retainedShelves);
-        if (estimatedBytes > SpotlightShelvesCacheByteLimit) return;
-        lock (_spotlightShelvesLock)
-        {
-            if (_spotlightShelvesCache.TryGetValue(key, out var previous))
-                _spotlightShelvesCacheBytes -= EstimateShelvesBytes(previous);
-            else
-                _spotlightShelvesCacheOrder.Enqueue(key);
-            _spotlightShelvesCache[key] = retainedShelves;
-            _spotlightShelvesCacheBytes += estimatedBytes;
-            while ((_spotlightShelvesCache.Count > SpotlightShelvesCacheCapacity ||
-                    _spotlightShelvesCacheBytes > SpotlightShelvesCacheByteLimit) &&
-                   _spotlightShelvesCacheOrder.TryDequeue(out var oldest))
-            {
-                if (_spotlightShelvesCache.Remove(oldest, out var removed))
-                    _spotlightShelvesCacheBytes -= EstimateShelvesBytes(removed);
-            }
-        }
-    }
-
-    private void ClearSpotlightShelvesCache()
-    {
-        lock (_spotlightShelvesLock)
-        {
-            _spotlightShelvesCache.Clear();
-            _spotlightShelvesCacheOrder.Clear();
-            _spotlightShelvesCacheBytes = 0;
-        }
-    }
-
-    private void RebuildSpotlightCacheOrder()
-    {
-        _spotlightShelvesCacheOrder.Clear();
-        foreach (var key in _spotlightShelvesCache.Keys) _spotlightShelvesCacheOrder.Enqueue(key);
     }
 
     private static long EstimateSnapshotBytes(CatalogSnapshot snapshot) =>
@@ -4048,8 +4022,6 @@ public sealed partial class CatalogLandingPage : UserControl
         if (_openShelfId is null && !updated.IsFlatSearch)
             RenderSpotlight(updated.SpotlightShelves);
         CacheSnapshot(account, updated);
-        if (!ReferenceEquals(updated.Shelves, updated.SpotlightShelves))
-            CacheSpotlightShelves(account.AccountId, mode, updated.SpotlightShelves);
     }
 
     private void SynchronizeRenderedShelves(IReadOnlyList<CatalogShelf> shelves, bool deferStructuralChanges = false,
@@ -4553,7 +4525,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var cts = new CancellationTokenSource();
         _savedStartupAuthCts = cts;
         _cachedStartupCatalogActive = _renderedSnapshot is not null && HasCatalogData(_renderedSnapshot);
-        ShowRefreshingStatus();
+        ShowCheckingAccountStatus();
         await AuthenticateSavedAccountAndRefreshAsync(connection, account, cts);
     }
 
@@ -4639,17 +4611,25 @@ public sealed partial class CatalogLandingPage : UserControl
         requestGeneration == Volatile.Read(ref _pageQueryGeneration) &&
         _account?.AccountId == account.AccountId;
 
-    private void ShowRefreshingStatus()
+    private void ShowCheckingAccountStatus()
     {
-        RefreshInfoBar.Message = "Updating...";
+        RefreshInfoBar.Message = CatalogStartupStatus.Resolve(true, false, null, DateTimeOffset.UtcNow);
         RefreshInfoBar.Severity = InfoBarSeverity.Informational;
         RefreshRetryButton.Visibility = Visibility.Collapsed;
         RefreshInfoBar.IsOpen = true;
     }
 
-    private void ShowUpdatedStatus()
+    private void ShowRefreshingStatus()
     {
-        RefreshInfoBar.Message = "Updated just now";
+        RefreshInfoBar.Message = CatalogStartupStatus.Resolve(false, true, null, DateTimeOffset.UtcNow);
+        RefreshInfoBar.Severity = InfoBarSeverity.Informational;
+        RefreshRetryButton.Visibility = Visibility.Collapsed;
+        RefreshInfoBar.IsOpen = true;
+    }
+
+    private void ShowPersistedRefreshStatus()
+    {
+        RefreshInfoBar.Message = UpdatedText;
         RefreshInfoBar.Severity = InfoBarSeverity.Informational;
         RefreshRetryButton.Visibility = Visibility.Collapsed;
         RefreshInfoBar.IsOpen = true;

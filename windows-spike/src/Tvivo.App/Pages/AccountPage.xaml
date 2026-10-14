@@ -116,7 +116,7 @@
             <StackPanel x:Name="LibraryTabPanel" Visibility="Collapsed">
                 <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
                     <StackPanel Spacing="10">
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Last catalog refresh" />
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Most recent catalog refresh" />
                         <TextBlock x:Name="LastRefreshText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Refresh catalog" />
                         <ComboBox x:Name="CatalogRefreshPolicySelector" MinWidth="300" FontSize="16"

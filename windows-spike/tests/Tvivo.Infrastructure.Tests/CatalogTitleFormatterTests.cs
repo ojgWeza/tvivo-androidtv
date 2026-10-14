@@ -12,6 +12,13 @@ public sealed class CatalogTitleFormatterTests
     [InlineData("# Home HD", "Home HD")]
     [InlineData("#1 Happy Family USA", "#1 Happy Family USA")]
     [InlineData("“Quoted”  title", "Quoted title")]
+    [InlineData(": Title", "Title")]
+    [InlineData("- | — . Title", "Title")]
+    [InlineData("[] : Title", "Title")]
+    [InlineData("(500) Days", "(500) Days")]
+    [InlineData(".hack", ".hack")]
+    [InlineData("-30-", "-30-")]
+    [InlineData("---", "---")]
     [InlineData("Plain Title", "Plain Title")]
     [InlineData(null, "")]
     public void StrayQuotesAndLeadingHashAreRemoved(string? title, string expected) =>

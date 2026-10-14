@@ -34,6 +34,8 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public event EventHandler? TracksChanged;
 
     public MediaPlayer Player => _player;
+    public bool HasMedia => _playbackItem is not null;
+    public PlaybackSessionToken? CurrentSession => _currentSession;
     public void PublishPendingWarnings()
     {
         if (_warnings is { } warnings)
@@ -43,6 +45,8 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public bool IsBuffering => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Buffering;
     public bool IsPaused => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Paused;
     public bool IsEnded => _ended;
+    public bool IsStopped => _player.Source is null ||
+        _player.PlaybackSession.PlaybackState == MediaPlaybackState.None;
     public int? HttpStatus => _warnings?.HttpStatus;
     public long Time => (long)_player.PlaybackSession.Position.TotalMilliseconds;
     public long Length => _player.PlaybackSession.NaturalDuration == TimeSpan.Zero
@@ -177,6 +181,16 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     {
         if (Timeline.ClampSeekTarget(timeMilliseconds) is { } target)
             _player.PlaybackSession.Position = TimeSpan.FromMilliseconds(target);
+    }
+
+    public bool TryResume(long positionMilliseconds)
+    {
+        if (_playbackItem is null || _source is null || _disposed)
+            return false;
+        if (Timeline.ClampSeekTarget(positionMilliseconds) is { } target && target > 0)
+            _player.PlaybackSession.Position = TimeSpan.FromMilliseconds(target);
+        _player.Play();
+        return true;
     }
 
     public async Task<PlaybackAttemptResult> StartAsync(

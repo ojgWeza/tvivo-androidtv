@@ -204,8 +204,6 @@
                             AutomationProperties.Name="Copy diagnostics" />
                     <TextBlock x:Name="CopyDiagnosticsStatus" VerticalAlignment="Center"
                                Foreground="{ThemeResource AppMutedTextBrush}" />
-                    <TextBlock Text="Titles are only recorded when playback fails." VerticalAlignment="Center"
-                               Foreground="{ThemeResource AppMutedTextBrush}" FontSize="12" Margin="8,0,0,0" />
                 </StackPanel>
                 <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
                     <Grid.ColumnDefinitions>
@@ -480,8 +478,7 @@
                             Click="CinemaButton_Click" />
 
                     <!-- Keep one app-owned transport below both playback surfaces. -->
-                    <Border x:Name="VlcTransportBar" Grid.Row="2" Padding="14,10" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="10"
-                            PointerEntered="VlcTransportBar_PointerEntered" PointerExited="VlcTransportBar_PointerExited">
+                    <Border x:Name="VlcTransportBar" Grid.Row="2" Padding="14,10" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="10">
                     <Border.OpacityTransition>
                         <ScalarTransition Duration="0:0:0.25" />
                     </Border.OpacityTransition>

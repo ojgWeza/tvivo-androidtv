@@ -33,4 +33,12 @@ public static class PlaybackRetryPolicy
 
     public static TimeSpan Delay(int attemptIndex) =>
         TimeSpan.FromSeconds(Math.Clamp(attemptIndex, 1, 4));
+
+    public static TimeSpan InterruptionDelay(int attemptIndex) => attemptIndex switch
+    {
+        <= 1 => TimeSpan.FromMilliseconds(500),
+        2 => TimeSpan.FromSeconds(1),
+        3 => TimeSpan.FromSeconds(2),
+        _ => TimeSpan.FromSeconds(3),
+    };
 }
