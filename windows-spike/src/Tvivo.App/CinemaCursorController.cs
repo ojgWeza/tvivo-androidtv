@@ -44,6 +44,7 @@ internal sealed class CinemaCursorController : IDisposable
         // takes effect on the next WM_SETCURSOR, i.e. after a mouse move, which immediately reveals it again.
         RestoreCursorAtPointer();
         if (hidden) NudgePointer(_hideBaseline);
+        ApplySystemCursorVisibility(hidden);
     }
 
     internal bool HasMovedSinceHide(int thresholdPixels = 2)
@@ -121,6 +122,25 @@ internal sealed class CinemaCursorController : IDisposable
     // A same-position refresh is not enough: Windows only re-queries the cursor on real pointer motion, so
     // an idle pointer would keep the arrow. Move one pixel out and back to force WM_SETCURSOR; this stays
     // below the movement threshold so it is not mistaken for user input.
+    // The robust, shape-independent hide: one balanced ShowCursor(FALSE) while hidden, one ShowCursor(TRUE)
+    // on show/dispose. The island re-applies its own arrow after a nudge, but a negative display count wins.
+    private bool _displayCountLowered;
+
+    private void ApplySystemCursorVisibility(bool hidden)
+    {
+        if (hidden && !_displayCountLowered)
+        {
+            _displayCountLowered = true;
+            var count = ShowCursor(false);
+            LaunchDiagnostics.Write($"event=cinema.cursor-displaycount count={count}");
+        }
+        else if (!hidden && _displayCountLowered)
+        {
+            _displayCountLowered = false;
+            ShowCursor(true);
+        }
+    }
+
     private static void NudgePointer(NativePoint point)
     {
         SetCursorPos(point.X + 1, point.Y);
@@ -186,6 +206,9 @@ internal sealed class CinemaCursorController : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 
     [DllImport("user32.dll")]
     private static extern nint WindowFromPoint(NativePoint point);
