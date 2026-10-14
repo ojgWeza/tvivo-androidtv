@@ -2,7 +2,7 @@
 
 The WiX v5 project produces an unsigned x64 per-user MSI. It installs the complete
 self-contained unpackaged publish directory at `%LOCALAPPDATA%\Programs\Tvivo`,
-adds a Start Menu shortcut, and registers Tvivo in Apps & Features. The app's
+adds Start Menu and desktop shortcuts, and registers Tvivo in Apps & Features. The app's
 user data remains at `%LOCALAPPDATA%\Tvivo`, outside the install folder. Releases use
 manual MSI major upgrades; there is no in-app updater. The stable UpgradeCode is
 `DE41D078-AB21-4CD3-8F5A-85D5C14B5992`.

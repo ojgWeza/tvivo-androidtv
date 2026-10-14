@@ -60,9 +60,27 @@
       </Directory>
     </StandardDirectory>
 
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="TvivoDesktopShortcut"
+                  Name="$(var.TvivoProductName)"
+                  Description="Browse your Tvivo library"
+                  Target="[INSTALLFOLDER]Tvivo.App.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="TvivoIcon" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\$(var.TvivoInstallDir)"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
     <Feature Id="TvivoFeature" Title="Tvivo" Level="1">
       <Files Include="$(var.PayloadDir)\**" Directory="INSTALLFOLDER" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
   </Package>
 </Wix>
