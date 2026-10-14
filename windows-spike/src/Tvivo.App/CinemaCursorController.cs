@@ -13,15 +13,20 @@ internal sealed class CinemaCursorController : IDisposable
     private const nuint SubclassId = 0x43494E45;
 
     private readonly nint _rootHwnd;
+    private readonly nint _transparentCursor;
     private readonly HashSet<nint> _subclassedWindows = new();
     private readonly SubclassProcedure _subclassProcedure;
     private bool _hidden;
     private bool _loggedHide;
     private bool _disposed;
+    private NativePoint _hideBaseline;
 
     internal CinemaCursorController(nint rootHwnd)
     {
         _rootHwnd = rootHwnd;
+        _transparentCursor = LoadCursor(LoadLibrary(Path.Combine(AppContext.BaseDirectory, "Assets", "TvivoCursors.dll")), (nint)101);
+        if (_transparentCursor == 0)
+            LaunchDiagnostics.Write($"event=cinema.cursor-resource.failed error={Marshal.GetLastWin32Error()}");
         _subclassProcedure = WindowSubclassProc;
         AddSubclass(rootHwnd, required: true);
     }
@@ -32,10 +37,32 @@ internal sealed class CinemaCursorController : IDisposable
         _hidden = hidden;
         _loggedHide = false;
         LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
+        if (hidden && GetCursorPos(out _hideBaseline))
+            WriteHideDiagnostics(_hideBaseline);
         RefreshChildWindows();
         // Re-evaluate the cursor under the pointer now in both directions; without this a hide only
         // takes effect on the next WM_SETCURSOR, i.e. after a mouse move, which immediately reveals it again.
         RestoreCursorAtPointer();
+    }
+
+    internal bool HasMovedSinceHide(int thresholdPixels = 2)
+    {
+        if (!_hidden || !GetCursorPos(out var current)) return false;
+        var dx = (long)current.X - _hideBaseline.X;
+        var dy = (long)current.Y - _hideBaseline.Y;
+        return dx * dx + dy * dy >= (long)thresholdPixels * thresholdPixels;
+    }
+
+    private static void WriteHideDiagnostics(NativePoint point)
+    {
+        var info = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        GetCursorInfo(ref info);
+        var screenPoint = info.ScreenPosition;
+        var hwnd = WindowFromPoint(screenPoint);
+        var className = new char[128];
+        var length = hwnd == 0 ? 0 : GetClassName(hwnd, className, className.Length);
+        var name = length > 0 ? new string(className, 0, length) : "unknown";
+        LaunchDiagnostics.Write($"event=cinema.cursor-hide-diagnostic flags=0x{info.Flags:X} hCursor=0x{info.Cursor:X} ptScreenPos={screenPoint.X},{screenPoint.Y} windowClass=\"{name}\"");
     }
 
     private void RefreshChildWindows()
@@ -77,7 +104,7 @@ internal sealed class CinemaCursorController : IDisposable
                 _loggedHide = true;
                 LaunchDiagnostics.Write($"event=cinema.cursor-hidden hwnd=0x{hwnd:X} subclassed={_subclassedWindows.Count}");
             }
-            SetCursor(0);
+            SetCursor(_transparentCursor);
             return 1;
         }
 
@@ -130,6 +157,15 @@ internal sealed class CinemaCursorController : IDisposable
     [DllImport("user32.dll")]
     private static extern nint SetCursor(nint cursor);
 
+    [DllImport("user32.dll", EntryPoint = "LoadCursorW", SetLastError = true)]
+    private static extern nint LoadCursor(nint module, nint resourceId);
+
+    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadLibrary(string fileName);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint GetModuleHandle(string? moduleName);
+
     [DllImport("user32.dll", EntryPoint = "SendMessageW")]
     private static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
 
@@ -139,6 +175,13 @@ internal sealed class CinemaCursorController : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll", EntryPoint = "GetCursorInfo", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorInfo(ref CursorInfo info);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetClassName(nint hwnd, [Out] char[] className, int maxCount);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -153,5 +196,14 @@ internal sealed class CinemaCursorController : IDisposable
     {
         internal int X;
         internal int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorInfo
+    {
+        internal int Size;
+        internal uint Flags;
+        internal nint Cursor;
+        internal NativePoint ScreenPosition;
     }
 }

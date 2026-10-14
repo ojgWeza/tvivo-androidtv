@@ -7,6 +7,8 @@ public static class PlaybackRetryPolicy
     public const int MaximumAttempts = 10;
     public static readonly TimeSpan MaximumElapsed = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan MaximumNotFoundElapsed = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan MaximumNotFoundHardElapsed = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan MinimumNotFoundOpenWindow = TimeSpan.FromSeconds(1);
 
     public static int ClampAttempts(int attempts) => Math.Clamp(attempts, MinimumAttempts, MaximumAttempts);
 
@@ -19,7 +21,10 @@ public static class PlaybackRetryPolicy
         var maximumElapsed = result == PlaybackAttemptResult.NotFound
             ? MaximumNotFoundElapsed
             : MaximumElapsed;
-        return elapsed + delay <= maximumElapsed &&
+        var viableOpenWindow = result == PlaybackAttemptResult.NotFound
+            ? MinimumNotFoundOpenWindow
+            : TimeSpan.Zero;
+        return elapsed + delay + viableOpenWindow <= maximumElapsed &&
             result is PlaybackAttemptResult.NotFound
                 or PlaybackAttemptResult.NetworkFailure
                 or PlaybackAttemptResult.Timeout

@@ -38,6 +38,32 @@ public sealed class PlaybackRetryPolicyTests
             PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(399)));
     }
 
+    [Fact]
+    public void Not_found_attempts_share_elapsed_time_including_engine_opens_and_backoff()
+    {
+        var elapsed = TimeSpan.Zero;
+        var attempt = 0;
+        while (PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, ++attempt, 10, elapsed))
+        {
+            elapsed += TimeSpan.FromSeconds(1.2); // fake open duration
+            elapsed += PlaybackRetryPolicy.Delay(PlaybackAttemptResult.NotFound, attempt);
+        }
+
+        Assert.True(elapsed <= PlaybackRetryPolicy.MaximumNotFoundHardElapsed);
+        Assert.False(PlaybackRetryPolicy.ShouldRetry(PlaybackAttemptResult.NotFound, 1, 10,
+            PlaybackRetryPolicy.MaximumNotFoundElapsed - TimeSpan.FromMilliseconds(399)));
+        Assert.False(EngineFallbackPolicy.ShouldFallback(PlaybackAttemptResult.NotFound, alreadyTried: false));
+    }
+
+    [Fact]
+    public void Final_failure_stays_on_player_with_a_user_choice_and_does_not_auto_advance()
+    {
+        var policy = new PlaybackFailurePolicy();
+        Assert.True(policy.TryHandle(11, 11, 11, ready: true));
+        Assert.False(policy.ShouldAutoAdvance(11));
+        Assert.False(policy.TryHandle(11, 11, 11, ready: true));
+    }
+
     [Theory]
     [InlineData(PlaybackAttemptResult.Forbidden)]
     [InlineData(PlaybackAttemptResult.UnsupportedMedia)]

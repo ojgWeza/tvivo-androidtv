@@ -231,8 +231,10 @@
                                         Visibility="Collapsed"
                                         PointerPressed="VideoSurface_PointerPressed"
                                         PointerReleased="VideoSurface_PointerReleased"
-                                        PointerMoved="VideoSurface_PointerMoved"
-                                        Background="{ThemeResource AppPanelSurfaceBrush}" />
+                                         PointerMoved="VideoSurface_PointerMoved"
+                                         Background="{ThemeResource AppPanelSurfaceBrush}" />
+                    <local:CinemaCursorZone x:Name="CinemaCursorZone" Grid.Row="0" Background="Transparent"
+                                            IsHitTestVisible="False" PointerMoved="VideoSurface_PointerMoved" />
                     <Border x:Name="PlayerVideoCurtain" Grid.Row="0" Background="{ThemeResource AppPanelSurfaceBrush}"
                             Visibility="Collapsed" IsHitTestVisible="False" />
                     <Border x:Name="NextEpisodePrompt" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Bottom"

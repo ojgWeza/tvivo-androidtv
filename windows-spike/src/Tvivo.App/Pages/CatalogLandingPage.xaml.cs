@@ -92,6 +92,11 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
     private readonly Dictionary<CatalogMode, DateOnly> _spotlightSelectionDateByMode = new();
+    private readonly Dictionary<CatalogMode, int> _spotlightStartIndexByMode = new();
+    private readonly Dictionary<CatalogMode, string> _spotlightOrderHashByMode = new();
+    private bool _spotlightPresented;
+    private string _spotlightSelectionSource = "new-day";
+    private int _spotlightExcludedCategoryCount;
     private readonly HashSet<string> _spotlightWarmUrls = new(StringComparer.Ordinal);
     // Managed-retention estimates; decoded artwork has a separate 128-entry / 96 MiB budget.
     private const int SnapshotCacheCapacity = 8;
@@ -369,6 +374,9 @@ public sealed partial class CatalogLandingPage : UserControl
         SetSearchTextWithoutReload(string.Empty);
         _spotlightByMode.Clear();
         _spotlightSelectionDateByMode.Clear();
+        _spotlightStartIndexByMode.Clear();
+        _spotlightOrderHashByMode.Clear();
+        _spotlightPresented = false;
         _spotlightWarmUrls.Clear();
         _scheduledRetries.Clear();
         _activityDataDirty = false;
@@ -931,6 +939,9 @@ public sealed partial class CatalogLandingPage : UserControl
             _browsePositions.Clear();
             _spotlightByMode.Clear();
             _spotlightSelectionDateByMode.Clear();
+            _spotlightStartIndexByMode.Clear();
+            _spotlightOrderHashByMode.Clear();
+            _spotlightPresented = false;
             _selectedGroupId = null;
             _openShelfId = null;
             _openShelfType = null;
@@ -2676,18 +2687,30 @@ public sealed partial class CatalogLandingPage : UserControl
         SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var accountId = _account?.AccountId ?? string.Empty;
+        var typeKey = _activeMode == CatalogMode.MyTvivo ? _activeMode.ToString() : TypeForMode(_activeMode).ToString();
+        var orderedIds = candidates.Select(candidate => candidate.Id).ToArray();
+        _spotlightOrderHashByMode[_activeMode] = SpotlightSelection.OrderedIdsHash(orderedIds);
+        _spotlightExcludedCategoryCount = CountSpotlightExcludedCategories(_account, _activeMode);
         var hasTodaySelection = _spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) && selectedDate == today;
         var card = hasTodaySelection
             ? candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id)
             : null;
         if (card is null && candidates.Length > 0)
         {
-            var warmCount = SpotlightWarmCount(candidates.Length);
-            var typeKey = _activeMode == CatalogMode.MyTvivo ? _activeMode.ToString() : TypeForMode(_activeMode).ToString();
-            var candidateIndex = SpotlightSelection.Index(_account?.AccountId ?? string.Empty, typeKey, today, warmCount);
+            var saved = ReadSpotlightDailySelection(accountId, typeKey, today);
+            var candidateIndex = saved is null
+                ? SpotlightSelection.Index(accountId, typeKey, today, candidates.Length)
+                : SpotlightSelection.RestoreIndex(orderedIds, saved.CandidateId, saved.Index);
             card = candidates[candidateIndex];
             _spotlightByMode[_activeMode] = card;
             _spotlightSelectionDateByMode[_activeMode] = today;
+            _spotlightStartIndexByMode[_activeMode] = candidateIndex;
+            _spotlightSelectionSource = saved is null ? "new-day" :
+                orderedIds.Contains(saved.CandidateId, StringComparer.Ordinal) ? "restored" : "fallback";
+            if (saved is null)
+                WriteSpotlightDailySelection(new SpotlightDailySelection(accountId, typeKey, today, card.Id, candidateIndex,
+                    _spotlightOrderHashByMode[_activeMode]));
         }
         var unchanged = card is not null && previousCard?.Id == card.Id && SpotlightArtwork.Source is not null;
         _spotlightCard = card;
@@ -2695,7 +2718,12 @@ public sealed partial class CatalogLandingPage : UserControl
         RenderSpotlightIndicators(candidates, card is null
             ? -1
             : Array.FindIndex(candidates, candidate => candidate.Id == card.Id));
-        if (card is null || unchanged) return;
+        if (card is null) return;
+        if (unchanged)
+        {
+            _spotlightPresented = true;
+            return;
+        }
 
         StopArtwork(SpotlightArtwork);
         SpotlightArtworkFallback.Visibility = Visibility.Visible;
@@ -2719,6 +2747,8 @@ public sealed partial class CatalogLandingPage : UserControl
             });
         if (!PerfToggles.IsDisabled("spotlightart"))
             StartArtwork(SpotlightArtwork, card.ArtworkUrl);
+        LogSpotlightSelection(card, candidates, today, _spotlightSelectionSource);
+        DispatcherQueue.TryEnqueue(() => _spotlightPresented = SpotlightPanel.Visibility == Visibility.Visible);
     }
 
     // The first SpotlightWarmCandidateLimit candidates are the ones the carousel auto-rotates through,
@@ -2749,7 +2779,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightTimer_Tick(object? sender, object args)
     {
         using var perfScope = PerfScope.Begin("SpotlightTimerTick");
-        if (_openShelfId is not null || _renderedSnapshot is not { } snapshot ||
+        if (!_spotlightPresented || _openShelfId is not null || _renderedSnapshot is not { } snapshot ||
             ContentState.Visibility != Visibility.Visible) return;
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (!_spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) || selectedDate != today)
@@ -2775,8 +2805,54 @@ public sealed partial class CatalogLandingPage : UserControl
         if (nextIndex < 0) return;
         _spotlightByMode[_activeMode] = candidates[nextIndex];
         _spotlightSelectionDateByMode[_activeMode] = DateOnly.FromDateTime(DateTime.UtcNow);
+        _spotlightSelectionSource = "timer";
         RenderSpotlight(snapshot.SpotlightShelves);
     }
+
+    private int CountSpotlightExcludedCategories(ProviderAccount? account, CatalogMode mode)
+    {
+        if (account is null) return 0;
+        var types = mode == CatalogMode.MyTvivo ? AllRefreshTypes : new[] { TypeForMode(mode) };
+        return types.Sum(type => GetRecentlyOpenedCategoryIds(account, type, DateTimeOffset.UtcNow).Count);
+    }
+
+    private static string SpotlightSelectionPath => TvivoDataPaths.For("spotlight-selections.json");
+
+    private static SpotlightDailySelection? ReadSpotlightDailySelection(string accountId, string type, DateOnly utcDay)
+    {
+        try
+        {
+            if (!File.Exists(SpotlightSelectionPath)) return null;
+            return JsonSerializer.Deserialize<List<SpotlightDailySelection>>(File.ReadAllText(SpotlightSelectionPath))?
+                .LastOrDefault(selection => selection.AccountId == accountId && selection.Type == type && selection.UtcDay == utcDay);
+        }
+        catch { return null; }
+    }
+
+    private static void WriteSpotlightDailySelection(SpotlightDailySelection selection)
+    {
+        try
+        {
+            var existing = File.Exists(SpotlightSelectionPath)
+                ? JsonSerializer.Deserialize<List<SpotlightDailySelection>>(File.ReadAllText(SpotlightSelectionPath)) ?? new()
+                : new List<SpotlightDailySelection>();
+            existing.RemoveAll(item => item.AccountId == selection.AccountId && item.Type == selection.Type && item.UtcDay == selection.UtcDay);
+            existing.Add(selection);
+            Directory.CreateDirectory(Path.GetDirectoryName(SpotlightSelectionPath)!);
+            File.WriteAllText(SpotlightSelectionPath, JsonSerializer.Serialize(existing));
+        }
+        catch { /* Spotlight selection is a convenience; catalog rendering must still work. */ }
+    }
+
+    private void LogSpotlightSelection(CatalogCard selected, IReadOnlyList<CatalogCard> candidates, DateOnly utcDay, string source)
+    {
+        var currentIndex = Array.FindIndex(candidates.ToArray(), candidate => candidate.Id == selected.Id);
+        var startIndex = _spotlightStartIndexByMode.GetValueOrDefault(_activeMode, currentIndex);
+        LaunchDiagnostics.Write($"event=spotlight.selection mode={_activeMode} utcDay={utcDay:yyyy-MM-dd} startIndex={startIndex} currentIndex={currentIndex} candidateCount={candidates.Count} excludedCategoryCount={_spotlightExcludedCategoryCount} source={source} orderedIdsHash={_spotlightOrderHashByMode.GetValueOrDefault(_activeMode, string.Empty)} selectedIdHash={SpotlightSelection.ShortHash(selected.Id)}");
+    }
+
+    private sealed record SpotlightDailySelection(string AccountId, string Type, DateOnly UtcDay,
+        string CandidateId, int Index, string OrderedIdsHash);
 
     public static int SpotlightWarmCount(int candidateCount) => Math.Clamp(candidateCount, 0, SpotlightWarmCandidateLimit);
 

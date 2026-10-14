@@ -210,10 +210,17 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
             _currentSession = session;
             _ended = false;
             _attemptClock = Stopwatch.StartNew();
-            _warnings = new AttemptWarningRing();
+            _startup = new TaskCompletionSource<PlaybackAttemptResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var warningSession = session;
+            AttemptWarningRing? warningRing = null;
+            warningRing = new AttemptWarningRing(() =>
+            {
+                if (_currentSession == warningSession && ReferenceEquals(_warnings, warningRing))
+                    _startup?.TrySetResult(PlaybackAttemptResult.NotFound);
+            });
+            _warnings = warningRing;
             NativeLog.Current = _warnings;
             EmitPhase("open-start");
-            _startup = new TaskCompletionSource<PlaybackAttemptResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var registration = linked.Token.Register(() => _startup.TrySetResult(PlaybackAttemptResult.Cancelled));
             var deadline = Task.Delay(StartupDeadline);
@@ -548,12 +555,16 @@ internal sealed class AttemptWarningRing
     private readonly ConcurrentQueue<string> _lines = new();
     private int _count;
     private int _httpStatus;
+    private readonly Action? _notFoundDetected;
     private static readonly System.Text.RegularExpressions.Regex HttpStatusPattern = new(
         @"(?:HTTP/1\.1\s+|HTTP error\s+)(?<status>[1-5][0-9]{2})\b",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    internal AttemptWarningRing(Action? notFoundDetected = null) => _notFoundDetected = notFoundDetected;
+
     internal void Enqueue(string line)
     {
+        if (PlaybackFailureClassifier.IsNotFoundLog(line)) _notFoundDetected?.Invoke();
         var statusMatch = HttpStatusPattern.Match(line);
         if (statusMatch.Success && int.TryParse(statusMatch.Groups["status"].Value, out var status))
             Volatile.Write(ref _httpStatus, status);

@@ -277,6 +277,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             };
             var playingSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var handlers = new EventHandlers(
+                session,
                 player,
                 state => PublishState(session, state),
                 resolved => RefreshVlcTracks(session, player, resolved),
@@ -325,7 +326,9 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             {
                 // StartAsync is entered and resumed on the window dispatcher. LibVLC's
                 // MediaPlayer is apartment-bound here, so invoke Play on that same
-                // dispatcher instead of moving the call to a pool thread.
+                // dispatcher instead of moving the call to a pool thread. Play can block
+                // while LibVLC opens a source; moving this instance to a pool thread is
+                // unsafe because it is bound to the VideoView dispatcher apartment.
                 using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 using var cancellationRegistration = linkedCancellation.Token.Register(
                     () => handlers.Completion.TrySetResult(PlaybackAttemptResult.Cancelled));
@@ -601,7 +604,16 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             if (PlaybackFailureClassifier.IsForbiddenLog(args.Message))
                 _forbiddenLogged = true;
             if (PlaybackFailureClassifier.IsNotFoundLog(args.Message))
+            {
                 _notFoundLogged = true;
+                var session = _currentSession;
+                var handlers = _handlers;
+                if (session is not null && handlers is { IsCurrent: true } && handlers.Session == session)
+                {
+                    LifecycleEvent?.Invoke($"event=playback.http-not-found session={session.Value}");
+                    handlers.Completion.TrySetResult(PlaybackAttemptResult.NotFound);
+                }
+            }
             Volatile.Read(ref _warnings)?.Enqueue($"level={args.Level} module={args.Module} message={args.Message}");
         }
     }
@@ -1074,12 +1086,14 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         private int _firstFrameReported;
 
         public EventHandlers(
+            PlaybackSessionToken session,
             MediaPlayer player,
             Action<VlcPlaybackState> publishState,
             Action<bool> refreshTracks,
             Action onPlaying,
             Action<string> enqueuePhase)
         {
+            Session = session;
             _publishState = publishState;
             _refreshTracks = refreshTracks;
             _onPlaying = onPlaying;
@@ -1136,6 +1150,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
 
         public TaskCompletionSource<PlaybackAttemptResult> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public PlaybackSessionToken Session { get; }
 
         public EventHandler<EventArgs> Playing { get; }
         public EventHandler<MediaPlayerVoutEventArgs> Vout { get; }
@@ -1145,7 +1160,7 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
         public EventHandler<MediaPlayerESDeletedEventArgs> ESDeleted { get; }
         public EventHandler<MediaPlayerESSelectedEventArgs> ESSelected { get; }
 
-        private bool IsCurrent => Volatile.Read(ref _invalidated) == 0;
+        public bool IsCurrent => Volatile.Read(ref _invalidated) == 0;
 
         public void Invalidate() => Interlocked.Exchange(ref _invalidated, 1);
     }
