@@ -29,3 +29,9 @@ Do-not-touch: title bar (never ExtendsContentIntoTitleBar), playback paths, prov
 
 ## Unknowns first
 Attribute each stall (layout vs decode/composition vs SQLite vs GC vs refresh); snapshot managed bytes and native surface bytes; SQLite plans; dark vs light baseline difference; owner decisions: prefetch distance, placeholder behaviour, reference hardware, whether cached catalog must be usable before provider auth (it currently authenticates first).
+
+## Findings 2026-10-14 (night) and decisions
+- **System-level jitter:** a trivial PowerShell loop (sleep 50 ms, no Tvivo running) froze ~1.5 s every 11-16 s on this machine; dwm.exe burned 1.4-1.8 CPU-s in each freeze window and NVDisplay.Container ~1 core constantly; commit 17.2/21.6 GB (memory pressure). The ~1.4 s idle "stalls" measured in Tvivo are NOT Tvivo's. METHOD RULE: every perf run records a concurrent control probe (trivial sleeper process) and only counts an app stall as the app's when the control did not freeze at the same time; also record free RAM / commit at run start and refuse to benchmark below ~6 GB free.
+- GC (total pause 100 ms) and threadpool starvation ruled out; bisection toggles (TVIVO_PERF_DISABLE: spotlight, xamltrace, playbacktimer, epg, perftimers, spotlightart, clips, shelfclip, lens) exist for future use; C0-C4 showed no effect.
+- Opus (standing in for owner, 2026-10-14) decided: (1) prefetch 3 shelves above/below the viewport; (2) static skeleton tiles at exact card size, no shimmer, no spinner, real shelf title+count shown immediately; (3) show cached catalog immediately, run auth/refresh in the background with one calm non-blocking status line ("Updating..."); auth failure shown clearly without blocking browsing.
+- Real app costs still to fix: BuildShelves 751 ms + apply 456 ms at launch; ~530 live cards after deep scroll; WS 350 -> 560 MB with depth.

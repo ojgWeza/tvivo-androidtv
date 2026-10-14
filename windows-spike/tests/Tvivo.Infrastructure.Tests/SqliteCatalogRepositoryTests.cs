@@ -688,6 +688,32 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Shelf_descriptors_include_category_title_matches_and_previews_stay_bounded()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie,
+                new[] { Group(account, "a", "Drama"), Group(account, "b", "Comedy") }, new[]
+                {
+                    ChannelFor(account, "m1", "a", "Needle one"),
+                    ChannelFor(account, "m2", "a", "Other drama"),
+                    ChannelFor(account, "m3", "b", "Needle two"),
+                });
+
+            var descriptors = repo.GetCategoryShelfDescriptors(account, CatalogItemType.Movie, "Drama");
+            Assert.Equal(new[] { ("a", 2) }, descriptors.Select(descriptor => (descriptor.Group.Id, descriptor.TotalCount)));
+
+            var preview = repo.GetChannelsGroupedByCategory(account, null, CatalogItemType.Movie, "Needle", 1,
+                new[] { "a", "b" }, sortOrder: CatalogItemSortOrder.AlphabeticalAsc);
+            Assert.Equal(new[] { "a", "b" }, preview.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal(1, preview["a"].TotalCount);
+            Assert.Equal("m1", Assert.Single(preview["a"].Items).Id);
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Movie_completion_can_be_reversed_and_restores_movie_resume_fields()
     {
         var repo = Create(out var dir);

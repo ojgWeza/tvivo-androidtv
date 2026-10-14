@@ -6,6 +6,7 @@ namespace Tvivo.Infrastructure;
 
 public sealed record CatalogPage(IReadOnlyList<Channel> Items, int TotalCount, DateTimeOffset? LatestAddedAt = null);
 public sealed record CatalogCategoryMatchCount(string CategoryId, int MatchCount);
+public sealed record CatalogCategoryShelfDescriptor(ChannelGroup Group, int TotalCount, DateTimeOffset? LatestAddedAt);
 public enum PlaybackProgressState { Unwatched, InProgress, Finished }
 public sealed record PlaybackProgress(string ItemId, PlaybackProgressState State, long ResumeMs, long? DurationMs);
 public sealed record PlaybackProgressPresentation(bool IsVisible, double Value, string AutomationName)
@@ -299,6 +300,7 @@ public sealed class SqliteCatalogRepository : IDisposable
 
     public bool ReplaceSnapshot(ProviderAccount account, CatalogItemType type, IReadOnlyList<ChannelGroup> groups, IReadOnlyList<Channel> channels, DateTimeOffset? successAt = null)
     {
+        using var phase = PerfScope.BeginPhase("sqliteUpsertTransaction");
         var typeName = TypeName(type);
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
@@ -345,6 +347,38 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.CommandText = "SELECT id,name,position FROM categories WHERE account_id=$a AND type=$type ORDER BY position,id"; command.Parameters.AddWithValue("$a", account.AccountId); command.Parameters.AddWithValue("$type", TypeName(type));
         using var reader = command.ExecuteReader(); var rows = new List<ChannelGroup>();
         while (reader.Read()) rows.Add(new(account.AccountId, reader.GetString(0), reader.GetString(1), reader.GetString(1), reader.GetInt32(2)));
+        return rows;
+    }
+
+    public IReadOnlyList<CatalogCategoryShelfDescriptor> GetCategoryShelfDescriptors(
+        ProviderAccount account, CatalogItemType type, string? filter = null)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT c.id,c.name,c.position,COUNT(i.id),MAX(i.added_at)
+            FROM categories c
+            LEFT JOIN items i ON i.account_id=c.account_id AND i.type=c.type AND i.category_id=c.id
+              AND ($filter IS NULL OR c.name LIKE $pattern ESCAPE '\' OR i.title LIKE $pattern ESCAPE '\')
+            WHERE c.account_id=$a AND c.type=$type
+            GROUP BY c.id,c.name,c.position
+            HAVING COUNT(i.id)>0
+            ORDER BY c.position,c.id;
+            """;
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
+        command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+        using var reader = command.ExecuteReader();
+        var rows = new List<CatalogCategoryShelfDescriptor>();
+        while (reader.Read())
+        {
+            var group = new ChannelGroup(account.AccountId, reader.GetString(0), reader.GetString(1), reader.GetString(1), reader.GetInt32(2));
+            DateTimeOffset? added = reader.IsDBNull(4) || reader.GetInt64(4) <= 0
+                ? null
+                : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(4));
+            rows.Add(new(group, reader.GetInt32(3), added));
+        }
         return rows;
     }
 
@@ -424,30 +458,54 @@ public sealed class SqliteCatalogRepository : IDisposable
         ProviderConnection? connection,
         CatalogItemType type,
         string? filter = null,
-        int limit = 100)
+        int limit = 100,
+        IReadOnlyCollection<string>? categoryIds = null,
+        IReadOnlySet<string>? unfilteredCategoryIds = null,
+        CatalogItemSortOrder? sortOrder = null)
     {
         using var sqliteConnection = Open();
         using var command = sqliteConnection.CreateCommand();
-        command.CommandText = """
+        var categoryParameters = categoryIds?.Distinct(StringComparer.Ordinal).ToArray();
+        var categoryClause = categoryParameters is null ? string.Empty :
+            " AND category_id IN (" + string.Join(",", categoryParameters.Select((_, index) => "$category" + index)) + ")";
+        var allCategoryParameters = unfilteredCategoryIds?.Intersect(categoryParameters ?? Array.Empty<string>(), StringComparer.Ordinal).ToArray()
+            ?? Array.Empty<string>();
+        var titleFilterClause = allCategoryParameters.Length == 0
+            ? "($filter IS NULL OR title LIKE $pattern ESCAPE '\\')"
+            : "(category_id IN (" + string.Join(",", allCategoryParameters.Select((_, index) => "$allCategory" + index)) + ") OR $filter IS NULL OR title LIKE $pattern ESCAPE '\\')";
+        var ordering = sortOrder switch
+        {
+            CatalogItemSortOrder.MostVisited => "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id",
+            CatalogItemSortOrder.AlphabeticalAsc => "title COLLATE NOCASE,id",
+            CatalogItemSortOrder.AlphabeticalDesc => "title COLLATE NOCASE DESC,id DESC",
+            CatalogItemSortOrder.RecentlyAdded => "added_at DESC,title COLLATE NOCASE,id",
+            CatalogItemSortOrder.RecentlyUpdated => "first_indexed_at DESC,title COLLATE NOCASE,id",
+            _ => "title,id",
+        };
+        command.CommandText = $"""
             WITH ranked AS (
                 SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast],
                        COUNT(*) OVER (PARTITION BY category_id) AS total_count,
                        MAX(added_at) OVER (PARTITION BY category_id) AS latest_added_at,
-                       ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY title, id) AS row_number
+                       ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY {ordering}) AS row_number
                 FROM items
-                WHERE account_id=$a AND type=$type
-                  AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\')
+                WHERE account_id=$a AND type=$type{categoryClause} AND {titleFilterClause}
             )
-            SELECT id, category_id, title, artwork, extension, added_at, total_count, latest_added_at, year, rating, genre, plot, [cast]
+            SELECT id, category_id, title, artwork, extension, added_at, total_count, latest_added_at, year, rating, genre, plot, [cast], row_number
             FROM ranked
             WHERE row_number <= $limit
-            ORDER BY category_id, title, id;
+            ORDER BY category_id, row_number;
             """;
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
         command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
+        if (categoryParameters is not null)
+            for (var index = 0; index < categoryParameters.Length; index++)
+                command.Parameters.AddWithValue("$category" + index, categoryParameters[index]);
+        for (var index = 0; index < allCategoryParameters.Length; index++)
+            command.Parameters.AddWithValue("$allCategory" + index, allCategoryParameters[index]);
 
         var pages = new Dictionary<string, List<Channel>>(StringComparer.Ordinal);
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);

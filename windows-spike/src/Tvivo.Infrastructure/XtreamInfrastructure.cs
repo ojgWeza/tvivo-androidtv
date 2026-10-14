@@ -263,6 +263,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var phase = PerfScope.BeginPhase("jsonParse");
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
             throw new JsonException("The catalog response was not a JSON array.");

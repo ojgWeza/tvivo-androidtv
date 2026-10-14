@@ -36,6 +36,7 @@ public partial class App : Application
     public App()
     {
         LaunchDiagnostics.Write("App constructor entered");
+        PerfToggles.LogStartup(LaunchDiagnostics.Write);
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
         ConfigureXamlDiagnostics();
@@ -45,6 +46,8 @@ public partial class App : Application
 
     private void ConfigureXamlDiagnostics()
     {
+        if (PerfToggles.IsDisabled("xamltrace")) return;
+
         var debugSettings = DebugSettings;
         debugSettings.IsXamlResourceReferenceTracingEnabled = true;
         debugSettings.IsBindingTracingEnabled = true;

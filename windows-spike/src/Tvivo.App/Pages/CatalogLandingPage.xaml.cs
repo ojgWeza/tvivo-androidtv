@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using Windows.Storage.Streams;
@@ -112,6 +113,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private static readonly List<WeakReference<CatalogLandingPage>> ArtworkPages = new();
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
     private readonly Dictionary<Image, AppliedArtwork> _appliedArtwork = new();
+    private readonly HashSet<Image> _loadedArtworkImages = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<UIElement> _liveCatalogCardContainers = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<FrameworkElement> _liveShelfContainerElements = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<UIElement, GridView> _catalogCardContainerOwners = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, LinkedListNode<CachedArtworkBitmap>> _artworkBitmapCache = new(StringComparer.Ordinal);
     private readonly LinkedList<CachedArtworkBitmap> _artworkBitmapLru = new();
     private long _artworkBitmapCacheBytes;
@@ -121,16 +126,37 @@ public sealed partial class CatalogLandingPage : UserControl
     private long _artworkImagesLoaded;
     private long _artworkImagesUnloaded;
     private long _refreshApplyDurationTicks;
+    private long _refreshApplyMaxDurationTicks;
     private long _refreshApplyCount;
     private long _snapshotApplyDurationTicks;
+    private long _snapshotApplyMaxDurationTicks;
     private long _snapshotApplyCount;
     private long _synchronizeShelvesDurationTicks;
     private long _synchronizeShelvesCount;
-    private long _contentLayoutDurationTicks;
-    private long _contentLayoutCount;
+    private long _shelfPreviewLoadDurationTicks;
+    private long _shelfPreviewLoadGeneration;
+    private DispatcherQueueTimer? _shelfViewportTimer;
+    private DispatcherQueueTimer? _shelfViewportPollTimer;
+    private ScrollViewer? _shelfScrollViewer;
+    private string _shelfViewportReason = "scroll";
+    private long _lastShelfWindowLogAt;
+    private readonly HashSet<(CatalogMode Mode, string ShelfId)> _shelfPreviewLoadsInFlight = new();
     private long _dispatchProbePostedAt;
     private long _dispatchProbeMaxTicks;
     private int _dispatchProbeOutstanding;
+    private long _dispatchProbeLastTickAt;
+    private int _dispatchProbeLastGc2Count;
+    private long _dispatchProbeLastGcPauseTicks;
+    private readonly object _dispatchProbeGapLogLock = new();
+    private long _dispatchProbeGapWindowStartedAt;
+    private int _dispatchProbeGapCount;
+    private readonly object _processSampleLock = new();
+    private long _lastProcessSampleAt;
+    private double _lastProcessCpuSeconds;
+    private int _lastPerfGc0Count;
+    private int _lastPerfGc1Count;
+    private int _lastPerfGc2Count;
+    private long _lastPerfGcPauseTicks;
     private readonly DispatcherTimer _perfSummaryTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly System.Threading.Timer _dispatchProbeTimer;
     private PerfSurfaceSnapshot? _lastPerfSurfaceSnapshot;
@@ -162,6 +188,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool _shelfDragStarted;
     private const int PageSize = CatalogGridPaging.PageSize;
     private const int ShelfPreviewSize = 12;
+    private const int PrefetchShelves = 3;
+    private const int RetainedShelfMargin = 10;
     private const string GenericLoadError = "Couldn't load the catalog. Check your connection and provider details, then retry.";
     public ProviderAccount? Account => _account;
     public ProviderConnection? Connection => _connection;
@@ -200,20 +228,32 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public CatalogLandingPage()
     {
+        PerfScope.Logger = LaunchDiagnostics.Write;
         _hoverMetadataLookup = new HoverMetadataLookup(_provider, _repository, log: LaunchDiagnostics.Write);
         _refreshTasks = new CatalogRefreshTasks((account, type) =>
             Task.Run(() => _refresh.RefreshTypeAsync(account, type)));
         lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
         InitializeComponent();
+        ShelvesItems.ContainerContentChanging += ShelfContainerContentChanging;
+        OpenShelfGrid.ContainerContentChanging += CatalogCardContainerContentChanging;
+        OpenShelfGrid.Unloaded += OpenShelfGrid_Unloaded;
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         _spotlightTimer.Tick += SpotlightTimer_Tick;
         _epgTimer.Tick += EpgTimer_Tick;
         _perfSummaryTimer.Tick += PerfSummaryTimer_Tick;
+        _lastPerfGc0Count = GC.CollectionCount(0);
+        _lastPerfGc1Count = GC.CollectionCount(1);
+        _lastPerfGc2Count = GC.CollectionCount(2);
+        _lastPerfGcPauseTicks = GC.GetTotalPauseDuration().Ticks;
+        _lastProcessSampleAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        using (var process = System.Diagnostics.Process.GetCurrentProcess())
+            _lastProcessCpuSeconds = process.TotalProcessorTime.TotalSeconds;
         _dispatchProbeTimer = new System.Threading.Timer(DispatchProbeTimer_Tick, null,
             TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         Unloaded += CatalogLandingPage_Unloaded;
-        _perfSummaryTimer.Start();
+        if (!PerfToggles.IsDisabled("perftimers"))
+            _perfSummaryTimer.Start();
         UpdateModeChrome();
         _lastPerfSurfaceSnapshot = CreatePerfSurfaceSnapshot(0);
     }
@@ -222,6 +262,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CatalogPageRoot_ActualThemeChanged(FrameworkElement sender, object args)
     {
+        using var perfScope = PerfScope.Begin("CatalogThemeApply");
         UpdateModeChrome();
         foreach (var button in SearchCategoryChips.Children.OfType<Button>())
         {
@@ -258,7 +299,9 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         _isActive = active;
         if (!active) CancelHoverRequest();
-        if (active) _spotlightTimer.Start();
+        if (active) ScheduleShelfViewportUpdate("activate");
+        else _shelfViewportPollTimer?.Stop();
+        if (active && !PerfToggles.IsDisabled("spotlight")) _spotlightTimer.Start();
         else _spotlightTimer.Stop();
         UpdateEpgLifecycle();
     }
@@ -329,69 +372,173 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void DispatchProbeTimer_Tick(object? state)
     {
+        using var perfScope = PerfScope.Begin("DispatchProbeTimer");
+        var tickAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var previousTickAt = Interlocked.Exchange(ref _dispatchProbeLastTickAt, tickAt);
+        var gc2Count = GC.CollectionCount(2);
+        var previousGc2Count = Interlocked.Exchange(ref _dispatchProbeLastGc2Count, gc2Count);
+        var gcPauseTicks = GC.GetTotalPauseDuration().Ticks;
+        var previousGcPauseTicks = Interlocked.Exchange(ref _dispatchProbeLastGcPauseTicks, gcPauseTicks);
+        var gapMs = previousTickAt == 0 ? 0 : ToMilliseconds(tickAt - previousTickAt);
+        var gcPauseMsSinceLast = TimeSpan.FromTicks(Math.Max(0, gcPauseTicks - previousGcPauseTicks)).TotalMilliseconds;
+        var gc2Delta = gc2Count - previousGc2Count;
+
+        WriteProcessPerfSample(tickAt);
+
         if (Interlocked.CompareExchange(ref _dispatchProbeOutstanding, 1, 0) != 0)
+        {
+            WriteDispatchProbeGap(gapMs, gcPauseMsSinceLast, gc2Delta, tickAt, -1);
             return;
+        }
 
         var postedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         Interlocked.Exchange(ref _dispatchProbePostedAt, postedAt);
-        if (!DispatcherQueue.TryEnqueue(() =>
+        var enqueueStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var enqueued = DispatcherQueue.TryEnqueue(() =>
         {
-            var elapsedTicks = System.Diagnostics.Stopwatch.GetTimestamp() - Interlocked.Read(ref _dispatchProbePostedAt);
+            using var perfScope = PerfScope.Begin("DispatchProbeCallback");
+            var callbackStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            var probePostedAt = Interlocked.Read(ref _dispatchProbePostedAt);
+            var elapsedTicks = callbackStartedAt - probePostedAt;
             Interlocked.Exchange(ref _dispatchProbeOutstanding, 0);
             if (elapsedTicks <= 0) return;
             UpdateMaximum(ref _dispatchProbeMaxTicks, elapsedTicks);
             if (System.Diagnostics.Stopwatch.GetElapsedTime(0, elapsedTicks) > TimeSpan.FromMilliseconds(100))
-                LaunchDiagnostics.Write($"event=perf.stall timestamp={DateTimeOffset.UtcNow:O} delayMs={ToMilliseconds(elapsedTicks):0.0}");
-        }))
+            {
+                var operations = PerfScope.GetOverlapping(probePostedAt, callbackStartedAt);
+                var attribution = string.Join(";", operations.Select(operation =>
+                    $"{operation.Name}:{ToMilliseconds(operation.DurationTicks):0.0}"));
+                LaunchDiagnostics.Write($"event=perf.stall timestamp={DateTimeOffset.UtcNow:O} delayMs={ToMilliseconds(elapsedTicks):0.0} ops={attribution}");
+            }
+        });
+        var enqueueMs = ToMilliseconds(System.Diagnostics.Stopwatch.GetTimestamp() - enqueueStartedAt);
+        if (!enqueued)
         {
             Interlocked.Exchange(ref _dispatchProbeOutstanding, 0);
+        }
+
+        WriteDispatchProbeGap(gapMs, gcPauseMsSinceLast, gc2Delta, tickAt, enqueueMs);
+    }
+
+    private void WriteDispatchProbeGap(double gapMs, double gcPauseMsSinceLast, int gc2Delta, long now, double enqueueMs)
+    {
+        if (gapMs <= 1000 || !ShouldLogDispatchProbeGap(now)) return;
+        LaunchDiagnostics.Write(
+            $"event=perf.timergap timestamp={DateTimeOffset.UtcNow:O} gapMs={gapMs:0.0} " +
+            $"gcPauseMsSinceLast={gcPauseMsSinceLast:0.0} gc2Delta={gc2Delta} " +
+            $"tpPending={ThreadPool.PendingWorkItemCount} enqueueMs={enqueueMs:0.0}");
+    }
+
+    private bool ShouldLogDispatchProbeGap(long now)
+    {
+        lock (_dispatchProbeGapLogLock)
+        {
+            if (_dispatchProbeGapWindowStartedAt == 0 ||
+                System.Diagnostics.Stopwatch.GetElapsedTime(_dispatchProbeGapWindowStartedAt, now) >= TimeSpan.FromSeconds(10))
+            {
+                _dispatchProbeGapWindowStartedAt = now;
+                _dispatchProbeGapCount = 0;
+            }
+
+            if (_dispatchProbeGapCount >= 10) return false;
+            _dispatchProbeGapCount++;
+            return true;
+        }
+    }
+
+    private void WriteProcessPerfSample(long now)
+    {
+        lock (_processSampleLock)
+        {
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(_lastProcessSampleAt, now) < TimeSpan.FromSeconds(10))
+                return;
+
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            var cpuSeconds = process.TotalProcessorTime.TotalSeconds;
+            var cpuSecondsDelta = cpuSeconds - _lastProcessCpuSeconds;
+            _lastProcessCpuSeconds = cpuSeconds;
+            _lastProcessSampleAt = now;
+            LaunchDiagnostics.Write(
+                $"event=perf.process timestamp={DateTimeOffset.UtcNow:O} cpuSecondsDelta={cpuSecondsDelta:0.000} " +
+                $"threads={process.Threads.Count} handles={process.HandleCount}");
         }
     }
 
     private void PerfSummaryTimer_Tick(object? sender, object args)
     {
+        using var perfScope = PerfScope.Begin("PerfSummaryTimer");
         var dispatchMaxTicks = Interlocked.Exchange(ref _dispatchProbeMaxTicks, 0);
         var snapshot = CreatePerfSurfaceSnapshot(dispatchMaxTicks);
-        if (_lastPerfSurfaceSnapshot == snapshot) return;
+        if (_lastPerfSurfaceSnapshot == snapshot && snapshot.GcPauseMs <= 50) return;
 
         _lastPerfSurfaceSnapshot = snapshot with { DispatchMaxTicks = 0 };
-        var liveImages = snapshot.ArtworkImagesLoaded - snapshot.ArtworkImagesUnloaded;
+        var liveImages = _loadedArtworkImages.Count;
         LaunchDiagnostics.Write(
             $"event=perf.surface timestamp={DateTimeOffset.UtcNow:O} " +
             $"shelfRealized={snapshot.ShelfContainersRealized} shelfRecycled={snapshot.ShelfContainersRecycled} liveShelves={snapshot.LiveShelfContainers} " +
+            $"shelvesLoaded={snapshot.ShelvesLoaded} shelvesSkeleton={snapshot.ShelvesSkeleton} shelfPreviewLoadMs={ToMilliseconds(snapshot.ShelfPreviewLoadDurationTicks):0.0} " +
             $"liveCards={snapshot.LiveCatalogCards} imageLoaded={snapshot.ArtworkImagesLoaded} imageUnloaded={snapshot.ArtworkImagesUnloaded} liveImages={liveImages} " +
             $"artworkActive={snapshot.ActiveArtworkLoads} artworkApplied={snapshot.AppliedArtworkLoads} " +
             $"cacheEntries={snapshot.DecodedCacheEntries} cacheBytes={snapshot.DecodedCacheBytes} wiredShelfGrids={snapshot.WiredShelfGrids} " +
             $"refreshApplyMs={ToMilliseconds(snapshot.RefreshApplyDurationTicks):0.0} " +
-             $"refreshApplyCount={snapshot.RefreshApplyCount} " +
-             $"snapshotApplyMs={ToMilliseconds(snapshot.SnapshotApplyDurationTicks):0.0} snapshotApplyCount={snapshot.SnapshotApplyCount} " +
+            $"refreshApplyMaxMs={ToMilliseconds(snapshot.RefreshApplyMaxDurationTicks):0.0} refreshApplyCount={snapshot.RefreshApplyCount} " +
+            $"snapshotApplyMs={ToMilliseconds(snapshot.SnapshotApplyDurationTicks):0.0} snapshotApplyMaxMs={ToMilliseconds(snapshot.SnapshotApplyMaxDurationTicks):0.0} snapshotApplyCount={snapshot.SnapshotApplyCount} " +
             $"synchronizeRenderedShelvesMs={ToMilliseconds(snapshot.SynchronizeShelvesDurationTicks):0.0} synchronizeRenderedShelvesCount={snapshot.SynchronizeShelvesCount} " +
-            $"contentUpdateLayoutMs={ToMilliseconds(snapshot.ContentLayoutDurationTicks):0.0} contentUpdateLayoutCount={snapshot.ContentLayoutCount} " +
-            $"dispatchMaxMs={ToMilliseconds(snapshot.DispatchMaxTicks):0.0}");
+            $"dispatchMaxMs={ToMilliseconds(snapshot.DispatchMaxTicks):0.0} " +
+            $"gc0={snapshot.Gc0} gc1={snapshot.Gc1} gc2={snapshot.Gc2} gcPauseMs={snapshot.GcPauseMs:0.0} " +
+            $"gcHeapMB={snapshot.GcHeapMB:0.0} gcCommittedMB={snapshot.GcCommittedMB:0.0} " +
+            $"tpThreads={snapshot.TpThreads} tpPending={snapshot.TpPending}");
     }
 
-    private PerfSurfaceSnapshot CreatePerfSurfaceSnapshot(long dispatchMaxTicks) => new(
-        Interlocked.Read(ref _shelfContainersRealized),
-        Interlocked.Read(ref _shelfContainersRecycled),
-        Interlocked.Read(ref _liveShelfContainers),
-        Interlocked.Read(ref _artworkImagesLoaded) - Interlocked.Read(ref _artworkImagesUnloaded) -
-            (SpotlightArtwork.IsLoaded ? 1 : 0),
-        Interlocked.Read(ref _artworkImagesLoaded),
-        Interlocked.Read(ref _artworkImagesUnloaded),
-        _artworkLoads.Count,
-        _appliedArtwork.Count,
-        _artworkBitmapCache.Count,
-        _artworkBitmapCacheBytes,
-        _wiredShelfGrids.Count,
-        Interlocked.Read(ref _refreshApplyDurationTicks),
-        Interlocked.Read(ref _refreshApplyCount),
-        Interlocked.Read(ref _snapshotApplyDurationTicks),
-        Interlocked.Read(ref _snapshotApplyCount),
-        Interlocked.Read(ref _synchronizeShelvesDurationTicks),
-        Interlocked.Read(ref _synchronizeShelvesCount),
-        Interlocked.Read(ref _contentLayoutDurationTicks),
-        Interlocked.Read(ref _contentLayoutCount),
-        dispatchMaxTicks);
+    private PerfSurfaceSnapshot CreatePerfSurfaceSnapshot(long dispatchMaxTicks)
+    {
+        var gc0Count = GC.CollectionCount(0);
+        var gc1Count = GC.CollectionCount(1);
+        var gc2Count = GC.CollectionCount(2);
+        var gcPauseTicks = GC.GetTotalPauseDuration().Ticks;
+        var gc0Delta = gc0Count - _lastPerfGc0Count;
+        var gc1Delta = gc1Count - _lastPerfGc1Count;
+        var gc2Delta = gc2Count - _lastPerfGc2Count;
+        var gcPauseMs = TimeSpan.FromTicks(Math.Max(0, gcPauseTicks - _lastPerfGcPauseTicks)).TotalMilliseconds;
+        _lastPerfGc0Count = gc0Count;
+        _lastPerfGc1Count = gc1Count;
+        _lastPerfGc2Count = gc2Count;
+        _lastPerfGcPauseTicks = gcPauseTicks;
+        var memoryInfo = GC.GetGCMemoryInfo();
+
+        return new PerfSurfaceSnapshot(
+            Interlocked.Read(ref _shelfContainersRealized),
+            Interlocked.Read(ref _shelfContainersRecycled),
+            Interlocked.Read(ref _liveShelfContainers),
+            _liveCatalogCardContainers.Count,
+            Interlocked.Read(ref _artworkImagesLoaded),
+            Interlocked.Read(ref _artworkImagesUnloaded),
+            _artworkLoads.Count,
+            _appliedArtwork.Count,
+            _artworkBitmapCache.Count,
+            _artworkBitmapCacheBytes,
+            _wiredShelfGrids.Count,
+            Interlocked.Read(ref _refreshApplyDurationTicks),
+            Interlocked.Read(ref _refreshApplyMaxDurationTicks),
+            Interlocked.Read(ref _refreshApplyCount),
+            Interlocked.Read(ref _snapshotApplyDurationTicks),
+            Interlocked.Read(ref _snapshotApplyMaxDurationTicks),
+            Interlocked.Read(ref _snapshotApplyCount),
+            Interlocked.Read(ref _synchronizeShelvesDurationTicks),
+            Interlocked.Read(ref _synchronizeShelvesCount),
+            _renderedShelves.Count(shelf => shelf.Cards.Count > 0),
+            _renderedShelves.Count(shelf => shelf.Cards.Count == 0),
+            Interlocked.Read(ref _shelfPreviewLoadDurationTicks),
+            dispatchMaxTicks,
+            gc0Delta,
+            gc1Delta,
+            gc2Delta,
+            gcPauseMs,
+            GC.GetTotalMemory(false) / (1024d * 1024d),
+            memoryInfo.TotalCommittedBytes / (1024d * 1024d),
+            ThreadPool.ThreadCount,
+            ThreadPool.PendingWorkItemCount);
+    }
 
     private static double ToMilliseconds(long stopwatchTicks) =>
         stopwatchTicks * 1000d / System.Diagnostics.Stopwatch.Frequency;
@@ -420,14 +567,25 @@ public sealed partial class CatalogLandingPage : UserControl
         long DecodedCacheBytes,
         int WiredShelfGrids,
         long RefreshApplyDurationTicks,
+        long RefreshApplyMaxDurationTicks,
         long RefreshApplyCount,
         long SnapshotApplyDurationTicks,
+        long SnapshotApplyMaxDurationTicks,
         long SnapshotApplyCount,
         long SynchronizeShelvesDurationTicks,
         long SynchronizeShelvesCount,
-        long ContentLayoutDurationTicks,
-        long ContentLayoutCount,
-        long DispatchMaxTicks);
+        int ShelvesLoaded,
+        int ShelvesSkeleton,
+        long ShelfPreviewLoadDurationTicks,
+        long DispatchMaxTicks,
+        int Gc0,
+        int Gc1,
+        int Gc2,
+        double GcPauseMs,
+        double GcHeapMB,
+        double GcCommittedMB,
+        int TpThreads,
+        long TpPending);
 
     internal static void ClearArtworkCache()
     {
@@ -572,6 +730,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public async Task SetModeAsync(CatalogMode mode)
     {
+        if (_activeMode != mode) CancelShelfPreviewLoads();
         if (_activeMode == mode)
         {
             await PrepareModeAsync(mode);
@@ -590,6 +749,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (SearchBox.Text == text)
             return;
 
+        CancelShelfPreviewLoads();
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         _suppressSearchChanged = true;
         try
@@ -624,6 +784,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _pageQueryGeneration);
         var accountChanged = _account?.AccountId != account.AccountId;
         var previousAccountId = _account?.AccountId;
+        if (accountChanged) CancelShelfPreviewLoads();
         if (accountChanged) CancelHoverRequest();
         _account = account;
         if (connection is not null || accountChanged)
@@ -652,6 +813,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public async Task LoadSavedAsync()
     {
+        CancelShelfPreviewLoads();
         CancelHoverRequest();
         LaunchDiagnostics.Write("event=catalog.load reason=saved-account-startup reused=false");
         var previousAccountId = _account?.AccountId;
@@ -917,7 +1079,8 @@ public sealed partial class CatalogLandingPage : UserControl
             }
 
             var type = TypeForMode(mode);
-            var groups = _repository.GetGroups(account, type);
+            var categoryDescriptors = _repository.GetCategoryShelfDescriptors(account, type, filter);
+            var groups = categoryDescriptors.Select(descriptor => descriptor.Group).ToArray();
             if (openShelfId is null && mode != CatalogMode.MyTvivo && !string.IsNullOrWhiteSpace(filter))
             {
                 var groupNames = groups.ToDictionary(group => group.Id, group => group.DisplayName, StringComparer.Ordinal);
@@ -954,7 +1117,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 var lastOffset = allItems.Count == 0 ? 0 : ((allItems.Count - 1) / PageSize) * PageSize;
                 var shelfOffset = Math.Clamp(requestedOffset, 0, lastOffset);
                 var shelfItems = allItems.Skip(shelfOffset).Take(PageSize).ToArray();
-                var shelfList = BuildShelves(account, groups, filter, mode, sort);
+                var shelfList = BuildShelves(account, groups, filter, mode, sort, categoryDescriptors);
                 return new CatalogSnapshot(mode, groups, null, shelfOffset,
                     new CatalogPage(shelfItems, allItems.Count), shelfList);
             }
@@ -971,7 +1134,7 @@ public sealed partial class CatalogLandingPage : UserControl
             var page = offset == 0
                 ? firstPage
                 : _repository.GetChannels(account, _connection, type, groupId, filter, offset, PageSize, sortOrder: itemSort);
-            var shelves = BuildShelves(account, groups, filter, mode, sort);
+            var shelves = BuildShelves(account, groups, filter, mode, sort, categoryDescriptors);
             return new CatalogSnapshot(mode, groups, groupId, offset, page, shelves);
         });
 
@@ -987,7 +1150,8 @@ public sealed partial class CatalogLandingPage : UserControl
             {
                 if (_spotlightShelvesCache.TryGetValue((account.AccountId, mode), out var cached)) return cached;
             }
-            var built = BuildShelves(account, snapshot.Groups, null, mode, SpotlightSort);
+            var spotlightDescriptors = _repository.GetCategoryShelfDescriptors(account, TypeForMode(mode));
+            var built = BuildShelves(account, snapshot.Groups, null, mode, SpotlightSort, spotlightDescriptors);
             CacheSpotlightShelves(account.AccountId, mode, built);
             return built;
         });
@@ -1095,7 +1259,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void UpdateEpgLifecycle()
     {
-        if (EpgEnabled && _isActive && _activeMode == CatalogMode.LiveTv)
+        if (!PerfToggles.IsDisabled("epg") && EpgEnabled && _isActive && _activeMode == CatalogMode.LiveTv)
             _epgTimer.Start();
         else
             _epgTimer.Stop();
@@ -1165,6 +1329,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void EpgTimer_Tick(object? sender, object args)
     {
+        using var perfScope = PerfScope.Begin("EpgTimerTick");
         if (!EpgEnabled) return;
         StartEpgIfVisible();
         _ = RefreshVisibleEpgAsync();
@@ -1179,7 +1344,11 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
         }
 
-        DispatcherQueue.TryEnqueue(() => _ = RefreshVisibleEpgAsync());
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            using var dispatchScope = PerfScope.Begin("EpgRefreshDispatch");
+            _ = RefreshVisibleEpgAsync();
+        });
     }
 
     private async Task RefreshVisibleEpgAsync()
@@ -1203,6 +1372,7 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!_isActive || _activeMode != CatalogMode.LiveTv || _account?.AccountId != account.AccountId)
                 return;
 
+            using var perfScope = PerfScope.Begin("EpgVisibleUpdate");
             foreach (var card in cards)
             {
                 var epgId = card.Channel!.Metadata["epg_channel_id"];
@@ -1234,8 +1404,11 @@ public sealed partial class CatalogLandingPage : UserControl
         IReadOnlyList<ChannelGroup> groups,
         string? filter,
         CatalogMode mode,
-        CategorySort sort)
+        CategorySort sort,
+        IReadOnlyList<CatalogCategoryShelfDescriptor>? categoryDescriptors = null)
     {
+        using var perfScope = PerfScope.Begin("BuildShelves");
+        using var refreshPhase = PerfScope.BeginPhase("snapshotBuild");
         if (mode == CatalogMode.MyTvivo)
             return BuildMyTvivoShelves(account, filter);
 
@@ -1268,35 +1441,25 @@ public sealed partial class CatalogLandingPage : UserControl
                 latestAddedAt));
         }
 
-        var pages = _repository.GetChannelsGroupedByCategory(account, _connection, type, filter, ShelfPreviewSize);
-        IReadOnlyDictionary<string, CatalogPage>? unfilteredPages = null;
-        foreach (var group in SortGroups(groups, sort))
+        categoryDescriptors ??= _repository.GetCategoryShelfDescriptors(account, type, filter);
+        Dictionary<string, long> shelfVisitsSnapshot;
+        lock (ShelfVisitsLock) shelfVisitsSnapshot = ReadShelfVisits();
+        foreach (var descriptor in SortGroups(categoryDescriptors, sort))
         {
+            var group = descriptor.Group;
             var titleMatchesFilter = !string.IsNullOrWhiteSpace(filter) &&
                 group.DisplayName.Contains(filter, StringComparison.CurrentCultureIgnoreCase);
-
-            CatalogPage page;
-            if (titleMatchesFilter)
-            {
-                unfilteredPages ??= _repository.GetChannelsGroupedByCategory(account, _connection, type, null, ShelfPreviewSize);
-                if (!unfilteredPages.TryGetValue(group.Id, out var unfilteredPage)) continue;
-                page = unfilteredPage;
-            }
-            else
-            {
-                if (!pages.TryGetValue(group.Id, out var filteredPage)) continue;
-                page = filteredPage;
-            }
-
             shelves.Add(CreateShelf(account,
                 group.Id,
                 group.DisplayName,
-                CountLabel(page.TotalCount, noun),
-                page.Items.Select(channel => ToCard(channel, type, QualityFromText(group.DisplayName))).ToArray(),
+                CountLabel(descriptor.TotalCount, noun),
+                Array.Empty<CatalogCard>(),
                 type,
                 group.Id,
                 true,
-                page.LatestAddedAt));
+                descriptor.LatestAddedAt,
+                ignoreItemFilterForPreview: titleMatchesFilter,
+                shelfVisitsSnapshot: shelfVisitsSnapshot));
         }
 
         return shelves;
@@ -1308,6 +1471,15 @@ public sealed partial class CatalogLandingPage : UserControl
             CategorySort.AlphabeticalAsc => groups.OrderBy(group => group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
             CategorySort.AlphabeticalDesc => groups.OrderByDescending(group => group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
             _ => groups.OrderBy(group => group.SortOrder ?? int.MaxValue).ThenBy(group => group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
+        };
+
+    private static IReadOnlyList<CatalogCategoryShelfDescriptor> SortGroups(
+        IReadOnlyList<CatalogCategoryShelfDescriptor> groups, CategorySort sort) =>
+        sort switch
+        {
+            CategorySort.AlphabeticalAsc => groups.OrderBy(group => group.Group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
+            CategorySort.AlphabeticalDesc => groups.OrderByDescending(group => group.Group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
+            _ => groups.OrderBy(group => group.Group.SortOrder ?? int.MaxValue).ThenBy(group => group.Group.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray(),
         };
 
     private static CatalogItemSortOrder ToItemSortOrder(CategorySort sort) => sort switch
@@ -1391,11 +1563,17 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private CatalogShelf CreateShelf(ProviderAccount account, string id, string title, string countLabel,
         IReadOnlyList<CatalogCard> cards, CatalogItemType type, string? groupId, bool opensPagedGrid,
-        DateTimeOffset? latestAddedAt)
+        DateTimeOffset? latestAddedAt, bool ignoreItemFilterForPreview = false,
+        IReadOnlyDictionary<string, long>? shelfVisitsSnapshot = null)
     {
-        var lastVisitedAt = GetLastShelfVisitAt(account, type, id) ?? DateTimeOffset.UtcNow;
+        DateTimeOffset? storedVisit = null;
+        if (shelfVisitsSnapshot is not null &&
+            shelfVisitsSnapshot.TryGetValue(ShelfVisitSettingKey(account, type, id), out var storedMilliseconds) &&
+            storedMilliseconds > 0)
+            storedVisit = DateTimeOffset.FromUnixTimeMilliseconds(storedMilliseconds);
+        var lastVisitedAt = (shelfVisitsSnapshot is null ? GetLastShelfVisitAt(account, type, id) : storedVisit) ?? DateTimeOffset.UtcNow;
         return new CatalogShelf(id, title, countLabel, cards, type, groupId, opensPagedGrid, latestAddedAt,
-            latestAddedAt is { } addedAt && addedAt > lastVisitedAt);
+            latestAddedAt is { } addedAt && addedAt > lastVisitedAt, ignoreItemFilterForPreview);
     }
 
     // ApplicationData.Current requires a packaged app identity, which this unpackaged WinUI3 app
@@ -1515,6 +1693,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public void NotifyMetadataChanged(string accountId, CatalogItemType type, string itemId)
     {
+        using var perfScope = PerfScope.Begin("NotifyMetadataChanged");
         var account = _account;
         var metadata = account is { } activeAccount && activeAccount.AccountId == accountId
             ? _repository.GetMetadata(activeAccount, type, itemId)
@@ -1671,6 +1850,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ShowCardToolTip(CatalogCard card, FrameworkElement cardElement)
     {
+        using var perfScope = PerfScope.Begin("HoverLookupUiUpdate");
         if (!card.HasHoverSummary)
         {
             DetachCardToolTip(cardElement);
@@ -1756,6 +1936,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var dispatcher = DispatcherQueue;
         if (dispatcher.HasThreadAccess)
         {
+            using var perfScope = PerfScope.Begin("RunOnUiThread");
             action();
             return Task.CompletedTask;
         }
@@ -1763,6 +1944,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!dispatcher.TryEnqueue(() =>
             {
+                using var perfScope = PerfScope.Begin("RunOnUiThread");
                 try
                 {
                     action();
@@ -1806,6 +1988,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private static void SetCardArtworkState(FrameworkElement cardRoot, string state)
     {
+        if (PerfToggles.IsDisabled("lens")) return;
+
         var scale = state switch { "Focused" => 1.12, "PointerOver" => 1.10, _ => 1.0 };
         if (FindFirstImage(cardRoot) is { RenderTransform: ScaleTransform imageScale })
             AnimateScale(imageScale, scale);
@@ -1846,6 +2030,7 @@ public sealed partial class CatalogLandingPage : UserControl
     // Rounded clip for the artwork viewport (WinUI's RectangleGeometry has no corner radius, so use a composition clip).
     private static void ApplyArtworkClip(Image image)
     {
+        if (PerfToggles.IsDisabled("clips") || PerfToggles.IsDisabled("shelfclip")) return;
         if (VisualTreeHelper.GetParent(image) is not Grid viewport || image.DataContext is not CatalogCard card ||
             card.Width <= 0 || card.Height <= 0)
             return;
@@ -1877,7 +2062,11 @@ public sealed partial class CatalogLandingPage : UserControl
             CancelHoverRequest();
     }
 
-    private void CatalogLandingPage_Unloaded(object sender, RoutedEventArgs args) => CancelHoverRequest();
+    private void CatalogLandingPage_Unloaded(object sender, RoutedEventArgs args)
+    {
+        CancelShelfPreviewLoads();
+        CancelHoverRequest();
+    }
 
     private void CancelHoverRequest()
     {
@@ -1975,6 +2164,7 @@ public sealed partial class CatalogLandingPage : UserControl
         (left.Id == right.Id && left.Title == right.Title && left.CountLabel == right.CountLabel &&
         left.Type == right.Type && left.GroupId == right.GroupId && left.OpensPagedGrid == right.OpensPagedGrid &&
         left.LatestAddedAt == right.LatestAddedAt && left.HasNewItems == right.HasNewItems &&
+        left.IgnoreItemFilterForPreview == right.IgnoreItemFilterForPreview &&
         left.Cards.Count == right.Cards.Count && (ReferenceEquals(left.Cards, right.Cards) || left.Cards.Zip(right.Cards).All(pair =>
             pair.First.Id == pair.Second.Id && pair.First.Title == pair.Second.Title &&
             pair.First.Subtitle == pair.Second.Subtitle && pair.First.ArtworkUrl == pair.Second.ArtworkUrl &&
@@ -1986,11 +2176,14 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task ApplySnapshotAsync(CatalogSnapshot snapshot, Func<bool>? isCurrent = null)
     {
+        CancelShelfPreviewLoads();
+        using var refreshPhase = PerfScope.BeginPhase("apply");
         var applyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var transitionGeneration = Volatile.Read(ref _modeTransitionGeneration);
         var fadedOut = false;
         var animateIncomingContent = false;
         var contentApplied = false;
+        var applyScope = default(PerfScope);
         var snapshotApplyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         await _modeTransitionGate.WaitAsync();
 
@@ -2027,6 +2220,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
 
+            applyScope = PerfScope.Begin("ApplySnapshot");
             Interlocked.Increment(ref _pageQueryGeneration);
             _activeMode = snapshot.Mode;
             _groups = snapshot.Groups;
@@ -2046,21 +2240,29 @@ public sealed partial class CatalogLandingPage : UserControl
                     EmptyMessage.Text = $"No matches for \"{snapshot.SearchFilter}\"";
                 }
             }
-            var snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
-            var contentChanged = previousSnapshot is null || !HasSameRenderedContent(previousSnapshot, snapshot);
-            var spotlightChanged = previousSnapshot is null ||
-                previousSnapshot.SpotlightShelves.Count != snapshot.SpotlightShelves.Count ||
-                !previousSnapshot.SpotlightShelves.Zip(snapshot.SpotlightShelves)
-                    .All(pair => SameVisibleShelf(pair.First, pair.Second));
-            var shouldRender = (snapshotChanged && contentChanged) ||
-                _renderedOpenShelfId != _openShelfId;
+            bool snapshotChanged;
+            bool contentChanged;
+            bool spotlightChanged;
+            bool shouldRender;
+            using (PerfScope.Begin("ApplySnapshotCompare"))
+            {
+                snapshotChanged = !ReferenceEquals(_renderedSnapshot, snapshot);
+                contentChanged = previousSnapshot is null || !HasSameRenderedContent(previousSnapshot, snapshot);
+                spotlightChanged = previousSnapshot is null ||
+                    previousSnapshot.SpotlightShelves.Count != snapshot.SpotlightShelves.Count ||
+                    !previousSnapshot.SpotlightShelves.Zip(snapshot.SpotlightShelves)
+                        .All(pair => SameVisibleShelf(pair.First, pair.Second));
+                shouldRender = (snapshotChanged && contentChanged) ||
+                    _renderedOpenShelfId != _openShelfId;
+            }
             LaunchDiagnostics.Write($"event=catalog.render reused={!shouldRender} mode={snapshot.Mode}");
             if (previousSnapshot is not null && contentChanged)
                 VisibleCatalogDataChanged?.Invoke(this, EventArgs.Empty);
             if (shouldRender)
             {
                 if (snapshotChanged && spotlightChanged) RenderSpotlight(snapshot.SpotlightShelves);
-                RenderShelfSurface(snapshot);
+                using (PerfScope.Begin("BuildShelvesResultApply"))
+                    RenderShelfSurface(snapshot);
                 _renderedOpenShelfId = _openShelfId;
             }
             _renderedSnapshot = snapshot;
@@ -2076,20 +2278,28 @@ public sealed partial class CatalogLandingPage : UserControl
                 SetState(content: true);
             // The virtualizing panel measures after binding. Browse restoration below
             // retries at low dispatcher priority and does not require a forced layout.
-            RestoreBrowseStateIfMatching(snapshot.Mode);
+            using (PerfScope.Begin("ApplySnapshotRestore"))
+                RestoreBrowseStateIfMatching(snapshot.Mode);
+            if (_openShelfId is null && !snapshot.IsFlatSearch && snapshot.Mode != CatalogMode.MyTvivo)
+                ScheduleShelfViewportUpdate("apply");
             ContentState.IsHitTestVisible = true;
             contentApplied = true;
             if (_isActive && _activeMode == CatalogMode.LiveTv)
                 _ = RefreshVisibleEpgAsync();
-            if (_isActive) _spotlightTimer.Start();
+            if (_isActive && !PerfToggles.IsDisabled("spotlight")) _spotlightTimer.Start();
+            applyScope.Dispose();
+            applyScope = default;
         }
         finally
         {
+            applyScope.Dispose();
             Interlocked.Exchange(ref _refreshApplyDurationTicks,
                 System.Diagnostics.Stopwatch.GetTimestamp() - applyStarted);
+            UpdateMaximum(ref _refreshApplyMaxDurationTicks, Interlocked.Read(ref _refreshApplyDurationTicks));
             Interlocked.Increment(ref _refreshApplyCount);
             Interlocked.Exchange(ref _snapshotApplyDurationTicks,
                 System.Diagnostics.Stopwatch.GetTimestamp() - snapshotApplyStarted);
+            UpdateMaximum(ref _snapshotApplyMaxDurationTicks, Interlocked.Read(ref _snapshotApplyDurationTicks));
             Interlocked.Increment(ref _snapshotApplyCount);
             if ((fadedOut || (animateIncomingContent && contentApplied)) && snapshot.Mode == _activeMode &&
                 transitionGeneration == Volatile.Read(ref _modeTransitionGeneration))
@@ -2163,7 +2373,8 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var previousCard = _spotlightCard;
         var candidates = GetSpotlightCandidates(shelves);
-        WarmSpotlightCandidates(candidates.Take(SpotlightWarmCandidateLimit));
+        if (!PerfToggles.IsDisabled("spotlightart"))
+            WarmSpotlightCandidates(candidates.Take(SpotlightWarmCandidateLimit));
         SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
         var card = candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id);
@@ -2189,7 +2400,12 @@ public sealed partial class CatalogLandingPage : UserControl
 
         StopArtwork(SpotlightArtwork);
         SpotlightArtworkFallback.Visibility = Visibility.Visible;
-        SpotlightArtwork.Visibility = Visibility.Visible;
+        SpotlightArtwork.Visibility = PerfToggles.IsDisabled("spotlightart") ? Visibility.Collapsed : Visibility.Visible;
+        if (PerfToggles.IsDisabled("spotlightart"))
+        {
+            SpotlightArtworkFallback.Visibility = Visibility.Collapsed;
+            SpotlightArtwork.Source = null;
+        }
         SpotlightTitle.Text = card.Channel?.DisplayName ?? card.Title;
         SpotlightSubtitle.Text = card.Channel is { } spotlightChannel
             ? SubtitleFor(spotlightChannel.Source.Kind)
@@ -2202,7 +2418,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 StreamKind.Series => "Open series",
                 _ => "Open channel",
             });
-        StartArtwork(SpotlightArtwork, card.ArtworkUrl);
+        if (!PerfToggles.IsDisabled("spotlightart"))
+            StartArtwork(SpotlightArtwork, card.ArtworkUrl);
     }
 
     // The first SpotlightWarmCandidateLimit candidates are the ones the carousel auto-rotates through,
@@ -2227,6 +2444,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightTimer_Tick(object? sender, object args)
     {
+        using var perfScope = PerfScope.Begin("SpotlightTimerTick");
         if (_openShelfId is not null || _renderedSnapshot is not { } snapshot ||
             ContentState.Visibility != Visibility.Visible) return;
         AdvanceSpotlight(1, snapshot, automatic: true);
@@ -2375,6 +2593,28 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             if (_snapshotCache.Remove(oldest, out var removed)) _snapshotCacheBytes -= removed.EstimatedBytes;
         }
+        TrimInactiveCachedShelfPreviews(key);
+    }
+
+    private void TrimInactiveCachedShelfPreviews(CatalogSnapshotKey keepKey)
+    {
+        foreach (var key in _snapshotCache.Keys.Where(key => key != keepKey).ToArray())
+        {
+            var cached = _snapshotCache[key];
+            var snapshot = cached.Snapshot;
+            IReadOnlyList<CatalogShelf> Strip(IReadOnlyList<CatalogShelf> shelves) => shelves.Select(shelf =>
+                key.Mode != CatalogMode.MyTvivo && shelf.OpensPagedGrid && shelf.Cards.Count > 0
+                    ? shelf with { Cards = Array.Empty<CatalogCard>() }
+                    : shelf).ToArray();
+            var strippedShelves = Strip(snapshot.Shelves);
+            var strippedSpotlight = ReferenceEquals(snapshot.Shelves, snapshot.SpotlightShelves)
+                ? null
+                : Strip(snapshot.SpotlightShelves);
+            var stripped = snapshot with { Shelves = strippedShelves, SpotlightSource = strippedSpotlight };
+            var bytes = EstimateSnapshotBytes(stripped);
+            _snapshotCache[key] = new CachedCatalogSnapshot(stripped, bytes);
+            _snapshotCacheBytes += bytes - cached.EstimatedBytes;
+        }
     }
 
     private void InvalidateAccountSnapshots(string accountId)
@@ -2402,7 +2642,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private void CacheSpotlightShelves(string accountId, CatalogMode mode, IReadOnlyList<CatalogShelf> shelves)
     {
         var key = (accountId, mode);
-        var estimatedBytes = EstimateShelvesBytes(shelves);
+        var retainedShelves = shelves.Select(shelf => mode != CatalogMode.MyTvivo && shelf.OpensPagedGrid && shelf.Cards.Count > 0
+            ? shelf with { Cards = Array.Empty<CatalogCard>() }
+            : shelf).ToArray();
+        var estimatedBytes = EstimateShelvesBytes(retainedShelves);
         if (estimatedBytes > SpotlightShelvesCacheByteLimit) return;
         lock (_spotlightShelvesLock)
         {
@@ -2410,7 +2653,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 _spotlightShelvesCacheBytes -= EstimateShelvesBytes(previous);
             else
                 _spotlightShelvesCacheOrder.Enqueue(key);
-            _spotlightShelvesCache[key] = shelves;
+            _spotlightShelvesCache[key] = retainedShelves;
             _spotlightShelvesCacheBytes += estimatedBytes;
             while ((_spotlightShelvesCache.Count > SpotlightShelvesCacheCapacity ||
                     _spotlightShelvesCacheBytes > SpotlightShelvesCacheByteLimit) &&
@@ -2472,7 +2715,11 @@ public sealed partial class CatalogLandingPage : UserControl
         }
 
         ScrollToTop();
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, ScrollToTop);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            using var perfScope = PerfScope.Begin("BrowseScrollResetDispatch");
+            ScrollToTop();
+        });
     }
 
     private void CaptureBrowseState()
@@ -2513,8 +2760,11 @@ public sealed partial class CatalogLandingPage : UserControl
         // two low-priority dispatch passes so layout settles first, and prefer ScrollIntoView
         // on the remembered card (which handles realization itself) over a raw pixel offset.
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            using var dispatchScope = PerfScope.Begin("BrowseRestoreDispatch");
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {
+                using var restoreScope = PerfScope.Begin("BrowseRestoreCallback");
                 if (openShelfId is not null && position.FocusedCardId is { } cardId)
                 {
                     var card = OpenShelfGrid.Items.OfType<CatalogCard>().FirstOrDefault(c => c.Id == cardId);
@@ -2557,7 +2807,8 @@ public sealed partial class CatalogLandingPage : UserControl
                         scrollRetryTimer.Stop();
                 };
                 scrollRetryTimer.Start();
-            }));
+            });
+        });
     }
 
     private void SetSearchTextWithoutReload(string value)
@@ -2577,6 +2828,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ArtworkImage_Opened(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ArtworkOpened");
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
             !ReferenceEquals(image.Source, load.Bitmap) || !IsCurrentArtworkTarget(image, load)) return;
         ReleaseArtworkSlot(image, load, "ImageOpened");
@@ -2589,6 +2841,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ArtworkImage_Failed(object sender, ExceptionRoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ArtworkFailed");
         if (sender is not Image image || !_artworkLoads.TryGetValue(image, out var load) ||
             !ReferenceEquals(image.Source, load.Bitmap)) return;
         LogArtworkFailure("ImageFailed");
@@ -2611,12 +2864,14 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ArtworkImage_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ArtworkDataContextChanged");
         if (sender is Image image && !ReferenceEquals(image, SpotlightArtwork) && image.IsLoaded)
             StartArtwork(image, (image.DataContext as CatalogCard)?.ArtworkUrl);
     }
 
     private void ArtworkImage_Loaded(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ArtworkLoaded");
         if (sender is not Image image) return;
         image.DataContextChanged -= ArtworkImage_DataContextChanged;
         image.ImageOpened -= ArtworkImage_Opened;
@@ -2624,7 +2879,7 @@ public sealed partial class CatalogLandingPage : UserControl
         image.DataContextChanged += ArtworkImage_DataContextChanged;
         image.ImageOpened += ArtworkImage_Opened;
         image.ImageFailed += ArtworkImage_Failed;
-        Interlocked.Increment(ref _artworkImagesLoaded);
+        if (_loadedArtworkImages.Add(image)) Interlocked.Increment(ref _artworkImagesLoaded);
         if (ReferenceEquals(image, SpotlightArtwork) && _openShelfId is not null) return;
         if (!ReferenceEquals(image, SpotlightArtwork)) ApplyArtworkClip(image);
 
@@ -2636,21 +2891,26 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ShelfContainer_Loaded(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ShelfContainerLoaded");
+        if (sender is not FrameworkElement container) return;
         Interlocked.Increment(ref _shelfContainersRealized);
-        Interlocked.Increment(ref _liveShelfContainers);
+        if (_liveShelfContainerElements.Add(container)) Interlocked.Increment(ref _liveShelfContainers);
     }
 
     private void ShelfContainer_Unloaded(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ShelfContainerUnloaded");
+        if (sender is not FrameworkElement container) return;
         Interlocked.Increment(ref _shelfContainersRecycled);
-        Interlocked.Decrement(ref _liveShelfContainers);
+        if (_liveShelfContainerElements.Remove(container)) Interlocked.Decrement(ref _liveShelfContainers);
     }
 
     private void ArtworkImage_Unloaded(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ArtworkUnloaded");
         if (sender is Image image)
         {
-            Interlocked.Increment(ref _artworkImagesUnloaded);
+            if (_loadedArtworkImages.Remove(image)) Interlocked.Increment(ref _artworkImagesUnloaded);
             StopArtwork(image);
             image.DataContextChanged -= ArtworkImage_DataContextChanged;
             image.ImageOpened -= ArtworkImage_Opened;
@@ -2666,6 +2926,15 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async void StartArtwork(Image image, string? url)
     {
+        if (ReferenceEquals(image, SpotlightArtwork) && PerfToggles.IsDisabled("spotlightart"))
+        {
+            image.Source = null;
+            image.Opacity = 0;
+            image.Visibility = Visibility.Collapsed;
+            SpotlightArtworkFallback.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         var card = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
         var homeCard = image.DataContext as HomePage.HomeShelfCard;
         var itemKey = card?.Id ?? (homeCard is null ? "card:unresolved" : $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}");
@@ -2736,13 +3005,14 @@ public sealed partial class CatalogLandingPage : UserControl
             }
             imageStream.Seek(0);
             await bitmap.SetSourceAsync(imageStream);
+            using var completionScope = PerfScope.Begin("ArtworkDecodeComplete");
             if (!IsCurrentArtworkLoad(image, load, "decode")) return;
             load.Bitmap = bitmap;
             CacheArtworkBitmap(cacheKey, bitmap);
             _ = ExpireArtworkAsync(image, load);
             ApplyArtworkToLiveImage(image, load, bitmap, "decoded");
         }
-        catch (OperationCanceledException exception)
+        catch (OperationCanceledException)
         {
             var canceledByView = load.Cancellation.IsCancellationRequested;
             if (!canceledByView)
@@ -2817,6 +3087,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ApplyArtworkToLiveImage(Image image, ArtworkLoad load, BitmapImage bitmap, string source)
     {
+        using var perfScope = PerfScope.Begin("ArtworkAssign");
         if (!_artworkLoads.TryGetValue(image, out var current) || !ReferenceEquals(current, load) ||
             !ReferenceEquals(load.Bitmap, bitmap) || !IsCurrentArtworkTarget(image, load))
         {
@@ -2919,7 +3190,7 @@ public sealed partial class CatalogLandingPage : UserControl
         SpotlightPanel.Visibility = isOpen || isSearch || _spotlightCard is null ? Visibility.Collapsed : Visibility.Visible;
         if (isOpen || isSearch)
             StopArtwork(SpotlightArtwork);
-        else if (_spotlightCard is not null && SpotlightArtwork.Source is null)
+        else if (!PerfToggles.IsDisabled("spotlightart") && _spotlightCard is not null && SpotlightArtwork.Source is null)
             StartArtwork(SpotlightArtwork, _spotlightCard.ArtworkUrl);
         PagerPanel.Visibility = isOpen || isSearch ? Visibility.Visible : Visibility.Collapsed;
         PageSearchPanel.Visibility = Visibility.Collapsed;
@@ -2953,8 +3224,304 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
+    private void ShelvesItems_Loaded(object sender, RoutedEventArgs args)
+    {
+        ShelvesItems.LayoutUpdated -= ShelvesItems_LayoutUpdated;
+        ShelvesItems.LayoutUpdated += ShelvesItems_LayoutUpdated;
+        AttachShelfScrollViewer();
+        _shelfViewportTimer ??= ShelvesItems.DispatcherQueue.CreateTimer();
+        _shelfViewportTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _shelfViewportTimer.IsRepeating = false;
+        _shelfViewportTimer.Tick -= ShelfViewportTimer_Tick;
+        _shelfViewportTimer.Tick += ShelfViewportTimer_Tick;
+        _shelfViewportPollTimer ??= ShelvesItems.DispatcherQueue.CreateTimer();
+        _shelfViewportPollTimer.Interval = TimeSpan.FromSeconds(1);
+        _shelfViewportPollTimer.IsRepeating = true;
+        _shelfViewportPollTimer.Tick -= ShelfViewportPollTimer_Tick;
+        _shelfViewportPollTimer.Tick += ShelfViewportPollTimer_Tick;
+        ScheduleShelfViewportUpdate("apply");
+    }
+
+    private void ShelvesItems_Unloaded(object sender, RoutedEventArgs args)
+    {
+        ShelvesItems.LayoutUpdated -= ShelvesItems_LayoutUpdated;
+        if (_shelfScrollViewer is { } viewer)
+            viewer.ViewChanged -= ShelvesScrollViewer_ViewChanged;
+        _shelfScrollViewer = null;
+        _shelfViewportPollTimer?.Stop();
+        CancelShelfPreviewLoads();
+    }
+
+    private void ShelvesItems_LayoutUpdated(object? sender, object args) => AttachShelfScrollViewer();
+
+    private void AttachShelfScrollViewer()
+    {
+        var viewer = FindShelfScrollViewer(ShelvesItems);
+        if (ReferenceEquals(viewer, _shelfScrollViewer)) return;
+        if (_shelfScrollViewer is { } previous)
+            previous.ViewChanged -= ShelvesScrollViewer_ViewChanged;
+        _shelfScrollViewer = viewer;
+        if (viewer is not null)
+            viewer.ViewChanged += ShelvesScrollViewer_ViewChanged;
+    }
+
+    private void ShelvesScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs args) =>
+        ScheduleShelfViewportUpdate("scroll");
+
+    private void ShelfContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (!args.InRecycleQueue && args.ItemIndex >= 0 &&
+            args.Item is CatalogShelf shelf && shelf.OpensPagedGrid && shelf.Cards.Count == 0)
+            ScheduleShelfViewportUpdate("container");
+    }
+
+    private void ScheduleShelfViewportUpdate(string reason)
+    {
+        if (_shelfViewportTimer is null || !ShelvesItems.IsLoaded) return;
+        _shelfViewportReason = reason;
+        _shelfViewportTimer.Stop();
+        _shelfViewportTimer.Start();
+    }
+
+    private void ShelfViewportTimer_Tick(DispatcherQueueTimer sender, object args)
+    {
+        var generation = Volatile.Read(ref _shelfPreviewLoadGeneration);
+        var reason = _shelfViewportReason;
+        ShelvesItems.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low,
+            () => UpdateShelfPreviewWindow(reason, generation));
+    }
+
+    private void ShelfViewportPollTimer_Tick(DispatcherQueueTimer sender, object args) =>
+        UpdateShelfPreviewWindow("poll", Volatile.Read(ref _shelfPreviewLoadGeneration));
+
+    private void CancelShelfPreviewLoads()
+    {
+        Interlocked.Increment(ref _shelfPreviewLoadGeneration);
+        _shelfViewportTimer?.Stop();
+        _shelfViewportPollTimer?.Stop();
+    }
+
+    private void UpdateShelfPreviewWindow(string reason, long generation)
+    {
+        if (generation != Volatile.Read(ref _shelfPreviewLoadGeneration) ||
+            _renderedSnapshot is not { IsFlatSearch: false } snapshot || snapshot.Mode == CatalogMode.MyTvivo ||
+            _openShelfId is not null || !_isActive || _account is not { } account ||
+            !TryGetVisibleShelfRange(snapshot, out var firstVisible, out var lastVisible))
+        {
+            _shelfViewportPollTimer?.Stop();
+            return;
+        }
+
+        var loaded = snapshot.Shelves.Select((shelf, index) => (shelf, index))
+            .Where(pair => pair.shelf.OpensPagedGrid && pair.shelf.Cards.Count > 0)
+            .Select(pair => pair.index)
+            .ToArray();
+        var windowSize = Math.Min(snapshot.Shelves.Count - 1, lastVisible + PrefetchShelves) -
+                         Math.Max(0, firstVisible - PrefetchShelves) + 1;
+        var plan = ShelfWindowPlanner.Plan(snapshot.Shelves.Count, firstVisible, lastVisible,
+            PrefetchShelves, windowSize + RetainedShelfMargin, loaded);
+
+        var visibleSkeletons = CountVisibleSkeletonShelves(snapshot, firstVisible, lastVisible);
+
+        if (plan.ToUnload.Count > 0)
+        {
+            var removeIds = plan.ToUnload.Select(index => snapshot.Shelves[index].Id).ToHashSet(StringComparer.Ordinal);
+            ReplaceShelfPreviewCards(account, snapshot.Mode,
+                removeIds.ToDictionary(id => id, _ => (IReadOnlyList<CatalogCard>?)null, StringComparer.Ordinal));
+            snapshot = _renderedSnapshot ?? snapshot;
+        }
+
+        var loadShelves = plan.ToLoad.Select(index => snapshot.Shelves[index])
+            .Where(shelf => shelf.OpensPagedGrid && shelf.Cards.Count == 0 &&
+                !_shelfPreviewLoadsInFlight.Contains((snapshot.Mode, shelf.Id)))
+            .ToArray();
+        if (loadShelves.Length > 0)
+        {
+            foreach (var shelf in loadShelves)
+                _shelfPreviewLoadsInFlight.Add((snapshot.Mode, shelf.Id));
+            _ = LoadShelfPreviewsAsync(account, snapshot.Mode, loadShelves, generation);
+        }
+
+        LogShelfWindow(firstVisible, lastVisible, loadShelves.Length, loaded.Count(index => index >= plan.FirstIndex && index <= plan.LastIndex), visibleSkeletons, reason);
+        if (HasRealizedSkeletonShelf(snapshot))
+        {
+            if (_isActive && !_shelfViewportPollTimer!.IsRunning)
+                _shelfViewportPollTimer.Start();
+        }
+        else
+        {
+            _shelfViewportPollTimer?.Stop();
+        }
+    }
+
+    private bool TryGetVisibleShelfRange(CatalogSnapshot snapshot, out int first, out int last)
+    {
+        first = int.MaxValue;
+        last = -1;
+        AttachShelfScrollViewer();
+        if (_shelfScrollViewer is not { } viewer || viewer.ViewportHeight <= 0) return false;
+
+        if (ShelvesItems.ItemsPanelRoot is { } panel && TryGetPanelVisibleRange(panel, snapshot.Shelves.Count, out first, out last))
+            return true;
+
+        var viewport = new Windows.Foundation.Rect(0, 0, viewer.ViewportWidth, viewer.ViewportHeight);
+        for (var index = 0; index < ShelvesItems.Items.Count; index++)
+        {
+            if (ShelvesItems.ContainerFromIndex(index) is not FrameworkElement container ||
+                container.Visibility != Visibility.Visible)
+                continue;
+            try
+            {
+                var bounds = container.TransformToVisual(viewer).TransformBounds(
+                    new Windows.Foundation.Rect(0, 0, container.ActualWidth, container.ActualHeight));
+                if (bounds.Bottom <= viewport.Top || bounds.Top >= viewport.Bottom) continue;
+                first = Math.Min(first, index);
+                last = Math.Max(last, index);
+            }
+            catch (InvalidOperationException) { }
+        }
+        if (last >= 0) return true;
+
+        // A fast jump can run before the virtualizing panel has realized its destination containers.
+        var headerHeight = SpotlightPanel.Visibility == Visibility.Visible ? SpotlightPanel.ActualHeight + 30 : 0;
+        var shelfHeight = _activeMode == CatalogMode.LiveTv ? 230d : 340d;
+        var estimatedIndex = Math.Clamp((int)(Math.Max(0, viewer.VerticalOffset - headerHeight) / shelfHeight),
+            0, Math.Max(0, ShelvesItems.Items.Count - 1));
+        first = estimatedIndex;
+        last = estimatedIndex;
+        return ShelvesItems.Items.Count > 0;
+    }
+
+    private static bool TryGetPanelVisibleRange(Panel panel, int itemCount, out int first, out int last)
+    {
+        first = -1;
+        last = -1;
+        var type = panel.GetType();
+        var firstProperty = type.GetProperty("FirstVisibleIndex");
+        var lastProperty = type.GetProperty("LastVisibleIndex");
+        if (firstProperty?.GetValue(panel) is not int panelFirst || lastProperty?.GetValue(panel) is not int panelLast ||
+            panelFirst < 0 || panelLast < panelFirst)
+            return false;
+        first = Math.Clamp(panelFirst, 0, Math.Max(0, itemCount - 1));
+        last = Math.Clamp(panelLast, first, Math.Max(first, itemCount - 1));
+        return itemCount > 0;
+    }
+
+    private int CountVisibleSkeletonShelves(CatalogSnapshot snapshot, int first, int last)
+    {
+        var count = 0;
+        for (var index = first; index <= last && index < snapshot.Shelves.Count; index++)
+            if (snapshot.Shelves[index].OpensPagedGrid && snapshot.Shelves[index].Cards.Count == 0 &&
+                ShelvesItems.ContainerFromIndex(index) is FrameworkElement { Visibility: Visibility.Visible })
+                count++;
+        return count;
+    }
+
+    private bool HasRealizedSkeletonShelf(CatalogSnapshot snapshot)
+    {
+        for (var index = 0; index < ShelvesItems.Items.Count && index < snapshot.Shelves.Count; index++)
+            if (snapshot.Shelves[index].OpensPagedGrid && snapshot.Shelves[index].Cards.Count == 0 &&
+                ShelvesItems.ContainerFromIndex(index) is FrameworkElement { Visibility: Visibility.Visible })
+                return true;
+        return false;
+    }
+
+    private void LogShelfWindow(int first, int last, int toLoad, int loaded, int skeleton, string reason)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_lastShelfWindowLogAt != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(_lastShelfWindowLogAt, now) < TimeSpan.FromMilliseconds(200))
+            return;
+        _lastShelfWindowLogAt = now;
+        LaunchDiagnostics.Write($"event=perf.shelfwindow first={first} last={last} toLoad={toLoad} loaded={loaded} skeleton={skeleton} reason={reason}");
+    }
+
+    private async Task LoadShelfPreviewsAsync(ProviderAccount account, CatalogMode mode,
+        IReadOnlyList<CatalogShelf> shelves, long generation)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var type = TypeForMode(mode);
+        var categoryIds = shelves.Select(shelf => shelf.Id).ToArray();
+        var unfilteredCategoryIds = shelves.Where(shelf => shelf.IgnoreItemFilterForPreview)
+            .Select(shelf => shelf.Id).ToHashSet(StringComparer.Ordinal);
+        var filter = SearchBox.Text;
+        var providerConnection = _connection;
+        var itemSort = ToItemSortOrder(_categorySort);
+        IReadOnlyDictionary<string, CatalogPage> pages;
+        try
+        {
+            pages = await Task.Run(() => _repository.GetChannelsGroupedByCategory(account, providerConnection, type,
+                filter, ShelfPreviewSize, categoryIds, unfilteredCategoryIds, itemSort));
+        }
+        catch (Exception exception)
+        {
+            Interlocked.Add(ref _shelfPreviewLoadDurationTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+            LaunchDiagnostics.Write($"event=catalog.shelf-preview.failed mode={mode} error={exception.GetType().Name}");
+            foreach (var shelf in shelves)
+                _shelfPreviewLoadsInFlight.Remove((mode, shelf.Id));
+            ScheduleShelfViewportUpdate("poll");
+            return;
+        }
+        Interlocked.Add(ref _shelfPreviewLoadDurationTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+
+        try
+        {
+            if (generation != Volatile.Read(ref _shelfPreviewLoadGeneration) || _account?.AccountId != account.AccountId ||
+                _activeMode != mode || _openShelfId is not null || !_isActive ||
+                _renderedSnapshot is not { IsFlatSearch: false } current ||
+                !TryGetVisibleShelfRange(current, out var firstVisible, out var lastVisible))
+                return;
+
+            var currentPlan = ShelfWindowPlanner.Plan(current.Shelves.Count, firstVisible, lastVisible,
+                PrefetchShelves, int.MaxValue,
+                current.Shelves.Select((shelf, index) => (shelf, index))
+                    .Where(pair => pair.shelf.OpensPagedGrid && pair.shelf.Cards.Count > 0)
+                    .Select(pair => pair.index));
+            var currentWindowIds = current.Shelves
+                .Skip(currentPlan.FirstIndex)
+                .Take(currentPlan.LastIndex - currentPlan.FirstIndex + 1)
+                .Where(shelf => shelf.OpensPagedGrid && shelf.Cards.Count == 0)
+                .Select(shelf => shelf.Id)
+                .ToHashSet(StringComparer.Ordinal);
+            var cards = new Dictionary<string, IReadOnlyList<CatalogCard>>(StringComparer.Ordinal);
+            foreach (var shelf in shelves)
+                if (currentWindowIds.Contains(shelf.Id) && pages.TryGetValue(shelf.Id, out var page) &&
+                    current.Shelves.FirstOrDefault(candidate => candidate.Id == shelf.Id)?.Cards.Count == 0)
+                    cards[shelf.Id] = page.Items.Select(channel => ToCard(channel, type, QualityFromText(shelf.Title))).ToArray();
+            if (cards.Count > 0)
+                ReplaceShelfPreviewCards(account, mode,
+                    cards.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<CatalogCard>?)pair.Value, StringComparer.Ordinal));
+        }
+        finally
+        {
+            foreach (var shelf in shelves)
+                _shelfPreviewLoadsInFlight.Remove((mode, shelf.Id));
+            ScheduleShelfViewportUpdate("poll");
+        }
+    }
+
+    private void ReplaceShelfPreviewCards(ProviderAccount account, CatalogMode mode,
+        IReadOnlyDictionary<string, IReadOnlyList<CatalogCard>?> replacements)
+    {
+        if (_renderedSnapshot is not { } current || current.Mode != mode || _account?.AccountId != account.AccountId) return;
+        IReadOnlyList<CatalogShelf> Replace(IReadOnlyList<CatalogShelf> shelves) => shelves
+            .Select(shelf => replacements.TryGetValue(shelf.Id, out var cards) ? shelf with { Cards = cards ?? Array.Empty<CatalogCard>() } : shelf)
+            .ToArray();
+
+        var shelves = Replace(current.Shelves);
+        var spotlight = ReferenceEquals(current.Shelves, current.SpotlightShelves) ? null : Replace(current.SpotlightShelves);
+        var updated = current with { Shelves = shelves, SpotlightSource = spotlight };
+        _renderedSnapshot = updated;
+        SynchronizeRenderedShelves(updated.Shelves);
+        if (_openShelfId is null && !updated.IsFlatSearch)
+            RenderSpotlight(updated.SpotlightShelves);
+        CacheSnapshot(account, updated);
+        if (!ReferenceEquals(updated.Shelves, updated.SpotlightShelves))
+            CacheSpotlightShelves(account.AccountId, mode, updated.SpotlightShelves);
+    }
+
     private void SynchronizeRenderedShelves(IReadOnlyList<CatalogShelf> shelves)
     {
+        using var perfScope = PerfScope.Begin("SynchronizeRenderedShelves");
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -3015,6 +3582,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async Task OpenShelfAsync(CatalogShelf shelf)
     {
+        CancelShelfPreviewLoads();
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         LaunchDiagnostics.Write($"event=catalog.browse.open mode={_activeMode} type={shelf.Type} scope={(shelf.GroupId is null ? "shelf" : "category")}");
         if (_account is { } account)
@@ -3066,9 +3634,11 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ShelfGrid_Loaded(object sender, RoutedEventArgs args)
     {
+        using var perfScope = PerfScope.Begin("ShelfGridLoaded");
         if (sender is not GridView gridView || !_wiredShelfGrids.Add(gridView))
             return;
 
+        gridView.ContainerContentChanging += CatalogCardContainerContentChanging;
         gridView.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(ShelfGrid_PointerPressed), true);
         gridView.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(ShelfGrid_PointerMoved), true);
         gridView.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(ShelfGrid_PointerReleased), true);
@@ -3081,6 +3651,9 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not GridView gridView || !_wiredShelfGrids.Remove(gridView))
             return;
 
+        gridView.ContainerContentChanging -= CatalogCardContainerContentChanging;
+        ForgetCatalogCardContainers(gridView);
+
         gridView.RemoveHandler(UIElement.PointerPressedEvent, new PointerEventHandler(ShelfGrid_PointerPressed));
         gridView.RemoveHandler(UIElement.PointerMovedEvent, new PointerEventHandler(ShelfGrid_PointerMoved));
         gridView.RemoveHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(ShelfGrid_PointerReleased));
@@ -3090,6 +3663,36 @@ public sealed partial class CatalogLandingPage : UserControl
             ResetShelfPointerState();
         if (ReferenceEquals(_draggedShelfGrid, gridView))
             _draggedShelfGrid = null;
+    }
+
+    private void CatalogCardContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        using var perfScope = PerfScope.Begin("ContainerContentChanging");
+        if (args.InRecycleQueue)
+        {
+            _liveCatalogCardContainers.Remove(args.ItemContainer);
+            _catalogCardContainerOwners.Remove(args.ItemContainer);
+        }
+        else
+        {
+            _liveCatalogCardContainers.Add(args.ItemContainer);
+            if (sender is GridView gridView) _catalogCardContainerOwners[args.ItemContainer] = gridView;
+        }
+    }
+
+    private void OpenShelfGrid_Unloaded(object sender, RoutedEventArgs args) =>
+        ForgetCatalogCardContainers(OpenShelfGrid);
+
+    private void ForgetCatalogCardContainers(GridView gridView)
+    {
+        foreach (var container in _catalogCardContainerOwners
+                     .Where(pair => ReferenceEquals(pair.Value, gridView))
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _catalogCardContainerOwners.Remove(container);
+            _liveCatalogCardContainers.Remove(container);
+        }
     }
 
     private void ShelfGrid_PointerPressed(object sender, PointerRoutedEventArgs args)
@@ -3150,6 +3753,7 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             gridView.DispatcherQueue?.TryEnqueue(() =>
             {
+                using var perfScope = PerfScope.Begin("ShelfPointerCleanup");
                 if (ReferenceEquals(_draggedShelfGrid, gridView))
                     _draggedShelfGrid = null;
             });
@@ -3191,7 +3795,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private void ScrollVerticallyTo(Func<ScrollViewer, double> target)
     {
         if (ActiveVerticalScrollViewer() is not { } viewer) return;
-        viewer.ChangeView(null, Math.Clamp(target(viewer), 0, viewer.ScrollableHeight), null, true);
+        var requestedOffset = Math.Clamp(target(viewer), 0, viewer.ScrollableHeight);
+        LaunchDiagnostics.Write($"event=catalog.scroll-nav offset={viewer.VerticalOffset:0} target={requestedOffset:0} shelves={ShelvesItems.Items.Count} itemsSource={(ShelvesItems.ItemsSource is null ? "null" : "bound")} shelvesVisibility={ShelvesItems.Visibility} contentVisibility={ContentState.Visibility}");
+        viewer.ChangeView(null, requestedOffset, null, true);
     }
 
     private void ScrollTop_Click(object sender, RoutedEventArgs args) => ScrollVerticallyTo(_ => 0);
@@ -3236,6 +3842,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
         if (_suppressSearchChanged || !_isReadyForInteraction) return;
+        CancelShelfPreviewLoads();
         BrowseContextChanging?.Invoke(this, EventArgs.Empty);
         SearchTextChanged?.Invoke(SearchBox.Text ?? string.Empty);
         ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
@@ -3248,6 +3855,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async void ClearSearch_Click(object sender, RoutedEventArgs args)
     {
+        CancelShelfPreviewLoads();
         if (!_isReadyForInteraction) return;
         _suppressSearchChanged = true;
         try
@@ -3290,7 +3898,11 @@ public sealed partial class CatalogLandingPage : UserControl
             SearchCategoryChips.HiddenCountChanged += (_, _) => UpdateSearchChipsToggle();
         }
         SearchCategoryChips.Children.Clear();
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateSearchChipsToggle);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            using var perfScope = PerfScope.Begin("SearchChipsUpdateDispatch");
+            UpdateSearchChipsToggle();
+        });
         var categories = snapshot.SearchCategoryCounts ?? Array.Empty<SearchCategoryCount>();
         var allCount = categories.Sum(category => category.MatchCount);
         AddSearchCategoryChip(string.Empty, "All", allCount, snapshot.SelectedGroupId is null);
@@ -3712,12 +4324,30 @@ public sealed partial class CatalogLandingPage : UserControl
         string? GroupId,
         bool OpensPagedGrid,
         DateTimeOffset? LatestAddedAt,
-        bool HasNewItems)
+        bool HasNewItems,
+        bool IgnoreItemFilterForPreview = false)
     {
+        public Visibility PreviewVisibility => Cards.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility SkeletonVisibility => Cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+        public double SkeletonHeight => Type == CatalogItemType.Live ? 138 : 250;
+        public double SkeletonRowHeight => SkeletonHeight + 36;
+        public IReadOnlyList<ShelfSkeletonTile> SkeletonTiles => ShelfSkeletonTiles.For(Type);
         public Visibility NewSinceLastVisitVisibility => HasNewItems ? Visibility.Visible : Visibility.Collapsed;
 
         // The shelf row is named from ToString() for screen readers; the record's default dumps every field.
         public override string ToString() => $"{Title}, {CountLabel}";
+    }
+
+    private sealed record ShelfSkeletonTile(double Width, double Height);
+
+    private static class ShelfSkeletonTiles
+    {
+        private static readonly IReadOnlyList<ShelfSkeletonTile> Poster = Enumerable.Range(0, ShelfPreviewSize)
+            .Select(_ => new ShelfSkeletonTile(190, 250)).ToArray();
+        private static readonly IReadOnlyList<ShelfSkeletonTile> Channel = Enumerable.Range(0, ShelfPreviewSize)
+            .Select(_ => new ShelfSkeletonTile(190, 138)).ToArray();
+        public static IReadOnlyList<ShelfSkeletonTile> For(CatalogItemType type) =>
+            type == CatalogItemType.Live ? Channel : Poster;
     }
 
     internal static EpgNowNext? FilterEpgForUi(bool enabled, EpgNowNext? nowNext) =>

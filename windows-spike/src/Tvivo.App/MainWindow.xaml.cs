@@ -177,6 +177,7 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        PerfScope.Logger = LaunchDiagnostics.Write;
         _selectedTheme = _themePreferenceStore.Read();
         LaunchDiagnostics.Write("MainWindow constructor entered");
         _vlcEngine = App.Services.GetRequiredService<VlcPlaybackEngine>();
@@ -271,7 +272,8 @@ public sealed partial class MainWindow : Window
         _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
-        _playbackUiTimer.Start();
+        if (!PerfToggles.IsDisabled("playbacktimer"))
+            _playbackUiTimer.Start();
         _heldSeekTimer.Tick += HeldSeekTimer_Tick;
         Activated += MainWindow_Activated;
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
@@ -518,6 +520,7 @@ public sealed partial class MainWindow : Window
 
         if (!WindowRoot.DispatcherQueue.TryEnqueue(() =>
             {
+                using var perfScope = PerfScope.Begin("PlaybackTracksUiUpdate");
                 Interlocked.Exchange(ref _trackRefreshQueued, 0);
                 if (_trackSelectingEngine is not { } engine)
                 {
@@ -1034,7 +1037,10 @@ public sealed partial class MainWindow : Window
         var keepCompactVisible = _playerPresentation == PlayerPresentation.Compact &&
             PlayerPresentationPolicy.CanCoexist(_playerPresentation, ToPlayerPageKind(page));
         if (isPlayer)
-            _playbackUiTimer.Start();
+        {
+            if (!PerfToggles.IsDisabled("playbacktimer"))
+                _playbackUiTimer.Start();
+        }
         var isCatalog = page == ShellPage.Catalog;
         var isStaticPage = page is ShellPage.Home or ShellPage.Setup or ShellPage.Account;
         TraceBackTransition($"show-page-visibility-begin page={page}");
@@ -1099,6 +1105,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplySelectedTheme()
     {
+        using var perfScope = PerfScope.Begin("WindowThemeApply");
         WindowRoot.RequestedTheme = _selectedTheme == ThemePreference.Light ? ElementTheme.Light : ElementTheme.Dark;
         var isDark = _selectedTheme == ThemePreference.Dark;
         RefreshThemeAwareBrushes();
@@ -1118,6 +1125,7 @@ public sealed partial class MainWindow : Window
 
     private void RefreshThemeAwareBrushes()
     {
+        using var perfScope = PerfScope.Begin("WindowThemeBrushRefresh");
         UpdateTopNavigationState();
         foreach (var entry in _playerEntries)
             entry.RefreshTheme(WindowRoot.ActualTheme);
@@ -2006,6 +2014,7 @@ public sealed partial class MainWindow : Window
         // Restore after the ListView has processed selection and any collection/layout changes.
         PlayerRelatedList.DispatcherQueue.TryEnqueue(() =>
         {
+            using var perfScope = PerfScope.Begin("PlayerListScrollRestore");
             var scrollViewer = FindPlayerListScrollViewer();
             if (scrollViewer is null) return;
             var maxOffset = Math.Max(0, scrollViewer.ExtentHeight - scrollViewer.ViewportHeight);
@@ -2431,14 +2440,22 @@ public sealed partial class MainWindow : Window
     {
         var dispatcher = WindowRoot.DispatcherQueue;
         if (dispatcher.HasThreadAccess)
+        {
+            using var perfScope = PerfScope.Begin("RunOnUiAsync");
             return action();
+        }
 
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!dispatcher.TryEnqueue(async () =>
             {
+                Task<T> actionTask;
                 try
                 {
-                    completion.TrySetResult(await action());
+                    using (PerfScope.Begin("RunOnUiAsync"))
+                        actionTask = action();
+                    var result = await actionTask;
+                    using (PerfScope.Begin("RunOnUiAsyncCompletion"))
+                        completion.TrySetResult(result);
                 }
                 catch (Exception exception)
                 {
@@ -2596,10 +2613,15 @@ public sealed partial class MainWindow : Window
 
     private void EpgCoordinator_EpgUpdated(object? sender, EventArgs args)
     {
+        using var perfScope = PerfScope.Begin("PlayerEpgUpdate");
         if (_isClosing || !_catalogLandingPage.EpgEnabled) return;
         if (!WindowRoot.DispatcherQueue.HasThreadAccess)
         {
-            WindowRoot.DispatcherQueue.TryEnqueue(() => EpgCoordinator_EpgUpdated(sender, args));
+            WindowRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                using var dispatchScope = PerfScope.Begin("PlayerEpgDispatch");
+                EpgCoordinator_EpgUpdated(sender, args);
+            });
             return;
         }
         if (IsPlaybackUiActive && _currentSource?.Kind == StreamKind.Live)
@@ -2608,6 +2630,7 @@ public sealed partial class MainWindow : Window
 
     private void PlayerEpgTimer_Tick(object? sender, object args)
     {
+        using var perfScope = PerfScope.Begin("PlayerEpgTimerTick");
         if (!_catalogLandingPage.EpgEnabled || !IsPlaybackUiActive || _currentSource?.Kind != StreamKind.Live)
         {
             StopPlayerEpgUpdates();
@@ -2645,7 +2668,11 @@ public sealed partial class MainWindow : Window
         }
         if (!WindowRoot.DispatcherQueue.HasThreadAccess)
         {
-            WindowRoot.DispatcherQueue.TryEnqueue(() => _ = RefreshPlayerNowNextAsync());
+            WindowRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                using var dispatchScope = PerfScope.Begin("RefreshPlayerNowNextDispatch");
+                _ = RefreshPlayerNowNextAsync();
+            });
             return;
         }
 
@@ -2681,6 +2708,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyPlayerNowNext(EpgNowNext? nowNext)
     {
+        using var perfScope = PerfScope.Begin("PlayerNowNextUiApply");
         nowNext = CatalogLandingPage.FilterEpgForUi(_catalogLandingPage.EpgEnabled, nowNext);
         _playerNowNext = nowNext?.Now is null && nowNext?.Next is null ? null : nowNext;
         if (_playerNowNext?.Now is { } now)
@@ -3200,6 +3228,7 @@ public sealed partial class MainWindow : Window
         var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
         WindowRoot.DispatcherQueue.TryEnqueue(() =>
         {
+            using var perfScope = PerfScope.Begin("LatePlaybackFailureUiUpdate");
             HandleLatePlaybackFailure(callbackGeneration);
             if (_windowState.IsWindowMini) ExitWindowMiniPlayer(expandToPlayer: false);
         });
@@ -3209,7 +3238,11 @@ public sealed partial class MainWindow : Window
     {
         if (!ReferenceEquals(_engine, _nativeEngine)) return;
         var callbackGeneration = Volatile.Read(ref _playbackSessionGeneration);
-        WindowRoot.DispatcherQueue.TryEnqueue(() => HandleLatePlaybackFailure(callbackGeneration));
+        WindowRoot.DispatcherQueue.TryEnqueue(() =>
+        {
+            using var perfScope = PerfScope.Begin("LatePlaybackFailureUiUpdate");
+            HandleLatePlaybackFailure(callbackGeneration);
+        });
     }
 
     private void HandleLatePlaybackFailure(long callbackGeneration)
@@ -3725,6 +3758,7 @@ public sealed partial class MainWindow : Window
         var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         batch.Completed += (_, _) => dispatcherQueue.TryEnqueue(() =>
         {
+            using var perfScope = PerfScope.Begin("WindowMiniTransitionApply");
             try
             {
                 apply();
@@ -3897,6 +3931,7 @@ public sealed partial class MainWindow : Window
         var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         batch.Completed += (_, _) => dispatcherQueue.TryEnqueue(() =>
         {
+            using var perfScope = PerfScope.Begin("CinemaTransitionApply");
             if (transitionGeneration != _cinemaTransitionGeneration)
                 return;
             ApplyCinemaMode(enabled);

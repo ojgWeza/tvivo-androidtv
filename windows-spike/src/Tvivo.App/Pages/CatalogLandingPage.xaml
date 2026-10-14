@@ -11,6 +11,14 @@
         <ItemsPanelTemplate x:Key="CatalogGridPanel">
             <ItemsWrapGrid Orientation="Horizontal" />
         </ItemsPanelTemplate>
+        <ItemsPanelTemplate x:Key="HorizontalSkeletonPanel">
+            <StackPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+        <DataTemplate x:Key="ShelfSkeletonTemplate">
+            <Border Width="{Binding Width}" Height="{Binding Height}"
+                    CornerRadius="12" Background="{ThemeResource AppRaisedSurfaceBrush}"
+                    Margin="0,12,14,0" IsHitTestVisible="False" />
+        </DataTemplate>
         <DataTemplate x:Key="TvivoArtworkPlaceholderTemplate">
             <Grid x:Name="PlaceholderArtworkRoot">
                 <Rectangle RadiusX="12" RadiusY="12">
@@ -308,6 +316,8 @@
                     <ListView x:Name="ShelvesItems"
                               Grid.Row="1"
                               Margin="0,-18,0,0"
+                              Loaded="ShelvesItems_Loaded"
+                              Unloaded="ShelvesItems_Unloaded"
                               SelectionMode="None"
                               IsItemClickEnabled="False"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -422,10 +432,17 @@
                                                         Click="ShelfCount_Click"
                                                         AutomationProperties.Name="Open full category listing" />
                                             </Grid>
+                                            <ItemsControl ItemsSource="{Binding SkeletonTiles}"
+                                                          ItemTemplate="{StaticResource ShelfSkeletonTemplate}"
+                                                          ItemsPanel="{StaticResource HorizontalSkeletonPanel}"
+                                                          Visibility="{Binding SkeletonVisibility}"
+                                                          Height="{Binding SkeletonRowHeight}"
+                                                          IsHitTestVisible="False" />
                                             <GridView ItemsSource="{Binding Cards}"
                                                       ItemTemplate="{StaticResource CatalogCardTemplate}"
                                                       ItemsPanel="{StaticResource HorizontalShelfPanel}"
                                                       Style="{StaticResource AppShelfGridViewStyle}"
+                                                      Visibility="{Binding PreviewVisibility}"
                                                       ItemClick="ShelfCards_ItemClick"
                                                       KeyDown="ShelfGrid_KeyDown"
                                                       Loaded="ShelfGrid_Loaded"

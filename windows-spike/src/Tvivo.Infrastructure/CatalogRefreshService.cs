@@ -18,6 +18,7 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
         IReadOnlyList<ChannelGroup> groups;
         try
         {
+            using var phase = PerfScope.BeginPhase("providerFetch");
             groups = await provider.GetChannelGroupsAsync(account, type, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -28,6 +29,7 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
         IReadOnlyList<Channel> channels;
         try
         {
+            using var phase = PerfScope.BeginPhase("providerFetch");
             channels = await provider.GetChannelsAsync(account, type, cancellationToken: cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
