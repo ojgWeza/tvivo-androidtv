@@ -83,7 +83,6 @@ public sealed partial class MainWindow : Window
     private ShellPage? _windowMiniPreviousPage;
     private PlayerPresentation _windowMiniPreviousPresentation = PlayerPresentation.Full;
     private bool _windowMiniPreviousCinema;
-    private bool _initializingPlaybackOptions = true;
     private bool _suppressTopSearchChanged;
     private bool _playerMovieProgressReady = true;
     private long _playerMovieProgressGeneration;
@@ -224,14 +223,7 @@ public sealed partial class MainWindow : Window
         _episodePlaybackMode = playbackOptions.EpisodeMode;
         _moviePlaybackMode = playbackOptions.MovieMode;
         _minimizeToMiniMode = playbackOptions.MinimizeToMiniMode;
-        try
-        {
-            SyncPlaybackModeToggles(_episodePlaybackMode);
-        }
-        finally
-        {
-            _initializingPlaybackOptions = false;
-        }
+        SyncPlaybackModeToggles(_episodePlaybackMode);
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
         CompactAudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
@@ -812,35 +804,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void AutoplayNextToggle_Checked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Next);
-
-    private void AutoplayNextToggle_Unchecked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Off);
-
-    private void ShuffleToggle_Checked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Shuffle);
-
-    private void ShuffleToggle_Unchecked(object sender, RoutedEventArgs args) => SetPlaybackMode(PlaybackMode.Off);
-
-    private void SetPlaybackMode(PlaybackMode mode)
+    private void PlaybackModeToggle_Click(object sender, RoutedEventArgs args)
     {
-        if (_initializingPlaybackOptions) return;
+        var clicked = sender == AutoplayNextToggle
+            ? PlaybackMode.Next
+            : sender == ShuffleToggle
+                ? PlaybackMode.Shuffle
+                : PlaybackMode.Off;
         // The toggles show the mode of the kind they were last configured for; edit that one,
         // not whatever _nowPlayingChannel happens to be mid-transition (null after a stop).
         var kind = _playlistOptionsKind ?? _nowPlayingChannel?.Source.Kind;
+        var before = GetPlaybackMode(kind);
+        var after = kind is StreamKind.Episode or StreamKind.Movie
+            ? PlaybackModeTransitions.Next(before, clicked)
+            : PlaybackMode.Off;
+
+        SetPlaybackMode(kind, after);
+        LaunchDiagnostics.Write($"event=playback-mode.click clicked={clicked} before={before} after={after} kind={kind?.ToString() ?? "unknown"} toggles=({AutoplayNextToggle.IsChecked == true},{ShuffleToggle.IsChecked == true})");
+    }
+
+    private void SetPlaybackMode(StreamKind? kind, PlaybackMode mode)
+    {
         if (kind == StreamKind.Episode)
             _episodePlaybackMode = mode;
         else if (kind == StreamKind.Movie)
             _moviePlaybackMode = mode;
-        else return;
 
-        _initializingPlaybackOptions = true;
-        try
-        {
-            SyncPlaybackModeToggles(mode);
-        }
-        finally
-        {
-            _initializingPlaybackOptions = false;
-        }
+        SyncPlaybackModeToggles(kind is StreamKind.Episode or StreamKind.Movie ? mode : PlaybackMode.Off);
+        if (kind is not (StreamKind.Episode or StreamKind.Movie)) return;
+
         _nextPlaybackSelector.Reset();
         ClearPreparedNextItem();
         WritePlaybackOptions();
@@ -867,21 +859,15 @@ public sealed partial class MainWindow : Window
     private void UpdatePlaylistOptionControls(StreamKind kind)
     {
         _playlistOptionsKind = kind;
-        _initializingPlaybackOptions = true;
-        try
+        var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
+        PlayerPlaylistOptionsRow.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        var mode = GetPlaybackMode(kind);
+        SyncPlaybackModeToggles(mode);
+        LaunchDiagnostics.Write($"event=playback-mode.sync kind={kind} mode={mode}");
+        if (!hasPlaylist)
         {
-            var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
-            PlayerPlaylistOptionsRow.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
-            SyncPlaybackModeToggles(GetPlaybackMode(kind));
-            if (!hasPlaylist)
-            {
-                _nextPlaybackSelector.Reset();
-                ClearPreparedNextItem();
-            }
-        }
-        finally
-        {
-            _initializingPlaybackOptions = false;
+            _nextPlaybackSelector.Reset();
+            ClearPreparedNextItem();
         }
     }
 
@@ -1046,8 +1032,9 @@ public sealed partial class MainWindow : Window
         if (page == ShellPage.Home)
             _ = _homePage.LoadAsync(_catalogLandingPage.Account, _catalogLandingPage.Connection, _catalogRepository);
         var isPlayer = page == ShellPage.Player;
-        var keepCompactVisible = _playerPresentation == PlayerPresentation.Compact &&
-            PlayerPresentationPolicy.CanCoexist(_playerPresentation, ToPlayerPageKind(page));
+        var playerVisible = PlayerPresentationPolicy.ShouldShowPlayerPage(
+            _playerPresentation, ToPlayerPageKind(page));
+        var keepCompactVisible = playerVisible && !isPlayer;
         if (isPlayer)
         {
             if (!PerfToggles.IsDisabled("playbacktimer"))
@@ -1060,9 +1047,9 @@ public sealed partial class MainWindow : Window
         _homePage.Visibility = page == ShellPage.Home ? Visibility.Visible : Visibility.Collapsed;
         _providerSetupPage.Visibility = page == ShellPage.Setup ? Visibility.Visible : Visibility.Collapsed;
         _accountPage.Visibility = page == ShellPage.Account ? Visibility.Visible : Visibility.Collapsed;
-        PlayerPage.Visibility = isPlayer || keepCompactVisible ? Visibility.Visible : Visibility.Collapsed;
+        PlayerPage.Visibility = playerVisible ? Visibility.Visible : Visibility.Collapsed;
         TraceBackTransition($"show-page-player-visibility-set page={page} player={PlayerPage.Visibility}");
-        SetPlaybackSurfaceVisibility(isPlayer || keepCompactVisible);
+        SetPlaybackSurfaceVisibility(playerVisible);
         CompactChrome.Visibility = keepCompactVisible ? Visibility.Visible : Visibility.Collapsed;
         if (keepCompactVisible) ApplyCompactGeometryToLayout();
         else if (!isPlayer)
@@ -1752,11 +1739,16 @@ public sealed partial class MainWindow : Window
         if (_currentSeriesId is not null && _currentSeriesAccount is not null)
         {
             _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+            RefreshSeasonProgressCount();
             _seriesEpisodeProgress.TryGetValue(episode.Id, out var episodeProgress);
             _resumePositionOnStart = episodeProgress?.State == PlaybackProgressState.InProgress ? episodeProgress.ResumeMs : null;
-            _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
-                _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
-            _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+            if (episodeProgress?.State != PlaybackProgressState.Finished)
+            {
+                _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
+                    _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
+                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+                RefreshSeasonProgressCount();
+            }
         }
         _nowPlayingChannel = episode;
         _currentSource = episode.Source;
@@ -3595,16 +3587,13 @@ public sealed partial class MainWindow : Window
     {
         if (_windowState.IsWindowMini)
         {
-            ExitWindowMiniPlayer(expandToPlayer: false, afterExit: () =>
-            {
-                SetPlayerPresentation(PlayerPresentation.Full);
-                StopHeldSeek(commit: false, released: false);
-                // Closing the mini player ends the session and leaves the player: going back through
-                // ShowPage stops playback once and lands on the page the user came from, instead of
-                // leaving an empty Player page behind.
-                if (_currentPage == ShellPage.Player) ReturnFromPlayer();
-                else StopPlaybackForNavigation();
-            });
+            var destination = _windowMiniPreviousPage == ShellPage.Player
+                ? _playerReturnPage
+                : _windowMiniPreviousPage ?? _playerReturnPage;
+            ExitWindowMiniPlayer(
+                expandToPlayer: false,
+                afterExit: () => StopCompactPlaybackAndNavigate(destination, windowMiniClose: true),
+                deferPageRestore: true);
             return;
         }
         StopHeldSeek(commit: true, released: false);
@@ -3710,7 +3699,8 @@ public sealed partial class MainWindow : Window
         PlayerPage.UpdateLayout();
     }
 
-    private void ExitWindowMiniPlayer(bool expandToPlayer, bool enterCinema = false, Action? afterExit = null)
+    private void ExitWindowMiniPlayer(bool expandToPlayer, bool enterCinema = false, Action? afterExit = null,
+        bool deferPageRestore = false)
     {
         if (!_windowState.IsWindowMini || _windowMiniTransitionInProgress) return;
         RunWindowMiniTransition(() =>
@@ -3731,7 +3721,7 @@ public sealed partial class MainWindow : Window
                 if (enterCinema || _windowMiniPreviousCinema) SetCinemaMode(true, animate: false);
                 else PauseButton.Focus(FocusState.Programmatic);
             }
-            else
+            else if (!deferPageRestore)
             {
                 SetPlayerPresentation(_windowMiniPreviousPresentation);
                 ShowPage(_windowMiniPreviousPage ?? ShellPage.Player);
@@ -3742,6 +3732,20 @@ public sealed partial class MainWindow : Window
             LaunchDiagnostics.Write($"event=window-mini.exit expand={expandToPlayer} page={_currentPage}");
             afterExit?.Invoke();
         });
+    }
+
+    private void StopCompactPlaybackAndNavigate(ShellPage destination, bool windowMiniClose = false)
+    {
+        StopHeldSeek(commit: false, released: false);
+        SetPlayerPresentation(PlayerPresentation.Full);
+        StopPlaybackForNavigation();
+
+        // Recompute every page's visibility after changing presentation and tearing down playback.
+        // The window-mini close route leaves _currentPage unset until this final layout is applied.
+        _currentPage = null;
+        ShowPage(destination);
+        if (windowMiniClose)
+            LaunchDiagnostics.Write($"event=window-mini.close-teardown destination={destination} playerVisible={PlayerPage.Visibility}");
     }
 
     private void SetCompactResizeZonesVisible(bool visible)

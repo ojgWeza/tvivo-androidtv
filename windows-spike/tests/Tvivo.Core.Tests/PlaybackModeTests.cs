@@ -6,6 +6,43 @@ namespace Tvivo.Core.Tests;
 public sealed class PlaybackModeTests
 {
     [Theory]
+    [InlineData(PlaybackMode.Next, PlaybackMode.Shuffle)]
+    [InlineData(PlaybackMode.Shuffle, PlaybackMode.Next)]
+    public void Clicking_the_other_mode_then_itself_turns_the_mode_off(
+        PlaybackMode current,
+        PlaybackMode clicked)
+    {
+        var switched = PlaybackModeTransitions.Next(current, clicked);
+
+        Assert.Equal(clicked, switched);
+        Assert.Equal(PlaybackMode.Off, PlaybackModeTransitions.Next(switched, clicked));
+    }
+
+    [Theory]
+    [InlineData(PlaybackMode.Next)]
+    [InlineData(PlaybackMode.Shuffle)]
+    public void Clicking_the_active_mode_turns_playback_mode_off(PlaybackMode mode)
+    {
+        Assert.Equal(PlaybackMode.Off, PlaybackModeTransitions.Next(mode, mode));
+    }
+
+    [Theory]
+    [InlineData(PlaybackMode.Next)]
+    [InlineData(PlaybackMode.Shuffle)]
+    public void Clicking_a_mode_while_off_activates_it(PlaybackMode clicked)
+    {
+        Assert.Equal(clicked, PlaybackModeTransitions.Next(PlaybackMode.Off, clicked));
+    }
+
+    [Theory]
+    [InlineData(PlaybackMode.Off)]
+    [InlineData((PlaybackMode)999)]
+    public void Off_stays_off_when_off_or_an_unknown_mode_is_clicked(PlaybackMode clicked)
+    {
+        Assert.Equal(PlaybackMode.Off, PlaybackModeTransitions.Next(PlaybackMode.Off, clicked));
+    }
+
+    [Theory]
     [InlineData(PlaybackMode.Off, false, false, false)]
     [InlineData(PlaybackMode.Next, true, true, false)]
     [InlineData(PlaybackMode.Shuffle, true, true, true)]

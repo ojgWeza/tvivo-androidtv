@@ -583,13 +583,13 @@
                                               Style="{StaticResource AppIconToggleButtonStyle}"
                                               AutomationProperties.Name="Autoplay next"
                                               ToolTipService.ToolTip="Autoplay next"
-                                              Checked="AutoplayNextToggle_Checked" Unchecked="AutoplayNextToggle_Unchecked" />
+                                              Click="PlaybackModeToggle_Click" />
                                 <ToggleButton x:Name="ShuffleToggle" Content="&#xE8B1;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                               Style="{StaticResource AppIconToggleButtonStyle}"
                                               AutomationProperties.Name="Shuffle"
                                               ToolTipService.ToolTip="Shuffle"
-                                              Checked="ShuffleToggle_Checked" Unchecked="ShuffleToggle_Unchecked" />
+                                              Click="PlaybackModeToggle_Click" />
                             </StackPanel>
                             </Grid>
                             <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Margin="0,4,0,0" Foreground="{ThemeResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />

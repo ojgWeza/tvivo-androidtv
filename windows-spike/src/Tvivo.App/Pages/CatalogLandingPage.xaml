@@ -356,7 +356,7 @@
                               ShowsScrollingPlaceholders="False"
                               SelectionMode="None"
                               IsItemClickEnabled="False"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListView.ItemContainerTransitions>
                             <TransitionCollection />
@@ -558,9 +558,10 @@
                               ItemTemplate="{StaticResource CatalogCardTemplate}"
                               ItemsPanel="{StaticResource CatalogGridPanel}"
                               Style="{StaticResource AppShelfGridViewStyle}"
+                              Margin="-8,0,-20,0"
                               ItemClick="ShelfCards_ItemClick"
                               KeyDown="OpenShelfGrid_KeyDown"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ScrollViewer.VerticalScrollBarVisibility="Hidden"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <GridView.ItemContainerTransitions>
                             <TransitionCollection />

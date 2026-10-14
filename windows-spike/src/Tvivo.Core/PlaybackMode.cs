@@ -10,6 +10,17 @@ public enum PlaybackMode
     Shuffle,
 }
 
+public static class PlaybackModeTransitions
+{
+    public static PlaybackMode Next(PlaybackMode current, PlaybackMode clicked)
+    {
+        if (clicked is not (PlaybackMode.Next or PlaybackMode.Shuffle))
+            return current is PlaybackMode.Next or PlaybackMode.Shuffle ? current : PlaybackMode.Off;
+
+        return current == clicked ? PlaybackMode.Off : clicked;
+    }
+}
+
 public enum MinimizeToMiniMode
 {
     MiniPlayerWhilePlaying,

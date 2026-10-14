@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -23,7 +24,18 @@ public sealed class ArtworkDiskCache
     private readonly Func<string, Task<byte[]>> _readBlob;
     private readonly SemaphoreSlim _mutations = new(1);
     private readonly object _flightGate = new();
+    private readonly object _trimGate = new();
     private readonly Dictionary<string, Task<byte[]?>> _flights = new(StringComparer.Ordinal);
+    private bool _totalBytesInitialized;
+    private long _trackedTotalBytes;
+    private long _lastTrimStartedAt;
+    private bool _trimInProgress;
+    private long _fetchTicks;
+    private long _hashTicks;
+    private long _storeTicks;
+    private long _trimTicks;
+    private long _trimCalls;
+    private long _streamCopyTicks;
     private int _generation;
 
     public ArtworkDiskCache(
@@ -62,10 +74,19 @@ public sealed class ArtworkDiskCache
         get
         {
             _mutations.Wait();
-            try { return ManagedBlobs().Sum(path => new FileInfo(path).Length); }
+            try
+            {
+                EnsureTrackedTotalBytes();
+                return _trackedTotalBytes;
+            }
             finally { _mutations.Release(); }
         }
     }
+
+    public ArtworkDiskCachePerfCounters GetPerfCounters() => new(
+        Interlocked.Read(ref _fetchTicks), Interlocked.Read(ref _hashTicks),
+        Interlocked.Read(ref _storeTicks), Interlocked.Read(ref _trimTicks),
+        Interlocked.Read(ref _trimCalls), Interlocked.Read(ref _streamCopyTicks));
 
     public Task<byte[]?> GetAsync(Uri imageUrl, CancellationToken cancellationToken = default)
     {
@@ -95,14 +116,18 @@ public sealed class ArtworkDiskCache
         try
         {
             EnsureRoot();
+            EnsureTrackedTotalBytes();
             Interlocked.Increment(ref _generation);
             foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.TopDirectoryOnly))
             {
                 if (!IsManagedFile(Path.GetFileName(path))) continue;
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException("Artwork cache contains a linked file.");
+                var blobLength = Path.GetExtension(path) == ".blob" ? new FileInfo(path).Length : 0;
                 File.Delete(path);
+                _trackedTotalBytes -= blobLength;
             }
+            _trackedTotalBytes = Math.Max(0, _trackedTotalBytes);
         }
         finally { _mutations.Release(); }
     }
@@ -142,28 +167,43 @@ public sealed class ArtworkDiskCache
                 if (stale.Entry.LastModified is { } modified)
                     request.Headers.IfModifiedSince = modified;
             }
-            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-            if (response.StatusCode == HttpStatusCode.NotModified && cached is { } unchanged)
+            var fetchStarted = Stopwatch.GetTimestamp();
+            byte[]? bytes = null;
+            string? etag = null;
+            DateTimeOffset? lastModified = null;
+            try
             {
-                unchanged.Entry.FetchedAt = now;
-                unchanged.Entry.ExpiresAt = now + _ttl;
-                unchanged.Entry.LastAccessAt = now;
-                await SaveMetadataAsync(key, unchanged.Entry, generation);
-                return unchanged.Bytes;
+                using (var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                {
+                    if (response.StatusCode == HttpStatusCode.NotModified && cached is { } unchanged)
+                    {
+                        unchanged.Entry.FetchedAt = now;
+                        unchanged.Entry.ExpiresAt = now + _ttl;
+                        unchanged.Entry.LastAccessAt = now;
+                        await SaveMetadataAsync(key, unchanged.Entry, generation);
+                        return unchanged.Bytes;
+                    }
+                    if (!response.IsSuccessStatusCode) return cached?.Bytes;
+                    bytes = await ReadLimitedAsync(response.Content);
+                    etag = response.Headers.ETag?.ToString();
+                    lastModified = response.Content.Headers.LastModified;
+                }
             }
-            if (!response.IsSuccessStatusCode) return cached?.Bytes;
-            var bytes = await ReadLimitedAsync(response.Content);
+            finally { Interlocked.Add(ref _fetchTicks, Stopwatch.GetTimestamp() - fetchStarted); }
             if (bytes is null) return cached?.Bytes;
+            var hashStarted = Stopwatch.GetTimestamp();
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            Interlocked.Add(ref _hashTicks, Stopwatch.GetTimestamp() - hashStarted);
             var entry = new Entry
             {
                 Revision = Guid.NewGuid().ToString("N"),
                 Length = bytes.Length,
-                Sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes)),
+                Sha256 = hash,
                 FetchedAt = now,
                 ExpiresAt = now + _ttl,
                 LastAccessAt = now,
-                ETag = response.Headers.ETag?.ToString(),
-                LastModified = response.Content.Headers.LastModified
+                ETag = etag,
+                LastModified = lastModified
             };
             await StoreAsync(key, entry, bytes, generation);
             return bytes;
@@ -180,13 +220,18 @@ public sealed class ArtworkDiskCache
         await using var source = await content.ReadAsStreamAsync();
         using var destination = new MemoryStream();
         var buffer = new byte[81920];
-        int count;
-        while ((count = await source.ReadAsync(buffer)) != 0)
+        var copyStarted = Stopwatch.GetTimestamp();
+        try
         {
-            if (destination.Length + count > _maxImageBytes) return null;
-            destination.Write(buffer, 0, count);
+            int count;
+            while ((count = await source.ReadAsync(buffer)) != 0)
+            {
+                if (destination.Length + count > _maxImageBytes) return null;
+                destination.Write(buffer, 0, count);
+            }
+            return destination.Length == 0 ? null : destination.ToArray();
         }
-        return destination.Length == 0 ? null : destination.ToArray();
+        finally { Interlocked.Add(ref _streamCopyTicks, Stopwatch.GetTimestamp() - copyStarted); }
     }
 
     private async Task<(Entry Entry, byte[] Bytes)?> ReadAsync(string key)
@@ -229,9 +274,15 @@ public sealed class ArtworkDiskCache
         await _mutations.WaitAsync();
         try
         {
+            EnsureTrackedTotalBytes();
             File.Delete(MetadataPath(key));
-            foreach (var path in ManagedBlobs().Where(path => Path.GetFileName(path).StartsWith(key + ".", StringComparison.Ordinal)))
+            foreach (var path in Directory.EnumerateFiles(_root, key + ".*.blob", SearchOption.TopDirectoryOnly))
+            {
+                var blobLength = File.Exists(path) ? new FileInfo(path).Length : 0;
                 File.Delete(path);
+                _trackedTotalBytes -= blobLength;
+            }
+            _trackedTotalBytes = Math.Max(0, _trackedTotalBytes);
         }
         finally { _mutations.Release(); }
     }
@@ -260,18 +311,32 @@ public sealed class ArtworkDiskCache
         {
             if (generation != _generation) return;
             EnsureRoot();
+            EnsureTrackedTotalBytes();
+            var storeStarted = Stopwatch.GetTimestamp();
             var temporary = Path.Combine(_root, key + "." + Guid.NewGuid().ToString("N") + ".tmp");
             var blob = BlobPath(key, entry.Revision);
             try
             {
                 await File.WriteAllBytesAsync(temporary, bytes);
                 File.Move(temporary, blob);
+                _trackedTotalBytes += bytes.Length;
+                foreach (var previousBlob in Directory.EnumerateFiles(_root, key + ".*.blob", SearchOption.TopDirectoryOnly)
+                             .Where(path => !string.Equals(path, blob, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var previousLength = File.Exists(previousBlob) ? new FileInfo(previousBlob).Length : 0;
+                    File.Delete(previousBlob);
+                    _trackedTotalBytes -= previousLength;
+                }
                 WriteMetadata(key, entry);
-                Trim();
             }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+                Interlocked.Add(ref _storeTicks, Stopwatch.GetTimestamp() - storeStarted);
+            }
         }
         finally { _mutations.Release(); }
+        TryScheduleTrim();
     }
 
     private void WriteMetadata(string key, Entry entry)
@@ -285,8 +350,47 @@ public sealed class ArtworkDiskCache
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    private void EnsureTrackedTotalBytes()
+    {
+        if (_totalBytesInitialized) return;
+        _trackedTotalBytes = ManagedBlobs().Sum(path => new FileInfo(path).Length);
+        _totalBytesInitialized = true;
+    }
+
+    private void TryScheduleTrim()
+    {
+        lock (_trimGate)
+        {
+            if (_trackedTotalBytes <= _maxBytes || _trimInProgress) return;
+            var now = Stopwatch.GetTimestamp();
+            if (_lastTrimStartedAt != 0 && Stopwatch.GetElapsedTime(_lastTrimStartedAt, now) < TimeSpan.FromSeconds(3)) return;
+            _lastTrimStartedAt = now;
+            _trimInProgress = true;
+            _ = Task.Run(TrimAsync);
+        }
+    }
+
+    private async Task TrimAsync()
+    {
+        var started = Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _trimCalls);
+        try
+        {
+            await _mutations.WaitAsync();
+            try { Trim(); }
+            finally { _mutations.Release(); }
+        }
+        finally
+        {
+            Interlocked.Add(ref _trimTicks, Stopwatch.GetTimestamp() - started);
+            lock (_trimGate) _trimInProgress = false;
+        }
+    }
+
     private void Trim()
     {
+        EnsureTrackedTotalBytes();
+        if (_trackedTotalBytes <= _maxBytes) return;
         var entries = new List<(string Key, Entry Value)>();
         foreach (var metadata in Directory.EnumerateFiles(_root, "*.json", SearchOption.TopDirectoryOnly))
         {
@@ -301,22 +405,28 @@ public sealed class ArtworkDiskCache
             }
             catch (JsonException) { }
         }
-        var live = entries.Select(item => BlobPath(item.Key, item.Value.Revision)).ToHashSet(StringComparer.Ordinal);
-        foreach (var orphan in ManagedBlobs().Where(path => !live.Contains(path))) File.Delete(orphan);
-        var total = ManagedBlobs().Sum(path => new FileInfo(path).Length);
-        if (total <= _maxBytes) return;
+        var liveBlobs = entries.Select(item => BlobPath(item.Key, item.Value.Revision)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var orphan in ManagedBlobs().Where(path => !liveBlobs.Contains(path)))
+        {
+            var orphanLength = new FileInfo(orphan).Length;
+            File.Delete(orphan);
+            _trackedTotalBytes -= orphanLength;
+        }
+        if (_trackedTotalBytes <= _maxBytes) return;
         var target = _maxBytes * 9 / 10;
         foreach (var (key, entry) in entries.OrderBy(item => item.Value.LastAccessAt))
         {
             var blob = BlobPath(key, entry.Revision);
             if (File.Exists(blob))
             {
-                total -= new FileInfo(blob).Length;
+                var blobLength = new FileInfo(blob).Length;
                 File.Delete(blob);
+                _trackedTotalBytes -= blobLength;
             }
             File.Delete(MetadataPath(key));
-            if (total <= target) break;
+            if (_trackedTotalBytes <= target) break;
         }
+        _trackedTotalBytes = Math.Max(0, _trackedTotalBytes);
     }
 
     private void EnsureRoot()
@@ -359,3 +469,11 @@ public sealed class ArtworkDiskCache
         public DateTimeOffset? LastModified { get; set; }
     }
 }
+
+public readonly record struct ArtworkDiskCachePerfCounters(
+    long FetchTicks,
+    long HashTicks,
+    long StoreTicks,
+    long TrimTicks,
+    long TrimCalls,
+    long StreamCopyTicks);

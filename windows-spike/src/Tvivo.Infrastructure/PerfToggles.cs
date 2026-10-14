@@ -14,6 +14,7 @@ public static class PerfToggles
         "clips",
         "lens",
         "shelfclip",
+        "artwork",
     ];
 
     private static readonly IReadOnlySet<string> DisabledToggles = ParseDisabled(

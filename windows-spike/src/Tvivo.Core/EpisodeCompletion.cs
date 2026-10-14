@@ -1,20 +1,37 @@
 namespace Tvivo.Core;
 
-/// <summary>
-/// When an episode counts as watched. A percentage of the length would mark a 20-minute episode
-/// finished with two minutes still to go, so completion is "the stream ended" or "only the last few
-/// seconds are left" (some streams stop just short of reporting an end), never a share of the length.
-/// </summary>
+internal static class CompletionThresholds
+{
+    public const long CreditsMilliseconds = 4 * 60_000;
+    public const long MinimumCreditsDurationMilliseconds = 5 * 60_000;
+    public const long ShortTailMilliseconds = 15_000;
+    public const long MinimumShortTailDurationMilliseconds = 60_000;
+    private const double MaximumCreditsTailShare = 0.05;
+
+    public static long CreditsTailMilliseconds(long durationMilliseconds) => durationMilliseconds <= 0
+        ? 0
+        : Math.Min(CreditsMilliseconds, (long)(durationMilliseconds * MaximumCreditsTailShare));
+
+    public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended, bool allowShortTail)
+    {
+        if (ended) return PlaybackEndPolicy.IsGenuineEnd(positionMilliseconds, durationMilliseconds, ended);
+        if (durationMilliseconds is not { } duration) return false;
+
+        if (duration >= MinimumCreditsDurationMilliseconds)
+            return duration - Math.Clamp(positionMilliseconds, 0, duration) <= CreditsTailMilliseconds(duration);
+
+        return allowShortTail && duration >= MinimumShortTailDurationMilliseconds &&
+               duration - Math.Clamp(positionMilliseconds, 0, duration) <= ShortTailMilliseconds;
+    }
+}
+
+/// <summary>Episodes use the movie credits window, with a short tail for very short episodes.</summary>
 public static class EpisodeCompletion
 {
-    public const long TailMilliseconds = 15_000;
-    private const long MinimumDurationForTailMilliseconds = 60_000;
+    public const long TailMilliseconds = CompletionThresholds.ShortTailMilliseconds;
 
     public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended) =>
-        ended
-            ? PlaybackEndPolicy.IsGenuineEnd(positionMilliseconds, durationMilliseconds, ended)
-            : durationMilliseconds is { } duration && duration >= MinimumDurationForTailMilliseconds &&
-              duration - Math.Clamp(positionMilliseconds, 0, duration) <= TailMilliseconds;
+        CompletionThresholds.IsFinished(positionMilliseconds, durationMilliseconds, ended, allowShortTail: true);
 }
 
 /// <summary>
@@ -23,19 +40,11 @@ public static class EpisodeCompletion
 /// </summary>
 public static class MovieCompletion
 {
-    public const long CreditsMilliseconds = 4 * 60_000;
-    private const long MinimumDurationMilliseconds = 5 * 60_000;
-    private const double MaximumTailShare = 0.05;
+    public const long CreditsMilliseconds = CompletionThresholds.CreditsMilliseconds;
 
-    public static long CreditsTailMilliseconds(long durationMilliseconds) => durationMilliseconds <= 0
-        ? 0
-        : Math.Min(CreditsMilliseconds, (long)(durationMilliseconds * MaximumTailShare));
+    public static long CreditsTailMilliseconds(long durationMilliseconds) =>
+        CompletionThresholds.CreditsTailMilliseconds(durationMilliseconds);
 
-    public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended)
-    {
-        if (ended) return PlaybackEndPolicy.IsGenuineEnd(positionMilliseconds, durationMilliseconds, ended);
-        if (durationMilliseconds is not { } duration || duration < MinimumDurationMilliseconds) return false;
-        var tail = CreditsTailMilliseconds(duration);
-        return duration - Math.Clamp(positionMilliseconds, 0, duration) <= tail;
-    }
+    public static bool IsFinished(long positionMilliseconds, long? durationMilliseconds, bool ended) =>
+        CompletionThresholds.IsFinished(positionMilliseconds, durationMilliseconds, ended, allowShortTail: false);
 }

@@ -192,6 +192,10 @@ public static class PlayerPresentationPolicy
             ? page is PlayerPageKind.Catalog or PlayerPageKind.Other
             : page == PlayerPageKind.Player;
 
+    public static bool ShouldShowPlayerPage(PlayerPresentation presentation, PlayerPageKind page) =>
+        page == PlayerPageKind.Player ||
+        presentation == PlayerPresentation.Compact && CanCoexist(presentation, page);
+
     public static bool ShouldStopPlaybackOnPageChange(
         PlayerPresentation presentation,
         PlayerPageKind currentPage,

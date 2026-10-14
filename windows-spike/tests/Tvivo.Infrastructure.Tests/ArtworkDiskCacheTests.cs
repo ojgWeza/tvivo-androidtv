@@ -180,6 +180,7 @@ public sealed class ArtworkDiskCacheTests
             await cache.GetAsync(url);
             clock.Advance(TimeSpan.FromMinutes(1));
         }
+        await WaitForBytesAsync(cache, 80);
         Assert.Equal(80, cache.TotalBytes);
         Assert.Equal(2, Directory.GetFiles(root.Cache, "*.blob").Length);
         Assert.Equal(3, calls);
@@ -188,6 +189,26 @@ public sealed class ArtworkDiskCacheTests
         Assert.Equal(0, cache.TotalBytes);
         Assert.Empty(Directory.GetFiles(root.Cache));
         Assert.True(File.Exists(root.OutsideSentinel));
+    }
+
+    [Fact]
+    public async Task Running_total_tracks_inserts_and_background_trim_evicts_to_ninety_percent()
+    {
+        using var root = new CacheRoot();
+        using var client = Client((_, _) => Task.FromResult(Ok(new string('x', 40))));
+        var cache = new ArtworkDiskCache(client, root.Cache, maxBytes: 100, maxImageBytes: 60);
+        var urls = Enumerable.Range(0, 3).Select(index => new Uri($"https://images.example.test/cap/{index}")).ToArray();
+
+        await cache.GetAsync(urls[0]);
+        Assert.Equal(40, cache.TotalBytes);
+        await cache.GetAsync(urls[1]);
+        Assert.Equal(80, cache.TotalBytes);
+        await cache.GetAsync(urls[2]);
+        await WaitForBytesAsync(cache, 80);
+
+        Assert.Equal(80, cache.TotalBytes);
+        Assert.Equal(2, Directory.GetFiles(root.Cache, "*.blob").Length);
+        Assert.Equal(2, Directory.GetFiles(root.Cache, "*.json").Length);
     }
 
     [Fact]
@@ -247,6 +268,14 @@ public sealed class ArtworkDiskCacheTests
     };
 
     private static string? Text(byte[]? bytes) => bytes is null ? null : Encoding.UTF8.GetString(bytes);
+
+    private static async Task WaitForBytesAsync(ArtworkDiskCache cache, long expected)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (cache.TotalBytes != expected && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.Equal(expected, cache.TotalBytes);
+    }
 
     private static void UpdatePeak(ref int peak, int current)
     {

@@ -88,6 +88,17 @@ public sealed class PlayerPresentationPolicyTests
         Assert.Equal(expected, PlayerPresentationPolicy.CanCoexist(presentation, page));
 
     [Theory]
+    [InlineData(PlayerPresentation.Full, PlayerPageKind.Player, true)]
+    [InlineData(PlayerPresentation.Full, PlayerPageKind.Catalog, false)]
+    [InlineData(PlayerPresentation.Cinema, PlayerPageKind.Other, false)]
+    [InlineData(PlayerPresentation.Compact, PlayerPageKind.Player, true)]
+    [InlineData(PlayerPresentation.Compact, PlayerPageKind.Catalog, true)]
+    [InlineData(PlayerPresentation.Compact, PlayerPageKind.Other, true)]
+    public void Player_page_visibility_is_derived_from_page_and_presentation(
+        PlayerPresentation presentation, PlayerPageKind page, bool expected) =>
+        Assert.Equal(expected, PlayerPresentationPolicy.ShouldShowPlayerPage(presentation, page));
+
+    [Theory]
     [InlineData(PlayerPresentation.Compact, PlayerPageKind.Player, PlayerPresentationHost.WindowMini, true)]
     [InlineData(PlayerPresentation.Compact, PlayerPageKind.Catalog, PlayerPresentationHost.WindowMini, true)]
     [InlineData(PlayerPresentation.Full, PlayerPageKind.Player, PlayerPresentationHost.WindowMini, false)]

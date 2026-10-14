@@ -121,6 +121,16 @@ public sealed partial class CatalogLandingPage : UserControl
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient ArtworkClient = CreateArtworkClient();
     private static readonly ArtworkDiskCache ArtworkBytes = new(ArtworkClient);
+    private static long _artworkSetSourceTicks;
+    private static long _artworkStreamCopyTicks;
+    private static long _artworkSourceBytes;
+    private static long _artworkSourceBytesMax;
+    private static long _artworkJpegCount;
+    private static long _artworkPngCount;
+    private static long _artworkWebpCount;
+    private static long _artworkOtherCount;
+    private static int _artworkPixelWidthMax;
+    private static int _artworkPixelHeightMax;
     private static readonly object ArtworkPagesLock = new();
     private static readonly List<WeakReference<CatalogLandingPage>> ArtworkPages = new();
     private readonly Dictionary<Image, ArtworkLoad> _artworkLoads = new();
@@ -174,6 +184,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly DispatcherTimer _perfSummaryTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly System.Threading.Timer _dispatchProbeTimer;
     private PerfSurfaceSnapshot? _lastPerfSurfaceSnapshot;
+    private ArtworkPerfSnapshot? _lastArtworkPerfSnapshot;
     private readonly Dictionary<string, (long LastLoggedAt, int Count)> _artworkFailureLogState = new(StringComparer.Ordinal);
     // Decoded BGRA pixels dominate retained memory; 96 MiB holds roughly 120 poster-sized cards.
     private const long ArtworkBitmapCacheByteLimit = 96L * 1024 * 1024;
@@ -263,6 +274,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _lastPerfGc1Count = GC.CollectionCount(1);
         _lastPerfGc2Count = GC.CollectionCount(2);
         _lastPerfGcPauseTicks = GC.GetTotalPauseDuration().Ticks;
+        _lastArtworkPerfSnapshot = CaptureArtworkPerfSnapshot();
         _lastProcessSampleAt = System.Diagnostics.Stopwatch.GetTimestamp();
         _lastShelfRowsPerfAt = System.Diagnostics.Stopwatch.GetTimestamp();
         using (var process = System.Diagnostics.Process.GetCurrentProcess())
@@ -489,6 +501,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private void PerfSummaryTimer_Tick(object? sender, object args)
     {
         using var perfScope = PerfScope.Begin("PerfSummaryTimer");
+        WriteArtworkPerfSample();
         WriteShelfRowsPerfSample();
         var dispatchMaxTicks = Interlocked.Exchange(ref _dispatchProbeMaxTicks, 0);
         var snapshot = CreatePerfSurfaceSnapshot(dispatchMaxTicks);
@@ -511,6 +524,63 @@ public sealed partial class CatalogLandingPage : UserControl
             $"gc0={snapshot.Gc0} gc1={snapshot.Gc1} gc2={snapshot.Gc2} gcPauseMs={snapshot.GcPauseMs:0.0} " +
             $"gcHeapMB={snapshot.GcHeapMB:0.0} gcCommittedMB={snapshot.GcCommittedMB:0.0} " +
             $"tpThreads={snapshot.TpThreads} tpPending={snapshot.TpPending}");
+    }
+
+    private void WriteArtworkPerfSample()
+    {
+        if (PerfToggles.IsDisabled("artwork")) return;
+        var snapshot = CaptureArtworkPerfSnapshot();
+        if (_lastArtworkPerfSnapshot == snapshot) return;
+        _lastArtworkPerfSnapshot = snapshot;
+        var cache = snapshot.Cache;
+        LaunchDiagnostics.Write(
+            $"event=perf.artwork fetchMs={ToMilliseconds(cache.FetchTicks):0.0} hashMs={ToMilliseconds(cache.HashTicks):0.0} " +
+            $"storeMs={ToMilliseconds(cache.StoreTicks):0.0} trimMs={ToMilliseconds(cache.TrimTicks):0.0} trimCalls={cache.TrimCalls} " +
+            $"streamCopyMs={ToMilliseconds(cache.StreamCopyTicks + snapshot.PageStreamCopyTicks):0.0} " +
+            $"setSourceMs={ToMilliseconds(snapshot.SetSourceTicks):0.0} sourceBytes={snapshot.SourceBytes} sourceBytesMax={snapshot.SourceBytesMax} " +
+            $"typeJpeg={snapshot.JpegCount} typePng={snapshot.PngCount} typeWebp={snapshot.WebpCount} typeOther={snapshot.OtherCount} " +
+            $"pixelWidthMax={snapshot.PixelWidthMax} pixelHeightMax={snapshot.PixelHeightMax} liveCards={_liveCatalogCardContainers.Count}");
+    }
+
+    private static ArtworkPerfSnapshot CaptureArtworkPerfSnapshot()
+    {
+        var cache = ArtworkBytes.GetPerfCounters();
+        return new ArtworkPerfSnapshot(
+            cache, Interlocked.Read(ref _artworkStreamCopyTicks), Interlocked.Read(ref _artworkSetSourceTicks),
+            Interlocked.Read(ref _artworkSourceBytes), Interlocked.Read(ref _artworkSourceBytesMax),
+            Interlocked.Read(ref _artworkJpegCount), Interlocked.Read(ref _artworkPngCount),
+            Interlocked.Read(ref _artworkWebpCount), Interlocked.Read(ref _artworkOtherCount),
+            Volatile.Read(ref _artworkPixelWidthMax), Volatile.Read(ref _artworkPixelHeightMax));
+    }
+
+    private static void RecordArtworkSource(byte[] bytes)
+    {
+        Interlocked.Add(ref _artworkSourceBytes, bytes.Length);
+        UpdateArtworkMax(ref _artworkSourceBytesMax, bytes.Length);
+        if (bytes.AsSpan().StartsWith(new byte[] { 0xff, 0xd8, 0xff })) Interlocked.Increment(ref _artworkJpegCount);
+        else if (bytes.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a })) Interlocked.Increment(ref _artworkPngCount);
+        else if (bytes.Length >= 12 && bytes.AsSpan(0, 4).SequenceEqual("RIFF"u8) && bytes.AsSpan(8, 4).SequenceEqual("WEBP"u8)) Interlocked.Increment(ref _artworkWebpCount);
+        else Interlocked.Increment(ref _artworkOtherCount);
+    }
+
+    private static void UpdateArtworkMax(ref long maximum, long value)
+    {
+        long previous;
+        do
+        {
+            previous = Interlocked.Read(ref maximum);
+            if (value <= previous) return;
+        } while (Interlocked.CompareExchange(ref maximum, value, previous) != previous);
+    }
+
+    private static void UpdateArtworkMax(ref int maximum, int value)
+    {
+        int previous;
+        do
+        {
+            previous = Volatile.Read(ref maximum);
+            if (value <= previous) return;
+        } while (Interlocked.CompareExchange(ref maximum, value, previous) != previous);
     }
 
     private void WriteShelfRowsPerfSample()
@@ -623,6 +693,19 @@ public sealed partial class CatalogLandingPage : UserControl
         double GcCommittedMB,
         int TpThreads,
         long TpPending);
+
+    private readonly record struct ArtworkPerfSnapshot(
+        ArtworkDiskCachePerfCounters Cache,
+        long PageStreamCopyTicks,
+        long SetSourceTicks,
+        long SourceBytes,
+        long SourceBytesMax,
+        long JpegCount,
+        long PngCount,
+        long WebpCount,
+        long OtherCount,
+        int PixelWidthMax,
+        int PixelHeightMax);
 
     internal static void ClearArtworkCache()
     {
@@ -3256,6 +3339,7 @@ public sealed partial class CatalogLandingPage : UserControl
             var bytes = await ArtworkBytes.GetAsync(uri, load.Cancellation.Token);
             if (bytes is null)
                 throw new InvalidDataException("Artwork image was unavailable or exceeded the decode limit.");
+            RecordArtworkSource(bytes);
             if (!IsCurrentArtworkLoad(image, load, stage)) return;
 
             stage = "decode-permit-wait";
@@ -3276,12 +3360,24 @@ public sealed partial class CatalogLandingPage : UserControl
             using var imageStream = new InMemoryRandomAccessStream();
             using (var writer = new DataWriter(imageStream))
             {
-                writer.WriteBytes(bytes);
-                await writer.StoreAsync();
-                writer.DetachStream();
+                var copyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    writer.WriteBytes(bytes);
+                    await writer.StoreAsync();
+                    writer.DetachStream();
+                }
+                finally
+                {
+                    Interlocked.Add(ref _artworkStreamCopyTicks, System.Diagnostics.Stopwatch.GetTimestamp() - copyStarted);
+                }
             }
             imageStream.Seek(0);
-            await bitmap.SetSourceAsync(imageStream);
+            var setSourceStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            try { await bitmap.SetSourceAsync(imageStream); }
+            finally { Interlocked.Add(ref _artworkSetSourceTicks, System.Diagnostics.Stopwatch.GetTimestamp() - setSourceStarted); }
+            UpdateArtworkMax(ref _artworkPixelWidthMax, bitmap.PixelWidth);
+            UpdateArtworkMax(ref _artworkPixelHeightMax, bitmap.PixelHeight);
             using var completionScope = PerfScope.Begin("ArtworkDecodeComplete");
             if (!IsCurrentArtworkLoad(image, load, "decode")) return;
             load.Bitmap = bitmap;
@@ -4606,6 +4702,48 @@ public sealed partial class CatalogLandingPage : UserControl
             MoveFocusInGrid(gridView, args, isWrappingGrid: true);
     }
 
+    private static int WrappingGridColumnCount(GridView gridView)
+    {
+        var wrapGrid = FindItemsWrapGrid(gridView);
+        if (wrapGrid is null || wrapGrid.ActualWidth <= 0)
+            return 1;
+
+        FrameworkElement? itemContainer = null;
+        for (var index = 0; index < gridView.Items.Count; index++)
+        {
+            if (gridView.ContainerFromIndex(index) is FrameworkElement candidate && candidate.ActualWidth > 0)
+            {
+                itemContainer = candidate;
+                break;
+            }
+        }
+
+        if (itemContainer is null)
+            return 1;
+
+        var itemMargin = itemContainer.Margin;
+        var spacing = itemMargin.Left + itemMargin.Right;
+        var pitch = itemContainer.ActualWidth + spacing;
+        return pitch <= 0
+            ? 1
+            : Math.Max(1, (int)Math.Floor((wrapGrid.ActualWidth + spacing) / pitch));
+    }
+
+    private static ItemsWrapGrid? FindItemsWrapGrid(DependencyObject element)
+    {
+        if (element is ItemsWrapGrid wrapGrid)
+            return wrapGrid;
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
+        {
+            var found = FindItemsWrapGrid(VisualTreeHelper.GetChild(element, index));
+            if (found is not null)
+                return found;
+        }
+
+        return null;
+    }
+
     private void MoveFocusInGrid(GridView gridView, KeyRoutedEventArgs args, bool isWrappingGrid)
     {
         var itemCount = gridView.Items.Count;
@@ -4625,7 +4763,7 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         else
         {
-            var columns = Math.Max(1, (int)Math.Floor((gridView.ActualWidth + 18) / (190 + 18)));
+            var columns = WrappingGridColumnCount(gridView);
             if (args.Key == Windows.System.VirtualKey.Right)
             {
                 if (index < 0) target = 0;

@@ -11,7 +11,7 @@ public sealed class PerfTogglesTests
         var disabled = PerfToggles.ParseDisabled(" spotlight, EPG,unknown,SPOTLIGHT ");
 
         Assert.Equal(new[] { "spotlight", "epg" },
-            new[] { "spotlight", "epg", "xamltrace", "playbacktimer", "perftimers", "spotlightart", "clips", "lens", "shelfclip" }
+            new[] { "spotlight", "epg", "xamltrace", "playbacktimer", "perftimers", "spotlightart", "clips", "lens", "shelfclip", "artwork" }
                 .Where(disabled.Contains));
     }
 

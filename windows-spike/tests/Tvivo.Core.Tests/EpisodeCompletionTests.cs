@@ -12,11 +12,27 @@ public sealed class EpisodeCompletionTests
         => Assert.False(EpisodeCompletion.IsFinished(18 * 60_000, Twenty, ended: false));
 
     [Fact]
-    public void Two_minutes_left_is_not_finished_but_the_last_fifteen_seconds_are()
+    public void Long_episodes_use_the_film_credits_window()
     {
         Assert.False(EpisodeCompletion.IsFinished(Twenty - 120_000, Twenty, false));
-        Assert.False(EpisodeCompletion.IsFinished(Twenty - 15_001, Twenty, false));
-        Assert.True(EpisodeCompletion.IsFinished(Twenty - 15_000, Twenty, false));
+        Assert.False(EpisodeCompletion.IsFinished(Twenty - 60_001, Twenty, false));
+        Assert.True(EpisodeCompletion.IsFinished(Twenty - 60_000, Twenty, false));
+    }
+
+    [Fact]
+    public void A_forty_five_minute_episode_stopped_two_minutes_before_the_end_is_finished()
+    {
+        const long Duration = 45 * 60_000;
+        Assert.True(EpisodeCompletion.IsFinished(Duration - 2 * 60_000, Duration, ended: false));
+    }
+
+    [Fact]
+    public void Episodes_under_five_minutes_keep_the_fifteen_second_tail()
+    {
+        const long Duration = 4 * 60_000;
+        Assert.False(EpisodeCompletion.IsFinished(Duration - 15_001, Duration, ended: false));
+        Assert.True(EpisodeCompletion.IsFinished(Duration - 15_000, Duration, ended: false));
+        Assert.False(EpisodeCompletion.IsFinished(45_000, 59_999, ended: false));
     }
 
     [Fact]

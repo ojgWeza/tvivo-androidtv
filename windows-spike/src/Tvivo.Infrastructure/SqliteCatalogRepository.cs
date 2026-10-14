@@ -790,7 +790,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,$kind,$id,$series,$resume,$duration,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=excluded.resume_ms,duration_ms=COALESCE(excluded.duration_ms,media_progress.duration_ms),finished=excluded.finished,updated_at=excluded.updated_at",
+        Execute(connection, transaction, "INSERT INTO media_progress(account_id,kind,item_id,series_id,resume_ms,duration_ms,finished,updated_at) VALUES($a,$kind,$id,$series,$resume,$duration,$finished,$now) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET series_id=excluded.series_id,resume_ms=excluded.resume_ms,duration_ms=COALESCE(excluded.duration_ms,media_progress.duration_ms),finished=CASE WHEN media_progress.kind='episode' THEN MAX(media_progress.finished,excluded.finished) ELSE excluded.finished END,updated_at=excluded.updated_at",
             ("$a", account.AccountId), ("$kind", kind), ("$id", itemId), ("$series", (object?)seriesId ?? DBNull.Value), ("$resume", finished ? 0 : position), ("$duration", (object?)duration ?? DBNull.Value), ("$finished", finished ? 1 : 0), ("$now", now));
         var saved = QueryProgressFinished(connection, transaction, account.AccountId, kind, itemId);
         if (kind == "movie")
