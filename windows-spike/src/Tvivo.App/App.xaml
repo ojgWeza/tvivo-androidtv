@@ -11,6 +11,7 @@
             </ResourceDictionary.MergedDictionaries>
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppSelectionRingBrush" Color="#D97757" />
                     <Color x:Key="AppCanvasColor">#0A1619</Color>
                     <Color x:Key="AppDeepColor">#071114</Color>
                     <Color x:Key="AppSurfaceColor">#0F2126</Color>
@@ -110,6 +111,7 @@
                     <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#66D97757" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppSelectionRingBrush" Color="#12383F" />
                     <Color x:Key="AppCanvasColor">#FFF5E5</Color>
                     <Color x:Key="AppDeepColor">#F4E5CC</Color>
                     <Color x:Key="AppSurfaceColor">#FFF9EF</Color>
@@ -209,6 +211,7 @@
                     <SolidColorBrush x:Key="RepeaterButtonBackgroundPressed" Color="#661B5557" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="AppSelectionRingBrush" ResourceKey="SystemColorHighlightBrush" />
                     <StaticResource x:Key="AppCanvasBrush" ResourceKey="SystemColorWindowBrush" />
                     <StaticResource x:Key="AppDeepBrush" ResourceKey="SystemColorWindowBrush" />
                     <StaticResource x:Key="AppPanelSurfaceBrush" ResourceKey="SystemColorWindowBrush" />
@@ -326,6 +329,8 @@
             </Style>
             <Style x:Key="AppShelfTitleButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="BorderBrush" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource AppTextBrush}" />
                 <Setter Property="Padding" Value="0" />
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
@@ -555,7 +560,7 @@
                                                   VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
                                                   Padding="{TemplateBinding Padding}" />
                                 <Border x:Name="FocusRing"
-                                        BorderBrush="{ThemeResource AppAccentBrush}"
+                                        BorderBrush="{ThemeResource AppSelectionRingBrush}"
                                         BorderThickness="5"
                                         CornerRadius="12"
                                         Opacity="0"
