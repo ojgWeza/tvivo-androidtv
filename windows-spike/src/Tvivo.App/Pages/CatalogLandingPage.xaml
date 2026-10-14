@@ -56,10 +56,7 @@
                                             ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
                             <Image Stretch="UniformToFill" Opacity="0" RenderTransformOrigin="0.5,0.5"
                                    Loaded="ArtworkImage_Loaded"
-                                   Unloaded="ArtworkImage_Unloaded"
-                                   DataContextChanged="ArtworkImage_DataContextChanged"
-                                   ImageOpened="ArtworkImage_Opened"
-                                   ImageFailed="ArtworkImage_Failed">
+                                   Unloaded="ArtworkImage_Unloaded">
                                 <Image.RenderTransform>
                                     <ScaleTransform x:Name="ArtworkImageScale" ScaleX="1" ScaleY="1" />
                                 </Image.RenderTransform>
@@ -349,8 +346,7 @@
                                                                 HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                                                                 ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
                                                 <Image x:Name="SpotlightArtwork" Stretch="UniformToFill" Opacity="0"
-                                                       Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded"
-                                                       ImageOpened="ArtworkImage_Opened" ImageFailed="ArtworkImage_Failed" />
+                                                       Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded" />
                                             </Grid>
                                         </Border>
                                     </StackPanel>
