@@ -92,6 +92,7 @@ public sealed partial class ProviderSetupPage : UserControl
 
             try
             {
+                connection = connection with { AccountId = result.Account.AccountId };
                 await _credentialStore.SaveAsync(connection);
             }
             catch (Exception exception)

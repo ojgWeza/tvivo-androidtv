@@ -28,6 +28,8 @@ namespace Tvivo.App;
 public sealed partial class MainWindow : Window
 {
     private const int DwmwaUseImmersiveDarkMode = 20;
+    private readonly long _windowConstructionTimestamp = Stopwatch.GetTimestamp();
+    private readonly HashSet<string> _startupPerfPhases = new(StringComparer.Ordinal);
     private readonly ThemePreferenceStore _themePreferenceStore = new();
     private ThemePreference _selectedTheme;
 
@@ -263,6 +265,7 @@ public sealed partial class MainWindow : Window
         ApplySelectedTheme();
         ApplyWindowChromeState();
         _catalogLandingPage.InteractionReadinessChanged += CatalogLandingPage_InteractionReadinessChanged;
+        _catalogLandingPage.StartupPhaseCompleted += CatalogLandingPage_StartupPhaseCompleted;
         _catalogLandingPage.SearchTextChanged += CatalogLandingPage_SearchTextChanged;
         _nativeEngine.Player.Volume = 1;
         NativePlayerElement.SetMediaPlayer(_nativeEngine.Player);
@@ -942,6 +945,15 @@ public sealed partial class MainWindow : Window
     private void CatalogLandingPage_InteractionReadinessChanged(object? sender, EventArgs args) =>
         SetCatalogSearchEnabled(_currentPage == ShellPage.Catalog && _catalogLandingPage.IsReadyForInteraction);
 
+    private void CatalogLandingPage_StartupPhaseCompleted(string phase)
+    {
+        if (!_startupPerfPhases.Add(phase)) return;
+        var elapsedMs = Stopwatch.GetElapsedTime(_windowConstructionTimestamp).TotalMilliseconds;
+        LaunchDiagnostics.Write($"event=perf.startup phase={phase} ms={elapsedMs:0}");
+        if (phase == "authDone" && _catalogLandingPage.Connection is { } connection)
+            LaunchDiagnostics.SetActiveSecrets(connection);
+    }
+
     private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
     {
         var returningFromPlayer = _currentPage == ShellPage.Player;
@@ -1564,15 +1576,15 @@ public sealed partial class MainWindow : Window
         Volatile.Write(ref _playerEntryTraceStartedAt, Stopwatch.GetTimestamp());
         LaunchDiagnostics.Write($"CLICK-AWAY-TRACE id={playerEntryTraceId} event=content-selected kind={args.Source.Kind}");
         Interlocked.Increment(ref _metadataGeneration);
-        if (args.Source.Kind == StreamKind.Series)
+        if (args.Source.DirectUri is null)
         {
-            await OpenSeriesAsync(args.Channel, selectionGeneration);
+            StatusText.Text = _catalogLandingPage.PlaybackUnavailableMessage;
             return;
         }
 
-        if (args.Source.DirectUri is null)
+        if (args.Source.Kind == StreamKind.Series)
         {
-            StatusText.Text = "This channel does not have a playable stream URL yet.";
+            await OpenSeriesAsync(args.Channel, selectionGeneration);
             return;
         }
 

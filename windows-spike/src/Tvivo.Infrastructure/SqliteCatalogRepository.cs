@@ -350,6 +350,15 @@ public sealed class SqliteCatalogRepository : IDisposable
         return rows;
     }
 
+    public bool HasAnyCatalogRows(ProviderAccount account)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM categories WHERE account_id=$a) OR EXISTS(SELECT 1 FROM items WHERE account_id=$a)";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
     public IReadOnlyList<CatalogCategoryShelfDescriptor> GetCategoryShelfDescriptors(
         ProviderAccount account, CatalogItemType type, string? filter = null)
     {

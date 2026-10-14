@@ -12,7 +12,7 @@ public sealed record ProviderAccount(
     int? MaxConnections = null,
     DateTimeOffset? ExpiresAt = null);
 
-public sealed record ProviderConnection(ProviderEndpoint Endpoint, string Username, string Password);
+public sealed record ProviderConnection(ProviderEndpoint Endpoint, string Username, string Password, string? AccountId = null);
 
 public enum AuthFailureReason
 {

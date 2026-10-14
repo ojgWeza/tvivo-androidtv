@@ -48,7 +48,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         {
             using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php"), cancellationToken);
             if (!response.IsSuccessStatusCode)
-                return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure, "http_failure");
+                return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure, $"http_{(int)response.StatusCode}");
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -76,7 +76,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 ? JsonValue.Int(server, "port") ?? connection.Endpoint.Port
                 : 0;
             var endpoint = connection.Endpoint with { Port = port };
-            var accountId = AccountIdentity.For(endpoint, connection.Username);
+            var accountId = connection.AccountId ?? AccountIdentity.For(endpoint, connection.Username);
             var account = new ProviderAccount(
                 accountId,
                 endpoint,

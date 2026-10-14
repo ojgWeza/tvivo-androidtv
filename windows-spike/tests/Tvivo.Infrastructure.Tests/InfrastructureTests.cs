@@ -450,7 +450,7 @@ public sealed class InfrastructureTests
         var httpResult = await httpFailure.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
         Assert.False(httpResult.Success);
         Assert.Equal(AuthFailureReason.NetworkFailure, httpResult.FailureReason);
-        Assert.Equal("http_failure", httpResult.DiagnosticCode);
+        Assert.Equal("http_503", httpResult.DiagnosticCode);
 
         var transportFailure = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((_, _) =>
             throw new HttpRequestException("private transport detail"))));
