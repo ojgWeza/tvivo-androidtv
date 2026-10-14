@@ -79,6 +79,7 @@ public sealed partial class MainWindow : Window
     private PlaybackMode _episodePlaybackMode = PlaybackMode.Next;
     private PlaybackMode _moviePlaybackMode = PlaybackMode.Shuffle;
     private MinimizeToMiniMode _minimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying;
+    private int _playbackAttempts = PlaybackRetryPolicy.DefaultAttempts;
     private WindowMiniGeometry _windowMiniGeometry = WindowMiniGeometry.Default;
     private WindowMiniGeometry _windowMiniGeometryAtEntry;
     private bool _windowMiniGeometryDirty;
@@ -107,6 +108,8 @@ public sealed partial class MainWindow : Window
     private long _itemSelectionGeneration;
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
+    private long _pendingPlaybackTargetGeneration = -1;
+    private string? _pendingPlaybackTargetLine;
     private long _activePlaybackSessionGeneration = -1;
     private long _metadataGeneration;
     private long _playerEntryTraceId;
@@ -231,6 +234,7 @@ public sealed partial class MainWindow : Window
         _episodePlaybackMode = playbackOptions.EpisodeMode;
         _moviePlaybackMode = playbackOptions.MovieMode;
         _minimizeToMiniMode = playbackOptions.MinimizeToMiniMode;
+        _playbackAttempts = playbackOptions.PlaybackAttempts;
         SyncPlaybackModeToggles(_episodePlaybackMode);
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
@@ -270,8 +274,10 @@ public sealed partial class MainWindow : Window
         _nativeEngine.Player.Volume = 1;
         NativePlayerElement.SetMediaPlayer(_nativeEngine.Player);
         _accountPage.SetPlaybackEngine(useVlc ? "LibVLC" : "Native");
+        _accountPage.SetPlaybackAttempts(_playbackAttempts);
         _accountPage.SetMinimizeToMiniMode(_minimizeToMiniMode);
         _accountPage.MinimizeToMiniModeChanged += AccountPage_MinimizeToMiniModeChanged;
+        _accountPage.PlaybackAttemptsChanged += AccountPage_PlaybackAttemptsChanged;
         _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
@@ -755,7 +761,7 @@ public sealed partial class MainWindow : Window
             var path = GetPlaybackOptionsPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, new PlaybackModePreferences(
-                _episodePlaybackMode, _moviePlaybackMode, _minimizeToMiniMode).ToJson());
+                _episodePlaybackMode, _moviePlaybackMode, _minimizeToMiniMode, _playbackAttempts).ToJson());
         }
         catch (Exception exception)
         {
@@ -766,6 +772,12 @@ public sealed partial class MainWindow : Window
     private void AccountPage_MinimizeToMiniModeChanged(object? sender, MinimizeToMiniMode mode)
     {
         _minimizeToMiniMode = mode;
+        WritePlaybackOptions();
+    }
+
+    private void AccountPage_PlaybackAttemptsChanged(object? sender, int attempts)
+    {
+        _playbackAttempts = PlaybackRetryPolicy.ClampAttempts(attempts);
         WritePlaybackOptions();
     }
 
@@ -1571,7 +1583,7 @@ public sealed partial class MainWindow : Window
             _seriesOpeningId == args.Channel.Id &&
             _seriesOpenCancellation is { IsCancellationRequested: false })
         {
-            LaunchDiagnostics.Write($"event=series.open.exit ms=0 reason=duplicate-in-flight seriesId={args.Channel.Id}");
+            LogSeriesOpenExit(Stopwatch.GetTimestamp(), args.Channel, "duplicate-in-flight");
             return;
         }
 
@@ -1694,19 +1706,19 @@ public sealed partial class MainWindow : Window
     private async Task OpenSeriesAsync(Channel series, long selectionGeneration)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        LaunchDiagnostics.Write($"event=series.open.start ms=0 seriesId={series.Id}");
+        LaunchDiagnostics.Write("event=series.open.start ms=0");
 
         if (_catalogLandingPage.Account is not { } account)
         {
             ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
-            LogSeriesOpenExit(startedAt, series.Id, "no-account");
+            LogSeriesOpenExit(startedAt, series, "no-account");
             return;
         }
 
         if (App.Services.GetService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
         {
             ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
-            LogSeriesOpenExit(startedAt, series.Id, "provider-unsupported");
+            LogSeriesOpenExit(startedAt, series, "provider-unsupported");
             return;
         }
 
@@ -1728,23 +1740,23 @@ public sealed partial class MainWindow : Window
                 {
                     if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
                     {
-                        LogSeriesOpenExit(startedAt, series.Id, "stale-generation");
+                        LogSeriesOpenExit(startedAt, series, "stale-generation");
                         return;
                     }
 
                     var timedOut = infoCts.IsCancellationRequested && !selectionCts.IsCancellationRequested;
                     var exceptionType = timedOut ? nameof(TimeoutException) : exception.GetType().Name;
                     ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
-                    LogSeriesOpenExit(startedAt, series.Id, "info-failed", $"exceptionType={exceptionType}");
+                    LogSeriesOpenExit(startedAt, series, "info-failed", $"exceptionType={exceptionType}");
                     return;
                 }
             }
 
             var episodeCount = details.Seasons.Sum(season => season.Episodes.Count);
-            LaunchDiagnostics.Write($"event=series.open.info ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} seasons={details.Seasons.Count} episodes={episodeCount} seriesId={series.Id}");
+            LaunchDiagnostics.Write($"event=series.open.info ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} seasons={details.Seasons.Count} episodes={episodeCount}");
             if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
             {
-                LogSeriesOpenExit(startedAt, series.Id, "stale-generation");
+                LogSeriesOpenExit(startedAt, series, "stale-generation");
                 return;
             }
 
@@ -1755,7 +1767,7 @@ public sealed partial class MainWindow : Window
                 if (selected is null)
                 {
                     ShowSeriesOpenMessage("This series has no episodes available.", isFailure: true);
-                    LogSeriesOpenExit(startedAt, series.Id, "no-episodes");
+                    LogSeriesOpenExit(startedAt, series, "no-episodes");
                     return;
                 }
 
@@ -1780,19 +1792,19 @@ public sealed partial class MainWindow : Window
                 QueueVisit(account, CatalogItemType.Series, series.Id);
                 if (!OpenSeriesEpisode(ToEpisodeChannel(account, series.Id, selected)))
                 {
-                    LogSeriesOpenExit(startedAt, series.Id, "no-direct-uri");
+                    LogSeriesOpenExit(startedAt, series, "no-direct-uri");
                     return;
                 }
 
                 ClearSeriesOpenMessage();
-                LogSeriesOpenExit(startedAt, series.Id, "ok");
+                LogSeriesOpenExit(startedAt, series, "ok");
             }
             catch (Exception exception)
             {
                 if (selectionGeneration == Volatile.Read(ref _itemSelectionGeneration))
                     ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
-                LaunchDiagnostics.Write($"event=series.open.exception type={exception.GetType().Name} message={SanitizeExceptionMessage(exception.Message)}");
-                LogSeriesOpenExit(startedAt, series.Id, "exception");
+                LaunchDiagnostics.Write($"event=series.open.exception type={exception.GetType().Name}");
+                LogSeriesOpenExit(startedAt, series, "exception");
             }
         }
         finally
@@ -1825,16 +1837,36 @@ public sealed partial class MainWindow : Window
         _seriesOpenMessageIsFailure = false;
     }
 
-    private static void LogSeriesOpenExit(long startedAt, string seriesId, string reason, string details = "")
+    private void ShowPlaybackRetryInfoBar(int nextAttempt, int maxAttempts)
     {
-        var suffix = string.IsNullOrEmpty(details) ? string.Empty : $" {details}";
-        LaunchDiagnostics.Write($"event=series.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason={reason}{suffix} seriesId={seriesId}");
+        var message = $"Trying again ({nextAttempt} of {maxAttempts})...";
+        WindowInfoBar.Message = message;
+        AutomationProperties.SetName(WindowInfoBar, message);
+        WindowInfoBar.Severity = InfoBarSeverity.Informational;
+        WindowInfoBar.IsOpen = true;
     }
 
-    private static string SanitizeExceptionMessage(string message)
+    private void ClearPlaybackRetryInfoBar()
     {
-        var singleLine = message.Replace('\r', ' ').Replace('\n', ' ');
-        return System.Text.RegularExpressions.Regex.Replace(singleLine, @"https?://\S+", "[url]");
+        if (WindowInfoBar.Message.StartsWith("Trying again (", StringComparison.Ordinal))
+            WindowInfoBar.IsOpen = false;
+    }
+
+    private void LogSeriesOpenExit(long startedAt, Channel series, string reason, string details = "")
+    {
+        var suffix = string.IsNullOrEmpty(details) ? string.Empty : $" {details}";
+        var elapsed = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+        if (reason == "ok")
+        {
+            LaunchDiagnostics.Write($"event=series.open.exit ms={elapsed:0.000} reason=ok{suffix}");
+            return;
+        }
+
+        var seriesTitle = SanitizePlaybackLabel(
+            _currentSeriesId == series.Id ? _currentSeriesTitle ?? series.DisplayName : series.DisplayName);
+        var itemRef = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{series.ProviderAccountId}\0{series.Id}")))[..8];
+        LaunchDiagnostics.Write($"event=series.open.exit ms={elapsed:0.000} reason={reason}{suffix} title=\"{seriesTitle}\" itemRef={itemRef}");
     }
 
     private static Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
@@ -1853,12 +1885,11 @@ public sealed partial class MainWindow : Window
     private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        var seriesLogId = episode.Metadata.GetValueOrDefault("seriesId", _currentSeriesId ?? string.Empty);
-        LaunchDiagnostics.Write($"event=episode.open.start ms=0 episodeId={episode.Id} seriesId={seriesLogId}");
+        LaunchDiagnostics.Write("event=episode.open.start ms=0");
         if (episode.Source.DirectUri is null)
         {
             ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
-            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=no-direct-uri episodeId={episode.Id} seriesId={seriesLogId}");
+            LogEpisodeOpenExit(startedAt, episode, "no-direct-uri");
             return false;
         }
 
@@ -1909,14 +1940,25 @@ public sealed partial class MainWindow : Window
             UpdateEpisodeNavigationButtons();
             if (!preserveCompact) ShowPage(ShellPage.Player);
             _ = StartPlaybackAsync(episode.Source, preserveCompact);
-            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=ok episodeId={episode.Id} seriesId={seriesLogId}");
+            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=ok");
             return true;
         }
         catch
         {
-            LaunchDiagnostics.Write($"event=episode.open.exit ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.000} reason=exception episodeId={episode.Id} seriesId={seriesLogId}");
+            LogEpisodeOpenExit(startedAt, episode, "exception");
             throw;
         }
+    }
+
+    private void LogEpisodeOpenExit(long startedAt, Channel episode, string reason)
+    {
+        var elapsed = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+        var seriesTitle = SanitizePlaybackLabel(_currentSeriesTitle ?? PlayerSideTitle.Text);
+        var seriesId = episode.Metadata.GetValueOrDefault("seriesId", _currentSeriesId ?? string.Empty);
+        var accountId = _currentSeriesAccount?.AccountId ?? episode.ProviderAccountId;
+        var itemRef = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{accountId}\0{seriesId}")))[..8];
+        LaunchDiagnostics.Write($"event=episode.open.exit ms={elapsed:0.000} reason={reason} title=\"{seriesTitle}\" itemRef={itemRef}");
     }
 
     private Channel? GetAdjacentEpisode(int offset)
@@ -2261,8 +2303,10 @@ public sealed partial class MainWindow : Window
         bool isRecovery = false,
         long? recoveryPositionMs = null,
         bool engineFallbackAttempt = false,
-        bool providerRetryAttempt = false)
+        TimeSpan? retryDelayElapsed = null)
     {
+        ClearPlaybackRetryInfoBar();
+        var totalRetryDelay = retryDelayElapsed ?? TimeSpan.Zero;
         var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
         if (!engineFallbackAttempt)
@@ -2331,6 +2375,9 @@ public sealed partial class MainWindow : Window
             try { category = await _catalogLandingPage.GetCategoryNameForAsync(targetChannel); }
             catch { /* Category labels are optional diagnostics; playback must still start. */ }
         }
+        if (generation != Volatile.Read(ref _playbackSessionGeneration))
+            return;
+
         var titleSource = source.Kind == StreamKind.Episode
             ? targetChannel?.Name
             : targetChannel?.DisplayName;
@@ -2350,46 +2397,64 @@ public sealed partial class MainWindow : Window
             $"{targetChannel?.ProviderAccountId ?? string.Empty}\0{source.StreamId}")))[..8];
         var extension = Regex.Replace(source.ContainerExtension ?? string.Empty, @"[^a-zA-Z0-9.+_-]", string.Empty)
             .ToLowerInvariant();
-        LaunchDiagnostics.Write($"event=playback.target kind={(source.Kind == StreamKind.Live ? "Live" : source.Kind == StreamKind.Episode ? "Episode" : "Movie")} title=\"{title}\" ext={extension} category=\"{categoryLabel}\" itemRef={itemRef} series=\"{seriesLabel}\" season={season} episode={episode} engine={engineName}");
-        LaunchDiagnostics.Write($"event=playback.start engine={engineName} kind={source.Kind}");
+        var kind = source.Kind == StreamKind.Live ? "Live" : source.Kind == StreamKind.Episode ? "Episode" : "Movie";
+        _pendingPlaybackTargetGeneration = generation;
+        _pendingPlaybackTargetLine = $"event=playback.target kind={kind} title=\"{title}\" ext={extension} category=\"{categoryLabel}\" itemRef={itemRef} series=\"{seriesLabel}\" season={season} episode={episode} engine={engineName}";
+        LaunchDiagnostics.Write($"event=playback.start.ref kind={kind} ext={extension} engine={engineName} itemRef={itemRef}");
         LaunchDiagnostics.Write($"event=playback.attempt generation={generation} engine={engineName} kind={source.Kind} extensionPresent={(string.IsNullOrWhiteSpace(source.ContainerExtension) ? "no" : "yes")} resume={(resumePosition > 0 || isRecovery && recoveryPositionMs > 0 ? "yes" : "no")} httpStatus=unknown redirect=unknown");
         PlaybackAttemptResult result;
+        var attemptCount = 0;
         try
         {
-            // Stop both backends before opening a replacement. Each backend owns
-            // native/network state independently, so stopping only the selected
-            // PlaybackService can leave the previous provider connection alive.
-            var handoffStartedAt = Stopwatch.GetTimestamp();
-            result = await _playbackHandoff.RunAsync(
-                _ => OnUiAsync(async () =>
-                {
-                    // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
-                    // while stopping) shows up here as a large gateWaitMs.
-                    LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
-                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                    var pendingStopStartedAt = Stopwatch.GetTimestamp();
-                    await _playbackStopTask;
-                    var pendingStopMs = Stopwatch.GetElapsedTime(pendingStopStartedAt).TotalMilliseconds;
-                    if (pendingStopMs >= 500)
-                        LaunchDiagnostics.Write($"event=playback.handoff stage=previous-stop-wait generation={generation} elapsedMs={pendingStopMs:0}");
-                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                    await StopBothPlaybackEnginesAsync();
-                    if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
-                    await Task.Yield();
-                    // PlaybackHandoff's delay resumes on a pool thread. Keep UI
-                    // layout and both engine lifecycle calls on the window's STA.
-                    if (IsCurrentPlaybackStart(generation, sessionCts))
-                        PlayerPage.UpdateLayout();
-                }),
-                token => OnUiAsync(() =>
-                {
-                    if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
-                        return Task.FromResult(PlaybackAttemptResult.Cancelled);
-                    LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
-                    _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
-                    return _playback.PlayAsync(playSource, token);
-                }),
-                sessionCts.Token);
+            while (true)
+            {
+                attemptCount++;
+                // Stop both backends before opening a replacement. Each backend owns
+                // native/network state independently, so stopping only the selected
+                // PlaybackService can leave the previous provider connection alive.
+                var handoffStartedAt = Stopwatch.GetTimestamp();
+                result = await _playbackHandoff.RunAsync(
+                    _ => OnUiAsync(async () =>
+                    {
+                        // Time spent queued behind an earlier start/stop (the handoff gate is not cancellable
+                        // while stopping) shows up here as a large gateWaitMs.
+                        LaunchDiagnostics.Write($"event=playback.handoff stage=gate-acquired generation={generation} gateWaitMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
+                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                        var pendingStopStartedAt = Stopwatch.GetTimestamp();
+                        await _playbackStopTask;
+                        var pendingStopMs = Stopwatch.GetElapsedTime(pendingStopStartedAt).TotalMilliseconds;
+                        if (pendingStopMs >= 500)
+                            LaunchDiagnostics.Write($"event=playback.handoff stage=previous-stop-wait generation={generation} elapsedMs={pendingStopMs:0}");
+                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                        await StopBothPlaybackEnginesAsync();
+                        if (!IsCurrentPlaybackStart(generation, sessionCts)) return;
+                        await Task.Yield();
+                        // PlaybackHandoff's delay resumes on a pool thread. Keep UI
+                        // layout and both engine lifecycle calls on the window's STA.
+                        if (IsCurrentPlaybackStart(generation, sessionCts))
+                            PlayerPage.UpdateLayout();
+                    }),
+                    token => OnUiAsync(() =>
+                    {
+                        if (generation != Volatile.Read(ref _playbackSessionGeneration) || sessionCts.IsCancellationRequested)
+                            return Task.FromResult(PlaybackAttemptResult.Cancelled);
+                        LaunchDiagnostics.Write($"event=playback.handoff stage=engine-open generation={generation} sinceClickMs={Stopwatch.GetElapsedTime(handoffStartedAt).TotalMilliseconds:0}");
+                        _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
+                        return _playback.PlayAsync(playSource, token);
+                    }),
+                    sessionCts.Token);
+                result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
+                if (!PlaybackRetryPolicy.ShouldRetry(result, attemptCount, _playbackAttempts, totalRetryDelay))
+                    break;
+
+                var delay = PlaybackRetryPolicy.Delay(attemptCount);
+                LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
+                ShowPlaybackRetryInfoBar(attemptCount + 1, _playbackAttempts);
+                await Task.Delay(delay, sessionCts.Token);
+                totalRetryDelay += delay;
+                if (!IsCurrentPlaybackStart(generation, sessionCts))
+                    return;
+            }
         }
         catch (OperationCanceledException) when (sessionCts.IsCancellationRequested)
         {
@@ -2399,10 +2464,11 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             LaunchDiagnostics.Write($"Playback start failed: {exception.GetType().Name} (HRESULT 0x{exception.HResult:X8})");
-            result = PlaybackAttemptResult.HostFailure;
+            result = PlaybackFailureClassifier.FromOpenException(exception);
         }
         finally
         {
+            ClearPlaybackRetryInfoBar();
             if (ReferenceEquals(Interlocked.CompareExchange(ref _playbackSessionCts, null, sessionCts), sessionCts))
                 sessionCts.Dispose();
         }
@@ -2414,35 +2480,28 @@ public sealed partial class MainWindow : Window
             return;
         }
         LaunchDiagnostics.Write($"Playback result: engine={engineName}, kind={source.Kind}, result={result}");
+        if (result is PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.DecodeFailure or
+            PlaybackAttemptResult.NetworkFailure or PlaybackAttemptResult.UnsupportedMedia or
+            PlaybackAttemptResult.HostFailure or PlaybackAttemptResult.Timeout or PlaybackAttemptResult.Forbidden or
+            PlaybackAttemptResult.NotFound)
+            WritePendingPlaybackTarget(generation);
         if (result != PlaybackAttemptResult.FirstFrame)
-            LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", _ => "error" }}");
+            LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason={result switch { PlaybackAttemptResult.Cancelled => "user-cancelled", PlaybackAttemptResult.Timeout => "timeout", PlaybackAttemptResult.Forbidden => "forbidden", _ => "error" }}");
         if (result == PlaybackAttemptResult.NotFound)
             LaunchDiagnostics.Write("event=playback.notfound");
         if (!engineFallbackAttempt && EngineFallbackPolicy.ShouldFallback(result, _engineFallbackTried.Contains(itemKey)))
         {
-            // The format, not the network, is the problem: the other player may well handle it.
+            // The selected engine exhausted its attempts; the other player may handle the format or connection.
             _engineFallbackTried.Add(itemKey);
             var failedLabel = EngineLabel(_engine);
             var otherEngine = ReferenceEquals(_engine, _vlcEngine) ? (IPlaybackEngine)_nativeEngine : _vlcEngine;
+            WritePendingPlaybackTarget(generation);
             LaunchDiagnostics.Write($"event=playback.fallback from={engineName} to={EngineLabel(otherEngine)} reason={result}");
             StatusText.Text = $"The {failedLabel} player couldn't play this ({DescribeFailure(result)}). Trying the {EngineLabel(otherEngine)} player…";
             SwitchEngineForPlayback(otherEngine);
             _resumePositionOnStart = resumeOnStartForFallback;
-            await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs, engineFallbackAttempt: true);
-            return;
-        }
-        if (!providerRetryAttempt && !engineFallbackAttempt && source.Kind != StreamKind.Live &&
-            result == PlaybackAttemptResult.NetworkFailure)
-        {
-            // Providers cap simultaneous connections and release the previous one a moment late, so a
-            // stream started (or seeked) right after another is often refused once. Wait and try again.
-            LaunchDiagnostics.Write($"event=playback.provider-retry engine={engineName} kind={source.Kind} delayMs=3000");
-            StatusText.Text = "The provider refused the stream. Retrying in a moment…";
-            try { await Task.Delay(TimeSpan.FromSeconds(3)); }
-            catch (OperationCanceledException) { return; }
-            if (generation != Volatile.Read(ref _playbackSessionGeneration)) return;
-            _resumePositionOnStart = resumeOnStartForFallback;
-            await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs, providerRetryAttempt: true);
+            await StartPlaybackAsync(source, preserveCompact, isRecovery, recoveryPositionMs,
+                engineFallbackAttempt: true, retryDelayElapsed: totalRetryDelay);
             return;
         }
         if (engineFallbackAttempt && result == PlaybackAttemptResult.FirstFrame)
@@ -2508,6 +2567,15 @@ public sealed partial class MainWindow : Window
         var safe = Regex.Replace(withoutUrls, "[\\p{Cc}\"']", " ");
         safe = Regex.Replace(safe, @"\s+", " ").Trim();
         return safe.Length > 120 ? safe[..120] : safe;
+    }
+
+    private void WritePendingPlaybackTarget(long generation)
+    {
+        if (_pendingPlaybackTargetGeneration != generation || _pendingPlaybackTargetLine is not { } line)
+            return;
+
+        _pendingPlaybackTargetLine = null;
+        LaunchDiagnostics.Write(line);
     }
 
     internal void WriteAppStartDiagnostics()
@@ -2697,6 +2765,7 @@ public sealed partial class MainWindow : Window
     private static string DescribeFailure(PlaybackAttemptResult result) => result switch
     {
         PlaybackAttemptResult.NotFound => "title not found",
+        PlaybackAttemptResult.Forbidden => "provider refused the stream",
         PlaybackAttemptResult.UnsupportedMedia => "unsupported video format",
         PlaybackAttemptResult.DecodeFailure => "decoding failed",
         _ => "playback failed",
@@ -2707,6 +2776,7 @@ public sealed partial class MainWindow : Window
         PlaybackAttemptResult.FirstFrame => "Playing",
         PlaybackAttemptResult.Cancelled => "Playback cancelled",
         PlaybackAttemptResult.NotFound => "This title isn't available from your provider right now (not found). Try another one.",
+        PlaybackAttemptResult.Forbidden => "The provider refused this stream (HTTP 403 or a connection limit). Stop any other active stream on this account, then retry.",
         PlaybackAttemptResult.Timeout => $"The {kind.ToString().ToLowerInvariant()} stream did not start before the timeout. Check the provider connection and stream URL, then retry.",
         PlaybackAttemptResult.HostFailure => $"The player could not open this {kind.ToString().ToLowerInvariant()} stream. Check its content ID and container extension, the provider account's active streams, and the network, then retry.",
         PlaybackAttemptResult.DecodeFailure => $"The {engineLabel} player opened the stream but could not decode it.",
@@ -3224,6 +3294,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentSource is not { } source) return;
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        WritePendingPlaybackTarget(Volatile.Read(ref _playbackSessionGeneration));
         LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=reconnecting");
         await StartPlaybackAsync(
             source,
@@ -3236,6 +3307,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentSource is not { } source) return;
         var engineName = ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native";
+        WritePendingPlaybackTarget(Volatile.Read(ref _playbackSessionGeneration));
         LaunchDiagnostics.Write($"event=playback.stall engine={engineName} kind={source.Kind} positionMs={lastPositionMs} outcome=retry-exhausted");
         StatusText.Text = "Playback stalled. Select Retry to resume.";
         SetPauseButtonState("Retry");
@@ -3469,6 +3541,7 @@ public sealed partial class MainWindow : Window
         SaveResumePosition(force: true, positionOverride: _lastGoodPlaybackPositionMilliseconds);
         StatusText.Text = "Playback failed. Select Retry to resume.";
         SetPauseButtonState("Retry");
+        WritePendingPlaybackTarget(currentGeneration);
         LaunchDiagnostics.Write($"event=playback.failure engine={(_engine == _vlcEngine ? "LibVLC" : "Native")} generation={currentGeneration} positionMs={_lastGoodPlaybackPositionMilliseconds} httpStatus={_engine.HttpStatus?.ToString() ?? "unknown"} outcome=retry");
     }
 

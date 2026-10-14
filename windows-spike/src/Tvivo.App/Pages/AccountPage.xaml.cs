@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -28,9 +29,11 @@ public sealed partial class AccountPage : UserControl
     public event EventHandler? ChangeUserRequested;
     public event EventHandler? RefreshCatalogRequested;
     public event EventHandler<string>? PlaybackEngineChanged;
+    public event EventHandler<int>? PlaybackAttemptsChanged;
     public event EventHandler<MinimizeToMiniMode>? MinimizeToMiniModeChanged;
 
     private bool _suppressEngineChanged;
+    private bool _suppressPlaybackAttemptsChanged;
     private bool _suppressMinimizeToMiniModeChanged;
     private bool _suppressCatalogRefreshPolicyChanged;
 
@@ -70,6 +73,22 @@ public sealed partial class AccountPage : UserControl
     {
         if (_suppressEngineChanged || PlaybackEngineSelector.SelectedItem is not ComboBoxItem { Tag: string tag }) return;
         PlaybackEngineChanged?.Invoke(this, tag);
+    }
+
+    public void SetPlaybackAttempts(int attempts)
+    {
+        _suppressPlaybackAttemptsChanged = true;
+        PlaybackAttemptsSelector.SelectedItem = PlaybackAttemptsSelector.Items
+            .OfType<ComboBoxItem>().First(item => string.Equals(item.Tag as string,
+                PlaybackRetryPolicy.ClampAttempts(attempts).ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
+        _suppressPlaybackAttemptsChanged = false;
+    }
+
+    private void PlaybackAttemptsSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_suppressPlaybackAttemptsChanged || PlaybackAttemptsSelector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
+            !int.TryParse(tag, NumberStyles.None, CultureInfo.InvariantCulture, out var attempts)) return;
+        PlaybackAttemptsChanged?.Invoke(this, PlaybackRetryPolicy.ClampAttempts(attempts));
     }
 
     private string? _openTab;

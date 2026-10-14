@@ -47,7 +47,8 @@ public static class PlaybackModeLogic
 public sealed record PlaybackModePreferences(
     PlaybackMode EpisodeMode,
     PlaybackMode MovieMode,
-    MinimizeToMiniMode MinimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying)
+    MinimizeToMiniMode MinimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying,
+    int PlaybackAttempts = PlaybackRetryPolicy.DefaultAttempts)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -66,10 +67,14 @@ public sealed record PlaybackModePreferences(
         return new PlaybackModePreferences(
             ReadMode(root, "EpisodeMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "EpisodeAutoplayNext"), isMovie: false),
             ReadMode(root, "MovieMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "MovieAutoplayNext"), isMovie: true),
-            ReadMinimizeMode(root));
+            ReadMinimizeMode(root),
+            PlaybackRetryPolicy.ClampAttempts(ReadInteger(root, nameof(PlaybackAttempts)) ?? PlaybackRetryPolicy.DefaultAttempts));
     }
 
-    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+    public string ToJson() => JsonSerializer.Serialize(this with
+    {
+        PlaybackAttempts = PlaybackRetryPolicy.ClampAttempts(PlaybackAttempts),
+    }, JsonOptions);
 
     private static PlaybackMode? ReadMode(JsonElement root, string name)
     {
@@ -97,6 +102,11 @@ public sealed record PlaybackModePreferences(
     private static bool? ReadBoolean(JsonElement root, string name) =>
         TryGetProperty(root, name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? value.GetBoolean()
+            : null;
+
+    private static int? ReadInteger(JsonElement root, string name) =>
+        TryGetProperty(root, name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var result)
+            ? result
             : null;
 
     private static bool TryGetProperty(JsonElement root, string name, out JsonElement value)

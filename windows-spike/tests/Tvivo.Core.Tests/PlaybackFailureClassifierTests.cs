@@ -65,11 +65,11 @@ public sealed class PlaybackFailureClassifierTests
     [InlineData(PlaybackAttemptResult.DecodeFailure, false, true)]
     [InlineData(PlaybackAttemptResult.UnknownFailure, false, true)]
     [InlineData(PlaybackAttemptResult.UnsupportedMedia, true, false)]
-    [InlineData(PlaybackAttemptResult.NetworkFailure, false, false)]
-    [InlineData(PlaybackAttemptResult.Timeout, false, false)]
+    [InlineData(PlaybackAttemptResult.NetworkFailure, false, true)]
+    [InlineData(PlaybackAttemptResult.Timeout, false, true)]
     [InlineData(PlaybackAttemptResult.Cancelled, false, false)]
     [InlineData(PlaybackAttemptResult.FirstFrame, false, false)]
-    public void Fallback_is_offered_once_and_only_for_format_problems(
+    public void Fallback_is_offered_once_for_eligible_engine_failures(
         PlaybackAttemptResult result, bool alreadyTried, bool expected) =>
         Assert.Equal(expected, EngineFallbackPolicy.ShouldFallback(result, alreadyTried));
 
@@ -104,11 +104,21 @@ public sealed class PlaybackFailureClassifierTests
     }
 
     [Fact]
-    public void Http_forbidden_remains_a_network_failure()
+    public void Http_forbidden_is_non_retryable()
     {
-        Assert.Equal(PlaybackAttemptResult.NetworkFailure,
+        Assert.Equal(PlaybackAttemptResult.Forbidden,
             PlaybackFailureClassifier.RefineLibVlcFailure(PlaybackAttemptResult.UnknownFailure, false, forbiddenLogged: true));
     }
+
+    [Theory]
+    [InlineData(403, PlaybackAttemptResult.UnknownFailure, PlaybackAttemptResult.Forbidden)]
+    [InlineData(404, PlaybackAttemptResult.NetworkFailure, PlaybackAttemptResult.NotFound)]
+    [InlineData(410, PlaybackAttemptResult.UnknownFailure, PlaybackAttemptResult.NotFound)]
+    [InlineData(429, PlaybackAttemptResult.UnknownFailure, PlaybackAttemptResult.NetworkFailure)]
+    [InlineData(503, PlaybackAttemptResult.UnknownFailure, PlaybackAttemptResult.NetworkFailure)]
+    [InlineData(500, PlaybackAttemptResult.UnknownFailure, PlaybackAttemptResult.NetworkFailure)]
+    public void Http_status_refines_failure_result(int status, PlaybackAttemptResult result, PlaybackAttemptResult expected) =>
+        Assert.Equal(expected, PlaybackFailureClassifier.RefineHttpStatus(result, status));
 
     [Theory]
     [InlineData(false)]
@@ -117,10 +127,10 @@ public sealed class PlaybackFailureClassifierTests
         Assert.False(EngineFallbackPolicy.ShouldFallback(PlaybackAttemptResult.NotFound, alreadyTried));
 
     [Fact]
-    public void A_refused_stream_is_a_network_failure_so_no_engine_fallback_is_offered()
+    public void A_refused_stream_does_not_trigger_engine_fallback()
     {
         var refined = PlaybackFailureClassifier.RefineLibVlcFailure(PlaybackAttemptResult.UnknownFailure, false, true);
-        Assert.Equal(PlaybackAttemptResult.NetworkFailure, refined);
+        Assert.Equal(PlaybackAttemptResult.Forbidden, refined);
         Assert.False(EngineFallbackPolicy.ShouldFallback(refined, false));
     }
 

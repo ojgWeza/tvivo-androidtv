@@ -81,6 +81,23 @@
                             <ComboBoxItem Content="Native player" Tag="Native" />
                             <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
                         </ComboBox>
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Playback attempts" />
+                        <ComboBox x:Name="PlaybackAttemptsSelector" MinWidth="220" FontSize="16"
+                                  SelectionChanged="PlaybackAttemptsSelector_SelectionChanged"
+                                  AutomationProperties.Name="Playback attempts">
+                            <ComboBoxItem Content="1" Tag="1" />
+                            <ComboBoxItem Content="2" Tag="2" />
+                            <ComboBoxItem Content="3" Tag="3" />
+                            <ComboBoxItem Content="4" Tag="4" />
+                            <ComboBoxItem Content="5" Tag="5" />
+                            <ComboBoxItem Content="6" Tag="6" />
+                            <ComboBoxItem Content="7" Tag="7" />
+                            <ComboBoxItem Content="8" Tag="8" />
+                            <ComboBoxItem Content="9" Tag="9" />
+                            <ComboBoxItem Content="10" Tag="10" />
+                        </ComboBox>
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                                   Text="How many times Tvivo tries before giving up (default 5)." />
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15"
                                    Text="When minimizing while a video is open" />
                         <ComboBox x:Name="MinimizeToMiniSelector" MinWidth="300" FontSize="16"

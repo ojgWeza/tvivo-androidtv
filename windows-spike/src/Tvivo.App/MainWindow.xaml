@@ -204,6 +204,8 @@
                             AutomationProperties.Name="Copy diagnostics" />
                     <TextBlock x:Name="CopyDiagnosticsStatus" VerticalAlignment="Center"
                                Foreground="{ThemeResource AppMutedTextBrush}" />
+                    <TextBlock Text="Titles are only recorded when playback fails." VerticalAlignment="Center"
+                               Foreground="{ThemeResource AppMutedTextBrush}" FontSize="12" Margin="8,0,0,0" />
                 </StackPanel>
                 <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
                     <Grid.ColumnDefinitions>

@@ -70,8 +70,8 @@ public static class PlaybackFailureClassifier
     public static PlaybackAttemptResult RefineLibVlcFailure(PlaybackAttemptResult result, bool missingDecoderLogged, bool forbiddenLogged = false, bool notFoundLogged = false) =>
         notFoundLogged && result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled)
             ? PlaybackAttemptResult.NotFound
-            : forbiddenLogged && result is (PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout)
-            ? PlaybackAttemptResult.NetworkFailure // the provider refused it: another player would get the same 403
+            : forbiddenLogged && result is (PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout or PlaybackAttemptResult.NetworkFailure)
+            ? PlaybackAttemptResult.Forbidden // the provider refused it: another player would get the same 403
             : missingDecoderLogged && result is (PlaybackAttemptResult.UnknownFailure or PlaybackAttemptResult.Timeout)
                 ? PlaybackAttemptResult.UnsupportedMedia
                 : result;
@@ -80,6 +80,15 @@ public static class PlaybackFailureClassifier
         notFoundLogged && result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled)
             ? PlaybackAttemptResult.NotFound
             : result;
+
+    public static PlaybackAttemptResult RefineHttpStatus(PlaybackAttemptResult result, int? status) => status switch
+    {
+        403 when result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled) => PlaybackAttemptResult.Forbidden,
+        404 or 410 when result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled) => PlaybackAttemptResult.NotFound,
+        429 or 503 when result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled) => PlaybackAttemptResult.NetworkFailure,
+        >= 500 and <= 599 when result is not (PlaybackAttemptResult.FirstFrame or PlaybackAttemptResult.Started or PlaybackAttemptResult.Cancelled) => PlaybackAttemptResult.NetworkFailure,
+        _ => result,
+    };
 }
 
 public static class EngineFallbackPolicy
@@ -92,10 +101,13 @@ public static class EngineFallbackPolicy
 
     public static bool AppliesNoVideoGrace(StreamKind kind) => kind != StreamKind.Live;
 
-    /// <summary>Another player can plausibly succeed only when the problem is the format, not the network.</summary>
+    /// <summary>Try the other player once after the selected engine's attempts are exhausted.</summary>
     public static bool ShouldFallback(PlaybackAttemptResult result, bool alreadyTried) =>
         !alreadyTried &&
         result is PlaybackAttemptResult.UnsupportedMedia
             or PlaybackAttemptResult.DecodeFailure
-            or PlaybackAttemptResult.UnknownFailure;
+            or PlaybackAttemptResult.UnknownFailure
+            or PlaybackAttemptResult.NetworkFailure
+            or PlaybackAttemptResult.Timeout
+            or PlaybackAttemptResult.HostFailure;
 }

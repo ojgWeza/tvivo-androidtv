@@ -91,6 +91,7 @@ public sealed class PlaybackModeTests
         Assert.Equal(PlaybackMode.Next, preferences.EpisodeMode);
         Assert.Equal(PlaybackMode.Shuffle, preferences.MovieMode);
         Assert.Equal(MinimizeToMiniMode.MiniPlayerWhilePlaying, preferences.MinimizeToMiniMode);
+        Assert.Equal(PlaybackRetryPolicy.DefaultAttempts, preferences.PlaybackAttempts);
     }
 
     [Fact]
@@ -114,6 +115,27 @@ public sealed class PlaybackModeTests
         var restored = PlaybackModePreferences.FromJson(preferences.ToJson());
 
         Assert.Equal(MinimizeToMiniMode.AlwaysMinimizeNormally, restored.MinimizeToMiniMode);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(4, 4)]
+    [InlineData(12, 10)]
+    public void Playback_attempt_setting_is_clamped_when_loaded(int configured, int expected)
+    {
+        var preferences = PlaybackModePreferences.FromJson($$"""{ "PlaybackAttempts": {{configured}} }""");
+
+        Assert.Equal(expected, preferences.PlaybackAttempts);
+    }
+
+    [Theory]
+    [InlineData("\"five\"")]
+    [InlineData("null")]
+    public void Invalid_playback_attempt_setting_uses_default(string configured)
+    {
+        var preferences = PlaybackModePreferences.FromJson($$"""{ "PlaybackAttempts": {{configured}} }""");
+
+        Assert.Equal(PlaybackRetryPolicy.DefaultAttempts, preferences.PlaybackAttempts);
     }
 
     [Theory]
