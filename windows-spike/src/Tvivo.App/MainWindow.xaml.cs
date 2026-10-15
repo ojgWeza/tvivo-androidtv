@@ -73,6 +73,12 @@ public sealed partial class MainWindow : Window
     private readonly NextPlaybackSelector _nextPlaybackSelector = new();
     private readonly PlaybackFailurePolicy _playbackFailurePolicy = new();
     private readonly PlaybackInterruptionBudget _interruptionBudget = new();
+    private readonly SleepTimerPolicy _sleepTimerPolicy = new();
+    private readonly long _sleepTimerClockOrigin = Stopwatch.GetTimestamp();
+    private int _sleepTimerMinutes;
+    private bool _sleepTimerWarningVisible;
+    private bool _sleepTimerStopStarted;
+    private string _sleepTimerRemainingText = string.Empty;
     private string[] _shufflePlaylistIds = Array.Empty<string>();
     private string? _preparedNextItemId;
     private string? _preparedNextForItemId;
@@ -120,6 +126,7 @@ public sealed partial class MainWindow : Window
     private bool _seriesOpenInfoVisible;
     private bool _seriesOpenMessageIsFailure;
     private bool _terminalPlaybackFailure;
+    private bool _sleepTimerEnded;
     private bool _playerLoadingArtActive;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
@@ -393,7 +400,8 @@ public sealed partial class MainWindow : Window
             switch (args.Key)
             {
                 case Windows.System.VirtualKey.Space:
-                    PauseButton_Click(sender, new RoutedEventArgs());
+                    if (!_sleepTimerEnded)
+                        PauseButton_Click(sender, new RoutedEventArgs());
                     args.Handled = true;
                     break;
                 case Windows.System.VirtualKey.PageUp:
@@ -1042,6 +1050,9 @@ public sealed partial class MainWindow : Window
         if (_currentPage == page)
             return;
 
+        if (page == ShellPage.Home && _currentPage == ShellPage.Player)
+            CancelSleepTimer("home");
+
         if (page != ShellPage.Player && _isCinemaMode)
             StopCinemaCursorIdleTimer(showCursor: true);
 
@@ -1054,6 +1065,7 @@ public sealed partial class MainWindow : Window
 
         if (shouldStopPlayback)
         {
+            CancelSleepTimer(page == ShellPage.Home ? "home" : "back");
             SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
             StopHeldSeek(commit: true, released: false);
         }
@@ -1919,6 +1931,7 @@ public sealed partial class MainWindow : Window
     {
         if (expectedGeneration is { } expected && expected != Volatile.Read(ref _playbackSessionGeneration))
             return;
+        CancelSleepTimer("final-failure");
         _terminalPlaybackFailure = true;
         _playbackFailurePolicy.MarkFinalFailure(Volatile.Read(ref _playbackSessionGeneration));
         SetPlayerLoadingArtState(PlayerLoadingArtState.FinalFailure);
@@ -1936,7 +1949,7 @@ public sealed partial class MainWindow : Window
 
     private void PlaybackFailureRetry_Click(object sender, RoutedEventArgs args)
     {
-        if (!_terminalPlaybackFailure || _currentSource is not { } source) return;
+        if (_sleepTimerEnded || !_terminalPlaybackFailure || _currentSource is not { } source) return;
         var position = source.Kind == StreamKind.Live ? 0 : Math.Max(0, _lastGoodPlaybackPositionMilliseconds);
         _resumePositionOnStart = position;
         _engineFallbackTried.Remove(PlaybackItemKey(source));
@@ -1975,6 +1988,7 @@ public sealed partial class MainWindow : Window
 
     private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false, bool autoplayNext = false)
     {
+        if (autoplayNext && ShouldStopBeforeStartingNextItem()) return false;
         var startedAt = Stopwatch.GetTimestamp();
         LaunchDiagnostics.Write("event=episode.open.start ms=0");
         if (episode.Source.DirectUri is null)
@@ -1983,6 +1997,7 @@ public sealed partial class MainWindow : Window
             LogEpisodeOpenExit(startedAt, episode, "no-direct-uri");
             return false;
         }
+        if (!autoplayNext) CancelEndOfCurrentItemTimerForManualChange(episode);
 
         try
         {
@@ -2548,6 +2563,14 @@ public sealed partial class MainWindow : Window
         bool engineFallbackAttempt = false,
         PlayerResetEntryKind entryKind = PlayerResetEntryKind.FreshStart)
     {
+        if ((isRecovery || entryKind == PlayerResetEntryKind.AutoplayNext) && ShouldStopBeforeStartingNextItem())
+            return;
+        if (_sleepTimerEnded && !isRecovery && entryKind is not (PlayerResetEntryKind.Retry or PlayerResetEntryKind.AutoplayNext))
+        {
+            _sleepTimerEnded = false;
+            _sleepTimerStopStarted = false;
+            RaiseSleepTimerStateChanged();
+        }
         var resetKind = isRecovery
             ? PlayerResetEntryKind.SameMediaRecovery
             : engineFallbackAttempt ? PlayerResetEntryKind.EngineFallback : entryKind;
@@ -2938,6 +2961,7 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        CancelSleepTimer("navigation");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         SaveResumePosition(force: true);
         if (_currentSource is { } stoppingSource)
@@ -3359,7 +3383,7 @@ public sealed partial class MainWindow : Window
 
     private async void PauseButton_Click(object sender, RoutedEventArgs args)
     {
-        if (_currentSource is null || _terminalPlaybackFailure) return;
+        if (_sleepTimerEnded || _currentSource is null || _terminalPlaybackFailure) return;
         if (Volatile.Read(ref _playbackSessionCts) is not null)
         {
             // A start is still in flight. Space or a click on the video must not restart it: that cancels
@@ -3395,8 +3419,201 @@ public sealed partial class MainWindow : Window
             _lastInterruptionObservedPosition = Math.Max(0, position);
     }
 
+    internal string SleepTimerRemainingText => _sleepTimerRemainingText;
+    internal bool SleepTimerWarningVisible => _sleepTimerWarningVisible;
+    internal bool SleepTimerEnded => _sleepTimerEnded;
+    internal string SleepTimerNoticeText { get; private set; } = string.Empty;
+    internal event EventHandler? SleepTimerStateChanged;
+
+    internal void StartSleepTimer(SleepTimerMode mode, int minutes)
+    {
+        var now = Stopwatch.GetElapsedTime(_sleepTimerClockOrigin);
+        SleepTimerDecision decision;
+        if (mode == SleepTimerMode.EndOfCurrentItem)
+        {
+            if (_nowPlayingChannel is not { } current ||
+                !_sleepTimerPolicy.TryStartEndOfCurrentItem(
+                    SleepTimerItemIdentity(current), current.Source.Kind == StreamKind.Live))
+                return;
+            _sleepTimerMinutes = 0;
+            decision = new SleepTimerDecision(_sleepTimerPolicy.State);
+        }
+        else
+        {
+            _sleepTimerMinutes = SleepTimerPolicy.ClampCustomMinutes(minutes);
+            decision = _sleepTimerPolicy.StartDuration(now, TimeSpan.FromMinutes(_sleepTimerMinutes));
+        }
+
+        _sleepTimerEnded = false;
+        _sleepTimerStopStarted = false;
+        _sleepTimerWarningVisible = false;
+        SleepTimerNoticeText = string.Empty;
+        UpdateSleepTimerDisplay(now, decision);
+        LaunchDiagnostics.Write($"event=sleep-timer.armed mode={mode} minutes={_sleepTimerMinutes}");
+        RaiseSleepTimerStateChanged();
+    }
+
+    internal void ExtendSleepTimer()
+    {
+        if (_sleepTimerPolicy.Mode != SleepTimerMode.Duration || _sleepTimerEnded) return;
+        var decision = _sleepTimerPolicy.Extend(Stopwatch.GetElapsedTime(_sleepTimerClockOrigin));
+        if (decision.StopPlayback)
+        {
+            MarkSleepTimerEnded();
+            _ = EndPlaybackForSleepTimerAsync();
+            return;
+        }
+
+        _sleepTimerMinutes += (int)SleepTimerPolicy.ExtensionDuration.TotalMinutes;
+        _sleepTimerWarningVisible = false;
+        SleepTimerNoticeText = string.Empty;
+        UpdateSleepTimerDisplay(Stopwatch.GetElapsedTime(_sleepTimerClockOrigin), decision);
+        LaunchDiagnostics.Write($"event=sleep-timer.extended mode={SleepTimerMode.Duration} minutes={_sleepTimerMinutes}");
+        RaiseSleepTimerStateChanged();
+    }
+
+    internal void CancelSleepTimer(string reason)
+    {
+        if (_sleepTimerPolicy.State is SleepTimerState.Off or SleepTimerState.Ended) return;
+        var mode = _sleepTimerPolicy.Mode ?? SleepTimerMode.Duration;
+        var minutes = _sleepTimerMinutes;
+        var decision = string.Equals(reason, "item-changed", StringComparison.Ordinal)
+            ? _sleepTimerPolicy.ManualItemChange()
+            : _sleepTimerPolicy.Cancel();
+        if (decision.State == SleepTimerState.Off)
+        {
+            _sleepTimerWarningVisible = false;
+            _sleepTimerRemainingText = string.Empty;
+            SleepTimerNoticeText = string.Equals(reason, "item-changed", StringComparison.Ordinal)
+                ? "Sleep timer turned off after changing video."
+                : string.Empty;
+            LaunchDiagnostics.Write($"event=sleep-timer.cancelled mode={mode} minutes={minutes}");
+            RaiseSleepTimerStateChanged();
+        }
+    }
+
+    private void CancelEndOfCurrentItemTimerForManualChange(Channel target)
+    {
+        if (_sleepTimerPolicy.Mode == SleepTimerMode.EndOfCurrentItem &&
+            !StringComparer.Ordinal.Equals(_sleepTimerPolicy.TargetItemIdentity, SleepTimerItemIdentity(target)))
+            CancelSleepTimer("item-changed");
+    }
+
+    private static string SleepTimerItemIdentity(Channel channel) =>
+        $"{channel.ProviderAccountId}|{channel.Source.Kind}|{channel.Id}|{channel.GroupId ?? string.Empty}";
+
+    private bool ShouldStopBeforeStartingNextItem()
+    {
+        EvaluateSleepTimer();
+        return _sleepTimerEnded;
+    }
+
+    private bool EvaluateSleepTimer()
+    {
+        if (_sleepTimerEnded) return true;
+        var now = Stopwatch.GetElapsedTime(_sleepTimerClockOrigin);
+        var decision = _sleepTimerPolicy.Tick(now);
+        UpdateSleepTimerDisplay(now, decision);
+        if (!decision.StopPlayback) return false;
+
+        MarkSleepTimerEnded();
+        _ = EndPlaybackForSleepTimerAsync();
+        return true;
+    }
+
+    private void UpdateSleepTimerDisplay(TimeSpan now, SleepTimerDecision decision)
+    {
+        var previousText = _sleepTimerRemainingText;
+        var previousWarning = _sleepTimerWarningVisible;
+        if (decision.ShowWarning) _sleepTimerWarningVisible = true;
+        if (decision.State is SleepTimerState.Off or SleepTimerState.Ended)
+        {
+            _sleepTimerRemainingText = string.Empty;
+        }
+        else if (_sleepTimerPolicy.Mode == SleepTimerMode.EndOfCurrentItem)
+        {
+            _sleepTimerRemainingText = _nowPlayingChannel?.Source.Kind == StreamKind.Movie
+                ? "Stops when this movie ends"
+                : "Stops when this episode ends";
+        }
+        else if (_sleepTimerPolicy.GetRemainingDisplay(now) is { } remaining)
+        {
+            _sleepTimerRemainingText = remaining.Unit == SleepTimerRemainingUnit.Seconds
+                ? $"{remaining.Value} sec left"
+                : $"{remaining.Value} min left";
+        }
+        if (previousText != _sleepTimerRemainingText || previousWarning != _sleepTimerWarningVisible)
+            RaiseSleepTimerStateChanged();
+    }
+
+    private void MarkSleepTimerEnded()
+    {
+        if (_sleepTimerEnded) return;
+        _sleepTimerEnded = true;
+        _sleepTimerWarningVisible = false;
+        _sleepTimerRemainingText = string.Empty;
+        SleepTimerNoticeText = string.Empty;
+    }
+
+    private void RaiseSleepTimerStateChanged() => SleepTimerStateChanged?.Invoke(this, EventArgs.Empty);
+
+    private async Task EndPlaybackForSleepTimerAsync(bool forceInProgress = true)
+    {
+        if (_sleepTimerStopStarted) return;
+        _sleepTimerStopStarted = true;
+        SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
+        _nextEpisodeAutoPlaySuppressed = true;
+        _nextEpisodeAdvanceStarted = true;
+        ClearPreparedNextItem();
+        NextEpisodePrompt.Visibility = Visibility.Collapsed;
+        StopHeldSeek(commit: false, released: false);
+        var position = _currentSource?.Kind == StreamKind.Live
+            ? 0
+            : Math.Max(_lastGoodPlaybackPositionMilliseconds, _engine.Timeline.PositionMilliseconds);
+        SaveResumePosition(force: true, positionOverride: position, forceInProgress: forceInProgress);
+
+        Interlocked.Increment(ref _playbackSessionGeneration);
+        Volatile.Write(ref _activePlaybackSessionGeneration, -1);
+        var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
+        sessionCts?.Cancel();
+        sessionCts?.Dispose();
+        _resumeReady = false;
+        _pendingResumePosition = null;
+        _recoveryInFlight = false;
+        _recoveryGeneration = -1;
+        LaunchDiagnostics.Write($"event=sleep-timer.ended mode={_sleepTimerPolicy.Mode ?? SleepTimerMode.Duration} minutes={_sleepTimerMinutes}");
+        _terminalPlaybackFailure = false;
+        RetryPlaybackButton.Visibility = Visibility.Collapsed;
+        PauseButton.IsEnabled = false;
+        SetPauseButtonState("Play");
+        ClearPlaybackStatus();
+        SetPlayerLoadingArtState(PlayerLoadingArtState.FinalFailure);
+        PlayerVideoCurtain.Visibility = Visibility.Visible;
+        try
+        {
+            _playbackStopTask = StopBothPlaybackEnginesAsync();
+            await _playbackStopTask;
+        }
+        catch
+        {
+        }
+        finally
+        {
+            SetPlaybackSurfaceVisibility(false);
+            PlayerVideoCurtain.Visibility = Visibility.Visible;
+            _playbackUiTimer.Stop();
+            RaiseSleepTimerStateChanged();
+        }
+    }
+
     private void PlaybackUiTimer_Tick(object? sender, object args)
     {
+        if (EvaluateSleepTimer()) return;
+        if (_sleepTimerEnded)
+        {
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            return;
+        }
         if (!IsPlaybackUiActive)
         {
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
@@ -3496,12 +3713,24 @@ public sealed partial class MainWindow : Window
             if (MovieCompletion.IsFinished(moviePosition, movieDuration, ended) != _movieCompletionRecorded)
                 SaveResumePosition(force: true);
         }
-        if (sessionIsCurrent && ended &&
+        if (sessionIsCurrent && ended && genuineEnd && _nowPlayingChannel is { } naturallyEndedChannel)
+        {
+            var sleepDecision = _sleepTimerPolicy.GenuineNaturalEnd(
+                SleepTimerItemIdentity(naturallyEndedChannel), isGenuineEnd: true);
+            if (sleepDecision.StopPlayback)
+            {
+                MarkSleepTimerEnded();
+                _ = EndPlaybackForSleepTimerAsync(forceInProgress: false);
+                return;
+            }
+        }
+        if (!_sleepTimerEnded && sessionIsCurrent && ended &&
             (_nowPlayingChannel?.Source.Kind == StreamKind.Live || genuineEnd) &&
             _playbackFailurePolicy.ShouldAutoAdvance(_activePlaybackSessionGeneration) &&
             !_nextEpisodeAutoPlaySuppressed && !_nextEpisodeAdvanceStarted &&
             PlaybackModeLogic.ShouldAutoAdvance(GetPlaybackMode(_nowPlayingChannel?.Source.Kind)) && GetNextPlaylistItem() is { } endedNextItem)
         {
+            if (ShouldStopBeforeStartingNextItem()) return;
             _nextEpisodeAdvanceStarted = true;
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
             if (endedNextItem.Source.Kind == StreamKind.Episode)
@@ -3736,7 +3965,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void SaveResumePosition(bool force = false, long? positionOverride = null)
+    private void SaveResumePosition(bool force = false, long? positionOverride = null, bool forceInProgress = false)
     {
         var sessionReady = _resumeReady && _activePlaybackSessionGeneration == Volatile.Read(ref _playbackSessionGeneration);
         var resumeEligible = _nowPlayingChannel?.Source.Kind == StreamKind.Movie ||
@@ -3777,7 +4006,7 @@ public sealed partial class MainWindow : Window
         if (type == CatalogItemType.Movie)
         {
             var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
-            var movieFinished = !failed && MovieCompletion.IsFinished(position, duration, ended);
+            var movieFinished = !forceInProgress && !failed && MovieCompletion.IsFinished(position, duration, ended);
             _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, movieFinished);
             _movieCompletionRecorded = movieFinished;
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
@@ -3788,7 +4017,7 @@ public sealed partial class MainWindow : Window
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is not null)
         {
             var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
-            var finished = !failed && EpisodeCompletion.IsFinished(position, duration, ended);
+            var finished = !forceInProgress && !failed && EpisodeCompletion.IsFinished(position, duration, ended);
             var completionChanged = finished != _seriesCompletionRecorded;
             _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
             _seriesCompletionRecorded = finished;
@@ -3805,7 +4034,7 @@ public sealed partial class MainWindow : Window
             }
         }
         else return;
-        LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={_engine.IsEnded}");
+        LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={(!forceInProgress && _engine.IsEnded).ToString().ToLowerInvariant()}");
         _lastResumeSavedAt = now;
     }
 
@@ -3911,6 +4140,8 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
+        if (args.WindowActivationState != WindowActivationState.Deactivated)
+            EvaluateSleepTimer();
         // Activation must NOT leave window-mini: clicking the mini window to drag or resize it
         // activates it. Leaving is explicit only (Expand, Close, Escape, double-click, playback end).
         if (_windowState.IsWindowMini)
@@ -3931,7 +4162,7 @@ public sealed partial class MainWindow : Window
 
     private void VlcEngine_StateChanged(object? sender, VlcPlaybackStateChangedEventArgs args)
     {
-        if (args.State is not (VlcPlaybackState.Failed or VlcPlaybackState.Completed) ||
+        if (_sleepTimerEnded || args.State is not (VlcPlaybackState.Failed or VlcPlaybackState.Completed) ||
             !ReferenceEquals(sender, _vlcEngine) || !ReferenceEquals(_engine, _vlcEngine) ||
             _vlcEngine.CurrentSession != args.Session) return;
         var callbackGeneration = Volatile.Read(ref _activePlaybackSessionGeneration);
@@ -3939,7 +4170,7 @@ public sealed partial class MainWindow : Window
         {
             if (_vlcEngine.CurrentSession != args.Session ||
                 callbackGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
-                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady) return;
+                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady || _sleepTimerEnded) return;
             if (args.State == VlcPlaybackState.Failed && !_playbackFailurePolicy.TryHandle(
                     callbackGeneration, callbackGeneration, _activePlaybackSessionGeneration, _resumeReady)) return;
             var timeline = _engine.Timeline;
@@ -3962,12 +4193,12 @@ public sealed partial class MainWindow : Window
 
     private void NativeEngine_PlaybackFailed(PlaybackSessionToken session)
     {
-        if (!ReferenceEquals(_engine, _nativeEngine) || _nativeEngine.CurrentSession != session) return;
+        if (_sleepTimerEnded || !ReferenceEquals(_engine, _nativeEngine) || _nativeEngine.CurrentSession != session) return;
         var callbackGeneration = Volatile.Read(ref _activePlaybackSessionGeneration);
         WindowRoot.DispatcherQueue.TryEnqueue(() =>
         {
             if (callbackGeneration != Volatile.Read(ref _playbackSessionGeneration) ||
-                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady) return;
+                callbackGeneration != _activePlaybackSessionGeneration || !_resumeReady || _sleepTimerEnded) return;
             if (!_playbackFailurePolicy.TryHandle(
                     callbackGeneration, callbackGeneration, _activePlaybackSessionGeneration, _resumeReady)) return;
             _ = RecoverPlaybackAsync(PlaybackInterruption.Error, callbackGeneration);
@@ -4210,6 +4441,8 @@ public sealed partial class MainWindow : Window
     private void PlayRelatedChannel(Channel channel, bool preserveCompact = false, bool autoplayNext = false)
     {
         if (channel.Source.DirectUri is null || channel.Source.Kind is not (StreamKind.Movie or StreamKind.Live)) return;
+        if (autoplayNext && ShouldStopBeforeStartingNextItem()) return;
+        if (!autoplayNext) CancelEndOfCurrentItemTimerForManualChange(channel);
         SaveResumePosition(force: true);
 
         // ItemClick supplies the clicked data item directly. Keep the category rows
@@ -4264,6 +4497,7 @@ public sealed partial class MainWindow : Window
 
     private void ReturnFromPlayer()
     {
+        CancelSleepTimer("back");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
         if (_playerReturnPage == ShellPage.Catalog)
@@ -4454,6 +4688,7 @@ public sealed partial class MainWindow : Window
 
     private void StopCompactPlaybackAndNavigate(ShellPage destination, bool windowMiniClose = false)
     {
+        CancelSleepTimer(windowMiniClose ? "mini-close" : "back");
         StopHeldSeek(commit: false, released: false);
         SetPlayerPresentation(PlayerPresentation.Full);
         StopPlaybackForNavigation();
@@ -5054,6 +5289,7 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        CancelSleepTimer("window-close");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         if (_windowState.IsWindowMini)
         {
