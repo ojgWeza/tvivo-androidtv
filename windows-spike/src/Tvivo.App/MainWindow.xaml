@@ -367,19 +367,29 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="CompactTitleText" VerticalAlignment="Center" Foreground="{ThemeResource AppOnMediaTextBrush}"
                                            TextTrimming="CharacterEllipsis" AutomationProperties.Name="Mini player title"
                                            AutomationProperties.AutomationId="CompactTitleText" />
-                                <Button x:Name="CompactExpandButton" Grid.Column="1" Content="&#xE8A7;"
+                                <TextBlock x:Name="CompactSleepTimerStatusText" Grid.Column="1" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource AppOnMediaMutedBrush}" FontSize="12"
+                                           TextTrimming="CharacterEllipsis" AutomationProperties.Name="Sleep timer status" />
+                                <Button x:Name="CompactSleepTimerButton" Grid.Column="2" Content="&#xE823;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
+                                        Style="{StaticResource AppIconButtonStyle}" MinWidth="44" MinHeight="44"
+                                        AutomationProperties.Name="Sleep timer" AutomationProperties.AutomationId="CompactSleepTimerButton"
+                                        ToolTipService.ToolTip="Sleep timer" Click="CompactSleepTimerButton_Click" />
+                                <Button x:Name="CompactExpandButton" Grid.Column="3" Content="&#xE8A7;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
                                         ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
-                                <Button x:Name="CompactCloseButton" Grid.Column="2" Content="&#xE8BB;"
+                                <Button x:Name="CompactCloseButton" Grid.Column="4" Content="&#xE8BB;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactCloseButton"
                                         ToolTipService.ToolTip="Return to player" Click="CompactCloseButton_Click" />
-                                <Button x:Name="CompactMinimizeButton" Grid.Column="3" Content="&#xE921;"
+                                <Button x:Name="CompactMinimizeButton" Grid.Column="5" Content="&#xE921;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Minimize" AutomationProperties.AutomationId="CompactMinimizeButton"
                                         ToolTipService.ToolTip="Minimize" Click="CompactMinimizeButton_Click" />
@@ -468,6 +478,29 @@
                             </Grid>
                         </Border>
                         </Grid>
+                        <Border x:Name="CompactSleepTimerPanel" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                MaxWidth="340" Padding="14" CornerRadius="8" Background="{ThemeResource AppPanelSurfaceBrush}"
+                                Visibility="Collapsed" IsHitTestVisible="True">
+                            <StackPanel Spacing="8">
+                                <StackPanel x:Name="CompactSleepTimerWarningActions" Spacing="8" Visibility="Collapsed">
+                                    <TextBlock Text="Playback stops in 2 minutes" FontSize="16" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource AppTextBrush}" TextWrapping="Wrap"
+                                               AutomationProperties.LiveSetting="Polite" />
+                                    <Button Content="Add 15 minutes" MinHeight="44" FontSize="16"
+                                            Style="{StaticResource AppPrimaryButtonStyle}" Click="SleepTimerExtend_Click"
+                                            AutomationProperties.Name="Add 15 minutes to sleep timer" />
+                                    <Button Content="Turn off timer" MinHeight="44" FontSize="16"
+                                            Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerCancel_Click"
+                                            AutomationProperties.Name="Turn off sleep timer" />
+                                </StackPanel>
+                                <StackPanel x:Name="CompactSleepTimerEndedActions" Spacing="8" Visibility="Collapsed">
+                                    <TextBlock Text="Sleep timer ended" FontSize="16" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource AppTextBrush}" AutomationProperties.LiveSetting="Polite" />
+                                    <Button Content="Back to catalog" MinHeight="44" FontSize="16"
+                                            Style="{StaticResource AppPrimaryButtonStyle}" Click="CompactSleepTimerBack_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                         <local:CompactResizeZone x:Name="CompactResizeEdgeLeft" HorizontalAlignment="Left" VerticalAlignment="Stretch" Width="7"
                                                  Edges="Left" CursorShape="SizeWestEast" Background="Transparent"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeLeft" />

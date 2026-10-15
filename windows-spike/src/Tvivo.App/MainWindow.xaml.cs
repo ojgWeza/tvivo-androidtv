@@ -3607,6 +3607,7 @@ public sealed partial class MainWindow : Window
         if (SleepTimerStatusText is null) return;
         var armed = _sleepTimerPolicy.State is not (SleepTimerState.Off or SleepTimerState.Ended) && !_sleepTimerEnded;
         var fullPlayer = _playerPresentation != PlayerPresentation.Compact && !_windowState.IsWindowMini;
+        var miniPlayer = !fullPlayer;
         var status = !string.IsNullOrEmpty(SleepTimerNoticeText)
             ? SleepTimerNoticeText
             : armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
@@ -3618,6 +3619,24 @@ public sealed partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         SleepTimerEndedOverlay.Visibility = fullPlayer && _sleepTimerEnded ? Visibility.Visible : Visibility.Collapsed;
+        CompactSleepTimerButton.Visibility = miniPlayer ? Visibility.Visible : Visibility.Collapsed;
+        var endOfItemStatus = _sleepTimerRemainingText is "Stops when this movie ends" or "Stops when this episode ends";
+        var miniTimerStatus = armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
+            ? endOfItemStatus
+                ? "Timer: End of item"
+                : $"Timer: {_sleepTimerRemainingText.Replace(" left", string.Empty, StringComparison.Ordinal)}"
+            : string.Empty;
+        CompactSleepTimerStatusText.Text = miniTimerStatus;
+        CompactSleepTimerStatusText.Visibility = miniTimerStatus.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        CompactSleepTimerPanel.Visibility = miniPlayer && (_sleepTimerEnded || _sleepTimerWarningVisible)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CompactSleepTimerWarningActions.Visibility = miniPlayer && _sleepTimerWarningVisible && !_sleepTimerEnded
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CompactSleepTimerEndedActions.Visibility = miniPlayer && _sleepTimerEnded
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         if (_sleepTimerWarningVisible || _sleepTimerEnded)
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
 
@@ -3640,12 +3659,13 @@ public sealed partial class MainWindow : Window
         var accessibleRemaining = _sleepTimerRemainingText
             .Replace(" min left", " minutes left", StringComparison.Ordinal)
             .Replace(" sec left", " seconds left", StringComparison.Ordinal);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
-            SleepTimerButton,
-            armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
-                ? $"Sleep timer, {accessibleRemaining}"
-                : "Sleep timer");
+        var timerButtonName = armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
+            ? $"Sleep timer, {accessibleRemaining}"
+            : "Sleep timer";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SleepTimerButton, timerButtonName);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactSleepTimerButton, timerButtonName);
         ToolTipService.SetToolTip(SleepTimerButton, status.Length == 0 ? "Sleep timer" : status);
+        ToolTipService.SetToolTip(CompactSleepTimerButton, status.Length == 0 ? "Sleep timer" : status);
         if (SleepTimerFlyout.IsOpen) PrepareSleepTimerFlyout();
     }
 
@@ -3738,6 +3758,24 @@ public sealed partial class MainWindow : Window
         _sleepTimerChangeEntryOpen = false;
     }
 
+    private void CompactSleepTimerButton_Click(object sender, RoutedEventArgs args)
+    {
+        PrepareSleepTimerFlyout();
+        SleepTimerFlyout.ShowAt(CompactSleepTimerButton);
+    }
+
+    private void CompactSleepTimerBack_Click(object sender, RoutedEventArgs args)
+    {
+        if (_windowState.IsWindowMini)
+        {
+            ExitWindowMiniPlayer(expandToPlayer: false,
+                afterExit: () => StopCompactPlaybackAndNavigate(ShellPage.Catalog), deferPageRestore: true);
+            return;
+        }
+
+        StopCompactPlaybackAndNavigate(ShellPage.Catalog);
+    }
+
     private void SleepTimerWatchAgain_Click(object sender, RoutedEventArgs args)
     {
         if (_nowPlayingChannel is not { } channel) return;
@@ -3812,7 +3850,6 @@ public sealed partial class MainWindow : Window
         {
             SetPlaybackSurfaceVisibility(false);
             PlayerVideoCurtain.Visibility = Visibility.Visible;
-            SleepTimerEndedOverlay.Visibility = Visibility.Visible;
             _playbackUiTimer.Stop();
             RaiseSleepTimerStateChanged();
         }
@@ -3855,7 +3892,7 @@ public sealed partial class MainWindow : Window
             }
             else if (CompactChrome.IsHitTestVisible && !_cinemaCursorIdleTimer.IsEnabled &&
                      !_compactPointerOverControls && !HasCompactKeyboardNavigationFocus() &&
-                     !_compactGeometryGestureActive && !IsTrackFlyoutOpen && !VolumeFlyout.IsOpen)
+                     !_compactGeometryGestureActive && !IsTrackFlyoutOpen && !VolumeFlyout.IsOpen && !SleepTimerFlyout.IsOpen)
             {
                 _cinemaCursorIdleTimer.Start();
             }
@@ -5472,7 +5509,7 @@ public sealed partial class MainWindow : Window
                  {
                      PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
                      RetryPlaybackButton,
-                     AudioSubtitlesButton, VolumeButton, SleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
+                     AudioSubtitlesButton, VolumeButton, SleepTimerButton, CompactSleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
         StatusText.Foreground = ThemeBrush(mutedKey);
