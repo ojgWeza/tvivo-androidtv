@@ -78,6 +78,9 @@ public sealed partial class MainWindow : Window
     private int _sleepTimerMinutes;
     private bool _sleepTimerWarningVisible;
     private bool _sleepTimerStopStarted;
+    private bool _sleepTimerCustomEntryOpen;
+    private bool _sleepTimerChangeEntryOpen;
+    private readonly DispatcherTimer _sleepTimerNoticeTimer = new() { Interval = TimeSpan.FromSeconds(4) };
     private string _sleepTimerRemainingText = string.Empty;
     private string[] _shufflePlaylistIds = Array.Empty<string>();
     private string? _preparedNextItemId;
@@ -246,6 +249,8 @@ public sealed partial class MainWindow : Window
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         InitializeComponent();
+        SleepTimerStateChanged += MainWindow_SleepTimerStateChanged;
+        _sleepTimerNoticeTimer.Tick += SleepTimerNoticeTimer_Tick;
         WindowRoot.ActualThemeChanged += WindowRoot_ActualThemeChanged;
         // Sliders mark pointer presses handled, so listen for handled events too.
         VolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
@@ -366,8 +371,32 @@ public sealed partial class MainWindow : Window
 
     private void WindowRoot_KeyDown(object sender, KeyRoutedEventArgs args)
     {
+        if (args.Key == Windows.System.VirtualKey.Escape && SleepTimerFlyout.IsOpen)
+        {
+            SleepTimerFlyout.Hide();
+            args.Handled = true;
+            return;
+        }
+
         if (args.Handled || IsTrackFlyoutOpen || VolumeFlyout.IsOpen)
             return;
+
+        var focusedElement = FocusManager.GetFocusedElement(WindowRoot.XamlRoot);
+        var editingText = focusedElement is TextBox or PasswordBox or NumberBox;
+        var controlDown = (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control) &
+                           Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        var shiftDown = (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift) &
+                         Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        if (args.Key == Windows.System.VirtualKey.T && controlDown && shiftDown && !editingText &&
+            _currentPage == ShellPage.Player && _currentSource is not null &&
+            _playerPresentation != PlayerPresentation.Compact && !_windowState.IsWindowMini)
+        {
+            PrepareSleepTimerFlyout();
+            SleepTimerFlyout.ShowAt(SleepTimerButton);
+            if (_isCinemaMode) ShowCinemaControls("sleep-timer-shortcut");
+            args.Handled = true;
+            return;
+        }
 
         if (_isCinemaMode && _currentPage == ShellPage.Player)
             ShowCinemaControls();
@@ -3448,8 +3477,12 @@ public sealed partial class MainWindow : Window
         _sleepTimerStopStarted = false;
         _sleepTimerWarningVisible = false;
         SleepTimerNoticeText = string.Empty;
+        _sleepTimerNoticeTimer.Stop();
         UpdateSleepTimerDisplay(now, decision);
         LaunchDiagnostics.Write($"event=sleep-timer.armed mode={mode} minutes={_sleepTimerMinutes}");
+        AnnounceSleepTimer(mode == SleepTimerMode.EndOfCurrentItem
+            ? "Sleep timer set to stop at the end of this video"
+            : $"Sleep timer set for {_sleepTimerMinutes} minutes");
         RaiseSleepTimerStateChanged();
     }
 
@@ -3467,6 +3500,7 @@ public sealed partial class MainWindow : Window
         _sleepTimerMinutes += (int)SleepTimerPolicy.ExtensionDuration.TotalMinutes;
         _sleepTimerWarningVisible = false;
         SleepTimerNoticeText = string.Empty;
+        _sleepTimerNoticeTimer.Stop();
         UpdateSleepTimerDisplay(Stopwatch.GetElapsedTime(_sleepTimerClockOrigin), decision);
         LaunchDiagnostics.Write($"event=sleep-timer.extended mode={SleepTimerMode.Duration} minutes={_sleepTimerMinutes}");
         RaiseSleepTimerStateChanged();
@@ -3485,8 +3519,10 @@ public sealed partial class MainWindow : Window
             _sleepTimerWarningVisible = false;
             _sleepTimerRemainingText = string.Empty;
             SleepTimerNoticeText = string.Equals(reason, "item-changed", StringComparison.Ordinal)
-                ? "Sleep timer turned off after changing video."
+                ? "Sleep timer turned off after changing video"
                 : string.Empty;
+            if (!string.IsNullOrEmpty(SleepTimerNoticeText)) _sleepTimerNoticeTimer.Start();
+            else _sleepTimerNoticeTimer.Stop();
             LaunchDiagnostics.Write($"event=sleep-timer.cancelled mode={mode} minutes={minutes}");
             RaiseSleepTimerStateChanged();
         }
@@ -3525,7 +3561,11 @@ public sealed partial class MainWindow : Window
     {
         var previousText = _sleepTimerRemainingText;
         var previousWarning = _sleepTimerWarningVisible;
-        if (decision.ShowWarning) _sleepTimerWarningVisible = true;
+        if (decision.ShowWarning && !_sleepTimerWarningVisible)
+        {
+            _sleepTimerWarningVisible = true;
+            AnnounceSleepTimer("Playback will stop in 2 minutes");
+        }
         if (decision.State is SleepTimerState.Off or SleepTimerState.Ended)
         {
             _sleepTimerRemainingText = string.Empty;
@@ -3553,9 +3593,180 @@ public sealed partial class MainWindow : Window
         _sleepTimerWarningVisible = false;
         _sleepTimerRemainingText = string.Empty;
         SleepTimerNoticeText = string.Empty;
+        _sleepTimerNoticeTimer.Stop();
+        if (SleepTimerFlyout.IsOpen) SleepTimerFlyout.Hide();
+        AnnounceSleepTimer("Sleep timer ended");
     }
 
     private void RaiseSleepTimerStateChanged() => SleepTimerStateChanged?.Invoke(this, EventArgs.Empty);
+
+    private void MainWindow_SleepTimerStateChanged(object? sender, EventArgs args) => RefreshSleepTimerPresentation();
+
+    private void RefreshSleepTimerPresentation()
+    {
+        if (SleepTimerStatusText is null) return;
+        var armed = _sleepTimerPolicy.State is not (SleepTimerState.Off or SleepTimerState.Ended) && !_sleepTimerEnded;
+        var fullPlayer = _playerPresentation != PlayerPresentation.Compact && !_windowState.IsWindowMini;
+        var status = !string.IsNullOrEmpty(SleepTimerNoticeText)
+            ? SleepTimerNoticeText
+            : armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
+                ? $"Sleep timer · {_sleepTimerRemainingText}"
+                : string.Empty;
+        SleepTimerStatusText.Text = status;
+        SleepTimerStatusPanel.Visibility = fullPlayer && !string.IsNullOrEmpty(status) ? Visibility.Visible : Visibility.Collapsed;
+        SleepTimerWarningPanel.Visibility = fullPlayer && _sleepTimerWarningVisible && !_sleepTimerEnded
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SleepTimerEndedOverlay.Visibility = fullPlayer && _sleepTimerEnded ? Visibility.Visible : Visibility.Collapsed;
+        if (_sleepTimerWarningVisible || _sleepTimerEnded)
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+
+        var kind = _nowPlayingChannel?.Source.Kind;
+        SleepTimerEndOfItemButton.Visibility = kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
+        SleepTimerEndOfItemButton.Content = kind == StreamKind.Episode
+            ? "At the end of this episode"
+            : "At the end of this movie";
+        SleepTimerEndedReplayActions.Visibility = kind is StreamKind.Movie or StreamKind.Episode or StreamKind.Live
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SleepTimerWatchAgainButton.Visibility = kind is StreamKind.Movie or StreamKind.Episode
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SleepTimerWatchChannelButton.Visibility = kind == StreamKind.Live
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        SleepTimerFlyoutStatusText.Text = _sleepTimerRemainingText;
+        var accessibleRemaining = _sleepTimerRemainingText
+            .Replace(" min left", " minutes left", StringComparison.Ordinal)
+            .Replace(" sec left", " seconds left", StringComparison.Ordinal);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+            SleepTimerButton,
+            armed && !string.IsNullOrEmpty(_sleepTimerRemainingText)
+                ? $"Sleep timer, {accessibleRemaining}"
+                : "Sleep timer");
+        ToolTipService.SetToolTip(SleepTimerButton, status.Length == 0 ? "Sleep timer" : status);
+        if (SleepTimerFlyout.IsOpen) PrepareSleepTimerFlyout();
+    }
+
+    private void PrepareSleepTimerFlyout()
+    {
+        var armed = _sleepTimerPolicy.State is not (SleepTimerState.Off or SleepTimerState.Ended) && !_sleepTimerEnded;
+        SleepTimerChoicesPanel.Visibility = (armed && !_sleepTimerChangeEntryOpen) || _sleepTimerCustomEntryOpen
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        SleepTimerArmedPanel.Visibility = armed && !_sleepTimerCustomEntryOpen && !_sleepTimerChangeEntryOpen
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SleepTimerCustomPanel.Visibility = _sleepTimerCustomEntryOpen
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void SleepTimerPreset_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button button || button.Tag is null ||
+            !int.TryParse(Convert.ToString(button.Tag, CultureInfo.InvariantCulture),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes)) return;
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        if (minutes == 0) CancelSleepTimer("user");
+        else StartSleepTimer(SleepTimerMode.Duration, minutes);
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerEndOfItem_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        StartSleepTimer(SleepTimerMode.EndOfCurrentItem, 0);
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerChooseMinutes_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = true;
+        _sleepTimerChangeEntryOpen = false;
+        SleepTimerMinutesNumberBox.Value = 30;
+        PrepareSleepTimerFlyout();
+    }
+
+    private void SleepTimerCustomStart_Click(object sender, RoutedEventArgs args)
+    {
+        var value = SleepTimerMinutesNumberBox.Value;
+        if (!double.IsFinite(value)) value = 30;
+        var minutes = Math.Clamp((int)(Math.Round(value / 5, MidpointRounding.AwayFromZero) * 5), 5, 240);
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        StartSleepTimer(SleepTimerMode.Duration, minutes);
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerCustomCancel_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerExtend_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        ExtendSleepTimer();
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerCancel_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+        CancelSleepTimer("user");
+        SleepTimerFlyout.Hide();
+    }
+
+    private void SleepTimerChange_Click(object sender, RoutedEventArgs args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = true;
+        PrepareSleepTimerFlyout();
+    }
+
+    private void SleepTimerFlyout_Closed(object sender, object args)
+    {
+        _sleepTimerCustomEntryOpen = false;
+        _sleepTimerChangeEntryOpen = false;
+    }
+
+    private void SleepTimerWatchAgain_Click(object sender, RoutedEventArgs args)
+    {
+        if (_nowPlayingChannel is not { } channel) return;
+        SleepTimerEndedOverlay.Visibility = Visibility.Collapsed;
+        if (channel.Source.Kind == StreamKind.Episode)
+            OpenSeriesEpisode(channel);
+        else if (channel.Source.Kind is StreamKind.Movie or StreamKind.Live)
+            PlayRelatedChannel(channel);
+    }
+
+    private void SleepTimerBack_Click(object sender, RoutedEventArgs args) => ReturnFromPlayer();
+
+    private void SleepTimerNoticeTimer_Tick(object? sender, object args)
+    {
+        _sleepTimerNoticeTimer.Stop();
+        if (_sleepTimerPolicy.State == SleepTimerState.Off && !_sleepTimerEnded)
+        {
+            SleepTimerNoticeText = string.Empty;
+            RaiseSleepTimerStateChanged();
+        }
+    }
+
+    private void AnnounceSleepTimer(string announcement)
+    {
+        SleepTimerAnnouncementText.Text = announcement;
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer
+            .CreatePeerForElement(SleepTimerAnnouncementText)?
+            .RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
+    }
 
     private async Task EndPlaybackForSleepTimerAsync(bool forceInProgress = true)
     {
@@ -3601,6 +3812,7 @@ public sealed partial class MainWindow : Window
         {
             SetPlaybackSurfaceVisibility(false);
             PlayerVideoCurtain.Visibility = Visibility.Visible;
+            SleepTimerEndedOverlay.Visibility = Visibility.Visible;
             _playbackUiTimer.Stop();
             RaiseSleepTimerStateChanged();
         }
@@ -3794,7 +4006,7 @@ public sealed partial class MainWindow : Window
         var promptLeadMilliseconds = playbackKind is { } kind && duration is > 0
             ? NextPrompt.LeadMilliseconds(kind, duration.Value)
             : 0;
-        if (promptLeadMilliseconds > 0 && nextItem is not null &&
+        if (!_sleepTimerWarningVisible && !_sleepTimerEnded && promptLeadMilliseconds > 0 && nextItem is not null &&
             remainingMilliseconds <= promptLeadMilliseconds && !_engine.IsEnded)
         {
             var label = playbackKind == StreamKind.Movie ? "Next movie" : "Next episode";
@@ -5219,6 +5431,7 @@ public sealed partial class MainWindow : Window
         // Cinema: the same transport floats over the bottom of the video instead of sitting below it.
         Grid.SetRow(VlcTransportBar, cinema ? 0 : 2);
         VlcTransportBar.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SleepTimerButton.Visibility = compact || _windowState.IsWindowMini ? Visibility.Collapsed : Visibility.Visible;
         VlcTransportBar.VerticalAlignment = cinema ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
         VlcTransportBar.HorizontalAlignment = HorizontalAlignment.Stretch;
         VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
@@ -5248,6 +5461,7 @@ public sealed partial class MainWindow : Window
             CompactTitleText.Text = PlayerTitleText.Text;
             CompactSeekRow.Visibility = _currentSource?.Kind == StreamKind.Live ? Visibility.Collapsed : Visibility.Visible;
         }
+        RefreshSleepTimerPresentation();
     }
 
     private void ApplyPlayerSurfaceColors(bool cinema, bool compact)
@@ -5258,7 +5472,7 @@ public sealed partial class MainWindow : Window
                  {
                      PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
                      RetryPlaybackButton,
-                     AudioSubtitlesButton, VolumeButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
+                     AudioSubtitlesButton, VolumeButton, SleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
         StatusText.Foreground = ThemeBrush(mutedKey);
@@ -5304,6 +5518,9 @@ public sealed partial class MainWindow : Window
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         _playbackUiTimer.Stop();
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
+        _sleepTimerNoticeTimer.Stop();
+        _sleepTimerNoticeTimer.Tick -= SleepTimerNoticeTimer_Tick;
+        SleepTimerStateChanged -= MainWindow_SleepTimerStateChanged;
         _heldSeekTimer.Stop();
         _heldSeekTimer.Tick -= HeldSeekTimer_Tick;
         Activated -= MainWindow_Activated;
