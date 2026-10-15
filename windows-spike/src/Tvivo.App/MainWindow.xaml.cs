@@ -4043,7 +4043,7 @@ public sealed partial class MainWindow : Window
         var promptLeadMilliseconds = playbackKind is { } kind && duration is > 0
             ? NextPrompt.LeadMilliseconds(kind, duration.Value)
             : 0;
-        if (!_sleepTimerWarningVisible && !_sleepTimerEnded && promptLeadMilliseconds > 0 && nextItem is not null &&
+        if (!_sleepTimerWarningVisible && !_sleepTimerEnded && _sleepTimerPolicy.Mode != SleepTimerMode.EndOfCurrentItem && promptLeadMilliseconds > 0 && nextItem is not null &&
             remainingMilliseconds <= promptLeadMilliseconds && !_engine.IsEnded)
         {
             var label = playbackKind == StreamKind.Movie ? "Next movie" : "Next episode";

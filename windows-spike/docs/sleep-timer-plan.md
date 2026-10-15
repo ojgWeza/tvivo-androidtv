@@ -115,4 +115,4 @@ This was a read-only planning pass. No files were edited, built, tested, or comm
 2. Changing video by hand cancels an "end of this movie/episode" timer, with a visible notice.
 3. First release stops directly at zero; the 5-second audio fade comes later (slice 5) once both engines pass.
 
-Status: slice 1 (SleepTimerPolicy in Tvivo.Core) started.
+Status: slices 1-4 built and committed (v1 = direct stop, no fade). Test plan: docs/test-plan-sleep-timer.md. Slice 5 (fade) deferred by owner decision.
