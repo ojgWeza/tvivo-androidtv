@@ -2569,7 +2569,12 @@ public sealed partial class MainWindow : Window
     {
         using var openCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
         openCts.CancelAfter(TimeSpan.FromSeconds(10));
-        return await _playback.PlayAsync(source, openCts.Token);
+        var result = await _playback.PlayAsync(source, openCts.Token);
+        // The engines report any token cancellation as Cancelled. When only the per-open timer fired
+        // (the session itself is still live) that is a Timeout, so the retry policy and the status line run.
+        return result == PlaybackAttemptResult.Cancelled && openCts.IsCancellationRequested && !sessionToken.IsCancellationRequested
+            ? PlaybackAttemptResult.Timeout
+            : result;
     }
 
     private Task<bool> QueueBothPlaybackEnginesStop(long? onlyIfCurrentGeneration = null) =>
