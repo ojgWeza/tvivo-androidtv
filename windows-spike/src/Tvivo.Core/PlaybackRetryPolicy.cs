@@ -9,6 +9,16 @@ public static class PlaybackRetryPolicy
     public static readonly TimeSpan MaximumNotFoundHardElapsed = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan MinimumNotFoundOpenWindow = TimeSpan.FromSeconds(1);
 
+    public static TimeSpan AttemptTimeout(StreamKind kind) => kind is StreamKind.Movie or StreamKind.Episode
+        ? TimeSpan.FromSeconds(25)
+        : TimeSpan.FromSeconds(10);
+
+    public static IReadOnlyList<TimeSpan> BackoffDelays(int maxAttempts)
+    {
+        var attempts = ClampAttempts(maxAttempts);
+        return Enumerable.Range(1, attempts - 1).Select(Delay).ToArray();
+    }
+
     public static int ClampAttempts(int attempts) => Math.Clamp(attempts, MinimumAttempts, MaximumAttempts);
 
     public static bool ShouldRetry(PlaybackAttemptResult result, int attemptIndex, int maxAttempts, TimeSpan elapsed)

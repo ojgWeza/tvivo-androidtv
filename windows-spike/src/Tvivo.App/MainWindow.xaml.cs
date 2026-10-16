@@ -137,6 +137,13 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _cooldownProgressTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private Stopwatch? _cooldownStopwatch;
     private string? _cooldownLastStatus;
+    private Stopwatch? _retryProgressStopwatch;
+    private int _retryProgressAttempt;
+    private int _retryProgressMaxAttempts;
+    private TimeSpan _retryProgressAttemptTimeout;
+    private IReadOnlyList<TimeSpan> _retryProgressBackoffs = Array.Empty<TimeSpan>();
+    private StreamKind _retryProgressKind;
+    private string? _retryProgressLastStatus;
     private CancellationTokenSource? _cooldownCancellation;
     private bool _playerLoadingArtActive;
     private CancellationTokenSource? _playbackSessionCts;
@@ -1939,10 +1946,72 @@ public sealed partial class MainWindow : Window
         _seriesOpenMessageIsFailure = false;
     }
 
+    private void ShowPlaybackRetryProgress(
+        StreamKind kind,
+        int attemptNumber,
+        int maxAttempts,
+        IReadOnlyList<TimeSpan> backoffDelays)
+    {
+        RetryPlaybackButton.Visibility = Visibility.Collapsed;
+        _retryProgressKind = kind;
+        _retryProgressAttempt = attemptNumber;
+        _retryProgressMaxAttempts = maxAttempts;
+        _retryProgressAttemptTimeout = PlaybackRetryPolicy.AttemptTimeout(kind);
+        _retryProgressBackoffs = backoffDelays;
+        UpdatePlaybackRetryProgress();
+    }
+
     private void ShowPlaybackRetryProgress(string message)
     {
         RetryPlaybackButton.Visibility = Visibility.Collapsed;
         SetPlaybackStatus(message);
+    }
+
+    private void SetPlaybackRetryProgressAttempt(int attemptNumber)
+    {
+        _retryProgressAttempt = attemptNumber;
+        UpdatePlaybackRetryProgress();
+    }
+
+    private void UpdatePlaybackRetryProgress()
+    {
+        if (_retryProgressStopwatch is not { } clock) return;
+        var progress = PlaybackRetryProgressPolicy.GetProgress(
+            _retryProgressAttempt,
+            _retryProgressMaxAttempts,
+            _retryProgressAttemptTimeout,
+            _retryProgressBackoffs,
+            clock.Elapsed,
+            _retryProgressKind);
+        if (!progress.IsVisible)
+            return;
+
+        RecentlyLeftCooldownProgress.Visibility = Visibility.Visible;
+        RecentlyLeftCooldownProgress.Value = progress.Fraction;
+        if (!StringComparer.Ordinal.Equals(progress.Status, _retryProgressLastStatus))
+        {
+            _retryProgressLastStatus = progress.Status;
+            SetPlaybackStatus(progress.Status);
+        }
+    }
+
+    private void StartPlaybackRetryProgress(
+        Stopwatch clock,
+        StreamKind kind,
+        int maxAttempts,
+        IReadOnlyList<TimeSpan> backoffDelays)
+    {
+        StopRecentlyLeftCooldownProgress();
+        _retryProgressStopwatch = clock;
+        _retryProgressKind = kind;
+        _retryProgressAttempt = 1;
+        _retryProgressMaxAttempts = maxAttempts;
+        _retryProgressAttemptTimeout = PlaybackRetryPolicy.AttemptTimeout(kind);
+        _retryProgressBackoffs = backoffDelays;
+        _cooldownProgressTimer.Interval = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled
+            ? TimeSpan.FromMilliseconds(50)
+            : TimeSpan.FromSeconds(1);
+        _cooldownProgressTimer.Start();
     }
 
     private void SetPlaybackStatus(string message)
@@ -2578,9 +2647,7 @@ public sealed partial class MainWindow : Window
         CancellationToken sessionToken)
     {
         using var openCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
-        openCts.CancelAfter(source.Kind is StreamKind.Movie or StreamKind.Episode
-            ? TimeSpan.FromSeconds(25)
-            : TimeSpan.FromSeconds(10));
+        openCts.CancelAfter(PlaybackRetryPolicy.AttemptTimeout(source.Kind));
         var result = await _playback.PlayAsync(source, openCts.Token);
         // The engines report any token cancellation as Cancelled. When only the per-open timer fired
         // (the session itself is still live) that is a Timeout, so the retry policy and the status line run.
@@ -2720,15 +2787,19 @@ public sealed partial class MainWindow : Window
 
     private void RecentlyLeftCooldownProgress_Tick(object? sender, object args)
     {
-        if (_cooldownStopwatch is not { } clock) return;
-        var elapsed = clock.Elapsed;
-        RecentlyLeftCooldownProgress.Value = RecentlyLeftCooldownPolicy.ProgressFraction(elapsed);
-        var status = RecentlyLeftCooldownPolicy.StatusAt(elapsed);
-        if (!StringComparer.Ordinal.Equals(status, _cooldownLastStatus))
+        if (_cooldownStopwatch is { } clock)
         {
-            _cooldownLastStatus = status;
-            SetPlaybackStatus(status);
+            var elapsed = clock.Elapsed;
+            RecentlyLeftCooldownProgress.Value = RecentlyLeftCooldownPolicy.ProgressFraction(elapsed);
+            var status = RecentlyLeftCooldownPolicy.StatusAt(elapsed);
+            if (!StringComparer.Ordinal.Equals(status, _cooldownLastStatus))
+            {
+                _cooldownLastStatus = status;
+                SetPlaybackStatus(status);
+            }
+            return;
         }
+        UpdatePlaybackRetryProgress();
     }
 
     private void StopRecentlyLeftCooldownProgress()
@@ -2736,6 +2807,12 @@ public sealed partial class MainWindow : Window
         _cooldownProgressTimer.Stop();
         _cooldownStopwatch = null;
         _cooldownLastStatus = null;
+        _retryProgressStopwatch = null;
+        _retryProgressAttempt = 0;
+        _retryProgressMaxAttempts = 0;
+        _retryProgressAttemptTimeout = TimeSpan.Zero;
+        _retryProgressBackoffs = Array.Empty<TimeSpan>();
+        _retryProgressLastStatus = null;
         RecentlyLeftCooldownProgress.Visibility = Visibility.Collapsed;
         RecentlyLeftCooldownProgress.Value = 0;
     }
@@ -2907,6 +2984,11 @@ public sealed partial class MainWindow : Window
             if (!IsCurrentPlaybackStart(generation, sessionCts))
                 return;
             retryClock.Start();
+            var retryBackoffs = isRecovery
+                ? Enumerable.Range(1, Math.Max(0, PlaybackRetryPolicy.ClampAttempts(_playbackAttempts) - 1))
+                    .Select(PlaybackRetryPolicy.InterruptionDelay).ToArray()
+                : PlaybackRetryPolicy.BackoffDelays(_playbackAttempts);
+            StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs);
             while (true)
             {
                 if (isRecovery && !_interruptionBudget.TryConsume(_playbackAttempts))
@@ -2915,6 +2997,7 @@ public sealed partial class MainWindow : Window
                     break;
                 }
                 attemptCount++;
+                SetPlaybackRetryProgressAttempt(isRecovery ? _interruptionBudget.AttemptsUsed : attemptCount);
                 // Stop both backends before opening a replacement. Each backend owns
                 // native/network state independently, so stopping only the selected
                 // PlaybackService can leave the previous provider connection alive.
@@ -2991,6 +3074,7 @@ public sealed partial class MainWindow : Window
                     {
                         if (!IsCurrentPlaybackStart(generation, sessionCts))
                             return;
+                        StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs);
                         continue;
                     }
                     if (!IsCurrentPlaybackStart(generation, sessionCts) || _sleepTimerEnded || _isClosing)
@@ -3011,12 +3095,12 @@ public sealed partial class MainWindow : Window
                 if (isRecovery)
                 {
                     LaunchDiagnostics.Write($"event=playback.resume attempt={_interruptionBudget.AttemptsUsed + 1} of {_playbackAttempts} positionMs={_lastGoodPlaybackPositionMilliseconds}");
-                    ShowPlaybackRetryProgress($"Reconnecting ({_interruptionBudget.AttemptsUsed + 1} of {_playbackAttempts})…");
+                    ShowPlaybackRetryProgress(source.Kind, _interruptionBudget.AttemptsUsed + 1, _playbackAttempts, retryBackoffs);
                 }
                 else
                 {
                     LaunchDiagnostics.Write($"event=playback.retry attempt={attemptCount + 1} of {_playbackAttempts} reason={result} delayMs={delay.TotalMilliseconds:0}");
-                    ShowPlaybackRetryProgress($"Retrying ({attemptCount + 1} of {_playbackAttempts})…");
+                    ShowPlaybackRetryProgress(source.Kind, attemptCount + 1, _playbackAttempts, retryBackoffs);
                 }
                 await Task.Delay(delay, sessionCts.Token);
                 if (!IsCurrentPlaybackStart(generation, sessionCts))
@@ -3043,6 +3127,7 @@ public sealed partial class MainWindow : Window
                 sessionCts.Dispose();
         }
 
+        StopRecentlyLeftCooldownProgress();
         if (!IsCurrentPlaybackStart(generation, sessionCts))
         {
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason=user-cancelled");
