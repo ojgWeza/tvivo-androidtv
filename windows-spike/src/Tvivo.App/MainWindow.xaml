@@ -241,13 +241,22 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <TextBlock x:Name="PlayerLoadingPopcorn" HorizontalAlignment="Center"
+                            <Image x:Name="PlayerLoadingPoster" Width="120" Height="180" Stretch="UniformToFill"
+                                   Visibility="Collapsed" IsHitTestVisible="False"
+                                   AutomationProperties.Name="Movie poster" />
+                            <TextBlock x:Name="PlayerLoadingPopcorn" Grid.Row="1" HorizontalAlignment="Center"
                                        FontFamily="Segoe UI Emoji" IsColorFontEnabled="True" FontSize="132"
                                        Foreground="#FFFFFFFF" Text="🍿" IsHitTestVisible="False" />
-                            <TextBlock x:Name="PlayerLoadingText" Grid.Row="1" HorizontalAlignment="Center"
+                            <TextBlock x:Name="PlayerLoadingText" Grid.Row="2" HorizontalAlignment="Center"
                                        Foreground="#FFFFFFFF" FontSize="24" Text="Loading..."
                                        AutomationProperties.Name="Loading" IsHitTestVisible="False" />
+                            <ProgressBar x:Name="RecentlyLeftCooldownProgress" Grid.Row="3" Width="420" Height="10"
+                                         Minimum="0" Maximum="1" Value="0" Visibility="Collapsed"
+                                         Foreground="#FFFFFFFF" Background="#FF555555"
+                                         AutomationProperties.Name="Waiting for playback" />
                         </Grid>
                     </Grid>
                     <Border x:Name="SleepTimerStatusPanel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"

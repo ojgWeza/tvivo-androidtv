@@ -13,6 +13,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -30,6 +32,7 @@ namespace Tvivo.App;
 
 public sealed partial class MainWindow : Window
 {
+    private static readonly HttpClient CooldownProbeClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private const int DwmwaUseImmersiveDarkMode = 20;
     private readonly long _windowConstructionTimestamp = Stopwatch.GetTimestamp();
     private readonly HashSet<string> _startupPerfPhases = new(StringComparer.Ordinal);
@@ -73,6 +76,7 @@ public sealed partial class MainWindow : Window
     private readonly NextPlaybackSelector _nextPlaybackSelector = new();
     private readonly PlaybackFailurePolicy _playbackFailurePolicy = new();
     private readonly PlaybackInterruptionBudget _interruptionBudget = new();
+    private readonly RecentlyLeftCooldownPolicy _recentlyLeftCooldownPolicy = new();
     private readonly SleepTimerPolicy _sleepTimerPolicy = new();
     private readonly long _sleepTimerClockOrigin = Stopwatch.GetTimestamp();
     private int _sleepTimerMinutes;
@@ -130,6 +134,10 @@ public sealed partial class MainWindow : Window
     private bool _seriesOpenMessageIsFailure;
     private bool _terminalPlaybackFailure;
     private bool _sleepTimerEnded;
+    private readonly DispatcherTimer _cooldownProgressTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private Stopwatch? _cooldownStopwatch;
+    private string? _cooldownLastStatus;
+    private CancellationTokenSource? _cooldownCancellation;
     private bool _playerLoadingArtActive;
     private CancellationTokenSource? _playbackSessionCts;
     private Task _playbackStopTask = Task.CompletedTask;
@@ -336,6 +344,7 @@ public sealed partial class MainWindow : Window
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
         LaunchDiagnostics.Write("MainWindow XAML initialized");
         Closed += OnClosed;
+        _cooldownProgressTimer.Tick += RecentlyLeftCooldownProgress_Tick;
         _catalogLandingPage.BrowseContextChanging += (_, _) => FlushPendingVisits();
         LaunchDiagnostics.Write("MainWindow constructor completed");
     }
@@ -2437,6 +2446,7 @@ public sealed partial class MainWindow : Window
         PlayerResetEntryKind reason,
         bool keepFrame = false)
     {
+        CancelRecentlyLeftCooldown();
         var generation = Interlocked.Increment(ref _playbackSessionGeneration);
         var previousCts = Interlocked.Exchange(ref _playbackSessionCts, null);
         previousCts?.Cancel();
@@ -2568,13 +2578,172 @@ public sealed partial class MainWindow : Window
         CancellationToken sessionToken)
     {
         using var openCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
-        openCts.CancelAfter(TimeSpan.FromSeconds(10));
+        openCts.CancelAfter(source.Kind is StreamKind.Movie or StreamKind.Episode
+            ? TimeSpan.FromSeconds(25)
+            : TimeSpan.FromSeconds(10));
         var result = await _playback.PlayAsync(source, openCts.Token);
         // The engines report any token cancellation as Cancelled. When only the per-open timer fired
         // (the session itself is still live) that is a Timeout, so the retry policy and the status line run.
         return result == PlaybackAttemptResult.Cancelled && openCts.IsCancellationRequested && !sessionToken.IsCancellationRequested
             ? PlaybackAttemptResult.Timeout
             : result;
+    }
+
+    private static string PlaybackCooldownIdentity(StreamSource source) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{source.Kind}\0{source.DirectUri?.AbsoluteUri ?? source.StreamId}")));
+
+    private void SaveResumeBeforeCooldown(long positionMilliseconds)
+    {
+        if (positionMilliseconds <= 0 || _nowPlayingChannel is not { } channel ||
+            _catalogLandingPage.Account is not { } account)
+            return;
+
+        if (channel.Source.Kind == StreamKind.Movie)
+            _catalogRepository.SaveProgress(account, "movie", channel.Id, null, positionMilliseconds, null, finished: false);
+        else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is { } seriesId)
+            _catalogRepository.SaveProgress(account, "episode", channel.Id, seriesId, positionMilliseconds, null, finished: false);
+        LaunchDiagnostics.Write($"event=resume.save kind={channel.Source.Kind} positionMs={positionMilliseconds} reason=cooldown-wait");
+    }
+
+    private async Task<bool> WaitForRecentlyLeftCooldownAsync(
+        StreamSource source,
+        string itemRef,
+        long generation,
+        CancellationTokenSource sessionCts)
+    {
+        CancelRecentlyLeftCooldown();
+        var cooldownCts = CancellationTokenSource.CreateLinkedTokenSource(sessionCts.Token);
+        _cooldownCancellation = cooldownCts;
+        var clock = Stopwatch.StartNew();
+        var result = "gave-up";
+        LaunchDiagnostics.Write($"event=playback.cooldown.start itemRef={itemRef}");
+        PlayerLoadingText.Text = PlayerTitleText.Text;
+        RecentlyLeftCooldownProgress.Value = 0;
+        RecentlyLeftCooldownProgress.Visibility = Visibility.Visible;
+        SetPlaybackStatus(RecentlyLeftCooldownPolicy.StatusAt(TimeSpan.Zero));
+        _cooldownLastStatus = RecentlyLeftCooldownPolicy.StatusAt(TimeSpan.Zero);
+        _cooldownStopwatch = clock;
+        _cooldownProgressTimer.Interval = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled
+            ? TimeSpan.FromMilliseconds(50)
+            : TimeSpan.FromSeconds(1);
+        _cooldownProgressTimer.Start();
+
+        try
+        {
+            var schedule = RecentlyLeftCooldownPolicy.BuildSchedule(() => 0.9d + Random.Shared.NextDouble() * 0.2d);
+            for (var index = 0; index < schedule.Count; index++)
+            {
+                if (!IsCurrentCooldownSession(generation, sessionCts, cooldownCts))
+                {
+                    result = "cancelled";
+                    return false;
+                }
+                var wait = schedule[index] - clock.Elapsed;
+                if (wait > TimeSpan.Zero)
+                    await Task.Delay(wait, cooldownCts.Token);
+                if (!IsCurrentCooldownSession(generation, sessionCts, cooldownCts))
+                {
+                    result = "cancelled";
+                    return false;
+                }
+
+                var statusCode = "timeout";
+                if (source.DirectUri is not null)
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, source.DirectUri);
+                    request.Headers.Range = new RangeHeaderValue(0, 0);
+                    using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(cooldownCts.Token);
+                    var remaining = RecentlyLeftCooldownPolicy.MaximumDuration - clock.Elapsed;
+                    probeCts.CancelAfter(remaining <= TimeSpan.Zero
+                        ? TimeSpan.FromMilliseconds(1)
+                        : remaining < TimeSpan.FromSeconds(5) ? remaining : TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        using var response = await CooldownProbeClient.SendAsync(
+                            request, HttpCompletionOption.ResponseHeadersRead, probeCts.Token);
+                        statusCode = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
+                        LaunchDiagnostics.Write($"event=playback.cooldown.attempt attempt={index + 1} elapsedSeconds={clock.Elapsed.TotalSeconds:0.0} status={statusCode}");
+                        if (!IsCurrentCooldownSession(generation, sessionCts, cooldownCts))
+                        {
+                            result = "cancelled";
+                            return false;
+                        }
+                        if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent)
+                        {
+                            result = "started";
+                            SetPlaybackStatus("Starting now");
+                            return true;
+                        }
+                    }
+                    catch (OperationCanceledException) when (!cooldownCts.IsCancellationRequested)
+                    {
+                        LaunchDiagnostics.Write($"event=playback.cooldown.attempt attempt={index + 1} elapsedSeconds={clock.Elapsed.TotalSeconds:0.0} status=timeout");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        LaunchDiagnostics.Write($"event=playback.cooldown.attempt attempt={index + 1} elapsedSeconds={clock.Elapsed.TotalSeconds:0.0} status=cancelled");
+                        throw;
+                    }
+                    catch (HttpRequestException)
+                    {
+                        LaunchDiagnostics.Write($"event=playback.cooldown.attempt attempt={index + 1} elapsedSeconds={clock.Elapsed.TotalSeconds:0.0} status=network-error");
+                    }
+                }
+                else
+                    LaunchDiagnostics.Write($"event=playback.cooldown.attempt attempt={index + 1} elapsedSeconds={clock.Elapsed.TotalSeconds:0.0} status=unavailable");
+            }
+            result = "gave-up";
+            return false;
+        }
+        catch (OperationCanceledException) when (cooldownCts.IsCancellationRequested)
+        {
+            result = "cancelled";
+            return false;
+        }
+        finally
+        {
+            var elapsed = Math.Min(clock.Elapsed.TotalSeconds, RecentlyLeftCooldownPolicy.MaximumDuration.TotalSeconds);
+            LaunchDiagnostics.Write($"event=playback.cooldown.end result={result} elapsedSeconds={elapsed:0.0}");
+            StopRecentlyLeftCooldownProgress();
+            if (ReferenceEquals(_cooldownCancellation, cooldownCts))
+                _cooldownCancellation = null;
+            cooldownCts.Dispose();
+        }
+    }
+
+    private bool IsCurrentCooldownSession(long generation, CancellationTokenSource sessionCts, CancellationTokenSource cooldownCts) =>
+        RecentlyLeftCooldownPolicy.IsCurrentSession(
+            sessionCts.IsCancellationRequested || cooldownCts.IsCancellationRequested || _sleepTimerEnded || _isClosing,
+            generation,
+            Volatile.Read(ref _playbackSessionGeneration)) && IsPlaybackUiActive;
+
+    private void RecentlyLeftCooldownProgress_Tick(object? sender, object args)
+    {
+        if (_cooldownStopwatch is not { } clock) return;
+        var elapsed = clock.Elapsed;
+        RecentlyLeftCooldownProgress.Value = RecentlyLeftCooldownPolicy.ProgressFraction(elapsed);
+        var status = RecentlyLeftCooldownPolicy.StatusAt(elapsed);
+        if (!StringComparer.Ordinal.Equals(status, _cooldownLastStatus))
+        {
+            _cooldownLastStatus = status;
+            SetPlaybackStatus(status);
+        }
+    }
+
+    private void StopRecentlyLeftCooldownProgress()
+    {
+        _cooldownProgressTimer.Stop();
+        _cooldownStopwatch = null;
+        _cooldownLastStatus = null;
+        RecentlyLeftCooldownProgress.Visibility = Visibility.Collapsed;
+        RecentlyLeftCooldownProgress.Value = 0;
+    }
+
+    private void CancelRecentlyLeftCooldown()
+    {
+        _cooldownCancellation?.Cancel();
+        StopRecentlyLeftCooldownProgress();
     }
 
     private Task<bool> QueueBothPlaybackEnginesStop(long? onlyIfCurrentGeneration = null) =>
@@ -2605,6 +2774,10 @@ public sealed partial class MainWindow : Window
             _sleepTimerStopStarted = false;
             RaiseSleepTimerStateChanged();
         }
+        var recentlyLeftCooldownEligible = !isRecovery && !engineFallbackAttempt &&
+            source.DirectUri is not null &&
+            _recentlyLeftCooldownPolicy.BeginOpen(PlaybackCooldownIdentity(source), source.Kind) ==
+            RecentlyLeftCooldownResult.WaitForProvider;
         var resetKind = isRecovery
             ? PlayerResetEntryKind.SameMediaRecovery
             : engineFallbackAttempt ? PlayerResetEntryKind.EngineFallback : entryKind;
@@ -2674,6 +2847,12 @@ public sealed partial class MainWindow : Window
         {
             PlayerTitleText.Text = selectedChannel.DisplayName;
             CompactTitleText.Text = selectedChannel.DisplayName;
+            PlayerLoadingText.Text = selectedChannel.DisplayName;
+            PlayerLoadingPoster.Source = selectedChannel.LogoUri is { } posterUri
+                ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(posterUri)
+                : null;
+            PlayerLoadingPoster.Visibility = selectedChannel.LogoUri is null ? Visibility.Collapsed : Visibility.Visible;
+            PlayerLoadingPopcorn.Visibility = selectedChannel.LogoUri is null ? Visibility.Visible : Visibility.Collapsed;
         }
         if (!preserveCompact) ShowPage(ShellPage.Player);
         if (source.Kind == StreamKind.Live)
@@ -2720,6 +2899,8 @@ public sealed partial class MainWindow : Window
         PlaybackAttemptResult result;
         var attemptCount = 0;
         var sawNotFound = false;
+        var cooldownAttempted = false;
+        var cooldownGaveUp = false;
         try
         {
             await playbackStart.StopTask;
@@ -2802,6 +2983,21 @@ public sealed partial class MainWindow : Window
                 }
                 if (result != PlaybackAttemptResult.HostNotReady)
                     result = PlaybackFailureClassifier.RefineHttpStatus(result, _engine.HttpStatus);
+                if (result == PlaybackAttemptResult.Forbidden && recentlyLeftCooldownEligible && !cooldownAttempted)
+                {
+                    cooldownAttempted = true;
+                    SaveResumeBeforeCooldown(requestedStartPosition);
+                    if (await WaitForRecentlyLeftCooldownAsync(source, itemRef, generation, sessionCts))
+                    {
+                        if (!IsCurrentPlaybackStart(generation, sessionCts))
+                            return;
+                        continue;
+                    }
+                    if (!IsCurrentPlaybackStart(generation, sessionCts) || _sleepTimerEnded || _isClosing)
+                        return;
+                    cooldownGaveUp = true;
+                    break;
+                }
                 sawNotFound |= result == PlaybackAttemptResult.NotFound;
                 var canRetry = isRecovery
                     ? _interruptionBudget.AttemptsUsed < PlaybackRetryPolicy.ClampAttempts(_playbackAttempts) &&
@@ -2953,7 +3149,8 @@ public sealed partial class MainWindow : Window
             _isUpdatingVolume = false;
         }
         if (result != PlaybackAttemptResult.FirstFrame && result != PlaybackAttemptResult.Cancelled)
-            ShowFinalPlaybackFailure(result, expectedGeneration: generation);
+            ShowFinalPlaybackFailure(result, status: cooldownGaveUp ? "Couldn't open it this time" : "Couldn't start playback",
+                expectedGeneration: generation);
     }
 
     private static string SanitizePlaybackLabel(string value)
@@ -2995,6 +3192,7 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        CancelRecentlyLeftCooldown();
         CancelSleepTimer("navigation");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         SaveResumePosition(force: true);
@@ -3594,6 +3792,7 @@ public sealed partial class MainWindow : Window
     private void MarkSleepTimerEnded()
     {
         if (_sleepTimerEnded) return;
+        CancelRecentlyLeftCooldown();
         _sleepTimerEnded = true;
         _sleepTimerWarningVisible = false;
         _sleepTimerRemainingText = string.Empty;
@@ -5545,6 +5744,7 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        CancelRecentlyLeftCooldown();
         CancelSleepTimer("window-close");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         if (_windowState.IsWindowMini)
@@ -5562,6 +5762,7 @@ public sealed partial class MainWindow : Window
         _playbackUiTimer.Tick -= PlaybackUiTimer_Tick;
         _sleepTimerNoticeTimer.Stop();
         _sleepTimerNoticeTimer.Tick -= SleepTimerNoticeTimer_Tick;
+        _cooldownProgressTimer.Tick -= RecentlyLeftCooldownProgress_Tick;
         SleepTimerStateChanged -= MainWindow_SleepTimerStateChanged;
         _heldSeekTimer.Stop();
         _heldSeekTimer.Tick -= HeldSeekTimer_Tick;
