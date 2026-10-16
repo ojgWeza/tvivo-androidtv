@@ -2649,7 +2649,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 var statusCode = "timeout";
-                if (source.DirectUri is not null)
+                if (source.DirectUri is { Scheme: "http" or "https" })
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, source.DirectUri);
                     request.Headers.Range = new RangeHeaderValue(0, 0);
