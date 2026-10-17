@@ -35,6 +35,15 @@ import com.google.gson.JsonParser
  */
 object SeriesInfoParser {
 
+    data class ShowMetadata(val genre: String?, val cast: String?, val year: String?)
+
+    fun parseShowMetadata(json: String): ShowMetadata? = runCatching {
+        val root = JsonParser.parseString(json).asJsonObject
+        val info = root.get("info")?.takeIf { it.isJsonObject }?.asJsonObject ?: return@runCatching null
+        ShowMetadata(info.string("genre"), info.string("cast"),
+            (info.string("releaseDate") ?: info.string("releasedate") ?: info.string("year"))?.take(4))
+    }.getOrNull()
+
     fun parse(json: String, accountId: String, seriesId: Int): List<EpisodeEntity> {
         if (json.isBlank()) return emptyList()
         val root = runCatching { JsonParser.parseString(json) }.getOrNull() ?: return emptyList()
@@ -72,7 +81,9 @@ object SeriesInfoParser {
                         containerExtension = obj.string("container_extension")
                             ?.takeIf { it.isNotBlank() },
                         durationSecs = durationOf(obj),
-                        added = obj.string("added")?.toLongOrNull()
+                        added = obj.string("added")?.toLongOrNull(),
+                        plot = (obj.string("plot") ?: obj.info()?.string("plot"))
+                            ?.takeIf { it.isNotBlank() }
                     )
                 )
             }

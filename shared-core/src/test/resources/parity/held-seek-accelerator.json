@@ -1,0 +1,11 @@
+[
+  {"name":"Zero_hold","heldMilliseconds":0,"expected":0},
+  {"name":"Before_click_window","heldMilliseconds":399,"expected":0},
+  {"name":"At_click_window","heldMilliseconds":400,"expected":30000},
+  {"name":"Before_first_ramp","heldMilliseconds":1899,"expected":30000},
+  {"name":"First_ramp","heldMilliseconds":1900,"expected":60000},
+  {"name":"Second_ramp","heldMilliseconds":3400,"expected":120000},
+  {"name":"Third_ramp","heldMilliseconds":4900,"expected":240000},
+  {"name":"Capped_ramp","heldMilliseconds":6400,"expected":300000},
+  {"name":"Long_hold_stays_capped","heldMilliseconds":60000,"expected":300000}
+]

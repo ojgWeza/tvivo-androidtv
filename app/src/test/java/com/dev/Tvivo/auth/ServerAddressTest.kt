@@ -78,6 +78,25 @@ class ServerAddressTest {
     }
 
     @Test
+    fun `no port means default port and no port in any url`() {
+        listOf("panel.example.com", "http://panel.example.com", "http://panel.example.com/").forEach { raw ->
+            val parsed = ServerAddress.parse(raw)!!
+            assertNull(raw, parsed.port)
+            val credentials = Credentials(parsed.host, parsed.port, "u", "p", parsed.useHttps)
+            assertEquals("http://panel.example.com", credentials.baseUrl())
+            assertEquals("http://panel.example.com/player_api.php", credentials.playerApiUrl())
+            assertEquals("panel.example.com", credentials.hostAndPort())
+        }
+    }
+
+    @Test
+    fun `typed port is kept in the url`() {
+        val parsed = ServerAddress.parse("http://panel.example.com:8080")!!
+        val credentials = Credentials(parsed.host, parsed.port, "u", "p", parsed.useHttps)
+        assertEquals("http://panel.example.com:8080", credentials.baseUrl())
+    }
+
+    @Test
     fun `rejects empty input`() {
         assertNull(ServerAddress.parse(""))
         assertNull(ServerAddress.parse("   "))

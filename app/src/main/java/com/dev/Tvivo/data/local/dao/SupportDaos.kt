@@ -24,6 +24,10 @@ interface CategoryDao {
     )
     fun observe(accountId: String, type: String): Flow<List<CategoryEntity>>
 
+    @Query("""SELECT * FROM categories WHERE accountId = :accountId AND type = :type
+        AND categoryId IN (:ids)""")
+    suspend fun byIds(accountId: String, type: String, ids: List<String>): List<CategoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<CategoryEntity>)
 
@@ -95,72 +99,149 @@ interface CatalogSyncDao {
 }
 
 @Dao
-interface ResumeDao {
+interface ResumeDao : ProfileWriteGuard {
 
+    /** Caller chunks ids to 200 so a large show never crosses SQLite bind limits. */
+    @Query("""SELECT * FROM resume_positions WHERE accountId = :accountId
+        AND profileId = :accountId AND contentType = :contentType AND itemId IN (:itemIds)""")
+    suspend fun forItems(accountId: String, contentType: String, itemIds: List<String>): List<ResumePositionEntity>
+
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         SELECT * FROM resume_positions
-        WHERE accountId = :accountId AND contentType = :contentType AND itemId = :itemId
+        WHERE accountId = :accountId AND profileId = :accountId
+          AND contentType = :contentType AND itemId = :itemId
         """
     )
     suspend fun get(accountId: String, contentType: String, itemId: String): ResumePositionEntity?
 
+    @Query("""SELECT * FROM resume_positions WHERE accountId = :accountId
+        AND profileId = :accountId AND contentType = :contentType AND itemId = :itemId""")
+    fun observe(accountId: String, contentType: String, itemId: String): Flow<ResumePositionEntity?>
+
+    @Query("""SELECT * FROM resume_positions WHERE accountId = :accountId AND profileId = :profileId
+        AND contentType = :contentType AND itemId = :itemId""")
+    suspend fun getForProfile(accountId: String, profileId: String, contentType: String, itemId: String): ResumePositionEntity?
+
     /**
-     * Continue watching: >60 s watched and <92% complete, newest first, capped at 50.
+     * Continue watching: at least 30 s saved and not at the end, newest first, capped at 50.
+     * Completion policy removes finished rows at write time (fixed tails by kind).
      * The cap is the point — the reference app shows `CONTINUE WATCHING 77`, which means
      * it never removes anything, and nobody has 77 films in progress.
      */
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         SELECT * FROM resume_positions
-        WHERE accountId = :accountId AND contentType = :contentType
-          AND positionMs > 60000
-          AND (durationMs = 0 OR positionMs < durationMs * 0.92)
+        WHERE accountId = :accountId AND profileId = :accountId AND contentType = :contentType
+          AND positionMs >= 30000
+          AND (durationMs = 0 OR positionMs < durationMs)
         ORDER BY updatedAt DESC LIMIT 50
         """
     )
     fun continueWatching(accountId: String, contentType: String): Flow<List<ResumePositionEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(row: ResumePositionEntity)
+    @Query("""SELECT * FROM resume_positions WHERE accountId = :accountId AND profileId = :accountId
+        AND contentType = :contentType AND positionMs >= 30000
+        AND (durationMs = 0 OR positionMs < durationMs)
+        ORDER BY updatedAt DESC LIMIT 20""")
+    suspend fun continueSnapshot(accountId: String, contentType: String): List<ResumePositionEntity>
 
+    @Query("""SELECT COUNT(*) FROM resume_positions WHERE accountId = :accountId AND profileId = :accountId
+        AND contentType = :contentType AND positionMs >= 30000
+        AND (durationMs = 0 OR positionMs < durationMs)""")
+    suspend fun continueCount(accountId: String, contentType: String): Int
+
+    @Query("""SELECT * FROM resume_positions
+        WHERE accountId = :accountId AND profileId = :profileId AND contentType = :contentType
+          AND positionMs >= 30000 AND (durationMs = 0 OR positionMs < durationMs)
+        ORDER BY updatedAt DESC LIMIT 50""")
+    fun continueWatchingForProfile(accountId: String, profileId: String, contentType: String): Flow<List<ResumePositionEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRow(row: ResumePositionEntity)
+
+    @Transaction
+    suspend fun upsert(row: ResumePositionEntity) {
+        ensureWritableProfile(row.accountId, row.profileId)
+        upsertRow(row)
+    }
+
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         DELETE FROM resume_positions
-        WHERE accountId = :accountId AND contentType = :contentType AND itemId = :itemId
+        WHERE accountId = :accountId AND profileId = :accountId
+          AND contentType = :contentType AND itemId = :itemId
         """
     )
     suspend fun remove(accountId: String, contentType: String, itemId: String)
+
+    @Query("""DELETE FROM resume_positions WHERE accountId = :accountId AND profileId = :profileId
+        AND contentType = :contentType AND itemId = :itemId""")
+    suspend fun removeForProfile(accountId: String, profileId: String, contentType: String, itemId: String)
 }
 
 @Dao
-interface FavouriteDao {
+interface FavouriteDao : ProfileWriteGuard {
 
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         SELECT * FROM favourites
-        WHERE accountId = :accountId AND contentType = :contentType
+        WHERE accountId = :accountId AND profileId = :accountId AND contentType = :contentType
         ORDER BY addedAt DESC
         """
     )
     fun observe(accountId: String, contentType: String): Flow<List<FavouriteEntity>>
 
+    @Query("""SELECT * FROM favourites WHERE accountId = :accountId AND profileId = :accountId
+        AND contentType = :contentType ORDER BY addedAt DESC LIMIT 20""")
+    suspend fun preview(accountId: String, contentType: String): List<FavouriteEntity>
+
+    @Query("""SELECT COUNT(*) FROM favourites WHERE accountId = :accountId AND profileId = :accountId
+        AND contentType = :contentType""")
+    suspend fun count(accountId: String, contentType: String): Int
+
+    @Query("""SELECT * FROM favourites WHERE accountId = :accountId AND profileId = :profileId
+        AND contentType = :contentType ORDER BY addedAt DESC""")
+    fun observeForProfile(accountId: String, profileId: String, contentType: String): Flow<List<FavouriteEntity>>
+
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         SELECT EXISTS(SELECT 1 FROM favourites
-        WHERE accountId = :accountId AND contentType = :contentType AND itemId = :itemId)
+        WHERE accountId = :accountId AND profileId = :accountId
+          AND contentType = :contentType AND itemId = :itemId)
         """
     )
     fun isFavourite(accountId: String, contentType: String, itemId: String): Flow<Boolean>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun add(row: FavouriteEntity)
+    @Query("""SELECT EXISTS(SELECT 1 FROM favourites WHERE accountId = :accountId
+        AND profileId = :profileId AND contentType = :contentType AND itemId = :itemId)""")
+    fun isFavouriteForProfile(accountId: String, profileId: String, contentType: String, itemId: String): Flow<Boolean>
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRow(row: FavouriteEntity)
+
+    @Transaction
+    suspend fun add(row: FavouriteEntity) {
+        ensureWritableProfile(row.accountId, row.profileId)
+        insertRow(row)
+    }
+
+    // Default adult SQL assumes defaultProfileId(accountId) == accountId (Entities.kt).
     @Query(
         """
         DELETE FROM favourites
-        WHERE accountId = :accountId AND contentType = :contentType AND itemId = :itemId
+        WHERE accountId = :accountId AND profileId = :accountId
+          AND contentType = :contentType AND itemId = :itemId
         """
     )
     suspend fun remove(accountId: String, contentType: String, itemId: String)
+
+    @Query("""DELETE FROM favourites WHERE accountId = :accountId AND profileId = :profileId
+        AND contentType = :contentType AND itemId = :itemId""")
+    suspend fun removeForProfile(accountId: String, profileId: String, contentType: String, itemId: String)
 }

@@ -1,13 +1,15 @@
 package com.dev.Tvivo.ui.browse
 
+import android.view.KeyEvent
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,14 +34,14 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
@@ -46,8 +49,12 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.dev.Tvivo.ui.common.TvivoImageLoader
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.common.tvFocusFrame
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
+import com.dev.Tvivo.ui.adaptive.WindowSizeClass
 
 /**
  * The one grid, for every content type. Four things live here rather than in hardening,
@@ -72,6 +79,8 @@ fun ContentGrid(
     onActivate: (BrowseItem) -> Unit,
     onContextMenu: (BrowseItem) -> Unit,
     onFocused: (BrowseItem) -> Unit,
+    progressFor: suspend (BrowseItem) -> Float? = { null },
+    onLeadingLeft: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
@@ -146,20 +155,22 @@ fun ContentGrid(
         restored = true
     }
 
-    // Card dimensions are fixed image-pipeline inputs. The column count is not: a
-    // constrained window or handset must show fewer whole cards rather than draw a
-    // tempting partial fifth card beyond the right edge. At the approved rail-open TV
-    // width (680 dp remaining), this still resolves to the specified five columns.
+    // Decode dimensions stay fixed for the image cache; cell width and column count
+    // adapt to the available TV, tablet, or handset width.
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val cardWidth = cardShape.widthDp()
-        val horizontalPadding = 24.dp
-        val gridGap = 20.dp
-        val columns = ((maxWidth - horizontalPadding * 2 + gridGap) / (cardWidth + gridGap))
+        val horizontalPadding = when {
+            LocalIsTelevision.current -> 48.dp
+            LocalWindowSizeClass.current == WindowSizeClass.Compact -> 16.dp
+            else -> 24.dp
+        }
+        val gridGap = 16.dp
+        val minCellWidth = if (cardShape == CardShape.POSTER) 150.dp else 200.dp
+        val columns = ((maxWidth - horizontalPadding * 2 + gridGap) / (minCellWidth + gridGap))
             .toInt()
-            .coerceIn(1, 5)
+            .coerceAtLeast(1)
 
         LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
+            columns = GridCells.Adaptive(minCellWidth),
             state = gridState,
         // **This is what makes leaving to the rail and coming back land where the user
         // left.** A focus group entered from outside delegates to its *first* focusable
@@ -178,13 +189,20 @@ fun ContentGrid(
             .focusRequester(gridFocusRequester)
             .focusProperties {
                 enter = {
-                    if (restoreTargetIsLaidOut()) restoreRequester else FocusRequester.Default
+                    runCatching {
+                        if (restoreTargetIsLaidOut()) restoreRequester else FocusRequester.Default
+                    }.getOrDefault(FocusRequester.Default)
                 }
             }
             .focusGroup(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 48.dp),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = horizontalPadding,
+            top = if (LocalIsTelevision.current) 27.dp else 16.dp,
+            end = horizontalPadding,
+            bottom = 48.dp
+        ),
+        horizontalArrangement = Arrangement.spacedBy(gridGap),
+        verticalArrangement = Arrangement.spacedBy(gridGap)
         ) {
             items(
             count = items.itemCount,
@@ -198,11 +216,20 @@ fun ContentGrid(
                 StreamCard(
                     item = item,
                     cardShape = cardShape,
-                    modifier = if (isRestoreTarget) {
+                    modifier = (if (isRestoreTarget) {
                         Modifier.focusRequester(restoreRequester)
                     } else {
                     Modifier
-                },
+                }).then(if (onLeadingLeft != null &&
+                    (index % columns == 0 || index == gridState.firstVisibleItemIndex))
+                    Modifier.onPreviewKeyEvent { event ->
+                        val native = event.nativeKeyEvent
+                        if (native.keyCode == KeyEvent.KEYCODE_DPAD_LEFT &&
+                            native.action == KeyEvent.ACTION_DOWN) {
+                            onLeadingLeft()
+                            true
+                        } else false
+                    } else Modifier),
                     itemFilterFocusRequester = itemFilterFocusRequester.takeIf { index < columns },
                     onActivate = { item?.let(onActivate) },
                     onLongPress = { item?.let(onContextMenu) },
@@ -211,7 +238,8 @@ fun ContentGrid(
                             lastFocusedId = it.id
                             onFocused(it)
                         }
-                    }
+                    },
+                    progressFor = progressFor
                 )
             }
 
@@ -221,11 +249,12 @@ fun ContentGrid(
                     // spinner and cannot get past it.
                     Box(
                         modifier = Modifier
-                            .height(cardShape.heightDp())
+                            .fillMaxWidth()
+                            .aspectRatio(cardShape.aspectRatio())
                             .focusProperties { canFocus = false },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("…", color = Palette.Dim)
+                        Text("…", color = AppColors.Dim)
                     }
                 }
             }
@@ -242,22 +271,24 @@ private fun StreamCard(
     itemFilterFocusRequester: FocusRequester? = null,
     onActivate: () -> Unit,
     onLongPress: () -> Unit,
-    onFocused: () -> Unit
+    onFocused: () -> Unit,
+    progressFor: suspend (BrowseItem) -> Float?
 ) {
     var focused by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val progress by produceState<Float?>(initialValue = null, item?.id) {
+        value = item?.let { progressFor(it) }
+    }
 
     Column(modifier = modifier) {
         Box(
             modifier = Modifier
-                .size(width = cardShape.widthDp(), height = cardShape.heightDp())
-                .background(Palette.Elevated)
-                // Static frame, no scale: a scaling card at 3 m reads as wobble, and
-                // reflowing neighbours makes the grid feel unstable under fast scroll.
-                .border(
-                    width = if (focused) 3.dp else 0.dp,
-                    color = if (focused) Palette.Accent else Color.Transparent
-                )
+                .fillMaxWidth()
+                .aspectRatio(cardShape.aspectRatio())
+                .testTag("catalog-item-${item?.id ?: "placeholder"}")
+                .background(AppColors.Elevated)
+                // The shared focus frame is static: no scale or lazy-row clipping risk.
+                .tvFocusFrame()
                 .onFocusChanged { st ->
                     focused = st.isFocused
                     if (st.isFocused) onFocused()
@@ -289,17 +320,11 @@ private fun StreamCard(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
-            } else if (item != null && cardShape == CardShape.CHANNEL) {
-                // A missing logo is panel data, not an empty card. Preserve the artwork
-                // bounds and give the channel a legible, stable fallback at ten feet.
-                Text(
-                    text = item.title.firstOrNull()?.uppercase() ?: "•",
-                    color = Palette.Ink,
-                    style = TvType.headline,
-                    maxLines = 1,
-                    modifier = Modifier.align(Alignment.Center)
+            } else if (item != null) {
+                com.dev.Tvivo.ui.common.ArtworkFallback(
+                    title = item.title,
+                    channel = cardShape == CardShape.CHANNEL
                 )
-
             }
             // **Both corner badges share one row, top-start.** The provider watermark on
             // this panel's art sits top-end, so that corner is unusable, and two
@@ -310,7 +335,10 @@ private fun StreamCard(
             // disambiguator that only matters once two rows read alike.
             if (item?.rating != null || item?.quality != null) {
                 Row(
-                    modifier = Modifier.align(Alignment.TopStart),
+                    modifier = Modifier
+                        .align(if (cardShape == CardShape.CHANNEL) Alignment.BottomStart else Alignment.TopStart)
+                        .padding(start = if (cardShape == CardShape.CHANNEL) 8.dp else 0.dp,
+                            bottom = if (cardShape == CardShape.CHANNEL) 8.dp else 0.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Accent-tinted so it reads as a value rather than a label, and so it
@@ -318,11 +346,11 @@ private fun StreamCard(
                     item.rating?.let { rating ->
                         Text(
                             text = rating.asRatingLabel(),
-                            color = Palette.Accent,
+                            color = AppColors.MediaAccent,
                             style = TvType.caption,
                             maxLines = 1,
                             modifier = Modifier
-                                .background(Palette.Bg.copy(alpha = 0.78f))
+                                .background(AppColors.MediaBase.copy(alpha = 0.88f))
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         )
                     }
@@ -335,11 +363,11 @@ private fun StreamCard(
                     item.quality?.let { quality ->
                         Text(
                             text = quality,
-                            color = Palette.Ink,
+                            color = AppColors.MediaText,
                             style = TvType.caption,
                             maxLines = 1,
                             modifier = Modifier
-                                .background(Palette.Bg.copy(alpha = 0.78f))
+                                .background(AppColors.MediaBase.copy(alpha = 0.88f))
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         )
                     }
@@ -367,9 +395,9 @@ private fun StreamCard(
                         .background(
                             Brush.verticalGradient(
                                 0f to Color.Transparent,
-                                0.30f to Palette.Bg.copy(alpha = 0.55f),
-                                0.55f to Palette.Bg.copy(alpha = 0.88f),
-                                1f to Palette.Bg.copy(alpha = 0.98f)
+                                0.30f to AppColors.MediaBase.copy(alpha = 0.55f),
+                                0.55f to AppColors.MediaBase.copy(alpha = 0.88f),
+                                1f to AppColors.MediaBase.copy(alpha = 0.98f)
                             )
                         )
                         .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -382,13 +410,19 @@ private fun StreamCard(
                         // Always full-strength ink: the title sits on its own scrim, so
                         // dimming it unfocused would fight the scrim rather than the
                         // artwork, and the focus frame already says where focus is.
-                        color = Palette.Ink,
+                        color = AppColors.MediaText,
                         style = TvType.label,
                         maxLines = 2,
                         minLines = 2,
                         softWrap = true,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
+            progress?.let { fraction ->
+                Box(Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomStart)
+                    .background(AppColors.Line)) {
+                    Box(Modifier.fillMaxWidth(fraction).height(4.dp).background(AppColors.Accent))
                 }
             }
         }
@@ -399,7 +433,7 @@ private fun StreamCard(
         if (cardShape == CardShape.CHANNEL) {
             Text(
                 text = item?.title ?: "",
-                color = if (focused) Palette.Ink else Palette.Dim,
+                color = if (focused) AppColors.Ink else AppColors.Dim,
                 style = TvType.label,
                 maxLines = 2,
                 softWrap = true,
@@ -435,7 +469,12 @@ private val SCRIM_HEIGHT = 68.dp
  */
 private const val FOCUS_RESTORE_FRAMES = 8
 
-/** Card sizes are specified in pixels because they are image-pipeline inputs. */
+private fun CardShape.aspectRatio(): Float = when (this) {
+    CardShape.POSTER -> 2f / 3f
+    CardShape.CHANNEL -> 16f / 9f
+}
+
+/** Decode sizes are specified in pixels because they are image-pipeline inputs. */
 private val CardShape.widthPx: Int
     get() = when (this) {
         CardShape.POSTER -> TvivoImageLoader.POSTER_WIDTH_PX
@@ -447,9 +486,3 @@ private val CardShape.heightPx: Int
         CardShape.POSTER -> TvivoImageLoader.POSTER_HEIGHT_PX
         CardShape.CHANNEL -> TvivoImageLoader.CHANNEL_HEIGHT_PX
     }
-
-@Composable
-private fun CardShape.widthDp(): Dp = with(LocalDensity.current) { widthPx.toDp() }
-
-@Composable
-private fun CardShape.heightDp(): Dp = with(LocalDensity.current) { heightPx.toDp() }

@@ -1,40 +1,38 @@
 package com.dev.Tvivo.ui.common
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 
 /**
- * The global-action control: an icon at rest, icon + label on focus.
+ * One 48 dp icon and label action used by browse headers and global actions.
  *
  * Refresh, Account and Exit are global actions, and this is the one component that draws
  * all of them — on Home (D-7) and in the browse header (D-8). Refresh was previously a
  * bare text link in the header and an action row on the Account screen, which made one
  * action look like two different things.
  *
- * **Why it expands rather than always showing its label.** Nothing may stay a mystery
- * glyph at ten feet, but a permanent row of three labels is a permanent row of chrome
- * above the content. Revealing the label on focus costs nothing at rest and answers the
- * question at exactly the moment the user is asking it.
+ * The label is always visible so its action is clear before D-pad focus arrives. The
+ * coral frame remains the only focus treatment.
  *
  * **[icon] is an `ImageVector`, not a character (Q-16).** The first cut used Unicode
  * placeholders and `⏻` (U+23FB) had no glyph in the TV font stack — it drew as a
@@ -51,69 +49,86 @@ fun IconPill(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    var focused by remember { mutableStateOf(false) }
-
     Row(
         modifier = modifier
-            .height(PILL_HEIGHT)
-            // Collapsed to the icon, expanded to fit its label. `widthIn` rather than a
-            // fixed width: label lengths differ, and a pill sized for the longest one
-            // would leave the others padded with dead space.
+            .heightIn(min = PILL_HEIGHT)
+            // `widthIn` rather than a fixed width: label lengths differ.
             .widthIn(min = PILL_HEIGHT)
-            .animateContentSize()
             .background(
-                color = if (focused) Palette.Accent else Palette.Elevated,
+                color = AppColors.Elevated,
                 shape = PILL_SHAPE
             )
-            .onFocusChanged { focused = it.isFocused }
             .tvFocusFrame(shape = PILL_SHAPE)
             // Not `clickable`: its default indication paints a rectangle that ignores
             // the stadium shape, which is Q-15.
             .tvClickable(enabled = enabled) { onClick() }
-            // 12 dp, down from 20: at 56 dp the padding is what centres the glyph, and
-            // 20 dp a side left the collapsed pill wider than it was tall.
+            // 12 dp centres the icon while leaving room for the label.
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val ink = when {
-            focused -> Palette.OnAccent
-            enabled -> Palette.Ink
-            else -> Palette.Dim
-        }
+        val ink = if (enabled) AppColors.Ink else AppColors.Dim
         Icon(
             imageVector = icon,
-            // The label carries the meaning on focus; at rest the row is described by
-            // the pill the user is on, so a per-icon description would be read out
-            // three times over on a screen with three of them.
             contentDescription = label,
             tint = ink,
             modifier = Modifier.size(ICON_SIZE)
         )
-        if (focused) {
-            Text(
-                text = label,
-                color = ink,
-                style = TvType.label,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 10.dp)
-            )
-        }
+        Text(text = label, color = ink, style = TvType.label, maxLines = 1,
+            modifier = Modifier.padding(start = 10.dp))
     }
 }
 
-/**
- * 56 dp square at rest, so the pills read as one row of uniform controls.
- *
- * **Was 88 dp, which was a touch target scaled up rather than a TV control.** An 88 dp
- * circle around a 32 dp glyph is a 2.75:1 ratio — ~87% of the pill is empty — and three
- * of them side by side dominated the Home header and pushed the account line sideways
- * whenever one took focus. 56 dp keeps the glyph comfortably legible at ten feet (the
- * constraint is the *icon* size, not the circle around it) while giving the header back
- * roughly a third of its width.
- */
-private val PILL_HEIGHT = 56.dp
+/** Compact, consistently shaped 48 dp icon action for browse headers and popup triggers. */
+@Composable
+fun HeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .background(AppColors.Elevated, PILL_SHAPE)
+            .tvFocusFrame(shape = PILL_SHAPE)
+            .semantics { this.contentDescription = contentDescription }
+            .tvClickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (enabled) AppColors.Ink else AppColors.Dim,
+            modifier = Modifier.size(ICON_SIZE)
+        )
+    }
+}
 
-/** Unchanged: this is the number that has to survive the ten-foot test, not the pill. */
-private val ICON_SIZE = 32.dp
+/** 48 dp minimum target; intrinsic width keeps the complete action label in its frame. */
+private val PILL_HEIGHT = 48.dp
+
+private val ICON_SIZE = 24.dp
 
 private val PILL_SHAPE = RoundedCornerShape(percent = 50)
+
+/** Material-style sort marks as a local vector, available without the extended icon pack. */
+@Composable
+internal fun sortIconVector(): ImageVector {
+    val ink = AppColors.Ink
+    return remember(ink) {
+        ImageVector.Builder(
+            name = "Sort",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(fill = SolidColor(ink)) {
+                moveTo(3f, 18f); horizontalLineTo(9f); verticalLineTo(16f); horizontalLineTo(3f); close()
+                moveTo(3f, 13f); horizontalLineTo(15f); verticalLineTo(11f); horizontalLineTo(3f); close()
+                moveTo(3f, 6f); verticalLineTo(8f); horizontalLineTo(21f); verticalLineTo(6f); close()
+            }
+        }.build()
+    }
+}

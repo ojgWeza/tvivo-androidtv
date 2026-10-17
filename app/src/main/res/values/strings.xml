@@ -1,4 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Tvivo</string>
+    <string name="appearance">Appearance</string>
+    <string name="theme">Theme</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_hint">Choose the app colour theme</string>
+    <string name="playback_stop">Stop playback</string>
+    <string name="playback_stopped">Playback stopped</string>
+    <string name="player_cancel_next">Cancel next episode</string>
+    <string name="player_rewind">Rewind 10 seconds</string>
+    <string name="player_forward">Forward 10 seconds</string>
+    <string name="player_play">Play</string>
+    <string name="player_pause">Pause</string>
+    <string name="player_seek">Seek playback</string>
+    <string name="player_seek_position">%1$s of %2$s</string>
+    <string name="player_audio_selected">Audio: %1$s</string>
+    <string name="player_subtitles_selected">Subtitles: %1$s</string>
+    <string name="player_track_off">Off</string>
+    <string name="player_start_over">Start over</string>
+    <string name="player_audio">Audio tracks</string>
+    <string name="player_subtitles">Subtitle tracks</string>
+    <string name="player_next">Next episode</string>
+    <string name="back">Back</string>
+    <string name="increase">Increase</string>
+    <string name="decrease">Decrease</string>
+    <string name="sleep_timer_button">Sleep timer</string>
+    <string name="sleep_timer_preset">%1$d minutes</string>
+    <string name="sleep_timer_custom">Custom duration</string>
+    <string name="sleep_timer_end_of_item">End of current item</string>
+    <string name="sleep_timer_start">Start timer</string>
+    <string name="sleep_timer_active">Sleep timer active</string>
+    <string name="sleep_timer_ends_with_item">Timer ends with this item</string>
+    <string name="sleep_timer_remaining_minutes">Sleep timer: %1$d minutes remaining</string>
+    <string name="sleep_timer_remaining_seconds">Sleep timer: %1$d seconds remaining</string>
+    <string name="sleep_timer_warning_title">Sleep timer</string>
+    <string name="sleep_timer_warning_message">Playback will stop in two minutes.</string>
+    <string name="sleep_timer_extend">Extend 15 minutes</string>
+    <string name="sleep_timer_turn_off">Turn off</string>
+    <string name="sleep_timer_watch_again">Watch again</string>
+    <string name="sleep_timer_watch_channel">Watch channel</string>
+    <plurals name="duration_hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
+    <plurals name="duration_minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
+    <plurals name="duration_seconds">
+        <item quantity="one">%d second</item>
+        <item quantity="other">%d seconds</item>
+    </plurals>
 </resources>

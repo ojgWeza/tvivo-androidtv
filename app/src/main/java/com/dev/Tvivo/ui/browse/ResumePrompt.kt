@@ -12,7 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.tvClickable
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 
 /**
@@ -31,12 +31,12 @@ fun ResumePrompt(
         Column(
             modifier = Modifier
                 .width(520.dp)
-                .background(Palette.Elevated)
+                .background(AppColors.Elevated)
                 .padding(24.dp)
         ) {
             Text(
                 text = title,
-                color = Palette.Ink,
+                color = AppColors.Ink,
                 style = TvType.title,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -51,7 +51,7 @@ fun ResumePrompt(
 private fun PromptAction(label: String, onClick: () -> Unit) {
     Text(
         text = label,
-        color = Palette.Ink,
+        color = AppColors.Ink,
         style = TvType.title,
         modifier = Modifier
             .fillMaxWidth()

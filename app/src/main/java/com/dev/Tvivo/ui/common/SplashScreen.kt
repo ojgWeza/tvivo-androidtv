@@ -23,7 +23,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.dev.Tvivo.R
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.AppIdentity
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 
 /**
@@ -48,7 +49,7 @@ fun SplashScreen(progress: Float, caption: String) {
     )
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Palette.Bg),
+        modifier = Modifier.fillMaxSize().background(AppColors.Bg),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -61,7 +62,7 @@ fun SplashScreen(progress: Float, caption: String) {
                 modifier = Modifier.size(160.dp)
             )
             Spacer(Modifier.height(24.dp))
-            Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
+            Text(text = AppIdentity.name(), color = AppColors.Ink, style = TvType.display)
             Spacer(Modifier.height(32.dp))
 
             Box(
@@ -69,19 +70,19 @@ fun SplashScreen(progress: Float, caption: String) {
                     .width(PROGRESS_WIDTH)
                     .height(PROGRESS_HEIGHT)
                     .clip(RoundedCornerShape(percent = 50))
-                    .background(Palette.Line)
+                    .background(AppColors.Line)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(animated)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(percent = 50))
-                        .background(Palette.Accent)
+                        .background(AppColors.Accent)
                 )
             }
 
             Spacer(Modifier.height(16.dp))
-            Text(text = caption, color = Palette.Dim, style = TvType.label)
+            Text(text = caption, color = AppColors.Dim, style = TvType.label)
         }
     }
 }

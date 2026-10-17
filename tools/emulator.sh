@@ -4,7 +4,9 @@
 # Two flags here are not optional on this machine:
 #   -gpu swiftshader_indirect  the host GPU path paints a black window; the guest is
 #                              rendering fine, but you cannot see it
-#   -memory 1536               16 GB total, and the Gradle daemon (1536m) plus the Kotlin
+#   EMU_MEMORY=2560 bash tools/emulator.sh <avd>  gives the guest more RAM for video playback
+#                              tests, only while no Gradle build is running
+#   -memory 1536               (default) 16 GB total, and the Gradle daemon (1536m) plus the Kotlin
 #                              daemon (768m) plus the emulator do not fit at once. The
 #                              emulator gets OOM-killed mid-session when they overlap
 #
@@ -50,7 +52,7 @@ echo "==> booting $AVD"
   -avd "$AVD" \
   -no-snapshot-load \
   -no-boot-anim \
-  -memory 1536 \
+  -memory "${EMU_MEMORY:-1536}" \
   -gpu swiftshader_indirect &
 
 echo "==> waiting for boot to complete (cold boot takes a few minutes)"

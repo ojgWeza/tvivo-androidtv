@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appearance">المظهر</string>
+    <string name="theme">السمة</string>
+    <string name="theme_dark">داكن</string>
+    <string name="theme_light">فاتح</string>
+    <string name="theme_hint">اختر ألوان التطبيق</string>
+    <string name="player_seek_position">%1$s من %2$s</string>
+    <string name="player_audio_selected">الصوت: %1$s</string>
+    <string name="player_subtitles_selected">الترجمة: %1$s</string>
+    <string name="player_track_off">إيقاف</string>
+    <string name="playback_stopped">توقف التشغيل</string>
+    <plurals name="duration_hours">
+        <item quantity="zero">%d ساعة</item>
+        <item quantity="one">%d ساعة</item>
+        <item quantity="two">%d ساعتان</item>
+        <item quantity="few">%d ساعات</item>
+        <item quantity="many">%d ساعة</item>
+        <item quantity="other">%d ساعة</item>
+    </plurals>
+    <plurals name="duration_minutes">
+        <item quantity="zero">%d دقيقة</item>
+        <item quantity="one">%d دقيقة</item>
+        <item quantity="two">%d دقيقتان</item>
+        <item quantity="few">%d دقائق</item>
+        <item quantity="many">%d دقيقة</item>
+        <item quantity="other">%d دقيقة</item>
+    </plurals>
+    <plurals name="duration_seconds">
+        <item quantity="zero">%d ثانية</item>
+        <item quantity="one">%d ثانية</item>
+        <item quantity="two">%d ثانيتان</item>
+        <item quantity="few">%d ثوانٍ</item>
+        <item quantity="many">%d ثانية</item>
+        <item quantity="other">%d ثانية</item>
+    </plurals>
+</resources>

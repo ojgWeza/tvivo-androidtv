@@ -3,6 +3,56 @@
 Short log of choices made during discovery, with rationale, so Claude Code
 doesn't re-litigate them without new information.
 
+## Android player controls and cold launch
+
+**Decision:** Resolve manual audio and subtitle menu choices inside `PlaybackService`
+against its own `Tracks`; keep the choice through a reconnect and clear it when a new
+item opens. Refresh the visible selection from `onTracksChanged`. Saved language
+preferences are applied before the new media item is prepared.
+
+**Why:** The player UI previously built an override from a `MediaController` track
+group, passed it through the session, then immediately repainted from the old track
+snapshot. This could leave the English checkmark visible even after choosing Arabic.
+The device fixture reproduced the symptom; the exact IPC rejection point needs a
+new approved device run to confirm.
+
+**Prevention:** Treat service-owned media state as authoritative. Back dismisses an
+open player menu or dialog before stopping playback. TV focus has an explicit path
+from transport to Sleep timer, with a short D-pad idle grace period. Edge-to-edge
+handset content consumes safe drawing insets. On Android 12+, the saved appearance
+is mirrored into the system's persisted per-app night mode so its cold splash can
+use the matching day or night background resource.
+
+## Slice 7 adaptive UI tokens and focus (2026-10-09)
+
+**Decision:** Use 16 dp grid gutters, 24 dp opened-grid padding, and 48 dp TV shell
+side margins. The TV top bar is 80 dp high. The selected tab is identified by accent
+text and a 4 dp underline; D-pad focus keeps the shared coral `tvFocusFrame` only.
+No focus scaling is used.
+
+Opened grids use adaptive cells with a 150 dp minimum for posters and 200 dp for
+channels, while image decode/cache dimensions remain 220×330 and 220×124 px. Focus
+restoration remains keyed by item ID. `Dim` and other text roles must meet 4.5:1
+contrast against their actual dark surfaces; the palette test measures the pairs used
+by hints, counts, metadata, and `See all`.
+
+**Why:** These are the approved TV layout and accessibility values from the Slice 7
+owner review. Adaptive cells let the same grid reflow on phones and tablets without
+changing the image pipeline, and separating selected-tab styling from the focus frame
+preserves one unambiguous D-pad focus treatment.
+
+**Q-30 closure:** The login form now uses a scrollable IME-padded viewport, with the
+TV action row constrained to the 297 dp ceiling. Its characterization assertion is
+tightened to the target; actual IME traversal still requires the owner's device run.
+
+## Android focus links follow rendered nodes (2026-10-08)
+
+**Decision:** A directional `focusProperties` link may point only to a node rendered in the current UI state. When a grid or panel is absent, use `FocusRequester.Default` and let Compose perform its normal search. Shelf card restoration is scoped to the shelf that opened Detail and gives up after five frames; a missing target clears the pending key. Opened-list grids retain their separate `pendingFocusItemId` restore path.
+
+**Why:** Compose 1.6.8 can throw when focus resolution or `requestFocus()` reaches a requester with no attached node. Browse filters and category rails exist in loading, empty, error and no-match states where the grid is absent; a closed side panel similarly has no rail. The previous catalog return observer also waited on a plain `rowIds` value inside `snapshotFlow`, which is not observable state and could wait forever.
+
+**Prevention:** Gate conditional links through `FocusLinkPolicy`, test the fallback policy for each state/direction, and keep restore requests bounded with explicit consumed/absent handling. `NormalizedNameKey` is the single shared normalization primitive for persisted names and in-memory sort keys.
+
 ## Kotlin (native) over Flutter
 
 **Decision:** Build native with Kotlin, not Flutter.
@@ -1548,6 +1598,131 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
 **Why:** The user wanted the Windows 10 package kept separate from the Windows 11 one so the two cannot upgrade or uninstall each other and the Windows 11 package is unaffected. Both share `%LOCALAPPDATA%\Tvivo` user data.
 **Open:** built on Windows 11 only; no Windows 10 machine verification yet.
 
+## Android production release: scope, monetization and product decisions (2026-10-07)
+
+**Decision:** The Android app goes to a public Google Play release for TV + phone + tablet from one codebase, adopts WinUI's identity and My Tvivo shelf model, and ships English and Arabic (Arabic mirrors the layout; English stays LTR). Plan: `docs/android-production-plan.md`. Approved by the owner:
+1. **Completion/watched:** port WinUI's fixed-tail rules (episode last 15 s; movie last 4 min but at most 5 %), store a watched flag, add mark-watched.
+2. **Play-next defaults:** episodes Next; movies Off on Android (WinUI's movie default Shuffle may deserve the same change); Shuffle stays selectable.
+3. **Tracks:** preferred audio (Auto/Arabic/English) and subtitles (Off/Arabic/English), default Auto and Off; match WinUI `TrackSelection` defaults where they exist (to be checked at build time).
+4. **Category quick-jump:** a category side panel hidden until revealed (TV: D-pad Left at the grid edge or a Categories button; touch: edge swipe or button; no hover on TV/touch).
+5. **Idle featured overlay:** dropped (also removed from WinUI).
+6. **Crash reporting:** local only, user-initiated export, for 1.0.
+7. **Identity:** *superseded the same day*: the name is postponed. `tvivo.es` is an unrelated IPTV subscription seller, so Tvivo is only the working name; wordmark, `applicationId`, domain and store name wait for the final name (TODO Phase 0).
+8. **Background audio:** PiP only, no foreground service in 1.0.
+9. **Compose Desktop:** treated as retired for planning.
+10. **Plus prices (hypotheses):** Egypt about $2-3 one-time / about $1 yearly; elsewhere $9.99 / $3.99; no monthly plan.
+11. **Plus v1:** profiles including parent-curated Kids profile, unlimited sources, backup/restore, themes, advanced subtitles, home customization and custom lists. Free always: playback, Continue Watching, favourites, basic tracks, QR/pairing, two sources, parental PIN, English and Arabic.
+**Also decided:** no ads; Tvivo stays a neutral player (no provider white-label for unlicensed providers); open setup-QR format with a confirm screen; phone-to-TV pairing with the code shown on the TV over same Wi-Fi; signed partner entitlements only for licensed entities and only once one exists.
+**Why:** most providers in the home market are unlicensed, so selling to them would end neutrality and risk Play removal; the owner needs income but wants free users genuinely happy, so core features stay free and Plus is conveniences.
+**Open:** final `applicationId`; Play developer account type and its testing requirements; Play payments policy for partner entitlements; Families policy wording.
+
+## Android Room v6: profiles, watched and visit data (2026-10-07)
+
+**Decision:** `AppDatabase` is version 6 with a real `MIGRATION_5_6` (never destructive). New tables: `profile`, `profile_allow` (Kids allowlist), `watched`, `visits`, `shelf_visits`, `recently_played`; `favourites` and `resume_positions` gain a non-null `profileId`. Each existing account identity gets a default Adult profile whose id is the account identity, so existing rows and DAO signatures keep behaving as before until the UI passes a profile id. Schema export is on (`app/schemas`).
+**Why:** Plus profiles (including the parent-curated Kids profile), a persistent watched flag, most-visited sort, NEW-since-last-visit and recently played all need profile-scoped data, and the migration should be done once (plan §12.8, R4/R6).
+**Trade-off:** favourites and resume_positions need a wider primary key `(accountId, profileId, contentType, itemId)`; SQLite cannot alter a primary key in place, so the migration copies and swaps those two tables inside a transaction. That is a rebuild of the only user data, so it has an independent review and extra tests before release.
+**Open:** no exported v5 schema JSON exists in the repo (the migration test builds v5 from SQL); reconstruct it from git history for `MigrationTestHelper`; test on a read-only copy of a real device database (never the live app data; the Tink keyset is unrecoverable).
+
+## Android shared policies and setup code (2026-10-07)
+**Decision:** WinUI's deterministic playback policies are ported to `shared-core` (`com.dev.Tvivo.playback`) with JSON golden vectors (`shared-core/src/test/resources/parity/`), using the approved Android defaults as explicit parameters (episodes Next, movies Off, audio Auto, subtitles Off). The open setup-code format and codec live in `shared-core` (`com.dev.Tvivo.setup`) with the URI scheme as one placeholder constant until the product name is chosen (`docs/setup-code-format.md`).
+**Open:** a C# test that loads the same vectors so WinUI and Android cannot drift.
+
+## Android player control surface (2026-10-07)
+
+**Decision:** `PlayerActivity` remains the sole Media3 owner. Its full-screen `PlayerView` has no native controller; a transparent `ComposeView` draws the control rows above it. The old View overlay used a non-draggable progress bar and large text buttons, so player controls now share the app's colour, type and focus tokens. Visibility, control availability, seek labels and picture-third mapping are plain Kotlin in `shared-core` with JVM tests. The physical rewind–play–forward order and double-tap thirds stay fixed in Arabic/RTL; text and spacing use start/end semantics. The player applies safe-drawing insets and transient immersive system bars so an edge swipe exposes phone navigation.
+
+**Prevention rule:** playback state and teardown stay in `PlayerActivity`; overlay UI receives values and callbacks only. Never duplicate an ExoPlayer owner inside Compose, and never make a live stream seekable just to share a VOD control layout.
+
+**Update (Opus review of `MIGRATION_5_6`, 2026-10-07):** verdict needs corrections, nothing blocking on data safety: all rows are copied, an interrupted migration rolls back, and the test's v5 fixture matches the real v5 history (v1–v3 were destructive, then 3→4 `plot`, 4→5 `rating`). Corrections adopted, since v6 has not shipped: every write path ensures the default Adult profile exists; writes with an unknown `profileId` fail gracefully; all child foreign keys become `ON DELETE CASCADE` and `deleteProfile` refuses to delete an Adult profile; v3→v6 and v4→v6 chain tests plus count/row-equality and interruption tests; a comment and test tying the hard-coded `profileId = :accountId` SQL to `defaultProfileId()`. Still open: reconstruct `5.json` from git history by building the last v5 commit in a throwaway worktree (not by hand), an instrumented API 24 migration run, and a test on a read-only copy of a real device database. Note: v1/v2 installs have no migration path (destructive fallback is gone since v4); confirm none exist in the field (only the owner's own dev builds are known).
+
+**Update (real v5 schema, 2026-10-07):** `app/schemas/com.dev.Tvivo.data.local.AppDatabase/5.json` was generated by Room itself by building the last v5 commit (2d14e95, which had `exportSchema = false`) in a throwaway worktree with schema export enabled, then removing the worktree. `AppDatabaseSchemaMigrationTest` creates v5 from the SQL inside that file and migrates it through Room (which validates schema and identity hash on open) with 3 accounts of seeded data; a guard test proves the hand-built v5 fixture in `AppDatabaseMigrationTest` has exactly the real v5 shape (ignoring `android_metadata`/`room_master_table`). `MigrationTestHelper` itself is used only in the instrumented twin because Robolectric unit tests do not see the schema folder as assets.
+
+## First emulator run of the Android characterization and spike tests (2026-10-07)
+
+**Result:** 15/15 instrumented tests pass on a dedicated API 34 TV emulator (`tvivo_test_tv34`, same profile as the main AVD; the main AVD with the stored login was not used). The first run had 6 failures, triaged as: Home touch tests were written for a handset and the TV emulator deliberately only logs tile touches (test now forces a handset configuration); TV Material buttons do not complete a touch click, as the Mi 10 finding says (tests now use the semantics click action); the Material 3 spike metric compared box width instead of text metrics (fixed); `ConfirmDialog` could throw when asking for focus before its node was attached (fixed in production code: wait a frame, retry); and the login action row measured 302 dp against the documented 297 dp IME ceiling (pre-existing, tracked as Q-30, baseline locked in the test).
+**Evidence the Material 3 candidate is viable:** TV arrows/OK/Back, exactly one `AccentSoft` focus frame, touch activation with 48 dp targets, RTL mirroring, and unchanged text metrics all pass on plain `androidx.compose.material3` with our own focus frame. The migration itself is still gated on the shell and shelf-focus spike.
+**Process notes:** the emulator and Gradle cannot run together on this 16 GB machine, so each rebuild shuts the emulator down and reboots it (about 2 minutes). Note that a pre-existing debug-only launch of the app on the fresh emulator showed the Login screen with the IME up; nothing was signed in and no provider was contacted.
+
+## Windows catalog refresh policy (2026-10-07)
+
+**Decision:** Replace the 15-minute automatic full-catalog refresh rule with a persisted policy in `catalog-options.json`: only on manual request, when a content type is older than one day (default), when older than seven days, or once per app start. Live, Movies, and Series use separate success stamps and refresh independently; each tab refreshes its own type, while Settings offers Refresh all. Saved catalog rows render before any due refresh. Failed or suspicious-empty refreshes keep the saved rows and previous success stamp, with quiet cooldown retries for automatic work.
+
+## Android type landing and ALL folder (2026-10-08)
+
+**Decision:** Movies, Series and Live open a lazy shelf landing. Personal shelves keep their shared-core order; `ALL` is the first virtual category and `RECENTLY ADDED` remains the opening grid selection when a shelf is opened from elsewhere. The landing loads at most 20 cards when each row enters composition, and the opened grid remains Room-paged. `ALL` has account-scoped paging/count queries using existing indexes; no Room migration was needed. Live adds `LAST WATCHED` as a bounded virtual folder so its pinned shelf has an honest See all target.
+
+**Sort and search:** category Most visited sorts by visit count, latest visit, then panel order and name; A–Z, Z–A and Recently added use the same normalized name key as item order. Opened grids omit Most visited because there is no per-item visit count; that choice means A–Z. A–Z, Z–A and Recently added control the SQL-bounded landing previews and opened grid for Movies, Series and Live. Ties use stable item IDs and null added timestamps sort last. The selected sort is saved by account, profile and content type and shared between landing and opened grid. The folder-title matching policy remains in shared-core, but the later Home and landing polish moved user search into the shell Search tab. LIKE wildcard characters are escaped. Cached rows stay visible during full-catalog indexing, with progress shown and Search described as a query over saved titles.
+
+**Refresh:** type landing Refresh forces that type's full catalog sync and says which library it refreshed. Opened real-category Refresh fetches the selected category without changing the selection; a virtual-folder Refresh fetches its parent type and names that scope. Duplicate manual refresh activation is ignored while in flight. Success and failure are reported while Room keeps the last complete cached rows on failure.
+
+**Focus:** the hidden category panel opens from Categories, D-pad Left at a leading card, or a touch edge swipe. Browse keeps its item-id focus restoration; shelf rows remember their last card. No `focusRestorer()` is used. A populated filter/Search field exposes a Right-reachable Clear control, and Back clears text before leaving.
+
+## Android movie and series detail (2026-10-08)
+
+**Decision:** Series cards open one detail page with the show hero, primary Continue/Next/Play action, season chips and episode list. The old “View episodes” hop is unreachable from cards. Back returns to the opening shell tab, whose card-id focus and scroll state already persist. The page passes the ordered show queue to the existing player extras. The policy in `shared-core` mirrors `SeriesEpisodeResolver` in `windows-spike/src/Tvivo.Core/Contracts.cs`: prefer the newest partial episode, otherwise the first unstarted one, and offer Watch again on the final completed episode. A distinct Next button accompanies Continue only when a watched episode and an unstarted successor support it. `EpisodeCompletion` supplies the fixed 15-second watched threshold; the playback repository now persists a watched mark at that threshold, instead of deleting progress at 92% and losing the episode's state.
+
+**Detail metadata:** Room v7 adds nullable episode plot and movie/series detail columns through `MIGRATION_6_7`. The existing `get_series_info` and `get_vod_info` calls fill them when supplied; absent values are omitted. This keeps synopses and cast/genre/trailer on cached reopen without another request. The migration only adds nullable columns and leaves favourites, resume and watched rows intact. Movie Play resumes directly when progress exists, with a separate Start over action and watched toggle. Movie saves now use `MovieCompletion`'s approved credits tail and persist watched state; saved partial rows remain in Continue Watching until the completion policy removes them. The player's existing end callback passes an `ended` flag to the repository so a genuine end of a short episode also records watched state. Episode row activation retains the existing resume choice for partial progress; its menu can mark watched/unwatched or clear resume. No stream is opened by automated tests.
+
+**Prevention rule:** Episode completion and row badges must come from the same fixed-tail policy and persisted watched rows. A pre-run page that only says “View episodes” introduces an unnecessary route and breaks the expected one-page series flow.
+
+## Android Home and landing polish (2026-10-08)
+
+**Decision (updated in Slice 6):** Home shows mixed Continue watching and Favourites, then separate Recently added Movies, Series and Live TV shelves, followed by Suggestions and visited folders. Empty core shelves are hidden; first run still shows route tiles. Type landing shelves are bounded and lazy. Recently added includes titles without a panel `added` timestamp, sorting them last, so a populated type never loses its shelf entirely. Home source queries remain bounded at 20 rows per type.
+
+**Navigation:** Search is reached from the shell, and Home's header has only the title plus a phone Settings gear. Settings owns manual library refresh and its last successful time; phone Home supports pull-to-refresh. Back on My Tvivo opens the existing safe-focused exit confirmation. TV top-bar Down targets the first shelf and first-shelf Up targets the selected tab. The opened-grid Filter sits after Sort in the horizontal row, while grid Up targets Sort. No focus-restorer modifier is used.
+
+**See all:** one shared policy requires a real total greater than the displayed preview and a meaningful destination. Mixed Home shelves open a type chooser leading to existing per-type virtual folders; type-specific Recently added shelves open their matching folder directly. Suggestions has no See all destination; category and per-type shelves open their existing paged or virtual folders only when they exceed the preview. Landing category previews remain lazy and bounded.
+
+## Android landing presentation parity polish (2026-10-08)
+
+**Decision:** My Tvivo and the Movies, Series and Live landings share one inset and section spacing through `LandingScaffold`. Shelf headings can wrap alongside a trailing See all action with a 48 dp minimum target and a shelf-specific accessible name. Poster and channel cards retain their existing display/decode dimensions; placeholders and empty hints match each content type's card height. Refresh state stays in the page header so saved shelves remain visible. The shared `AccentSoft` focus frame remains inside component bounds, with edge padding on horizontal card/control rows.
+
+## Android TV shelf navigation and category ordering (2026-10-08)
+
+**Decision:** Home and type landing shelves share a vertical-navigation helper. Up and Down select the adjacent non-empty shelf, scroll its heading into view, then request its remembered card by stable item key with bounded retries while the lazy row composes. Returning to the first shelf scrolls the screen header and shelf heading into view together. The row registers focus actions only while composed; no `FocusRequester` is linked to an offscreen or absent row.
+
+**Categories and sort:** Movies, Series, Live and opened lists use a 48 dp start-edge Categories tab. Left from the first card focuses the tab; Right returns to content; OK opens the category drawer and Back restores focus to the tab. The drawer orders categories with Most visited, A–Z or Z–A. Opened-list Sort is a header menu beside Filter with A–Z, Z–A and Recently added; it changes the SQL paging order and is saved per account, profile and type. Category order has its own saved selection and does not change item order. The TV top bar contains centered tabs without a duplicate brand; the My Tvivo page title is omitted on TV while the phone keeps it.
+
+**Empty shelves and Home order:** Empty Continue watching and Favourites are hidden without hints; Recently added is shown when that type has catalog titles. Suggestions and folder previews are hidden when empty. The Live Last watched shelf retains its focusable empty hint. First-run Home route tiles remain unchanged. My Tvivo shows mixed Continue watching, mixed Favourites, then separate bounded Recently added Movies, Series and Live TV shelves, followed by Suggestions and most-visited folders. The per-type Recently added shelves use the existing stable virtual-folder IDs and only show See all when the total exceeds the 20-card preview. Category landing shelves are lazy and bounded; unknown counts show a loading placeholder until the catalog count arrives, and zero-count shelves disappear.
+
+**Sort rule:** category and item A–Z use the same normalized name key. Most visited remains a category ordering choice and is omitted from opened lists because no per-item visit metric exists.
+
+**Validation boundary:** JVM policy/status tests and AndroidTest compilation cover the deterministic parts. Font scale 1.3, focused-edge rendering, overscan and TV/phone/tablet composition remain manual runtime checks; no runtime screenshots were captured for this slice.
+
+## Windows playback reliability and diagnostics (2026-10-08)
+
+**Decision:** (1) A stall triggers at most one automatic reconnect per user start, decided by `StallRecoveryPolicy`; a freeze before the first real progress only shows Retry. (2) An end of playback is genuine only with a known duration and a position within 30 s of it (`PlaybackEndPolicy`); an early EOF or unknown duration keeps progress, shows Retry, and neither marks watched nor auto-advances. (3) A failure after start shows Retry once per session. (4) Diagnostics are scrubbed by the active account's host, username and password (raw and URL-encoded) before writing and again on export; stack traces are not logged, and an exception before an account is registered logs only its type. (5) Native open uses `rw_timeout`/`timeout` of 15 s plus an awaited cleanup gate so only one upstream connection is opened at a time. (6) A provider with an empty port is reached on the scheme default and no port is ever written; the panel-reported port is ignored in that case. (7) Artwork originals are cached on disk by URL hash (30-day TTL, 200 MB cap, one fetch per URL); the spotlight carousel warms six images and then makes no idle requests. (8) Automatic catalog refresh failures are silent; only a refresh the user starts shows a plain message, never raw exception text. (9) EPG stays off by default.
+
+**Why:** a friend's playback failures and slow 4K, plus the earlier first-load 429 message, showed that failures were either invisible or looped, and that raw provider text could reach the user or the log.
+
+**Trade-offs:** no stack traces in the launch log makes our own crash debugging harder (restore behind the scrubber if needed). The real FFmpeg timeout and socket release are unverified. The Copy diagnostics button in the player top bar is temporary until the shared playback menu (S10).
+
+**Open:** the friend's four-open diagnostic result decides the autopilot resolver (S7), recipe memory (S8) and 4K tuning (S9); whether to build an app-side rolling buffer for live pause/rewind.
+
+EPG stays off by default (2026-10-09): the UI must not start EPG timers, warm channel maps, or expose guide and Now/Next text while the immutable feature is disabled; Live browsing and playback remain available.
+
+## Slice 8 browse controls, focus entry and cached shelves (2026-10-09)
+
+**Decision:** Landing headers expose only a compact Refresh icon. Category order lives
+beside the drawer filter; opened-grid item order uses the shared compact sort icon.
+Each popup spells out every option and gives the selected option a visible check.
+Browse header icon actions share one 48 dp rounded shape and accessible descriptions.
+
+The categories tab is reachable with Left from visible shelf cards at the viewport's
+leading edge, shelf See all actions, the landing header, and opened-grid cards/header.
+The tab points inward and spans its full focus frame. Its return path uses the existing
+row/item restoration policies; conditional links still use `FocusLinkPolicy` or are
+requested only while the tab is composed.
+
+Landing previews and pinned shelves query Room independently of refresh. Cached counts
+keep the landing from substituting skeletons during background refresh; skeletons remain
+for genuinely empty, first-load shelves. See all uses a centered, compact 48 dp target.
+
+**Why:** Slice 8 owner review found unclear sort placement and popup labels, hard-to-reach
+category navigation, visible skeletons during offline refresh, and an oversized See all
+focus frame. This preserves slice 1–7 behavior, including item-id restoration, the tab
+bar treatment, and focus links to rendered nodes only.
+
 ## WinUI polish, engine fallback and fullscreen (2026-10-13)
 
 **Decision:** (1) The For You page shows Continue watching (Movies, Series, Live TV), Recently added (x3) and Favorites (x3); Recently played is removed as a duplicate of Continue watching. (2) The top bar centers the main menu; search is a lens that expands on demand, sort and Settings are icons, and Refresh is an icon next to the "Updated ..." text. (3) The focused card pops (106% plus an accent ring) and hover lifts it slightly; list items expose real accessible names. (4) The app font is Atkinson Hyperlegible Next, bundled under its OFL license. (5) When a title fails for a format reason (unsupported, decode, unknown), playback switches once to the other engine for that title; the choice is remembered for the session and the saved engine preference is never changed. Network failures and timeouts do not trigger it. (6) A movie or episode that plays without any video output for 10 s is treated as unsupported media (Live is exempt: radio channels have no video). (7) Fullscreen is topmost only while the window is active.
@@ -1557,3 +1732,37 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
 **Trade-offs:** the fallback adds one extra open (up to the 30 s deadline) before the user sees a failure. Only the Regular font file is loaded, so bold is synthesized. Topmost fullscreen must drop on deactivation or it would stay above other apps after Alt+Tab. The original taskbar failure was not reproduced, so the fix is defensive.
 
 **Open:** root cause of the 19 s pre-open stall (new `playback.handoff` logs decide it); real-stream verification of the fallback; whether the Native engine needs its own no-video check; persistence of the playlist and engine choices.
+
+## Android 1.0 player, background and appearance scope (2026-10-16)
+
+**Owner decision:** Android 1.0 includes the sleep timer with WinUI-style presets, two-minute warning, +15-minute extension and end-of-current-movie/episode mode. Duration expiry must stop playback and release the stream, including while the player is backgrounded; it takes precedence over recovery and play-next. The WinUI sleep-timer test report dated 2026-10-15 was blocked before UI input, so its source defines the behavior to implement, not verified runtime parity.
+
+**Owner decision:** Android 1.0 includes a persisted Light theme choice. Dark remains the initial default, matching WinUI's `ThemePreferenceStore`. This supersedes `docs/android-production-plan.md` §4.6's light-theme deferral. Whether basic Dark/Light is free while Plus themes are extra palettes remains to be confirmed.
+
+**Owner decision:** Movie, episode and Live playback on phone/tablet must continue with the screen off and while another app is foregrounded, with audio at minimum. This supersedes the 2026-10-07 “PiP only, no foreground service” decision and the older Phase 0 open item. A single foreground `MediaSessionService` (or equivalent) must own the ExoPlayer and stream lifecycle; the earlier decision that `PlayerActivity` is the sole Media3 owner and that `onStop()` tears down playback is superseded. Explicit Back/Stop still ends the viewing session. Only one stream may be open at a time; release the current connection before the next open.
+
+**Owner decision:** A floating Android picture-in-picture mini player is wanted while using other phone apps. It shares the service-owned playback session, with no assumption that TV supports PiP. Entry behavior while paused and the precise minimize control remain open design points.
+
+**Implementation plan:** `docs/android-player-slice-plan-2026-10-16.md`. This is a scope and architecture decision, not evidence that the Android code or device behavior has changed.
+
+**Sleep-timer teardown lesson (2026-10-17):** The A10 mock-provider run stopped a two-minute episode at its genuine end, but the foreground player still showed a play button and a false LIVE label. The service recorded the ended snapshot, then released the MediaSession; the Activity only read that snapshot through a STATUS command on the released controller. Treat controller disconnection as a terminal UI event and read the matching process-local snapshot directly. Keep Watch again on the normal PLAY path at position zero with a fresh request and a controller that survives or reconnects after teardown. A pre-release session notification can improve responsiveness but cannot be the only signal. JVM tests cover the state and replay decisions; the corrected screen still needs owner-approved device verification.
+
+## Android player mid-stream recovery and resume (2026-10-17)
+
+**Cause:** In the run4a5 mock-provider session, Media3 received HTTP 403 after 66.7 s and 199.5 s of movie playback. The service treated every error after forward progress as final, so its bounded HTTP retry never ran. The same recovery flag also told the stall policy that an HTTP retry had consumed the one allowed stall reconnect. The mock already released active-stream accounting on response close/finish; a stalled response abort followed by a range reopen passes its selftest. The log does not record individual mock requests, so the exact Media3 range-request ordering remains unproven.
+
+**Prevention rule:** Keep one stream connection at the Media3 data-source boundary as well as in session handoff. Reopen transient source failures only after closing the old source, retain the attempt budget across reopens, and keep the single stall-recovery budget separate. A final failure saves the last verified forward position without marking completion, and Retry must stay visible. BACK ends the player on the first press while menus and dialogs retain their own dismiss action. Runtime behavior still needs a later owner-approved device check.
+
+**Run4a6 follow-up:** A movie stopped at about 39 s had no resume because both the repository write gate and Continue watching SQL required 60 s; the series example reached about 73 s. Those gates now agree at 30 s, and Room tests cover a 39 s movie with known and unknown duration. Stop commands now acknowledge after saving, while the media session is still available, so the activity can release its controller binding promptly. The mock's early EOF cutoff is absolute within the file, so Range retries cannot extend a 40% cutoff. Service teardown under two seconds remains pending device verification.
+
+**Run4a7 follow-up:** A Stop acknowledgement is the navigation barrier: the player Activity remains visible until the service has committed resume state and closed its handoff, including when Stop is requested twice. Detail and Home use Room invalidation for progress; a one-shot detail read must not overwrite a newer Flow value. Remaining movie minutes round down (a 16-minute movie at 49 s shows 15 min left). Timer status is refreshed when the player regains window focus and after a timer command completes; Armed timers always send remaining milliseconds. The data-source connection gate is shared across replacement service factories, so a new factory closes the previous source before its first open. The run4a7 403 confirms the mock rejected an overlapping connection, but its log lacks per-request timestamps, so the exact prior socket cannot be identified. Runtime confirmation remains for an owner-approved device run.
+
+## Android player slices 1–13 + device-run fixes (2026-10-17)
+
+**Implementation:** Playback is owned by one `MediaSessionService` with a single connection gate and serialized save/stop/release/open handoff. The service provides the media notification, audio focus/noisy handling, bounded Retry and one stall reconnect, genuine-end checks, play-next, saved track preferences and track selection, and the sleep timer. PiP auto-enters only while playing; pausing dismisses its video window. Timer expiry has notification actions during its two-minute warning and a process-local ended snapshot with a controller-disconnect path. Episode play-next defaults to Next and movie play-next to Off; movie play-next still has no playlist source.
+
+**Appearance and fixture:** Dark/Light is persisted, Dark is the default, and Android 12+ has day/night splash resources. The owner decided both basic themes are free; Plus themes are additional palettes. `tools/mock-provider/` supplies the local Xtream fixture and ffmpeg media generator. Gemini UX polish applied adaptive phone spacing, a larger seek thumb and spoken duration, selected-track announcements, a bounded timer menu and clearer selection/value states; it skipped already-correct media contrast and adaptive gutters, with no further focus changes.
+
+**Owner decisions (2026-10-16/17):** Playback remains service-owned with release-before-next; PiP auto-entry is playing-only and paused video does not stay in PiP; background timer warning actions are quiet; Dark/Light is free. The end-of-item D-pad menu order was adjusted, pending device verification.
+
+**Evidence boundary:** The slice plan records the architecture and sequence: [`docs/android-player-slice-plan-2026-10-16.md`](android-player-slice-plan-2026-10-16.md). JVM tests pass, but real-device behavior and the listed follow-ups remain unverified.

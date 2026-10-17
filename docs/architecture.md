@@ -155,27 +155,31 @@ All three columns are written in the same transaction as the row.
 
 ### Virtual rail entries own no sync state
 
-**Built 2026-09-10** — `RECENTLY ADDED`, `CONTINUE WATCHING` and `FAVOURITES`,
-in that order, above the panel's own categories. `ALL` is specified here but
-not built; see the note at the end of this section.
+The rail now leads with `ALL`, followed by `RECENTLY ADDED` (the default open
+selection), `CONTINUE WATCHING` or Live's `LAST WATCHED`, and `FAVOURITES`.
+The type landing and its hidden category panel use the same virtual entries.
 
 They are modelled as `CategoryEntity` with a `__`-prefixed id (`__recent`,
-`__continue`, `__favourites`). Panel ids are numeric strings, so the prefix
+`__continue`, `__played`, `__favourites`, `__all`). Panel ids are numeric strings, so the prefix
 cannot collide, and `VirtualFolder.isVirtual` is a prefix test rather than set
-membership so a fourth folder needs no list updated elsewhere. Modelling them
+membership so another folder needs no list updated elsewhere. Modelling them
 as categories is what keeps the rail, the header, the counts and the focus
 contract from each growing a second case — the only real difference is where
 their rows come from, which is one `when` in `BrowseViewModel`.
 
-They are **bounded** (100, 50, and however many the user favourited), so they
-are delivered as a single `PagingData.from` page rather than paged. That call
+Personal and recent folders are **bounded** (100, 50, and however many the user
+favourited), so they are delivered as a single `PagingData.from` page. `ALL`
+uses account-scoped Room `PagingSource` queries, an observable total count,
+and escaped-LIKE paging and count queries for its filter. That bounded-folder call
 **must** be given explicit `sourceLoadStates`; without them `refresh` stays
 `Loading` for ever and the grid renders a spinner over a list it is already
 holding (Q-26).
 
 Two guards matter: a virtual id must never reach `refreshCategory` — the panel
 does not know `__continue` — and never reach `countFiltered`, since there is no
-table to count.
+table to count. `ALL` is the exception: its count and filter run against the
+type's catalog table, using the existing `(accountId, nameNormalized)` index
+prefix; the leading-wildcard filter scans only that account's rows.
 
 `RECENTLY_ADDED_LIMIT` is 100, agreed with the user, and lives with the enum
 rather than in the DAO because it is a product decision.
@@ -183,9 +187,8 @@ rather than in the DAO because it is a product decision.
 These are **views over existing rows**. They must never get a `sync_meta` row,
 not even a sentinel `category_id`. Giving `ALL` a sentinel reintroduces exactly the data-loss bug
 the per-category key was introduced to fix: refreshing `ALL` stamps everything
-fresh, and per-category refreshes then stop happening for 24 h. `ALL`'s
-displayed freshness is the *oldest* category stamp, and manual refresh inside
-`ALL` re-fetches only the categories that are actually stale.
+fresh, and per-category refreshes then stop happening for 24 h. Selecting or
+refreshing `ALL` never calls `refreshCategory`; the full-catalog sync owns its rows.
 
 **Activating a card opens a pre-run page, not the player** (`ui/detail/`).
 `ContentGrid`'s callback is `onActivate`, not `onPlay` — it has not started a
@@ -345,13 +348,12 @@ zero rows — indistinguishable from a genuinely empty catalog, and in both case
 flipping generations would delete every per-category row the user already has.
 Both paths instead record `partial` and leave the existing rows alone.
 
-**Gating.** `ALL`, `RECENTLY ADDED` and search are disabled until
-`catalog_sync.state = complete` for that content type. A partially indexed
-catalog answering a search returns a confident "no results" for a title that
-exists — the precise failure the original scoped-search decision existed to
-prevent, relocated rather than solved. Ordinary category browsing works
-throughout. Sync resumes safely after process death, and never downloads poster
-art as part of the sync.
+**Progress.** The full-catalog sync reports indexing state and a row count in
+Browse and the type landing. Cached rows remain browsable while a refresh runs;
+global Search explicitly describes its results as saved titles on this device,
+so an incomplete index is not presented as an authoritative provider result.
+Ordinary category browsing remains available throughout. Sync resumes safely
+after process death and never downloads poster art as part of the sync.
 
 The daily re-sync of 48,751 rows should be staggered via WorkManager at low
 priority rather than fired all at once on the first foreground of the day.
@@ -420,17 +422,20 @@ on every D-pad press and fight the user's own scrolling.
 
 ## Search
 
-Scoped to the **content type**, not to a category and not across the catalog.
-The Home screen picks Live, Movies or Series, and search inside that content
-type covers all of it. Three searches exist and each is complete within its own
-scope, so the boundary is visible in the navigation rather than in a label.
+The signed-in shell has a global Search tab. Its field survives tab changes;
+after a 300 ms debounce, `HomeRepository.search` normalizes the query and runs
+one Room `LIKE` preview per content type on `Dispatchers.IO`. Each query has a
+SQL `LIMIT 60`, so the UI never loads the catalog to filter it. Results are
+grouped as Movies, Series and Live TV. The text below the field says the search
+covers titles already saved on this device; a missing result during background
+indexing is therefore not presented as a definitive provider result.
 
-This supersedes the earlier category-scoped design; see `decisions.md`.
-
-- **Content-type search** — over every row of that type. Requires
-  `catalog_sync.state = complete` for the type; disabled and labelled until then.
-- **Category filter** — filters the ~120 cached category names in the rail. A
-  plain `LIKE` over ~120 rows, always available.
+Browse still has its category-name filter (~120 cached names) and its item
+filter within the selected category or `ALL`. The type landing also has a
+persistent in-place search: a matching folder title opens its full preview,
+while an item match gets a filtered, SQL-bounded preview. The shell's global
+preview remains deliberately bounded. Both Browse and global Search expose a
+D-pad-reachable Clear control; Back clears nonempty text before closing/leaving.
 
 **All three content types are synced in full.** If only VOD were synced,
 someone searching for a channel or a show would get a confident "no results"
@@ -444,9 +449,8 @@ lowercase, Arabic diacritics stripped, whitespace collapsed, quality tokens
 (`HD`, `FHD`, `4K`) removed — applied on insert, in the same transaction as the
 write.
 
-**Query mechanics.** Debounce 300 ms, run on `Dispatchers.IO` through the
-paging source. DAOs expose a query-bearing `PagingSource` variant so results
-page exactly like unfiltered ones.
+**Query mechanics.** Browse uses `PagingSource`; global Search uses three
+bounded Room queries. Both debounce typed item filters by 300 ms.
 
 **FTS remains deferred, but the reasoning has changed and must be measured.**
 The original argument was that a category is only a few thousand rows. Content-
@@ -457,6 +461,26 @@ handle Arabic poorly, but add a covering index on
 `(account_id, content_type, name_normalized)` so prefix queries stay indexed,
 and instrument it on the real box. If p95 per keystroke exceeds ~200 ms,
 revisit with `unicode61 remove_diacritics=2`.
+
+## Adaptive shell and My Tvivo
+
+`Route.Main(tab)` holds the selected signed-in destination. TV draws a top bar,
+tablet and wide touch windows draw a start-side navigation rail, and compact
+touch windows draw a bottom bar. Each tab is wrapped in a saveable-state holder;
+Browse's ViewModel is keyed by content type, so switching tabs preserves its
+category and grid position. Detail and account sub-routes replace the body and
+Back returns to the tab that opened them. A top-level Back returns to My Tvivo,
+then lets the system exit.
+
+`HomeRepository` builds My Tvivo from Room v6's resume, favourite, recent-play
+and category-visit data. Each preview resolves at most 20 catalog cards, and
+visits show at most three Movie folders and three Series folders. Suggestions
+query at most 80 candidates per type with a session-stable SQL ranking, then
+apply the shared-core seeded weighted reservoir to 20 cards, excluding recent
+and continuing titles. The Home snapshot stays visible during refresh. Empty
+shelves are omitted; a truly empty catalog shows the three browse route cards.
+Shelf focus is restored by item ID using explicit requesters, without
+`focusRestorer()`.
 
 ## Images
 

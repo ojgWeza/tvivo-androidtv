@@ -21,8 +21,8 @@ class AuthRepository {
      * Validates against `player_api.php`. A wrong password comes back as HTTP 200 with
      * `auth: 0`, so the body decides the outcome, not the status code.
      *
-     * On success the port is corrected from `server_info` — the login screen only asks
-     * for one server field, so a user who typed a bare host gets the real port here.
+     * The typed port is kept as typed: an empty port stays empty (default port) and is
+     * never filled in from `server_info`.
      */
     suspend fun authenticate(input: Credentials): Result<AuthenticatedAccount> =
         withContext(Dispatchers.IO) {
@@ -46,13 +46,13 @@ class AuthRepository {
                 }
                 requireNotNull(info)
 
-                val reportedPort = body?.serverInfo?.port?.toIntOrNull()
-                val corrected = input.copy(port = input.port ?: reportedPort)
-
+                // An empty port means the provider's default port. The port a panel reports for
+                // itself is often an internal one behind a proxy, so it must never replace that
+                // (same rule as the WinUI app, commit 6d73d0c).
                 Result.success(
                     AuthenticatedAccount(
-                        credentials = corrected,
-                        accountId = AccountIdentity.of(corrected),
+                        credentials = input,
+                        accountId = AccountIdentity.of(input),
                         userInfo = info,
                         httpsPort = body?.serverInfo?.httpsPort?.toIntOrNull()
                     )

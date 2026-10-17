@@ -1,6 +1,7 @@
 package com.dev.Tvivo.data.local.entities
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 
 /**
@@ -12,6 +13,12 @@ import androidx.room.Index
 const val TYPE_LIVE = "live"
 const val TYPE_VOD = "vod"
 const val TYPE_SERIES = "series"
+
+const val PROFILE_ADULT = "Adult"
+const val PROFILE_KIDS = "Kids"
+
+/** The account identity is the stable id of its default adult profile. */
+fun defaultProfileId(accountKey: String): String = accountKey
 
 /** The category list itself is cached under this sentinel, on the same TTL. */
 const val CATEGORY_LIST_SENTINEL = "__categories__"
@@ -71,7 +78,12 @@ data class VodStreamEntity(
     val rating: Double?,
     val added: Long?,
     val num: Int?,
-    val generation: Long
+    val generation: Long,
+    val genre: String? = null,
+    val cast: String? = null,
+    val year: String? = null,
+    val durationMinutes: Int? = null,
+    val trailer: String? = null
 )
 
 @Entity(
@@ -102,7 +114,14 @@ data class CatalogSyncEntity(
 
 @Entity(
     tableName = "resume_positions",
-    primaryKeys = ["accountId", "contentType", "itemId"]
+    primaryKeys = ["accountId", "profileId", "contentType", "itemId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountId", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index(value = ["accountId", "profileId"])]
 )
 data class ResumePositionEntity(
     val accountId: String,
@@ -110,18 +129,132 @@ data class ResumePositionEntity(
     val itemId: String,
     val positionMs: Long,
     val durationMs: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val profileId: String = defaultProfileId(accountId)
 )
 
 @Entity(
     tableName = "favourites",
-    primaryKeys = ["accountId", "contentType", "itemId"]
+    primaryKeys = ["accountId", "profileId", "contentType", "itemId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountId", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index(value = ["accountId", "profileId"])]
 )
 data class FavouriteEntity(
     val accountId: String,
     val contentType: String,
     val itemId: String,
-    val addedAt: Long
+    val addedAt: Long,
+    val profileId: String = defaultProfileId(accountId)
+)
+
+@Entity(tableName = "profile", primaryKeys = ["accountKey", "id"])
+data class ProfileEntity(
+    val id: String,
+    val accountKey: String,
+    val name: String,
+    /** [PROFILE_ADULT] or [PROFILE_KIDS]. */
+    val kind: String,
+    val createdAt: Long
+)
+
+/** [allowKey] distinguishes an item id from a category id in the same content type. */
+@Entity(
+    tableName = "profile_allow",
+    primaryKeys = ["accountKey", "profileId", "contentType", "allowKey"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountKey", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class ProfileAllowEntity(
+    val profileId: String,
+    val accountKey: String,
+    val contentType: String,
+    /** `item:<id>` or `category:<id>`; permits both ids to have the same text. */
+    val allowKey: String,
+    /** Empty only for a whole-category allow entry. */
+    val itemId: String,
+    val categoryId: String?
+)
+
+@Entity(
+    tableName = "watched",
+    primaryKeys = ["accountKey", "profileId", "contentType", "itemId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountKey", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class WatchedEntity(
+    val profileId: String,
+    val accountKey: String,
+    val contentType: String,
+    val itemId: String,
+    val watchedAt: Long
+)
+
+@Entity(
+    tableName = "visits",
+    primaryKeys = ["accountKey", "profileId", "contentType", "categoryId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountKey", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class VisitEntity(
+    val profileId: String,
+    val accountKey: String,
+    val contentType: String,
+    val categoryId: String,
+    val count: Long,
+    val lastVisitedAt: Long
+)
+
+@Entity(
+    tableName = "shelf_visits",
+    primaryKeys = ["accountKey", "profileId", "contentType", "categoryId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountKey", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class ShelfVisitEntity(
+    val profileId: String,
+    val accountKey: String,
+    val contentType: String,
+    val categoryId: String,
+    val lastVisitedAt: Long
+)
+
+@Entity(
+    tableName = "recently_played",
+    primaryKeys = ["accountKey", "profileId", "contentType", "itemId"],
+    foreignKeys = [ForeignKey(
+        entity = ProfileEntity::class,
+        parentColumns = ["accountKey", "id"],
+        childColumns = ["accountKey", "profileId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class RecentlyPlayedEntity(
+    val profileId: String,
+    val accountKey: String,
+    val contentType: String,
+    val itemId: String,
+    val playedAt: Long
 )
 
 /**
@@ -190,7 +323,10 @@ data class SeriesEntity(
     val rating: Double?,
     val added: Long?,
     val num: Int?,
-    val generation: Long
+    val generation: Long,
+    val genre: String? = null,
+    val cast: String? = null,
+    val year: String? = null
 )
 
 /**
@@ -217,5 +353,6 @@ data class EpisodeEntity(
     val title: String,
     val containerExtension: String?,
     val durationSecs: Int?,
-    val added: Long?
+    val added: Long?,
+    val plot: String? = null
 )

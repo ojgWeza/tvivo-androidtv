@@ -35,4 +35,12 @@ class BrowseStatusMessageTest {
             browseStatusMessage(null, CatalogSyncer.STATE_FAILED, hasCachedItems = true)
         )
     }
+
+    @Test
+    fun liveNetworkErrorKeepsCachedDataStatusVisible() {
+        assertEquals(
+            "Offline — showing cached data",
+            browseStatusMessage(AppError.Unreachable, CatalogSyncer.STATE_FAILED, hasCachedItems = true)
+        )
+    }
 }

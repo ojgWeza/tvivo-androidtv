@@ -24,14 +24,29 @@ import okhttp3.ResponseBody
  */
 object VodInfoParser {
 
-    /** Just the plot. Nothing else on the pre-run page comes from this call. */
-    fun parsePlot(body: ResponseBody): String? = runCatching {
+    data class Details(
+        val plot: String?, val genre: String?, val cast: String?,
+        val year: String?, val durationMinutes: Int?, val trailer: String?
+    )
+
+    fun parseDetails(body: ResponseBody): Details? = runCatching {
         val root = JSONObject(body.string())
-        // `info` is where this panel's `get_series_info` puts the equivalent, so it is
-        // the first place to look.
         val info = root.optJSONObject("info")
-        firstNonBlank(info, PLOT_KEYS) ?: firstNonBlank(root, PLOT_KEYS)
+        fun field(vararg keys: String): String? =
+            firstNonBlank(info, keys.toList()) ?: firstNonBlank(root, keys.toList())
+        val duration = field("duration")?.split(":")?.mapNotNull { it.toIntOrNull() }
+        val minutes = when (duration?.size) {
+            3 -> duration[0] * 60 + duration[1]
+            2 -> duration[0]
+            else -> null
+        }
+        Details(field(*PLOT_KEYS.toTypedArray()), field("genre"), field("cast"),
+            field("releasedate", "releaseDate", "year")?.take(4), minutes,
+            field("youtube_trailer", "trailer"))
     }.getOrNull()
+
+    /** Just the plot. Nothing else on the pre-run page comes from this call. */
+    fun parsePlot(body: ResponseBody): String? = parseDetails(body)?.plot
 
     private fun firstNonBlank(obj: JSONObject?, keys: List<String>): String? {
         if (obj == null) return null

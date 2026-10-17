@@ -1,5 +1,6 @@
 package com.dev.Tvivo.data.local
 
+import androidx.paging.PagingSource
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dev.Tvivo.data.local.entities.CategoryEntity
@@ -88,6 +89,96 @@ class CatalogDaoTest {
         num = null,
         generation = generation
     )
+
+    @Test fun allCountsAndPreviewsCrossCategoriesWithoutCrossingAccounts() = runTest {
+        db.vodDao().insertAll(listOf(vod(1, "10", "Alpha"), vod(2, "20", "Beta"),
+            vod(3, "10", "Other", accountId = other)))
+        db.seriesDao().insertAll(listOf(series(1, "10", "Alpha"), series(2, "20", "Beta")))
+        db.liveDao().insertAll(listOf(live(1, "10", "Alpha"), live(2, "20", "Beta")))
+
+        assertEquals(2, db.vodDao().totalCount(account).first())
+        assertEquals(2, db.seriesDao().totalCount(account).first())
+        assertEquals(2, db.liveDao().totalCount(account).first())
+        assertEquals(listOf(1, 2), db.vodDao().allPreview(account).map { it.streamId })
+        assertEquals(listOf(1, 2), db.seriesDao().allPreview(account).map { it.seriesId })
+        assertEquals(listOf(1, 2), db.liveDao().allPreview(account).map { it.streamId })
+    }
+
+    @Test fun liveCategoryCountIsScopedToTheSelectedCategoryAndAccount() = runTest {
+        db.liveDao().insertAll(listOf(live(1, "10"), live(2, "10"), live(3, "20")))
+        assertEquals(2, db.liveDao().categoryCount(account, "10"))
+        assertEquals(1, db.liveDao().categoryCount(account, "20"))
+        assertEquals(0, db.liveDao().categoryCount(other, "10"))
+    }
+
+    @Test fun allFilteredTreatsLikeWildcardsAsLiteralCharacters() = runTest {
+        db.vodDao().insertAll(listOf(vod(1, "10", "A_1"), vod(2, "20", "A%2"),
+            vod(3, "30", "AB3")))
+        db.seriesDao().insertAll(listOf(series(1, "10", "A_1"), series(2, "20", "AB2")))
+        db.liveDao().insertAll(listOf(live(1, "10", "A_1"), live(2, "20", "AB2")))
+
+        assertEquals(1, db.vodDao().countAllFiltered(account, "a\\_").first())
+        assertEquals(1, db.vodDao().countAllFiltered(account, "a\\%").first())
+        assertEquals(1, db.seriesDao().countAllFiltered(account, "a\\_").first())
+        assertEquals(1, db.liveDao().countAllFiltered(account, "a\\_").first())
+        assertEquals(listOf(1), db.vodDao().allPreviewFiltered(account, "a\\_").map { it.streamId })
+        assertEquals(listOf(1), db.seriesDao().allPreviewFiltered(account, "a\\_").map { it.seriesId })
+        assertEquals(listOf(1), db.liveDao().allPreviewFiltered(account, "a\\_").map { it.streamId })
+    }
+
+    @Test fun allPagingAndOpenedShelfSortStayBoundedAndAccountScoped() = runTest {
+        db.vodDao().insertAll(listOf(vod(1, "10", "Alpha"), vod(2, "20", "Zulu"),
+            vod(3, "10", "Other", accountId = other)))
+        val params = PagingSource.LoadParams.Refresh<Int>(null, 20, true)
+        val all = db.vodDao().pagingAll(account).load(params)
+        val descending = db.vodDao().pagingSorted(account, null, "", "za").load(params)
+        assertEquals(listOf(1, 2),
+            (all as PagingSource.LoadResult.Page<Int, VodStreamEntity>).data.map { it.streamId })
+        assertEquals(listOf(2, 1),
+            (descending as PagingSource.LoadResult.Page<Int, VodStreamEntity>).data.map { it.streamId })
+    }
+
+    @Test fun landingAndOpenedSortsAgreeAcrossAllThreeCatalogs() = runTest {
+        val vodRows = listOf(vod(3, "10", "Éclair").copy(nameNormalized = "eclair", added = 100),
+            vod(1, "10", "Beta").copy(added = 100), vod(2, "10", "Eclair"))
+        val seriesRows = listOf(series(3, "10", "Éclair").copy(nameNormalized = "eclair", added = 100),
+            series(1, "10", "Beta").copy(added = 100), series(2, "10", "Eclair"))
+        val liveRows = listOf(live(3, "10", "Éclair").copy(nameNormalized = "eclair", added = 100),
+            live(1, "10", "Beta").copy(added = 100), live(2, "10", "Eclair"))
+        db.vodDao().insertAll(vodRows)
+        db.seriesDao().insertAll(seriesRows)
+        db.liveDao().insertAll(liveRows)
+
+        assertEquals(listOf(1, 2, 3), db.vodDao().landingPreviewSorted(account, "10", "az").map { it.streamId })
+        assertEquals(listOf(1, 2, 3), db.seriesDao().landingPreviewSorted(account, "10", "az").map { it.seriesId })
+        assertEquals(listOf(1, 2, 3), db.liveDao().landingPreviewSorted(account, "10", "az").map { it.streamId })
+        assertEquals(listOf(2, 3, 1), db.vodDao().landingPreviewSorted(account, "10", "za").map { it.streamId })
+        assertEquals(listOf(2, 3, 1), db.seriesDao().landingPreviewSorted(account, "10", "za").map { it.seriesId })
+        assertEquals(listOf(2, 3, 1), db.liveDao().landingPreviewSorted(account, "10", "za").map { it.streamId })
+        assertEquals(listOf(1, 3, 2), db.vodDao().landingPreviewSorted(account, "10", "recent").map { it.streamId })
+        assertEquals(listOf(1, 3, 2), db.seriesDao().landingPreviewSorted(account, "10", "recent").map { it.seriesId })
+        assertEquals(listOf(1, 3, 2), db.liveDao().landingPreviewSorted(account, "10", "recent").map { it.streamId })
+
+        val params = PagingSource.LoadParams.Refresh<Int>(null, 20, true)
+        val vodDescending = db.vodDao().pagingSorted(account, "10", "", "za").load(params)
+            as PagingSource.LoadResult.Page<Int, VodStreamEntity>
+        val seriesDescending = db.seriesDao().pagingSorted(account, "10", "", "za").load(params)
+            as PagingSource.LoadResult.Page<Int, SeriesEntity>
+        val liveDescending = db.liveDao().pagingSorted(account, "10", "", "za").load(params)
+            as PagingSource.LoadResult.Page<Int, LiveStreamEntity>
+        val vodRecent = db.vodDao().pagingSorted(account, "10", "", "recent").load(params)
+            as PagingSource.LoadResult.Page<Int, VodStreamEntity>
+        val seriesRecent = db.seriesDao().pagingSorted(account, "10", "", "recent").load(params)
+            as PagingSource.LoadResult.Page<Int, SeriesEntity>
+        val liveRecent = db.liveDao().pagingSorted(account, "10", "", "recent").load(params)
+            as PagingSource.LoadResult.Page<Int, LiveStreamEntity>
+        assertEquals(listOf(2, 3, 1), vodDescending.data.map { it.streamId })
+        assertEquals(listOf(2, 3, 1), seriesDescending.data.map { it.seriesId })
+        assertEquals(listOf(2, 3, 1), liveDescending.data.map { it.streamId })
+        assertEquals(listOf(1, 3, 2), vodRecent.data.map { it.streamId })
+        assertEquals(listOf(1, 3, 2), seriesRecent.data.map { it.seriesId })
+        assertEquals(listOf(1, 3, 2), liveRecent.data.map { it.streamId })
+    }
 
     private suspend fun vodCount(categoryId: String, accountId: String = account): Int =
         db.vodDao().countsByCategory(accountId).first()

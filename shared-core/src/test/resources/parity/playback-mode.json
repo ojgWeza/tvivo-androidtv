@@ -1,0 +1,21 @@
+[
+  {"name":"Off_controls_advance_prompt_and_pick_strategy","op":"logic","mode":"Off","expected":{"advance":false,"prompt":false,"shuffle":false}},
+  {"name":"Next_controls_advance_prompt_and_pick_strategy","op":"logic","mode":"Next","expected":{"advance":true,"prompt":true,"shuffle":false}},
+  {"name":"Shuffle_controls_advance_prompt_and_pick_strategy","op":"logic","mode":"Shuffle","expected":{"advance":true,"prompt":true,"shuffle":true}},
+  {"name":"Episode_legacy_true","op":"legacy","autoplay":true,"isMovie":false,"expected":"Next"},
+  {"name":"Episode_legacy_false","op":"legacy","autoplay":false,"isMovie":false,"expected":"Off"},
+  {"name":"Episode_legacy_missing","op":"legacy","autoplay":null,"isMovie":false,"expected":"Next"},
+  {"name":"Movie_legacy_true","op":"legacy","autoplay":true,"isMovie":true,"expected":"Next"},
+  {"name":"Movie_legacy_false","op":"legacy","autoplay":false,"isMovie":true,"expected":"Shuffle"},
+  {"name":"Movie_legacy_missing","op":"legacy","autoplay":null,"isMovie":true,"expected":"Shuffle"},
+  {"name":"Legacy_settings_file_migrates_episode_and_movie_values","op":"fromJson","json":"{\"EpisodeAutoplayNext\":false,\"MovieAutoplayNext\":false}","expected":{"episode":"Off","movie":"Shuffle","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"Missing_legacy_values_use_WinUI_defaults","op":"fromJson","json":"{}","expected":{"episode":"Next","movie":"Shuffle","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"Explicit_modes_round_trip_as_strings","op":"roundTrip","episode":"Off","movie":"Shuffle","mini":"MiniPlayerWhilePlaying","expected":{"episode":"Off","movie":"Shuffle","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"Minimize_to_mini_setting_persists_when_changed","op":"roundTrip","episode":"Off","movie":"Next","mini":"AlwaysMinimizeNormally","expected":{"episode":"Off","movie":"Next","mini":"AlwaysMinimizeNormally"}},
+  {"name":"Legacy_minimize_true","op":"fromJson","json":"{\"MinimizeToMiniPlayerWhilePlaying\":true}","expected":{"episode":"Next","movie":"Shuffle","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"Legacy_minimize_false","op":"fromJson","json":"{\"MinimizeToMiniPlayerWhilePlaying\":false}","expected":{"episode":"Next","movie":"Shuffle","mini":"AlwaysMinimizeNormally"}},
+  {"name":"Explicit_minimize_mode_takes_precedence","op":"fromJson","json":"{\"MinimizeToMiniMode\":\"MiniPlayerWhilePlayingOrPaused\",\"MinimizeToMiniPlayerWhilePlaying\":false}","expected":{"episode":"Next","movie":"Shuffle","mini":"MiniPlayerWhilePlayingOrPaused"}},
+  {"name":"Android_play_next_defaults","op":"defaults","platform":"Android","expected":{"episode":"Next","movie":"Off","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"Android_empty_settings_use_Android_defaults","op":"fromJson","platform":"Android","json":"{}","expected":{"episode":"Next","movie":"Off","mini":"MiniPlayerWhilePlaying"}},
+  {"name":"WinUI_play_next_defaults","op":"defaults","platform":"WinUI","expected":{"episode":"Next","movie":"Shuffle","mini":"MiniPlayerWhilePlaying"}}
+]

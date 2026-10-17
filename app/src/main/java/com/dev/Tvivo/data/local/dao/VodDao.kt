@@ -73,6 +73,44 @@ interface VodDao {
     @Query("SELECT * FROM vod_streams WHERE accountId = :accountId ORDER BY nameNormalized ASC")
     fun pagingAll(accountId: String): PagingSource<Int, VodStreamEntity>
 
+    @Query("SELECT * FROM vod_streams WHERE accountId = :accountId ORDER BY nameNormalized, streamId LIMIT 20")
+    suspend fun allPreview(accountId: String): List<VodStreamEntity>
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, streamId LIMIT 20""")
+    suspend fun allPreviewFiltered(accountId: String, query: String): List<VodStreamEntity>
+
+    /** Alternate opened-shelf order. Default A-Z keeps the existing index-backed queries. */
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        AND (:categoryId IS NULL OR categoryId = :categoryId)
+        AND (:query = '' OR nameNormalized LIKE '%' || :query || '%' ESCAPE '\')
+        ORDER BY CASE WHEN :sort = 'recent' AND added IS NULL THEN 1 ELSE 0 END,
+            CASE WHEN :sort = 'recent' THEN added END DESC,
+            CASE WHEN :sort = 'za' THEN nameNormalized END DESC,
+            CASE WHEN :sort = 'recent' THEN NULL ELSE nameNormalized END ASC,
+            streamId ASC""")
+    fun pagingSorted(accountId: String, categoryId: String?, query: String, sort: String):
+        PagingSource<Int, VodStreamEntity>
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        AND (:categoryId IS NULL OR categoryId = :categoryId)
+        ORDER BY CASE WHEN :sort = 'recent' AND added IS NULL THEN 1 ELSE 0 END,
+            CASE WHEN :sort = 'recent' THEN added END DESC,
+            CASE WHEN :sort = 'za' THEN nameNormalized END DESC,
+            CASE WHEN :sort = 'recent' THEN NULL ELSE nameNormalized END ASC,
+            streamId ASC LIMIT 20""")
+    suspend fun landingPreviewSorted(accountId: String, categoryId: String?, sort: String): List<VodStreamEntity>
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, streamId""")
+    fun pagingAllFiltered(accountId: String, query: String): PagingSource<Int, VodStreamEntity>
+
+    @Query("""SELECT COUNT(*) FROM vod_streams WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'""")
+    fun countAllFiltered(accountId: String, query: String): Flow<Int>
+
     @Query(
         """
         SELECT * FROM vod_streams
@@ -81,6 +119,38 @@ interface VodDao {
         """
     )
     fun pagingSearch(accountId: String, query: String): PagingSource<Int, VodStreamEntity>
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, streamId LIMIT 60""")
+    suspend fun searchPreview(accountId: String, query: String): List<VodStreamEntity>
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId AND categoryId = :categoryId
+        ORDER BY nameNormalized, streamId LIMIT 20""")
+    suspend fun categoryPreview(accountId: String, categoryId: String): List<VodStreamEntity>
+
+    @Query("SELECT COUNT(*) FROM vod_streams WHERE accountId = :accountId AND categoryId = :categoryId")
+    suspend fun categoryCount(accountId: String, categoryId: String): Int
+
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId AND categoryId = :categoryId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, streamId LIMIT 20""")
+    suspend fun categoryPreviewFiltered(accountId: String, categoryId: String, query: String): List<VodStreamEntity>
+
+    @Query("""SELECT categoryId, COUNT(*) AS count FROM vod_streams
+        WHERE accountId = :accountId AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        GROUP BY categoryId""")
+    suspend fun matchingCategoryCounts(accountId: String, query: String): List<CategoryCount>
+
+    @Query("""SELECT categoryId, MAX(added) AS latestAdded FROM vod_streams
+        WHERE accountId = :accountId GROUP BY categoryId""")
+    suspend fun categoryLatest(accountId: String): List<CategoryLatest>
+
+    /** Stable per session and SQL-bounded; Kotlin applies the exact weighted reservoir. */
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        ORDER BY (ABS(((streamId * 1103515245 + :seed) % 2147483647)) / 2147483647.0)
+            * (1.0 + COALESCE(rating, 0.0) / 10.0) DESC, streamId LIMIT 80""")
+    suspend fun suggestionCandidates(accountId: String, seed: Int): List<VodStreamEntity>
 
     /**
      * `Recently added`. `added` is a unix timestamp the panel sets, so this is the
@@ -93,8 +163,8 @@ interface VodDao {
     @Query(
         """
         SELECT * FROM vod_streams
-        WHERE accountId = :accountId AND added IS NOT NULL
-        ORDER BY added DESC LIMIT :limit
+        WHERE accountId = :accountId
+        ORDER BY added DESC, streamId LIMIT :limit
         """
     )
     fun recentlyAdded(accountId: String, limit: Int): Flow<List<VodStreamEntity>>
@@ -113,6 +183,9 @@ interface VodDao {
 
     @Query("SELECT COUNT(*) FROM vod_streams WHERE accountId = :accountId")
     fun totalCount(accountId: String): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM vod_streams WHERE accountId = :accountId")
+    suspend fun countSnapshot(accountId: String): Int
 
     @Query("SELECT * FROM vod_streams WHERE accountId = :accountId AND streamId = :streamId")
     suspend fun byId(accountId: String, streamId: Int): VodStreamEntity?
@@ -137,8 +210,13 @@ interface VodDao {
      * It is lost on the next full sync, which rewrites every row — acceptable, because
      * the fetch is one small call and only happens for films actually opened.
      */
-    @Query("UPDATE vod_streams SET plot = :plot WHERE accountId = :accountId AND streamId = :streamId")
-    suspend fun updatePlot(accountId: String, streamId: Int, plot: String)
+    @Query("""UPDATE vod_streams SET plot = COALESCE(:plot, plot),
+        genre = COALESCE(:genre, genre), `cast` = COALESCE(:cast, `cast`),
+        year = COALESCE(:year, year), durationMinutes = COALESCE(:durationMinutes, durationMinutes),
+        trailer = COALESCE(:trailer, trailer)
+        WHERE accountId = :accountId AND streamId = :streamId""")
+    suspend fun updateDetails(accountId: String, streamId: Int, plot: String?, genre: String?,
+        cast: String?, year: String?, durationMinutes: Int?, trailer: String?)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<VodStreamEntity>)
@@ -161,3 +239,5 @@ interface VodDao {
 }
 
 data class CategoryCount(val categoryId: String?, val count: Int)
+
+data class CategoryLatest(val categoryId: String?, val latestAdded: Long?)

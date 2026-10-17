@@ -14,19 +14,30 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 
 /**
- * The one focus indicator for the whole app — [ContentGrid]'s static accent frame,
+ * The one focus indicator for the whole app — [ContentGrid]'s static frame,
  * lifted out so buttons and Home tiles can't diverge from the grid cards again (Q-3).
  */
-fun Modifier.tvFocusFrame(shape: Shape = RectangleShape): Modifier = composed {
+fun Modifier.tvFocusFrame(shape: Shape = RectangleShape, focusColor: Color? = null): Modifier = composed {
     var focused by remember { mutableStateOf(false) }
+    val inner = if (focusColor == null) AppColors.FocusInner else Color.Transparent
+    val outerWidth = when {
+        !focused -> 0.dp
+        inner != Color.Transparent -> 5.dp
+        else -> 3.dp
+    }
     this
         .onFocusChanged { focused = it.isFocused }
         .border(
-            width = if (focused) 3.dp else 0.dp,
-            color = if (focused) Palette.Accent else Color.Transparent,
+            width = if (focused && inner != Color.Transparent) 3.dp else 0.dp,
+            color = inner,
+            shape = shape
+        )
+        .border(
+            width = outerWidth,
+            color = if (focused) focusColor ?: AppColors.Focus else Color.Transparent,
             shape = shape
         )
 }

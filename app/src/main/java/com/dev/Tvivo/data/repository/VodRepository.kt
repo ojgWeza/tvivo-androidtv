@@ -4,6 +4,7 @@ import androidx.paging.PagingSource
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.NameNormalizer
+import com.dev.Tvivo.home.CatalogSort
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
@@ -54,6 +55,21 @@ class VodRepository(
 
     fun pagingAll(): PagingSource<Int, VodStreamEntity> = db.vodDao().pagingAll(accountId)
 
+    fun pagingSorted(categoryId: String?, query: String, sort: CatalogSort): PagingSource<Int, VodStreamEntity> =
+        db.vodDao().pagingSorted(accountId, categoryId, NameNormalizer.escapeLikeQuery(query),
+            sort.toSqlKey())
+
+    suspend fun landingPreviewSorted(categoryId: String?, sort: CatalogSort): List<VodStreamEntity> =
+        db.vodDao().landingPreviewSorted(accountId, categoryId, sort.toSqlKey())
+
+    fun pagingAllFiltered(query: String): PagingSource<Int, VodStreamEntity> =
+        db.vodDao().pagingAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun countAllFiltered(query: String): Flow<Int> =
+        db.vodDao().countAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun totalCount(): Flow<Int> = db.vodDao().totalCount(accountId)
+
     fun pagingSearch(query: String): PagingSource<Int, VodStreamEntity> =
         db.vodDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
 
@@ -78,15 +94,16 @@ class VodRepository(
      * error state on the pre-run page, which has a poster, a title and a Play button
      * that all work perfectly well without one.
      */
-    suspend fun fetchPlot(streamId: Int): String? = withContext(Dispatchers.IO) {
+    suspend fun fetchDetails(streamId: Int): Result<VodInfoParser.Details?> = withContext(Dispatchers.IO) {
         runCatching {
             val response = api.getVodInfo(credentials.username, credentials.password, streamId)
-            if (!response.isSuccessful) return@runCatching null
+            if (!response.isSuccessful) throw com.dev.Tvivo.auth.AppErrorException(ErrorMapper.fromHttpCode(response.code()))
             val body = response.body() ?: return@runCatching null
-            VodInfoParser.parsePlot(body)?.also { plot ->
-                db.vodDao().updatePlot(accountId, streamId, plot)
+            VodInfoParser.parseDetails(body)?.also { details ->
+                db.vodDao().updateDetails(accountId, streamId, details.plot,
+                    details.genre, details.cast, details.year, details.durationMinutes, details.trailer)
             }
-        }.getOrNull()
+        }
     }
 
     suspend fun refreshCategories(force: Boolean = false): Result<Boolean> =
@@ -146,4 +163,10 @@ class VodRepository(
                 write = { rows -> db.vodDao().replaceCategory(accountId, categoryId, rows) }
             )
         }
+}
+
+private fun CatalogSort.toSqlKey() = when (this) {
+    CatalogSort.AlphabeticalDesc -> "za"
+    CatalogSort.RecentlyAdded -> "recent"
+    CatalogSort.MostVisited, CatalogSort.AlphabeticalAsc -> "az"
 }

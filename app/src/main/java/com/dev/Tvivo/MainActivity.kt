@@ -14,12 +14,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -31,9 +34,17 @@ import com.dev.Tvivo.diagnostics.CodecProbe
 import com.dev.Tvivo.sync.RefreshWorker
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.ui.browse.BrowseScreen
+import com.dev.Tvivo.ui.browse.CatalogLandingScreen
 import com.dev.Tvivo.ui.common.SplashScreen
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.home.HomeScreen
+import com.dev.Tvivo.home.ShellNavigation
+import com.dev.Tvivo.home.ShellTab
+import com.dev.Tvivo.home.ShelfRestoreKey
+import com.dev.Tvivo.ui.shell.AppShell
+import com.dev.Tvivo.ui.shell.SearchScreen
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.browse.VirtualFolder
 import com.dev.Tvivo.ui.settings.AccountViewModel
 import com.dev.Tvivo.ui.series.SeriesDetailScreen
 import com.dev.Tvivo.ui.settings.SettingsScreen
@@ -44,14 +55,32 @@ import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
+import com.dev.Tvivo.data.local.entities.RecentlyPlayedEntity
+import com.dev.Tvivo.data.local.entities.ShelfVisitEntity
+import com.dev.Tvivo.data.repository.roomKey
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.detail.ItemDetailScreen
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvivoTheme
+import com.dev.Tvivo.ui.ThemeMode
+import com.dev.Tvivo.playback.PlayerPreferencesStore
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.toArgb
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private lateinit var initialThemeMode: ThemeMode
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val appearance = PlayerPreferencesStore(applicationContext)
+        initialThemeMode = runBlocking { appearance.themeMode.first() }
+        appearance.syncSystemTheme(initialThemeMode)
+        val launchColor = (if (initialThemeMode == ThemeMode.Light) com.dev.Tvivo.ui.theme.LightAppColors else com.dev.Tvivo.ui.theme.DefaultAppColors).bg.toArgb()
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(launchColor))
         // Without this `Modifier.imePadding()` is a no-op: Compose reads `WindowInsets.ime`,
         // and while the decor still fits system windows the framework consumes the inset
         // itself and reports zero to Compose. `adjustResize` in the manifest is necessary
@@ -73,10 +102,18 @@ class MainActivity : ComponentActivity() {
         // subclass keeps it in the one place that already owns start-up ordering.
         RefreshWorker.schedule(applicationContext)
         setContent {
-            TvivoTheme {
+            val themeMode by PlayerPreferencesStore(LocalContext.current).themeMode.collectAsState(initial = initialThemeMode)
+            SideEffect {
+                val systemBarColor = (if (themeMode == ThemeMode.Light) com.dev.Tvivo.ui.theme.LightAppColors else com.dev.Tvivo.ui.theme.DefaultAppColors).bg.toArgb()
+                window.statusBarColor = systemBarColor
+                window.navigationBarColor = systemBarColor
+                WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = themeMode == ThemeMode.Light
+                WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = themeMode == ThemeMode.Light
+            }
+            TvivoTheme(mode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    colors = SurfaceDefaults.colors(containerColor = Palette.Bg)
+                    colors = SurfaceDefaults.colors(containerColor = AppColors.Bg)
                 ) {
                     TvivoApp()
                 }
@@ -135,7 +172,19 @@ private fun playItem(
             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, if (isLive) TYPE_LIVE else TYPE_VOD)
             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+            .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
     )
+    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+        AppDatabase.get(context).recentlyPlayedDao().record(
+            RecentlyPlayedEntity(
+                profileId = accountId,
+                accountKey = accountId,
+                contentType = if (isLive) TYPE_LIVE else TYPE_VOD,
+                itemId = itemId.toString(),
+                playedAt = System.currentTimeMillis()
+            )
+        )
+    }
 }
 
 internal sealed interface Route {
@@ -143,6 +192,7 @@ internal sealed interface Route {
      *  animate a bar on a timer. */
     data class Loading(val progress: Float, val caption: String) : Route
     data object Login : Route
+    data class Main(val credentials: Credentials, val tab: ShellTab) : Route
     data class Home(val credentials: Credentials) : Route
     data class Browse(val credentials: Credentials, val type: ContentType) : Route
 
@@ -177,6 +227,7 @@ internal fun browseRoute(credentials: Credentials, type: ContentType): Route.Bro
 private fun Route.diagnosticName(): String = when (this) {
     is Route.Loading -> "Loading"
     Route.Login -> "Login"
+    is Route.Main -> "Main ${tab.name}"
     is Route.Home -> "Home"
     is Route.Browse -> "Browse ${type.name}"
     is Route.ItemDetail -> "Detail ${type.name}"
@@ -189,20 +240,24 @@ private fun Route.diagnosticName(): String = when (this) {
 @Composable
 private fun TvivoApp() {
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val isTelevision = configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-        Configuration.UI_MODE_TYPE_TELEVISION
+    val isTelevision = LocalIsTelevision.current
     val store = remember { CredentialsStore(context.applicationContext) }
     var route by remember {
         mutableStateOf<Route>(Route.Loading(0.15f, "Starting…"))
     }
+    var savedTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
+    var detailOriginTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
+    var browseCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingHomeFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingSearchFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCatalogFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val tabStates = rememberSaveableStateHolder()
 
     LaunchedEffect(route) {
         DiagnosticLog.info("Navigation", "destination composed", "route=${route.diagnosticName()}")
     }
 
-    // Handset login is a touch-first portrait form; the catalog is designed around wide
-    // cards and rail navigation, so it returns to landscape once an account is active.
+    // Handset login is portrait; signed-in routes follow the window size class.
     // MainActivity handles these configuration changes itself so changing orientation does
     // not recreate the activity and discard an in-progress sign-in or account switch.
     LaunchedEffect(isTelevision, route) {
@@ -211,7 +266,7 @@ private fun TvivoApp() {
             isTelevision -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             route is Route.Login || route is Route.Loading ->
                 ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            else -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
         if (activity.requestedOrientation != requestedOrientation) {
             activity.requestedOrientation = requestedOrientation
@@ -240,12 +295,12 @@ private fun TvivoApp() {
         val credentials = store.load()
         route = Route.Loading(0.8f, "Opening your library")
         AppDatabase.get(context.applicationContext)
-        route = credentials?.let { Route.Home(it) } ?: Route.Login
+        route = credentials?.let { Route.Main(it, savedTab) } ?: Route.Login
     }
 
     // The tile Home returns focus to. Kept out of Route.Home so Back restores it
     // without the Home route having to carry navigation history.
-    var lastOpened by remember { mutableStateOf<ContentType?>(null) }
+    var lastOpened by rememberSaveable { mutableStateOf<ContentType?>(null) }
 
     // Set when Login was opened from Settings with an account still signed in, so Back
     // returns to Home instead of exiting an app the user is still signed into.
@@ -253,11 +308,13 @@ private fun TvivoApp() {
 
     val account: AccountViewModel = viewModel()
     val accountState by account.state.collectAsStateWithLifecycle()
+    var homeExitRequest by remember { mutableIntStateOf(0) }
 
     // Browse and Settings both go back to Home; Home and Login are the top of the stack
     // and fall through to the default (exit-to-launcher) behaviour.
     BackHandler(
-        enabled = route is Route.Browse ||
+        enabled = route is Route.Main ||
+            route is Route.Browse ||
             route is Route.ItemDetail ||
             route is Route.SeriesDetail ||
             route is Route.Settings ||
@@ -266,28 +323,33 @@ private fun TvivoApp() {
             (route is Route.Login && switchingAccount != null)
     ) {
         when (val current = route) {
-            is Route.Browse -> route = Route.Home(current.credentials)
+            is Route.Main -> {
+                if (current.tab == ShellTab.MyTvivo) {
+                    homeExitRequest++
+                    return@BackHandler
+                }
+                when (ShellNavigation.backFromTopLevel(current.tab)) {
+                    ShellNavigation.BackAction.ShowExitConfirmation -> homeExitRequest++
+                    ShellNavigation.BackAction.ReturnToMyTvivo -> {
+                        savedTab = ShellTab.MyTvivo
+                        route = Route.Main(current.credentials, ShellTab.MyTvivo)
+                    }
+                }
+            }
+            is Route.Browse -> route = Route.Main(current.credentials, ShellTab.MyTvivo)
             // Back out of the pre-run page returns to the grid it was opened from, which
             // restores focus to the card by item id.
-            is Route.ItemDetail -> route = Route.Browse(current.credentials, current.type)
-            // Back out of the episode picker returns to the show's pre-run page, which
-            // is the screen it was opened from. Going straight to the grid would skip a
-            // step the user walked through and lose the heart they may have come back
-            // for.
-            is Route.SeriesDetail ->
-                route = Route.ItemDetail(
-                    current.credentials,
-                    ContentType.SERIES,
-                    current.seriesId
-                )
-            is Route.Settings -> route = Route.Home(current.credentials)
+            is Route.ItemDetail -> route = Route.Main(current.credentials, detailOriginTab)
+            is Route.SeriesDetail -> route = Route.Main(current.credentials, detailOriginTab)
+            is Route.Settings -> route = Route.Main(current.credentials, ShellTab.MyTvivo)
             // Back out of Subscription returns to Account, which is where it was opened
             // from — skipping to Home would lose the user's place in the action list.
-            is Route.Subscription -> route = Route.Settings(current.credentials)
-            is Route.Diagnostics -> route = Route.Settings(current.credentials)
+            is Route.Subscription -> route = Route.Main(current.credentials, ShellTab.Settings)
+            is Route.Diagnostics -> route = Route.Main(current.credentials, ShellTab.Settings)
             is Route.Login -> switchingAccount?.let {
                 switchingAccount = null
-                route = Route.Home(it)
+                savedTab = ShellTab.MyTvivo
+                route = Route.Main(it, ShellTab.MyTvivo)
             }
             else -> Unit
         }
@@ -305,37 +367,183 @@ private fun TvivoApp() {
                 // would otherwise still describe the previous subscription.
                 switchingAccount = null
                 account.load()
-                route = Route.Home(authenticated.credentials)
+                savedTab = ShellTab.MyTvivo
+                pendingHomeFocusKey = null
+                pendingSearchFocusKey = null
+                browseCategoryId = null
+                lastOpened = null
+                route = Route.Main(authenticated.credentials, ShellTab.MyTvivo)
             }
         )
 
-        is Route.Home -> HomeScreen(
-            lastSelected = lastOpened,
-            accountSummary = accountState.summary,
-            accountWarning = accountState.expiringSoon,
-            // D-7/D-17: Refresh and Exit are global actions and live in Home's icon row.
-            isRefreshing = accountState.isRefreshing,
-            refreshMessage = accountState.refreshMessage,
-            onRefreshEverything = account::refreshEverything,
-            onSelect = { type ->
-                runCatching {
-                    DiagnosticLog.info("Home", "route requested", "contentType=${type.name} route=Browse")
-                    lastOpened = type
-                    route = browseRoute(current.credentials, type)
-                    DiagnosticLog.info(
-                        "Navigation", "route state mutated",
-                        "route=Browse contentType=${type.name}"
-                    )
-                }.onFailure { error ->
-                    DiagnosticLog.error(
-                        "Home", "route transition rejected",
-                        "contentType=${type.name} error=${error.javaClass.simpleName}"
-                    )
+        is Route.Home -> LaunchedEffect(current.credentials) {
+            route = Route.Main(current.credentials, ShellTab.MyTvivo)
+        }
+
+        is Route.Main -> {
+            val accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) }
+            fun select(tab: ShellTab) {
+                savedTab = tab
+                browseCategoryId = null
+                route = Route.Main(current.credentials, tab)
+            }
+            fun openCard(card: com.dev.Tvivo.data.repository.HomeCard, shelfId: String? = null) {
+                detailOriginTab = current.tab
+                if (current.tab == ShellTab.MyTvivo && shelfId != null)
+                    pendingHomeFocusKey = ShelfRestoreKey.of(shelfId, card.key)
+                if (current.tab == ShellTab.Search) pendingSearchFocusKey = card.key
+                route = if (card.type == ContentType.SERIES) {
+                    Route.SeriesDetail(current.credentials, card.item.id)
+                } else Route.ItemDetail(current.credentials, card.type, card.item.id)
+            }
+            AppShell(selected = current.tab, onSelect = ::select) {
+                tabStates.SaveableStateProvider("$accountId:${current.tab.name}") {
+                    when (current.tab) {
+                        ShellTab.MyTvivo -> HomeScreen(
+                            accountId = accountId,
+                            providerHost = current.credentials.host,
+                            subscriptionExpiry = accountState.expiry,
+                            accountWarning = accountState.expiringSoon,
+                            pendingFocusCardKey = pendingHomeFocusKey,
+                            lastSelected = lastOpened,
+                            isRefreshing = accountState.isRefreshing,
+                            refreshMessage = accountState.refreshMessage,
+                            onRefreshEverything = account::refreshEverything,
+                            onSelect = { type ->
+                                lastOpened = type
+                                select(when (type) {
+                                    ContentType.MOVIES -> ShellTab.Movies
+                                    ContentType.SERIES -> ShellTab.Series
+                                    ContentType.LIVE -> ShellTab.Live
+                                })
+                            },
+                            onOpenSearch = { select(ShellTab.Search) },
+                            onOpenSettings = { select(ShellTab.Settings) },
+                            onOpenCard = { card, shelfId -> openCard(card, shelfId) },
+                            onPlayCard = { card, resumeMs, shelfId ->
+                                pendingHomeFocusKey = ShelfRestoreKey.of(shelfId, card.key)
+                                if (card.type == ContentType.SERIES) {
+                                    detailOriginTab = current.tab
+                                    route = Route.SeriesDetail(current.credentials, card.item.id)
+                                } else playItem(context, current.credentials, accountId,
+                                    card.type == ContentType.LIVE, card.item.id, card.item.title,
+                                    card.item.extension, resumeMs)
+                            },
+                            onSeeAll = { shelf ->
+                                if (shelf.id == "__my_suggestions") {
+                                    select(ShellTab.Search)
+                                } else {
+                                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                                        AppDatabase.get(context).shelfVisitDao().record(
+                                            ShelfVisitEntity(
+                                                profileId = accountId,
+                                                accountKey = accountId,
+                                                contentType = shelf.type.roomKey(),
+                                                categoryId = shelf.categoryId ?: shelf.id,
+                                                lastVisitedAt = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    browseCategoryId = shelf.categoryId ?: when {
+                                        shelf.id.startsWith("__my_continue_") -> VirtualFolder.CONTINUE_WATCHING.id
+                                        shelf.id.startsWith("__my_added_") -> VirtualFolder.RECENTLY_ADDED.id
+                                        shelf.id.startsWith("__my_favorites_") -> VirtualFolder.FAVOURITES.id
+                                        else -> null
+                                    }
+                                    savedTab = when (shelf.type) {
+                                        ContentType.MOVIES -> ShellTab.Movies
+                                        ContentType.SERIES -> ShellTab.Series
+                                        ContentType.LIVE -> ShellTab.Live
+                                    }
+                                    route = Route.Main(current.credentials, savedTab)
+                                }
+                            },
+                            onExit = { (context as? android.app.Activity)?.finish() },
+                            exitRequest = homeExitRequest,
+                            onExitRequestHandled = { homeExitRequest = 0 },
+                            onPendingFocusConsumed = { pendingHomeFocusKey = null }
+                        )
+                        ShellTab.Search -> SearchScreen(accountId,
+                            pendingFocusCardKey = pendingSearchFocusKey,
+                            onPendingFocusConsumed = { pendingSearchFocusKey = null },
+                            onOpen = { card -> openCard(card) },
+                            onBrowse = { type ->
+                                select(when (type) {
+                                    ContentType.MOVIES -> ShellTab.Movies
+                                    ContentType.SERIES -> ShellTab.Series
+                                    ContentType.LIVE -> ShellTab.Live
+                                })
+                            })
+                        ShellTab.Settings -> SettingsScreen(
+                            viewModel = account,
+                            onRefreshLibrary = account::refreshEverything,
+                            onSignedOut = {
+                                savedTab = ShellTab.MyTvivo
+                                pendingHomeFocusKey = null
+                                pendingSearchFocusKey = null
+                                browseCategoryId = null
+                                route = Route.Login
+                            },
+                            onSwitchAccount = {
+                                switchingAccount = current.credentials
+                                route = Route.Login
+                            },
+                            onShowSubscription = { route = Route.Subscription(current.credentials) },
+                            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) }
+                        )
+                        else -> {
+                            val type = when (current.tab) {
+                                ShellTab.Movies -> ContentType.MOVIES
+                                ShellTab.Series -> ContentType.SERIES
+                                else -> ContentType.LIVE
+                            }
+                            CatalogLandingScreen(
+                                contentType = type,
+                                accountId = accountId,
+                                initialCategoryId = browseCategoryId,
+                                pendingFocusCardKey = pendingCatalogFocusKey,
+                                onPendingFocusConsumed = { pendingCatalogFocusKey = null },
+                                onReturnToLanding = { browseCategoryId = null },
+                                onOpenDetail = { item, shelfId ->
+                                    pendingCatalogFocusKey = ShelfRestoreKey.of(
+                                        shelfId, "${type.name}:${item.id}")
+                                    detailOriginTab = current.tab
+                                    route = if (type == ContentType.SERIES) {
+                                        Route.SeriesDetail(current.credentials, item.id)
+                                    } else Route.ItemDetail(current.credentials, type, item.id)
+                                },
+                                onOpenDetailFromGrid = { item ->
+                                    pendingCatalogFocusKey = null
+                                    detailOriginTab = current.tab
+                                    route = if (type == ContentType.SERIES) {
+                                        Route.SeriesDetail(current.credentials, item.id)
+                                    } else Route.ItemDetail(current.credentials, type, item.id)
+                                },
+                                onPlay = { item, resumeFromMs, shelfId ->
+                                    pendingCatalogFocusKey = shelfId.takeIf { it.isNotEmpty() }
+                                        ?.let { ShelfRestoreKey.of(it, "${type.name}:${item.id}") }
+                                    if (type == ContentType.SERIES) {
+                                        detailOriginTab = current.tab
+                                        route = Route.SeriesDetail(current.credentials, item.id)
+                                    } else playItem(context, current.credentials, accountId,
+                                        type == ContentType.LIVE, item.id, item.title,
+                                        item.extension, resumeFromMs)
+                                },
+                                onPlayFromGrid = { item, resumeFromMs ->
+                                    pendingCatalogFocusKey = null
+                                    if (type == ContentType.SERIES) {
+                                        detailOriginTab = current.tab
+                                        route = Route.SeriesDetail(current.credentials, item.id)
+                                    } else playItem(context, current.credentials, accountId,
+                                        type == ContentType.LIVE, item.id, item.title,
+                                        item.extension, resumeFromMs)
+                                }
+                            )
+                        }
+                    }
                 }
-            },
-            onOpenSettings = { route = Route.Settings(current.credentials) },
-            onExit = { (context as? android.app.Activity)?.finish() }
-        )
+            }
+        }
 
         is Route.Settings -> SettingsScreen(
             viewModel = account,
@@ -365,7 +573,13 @@ private fun TvivoApp() {
                 // Activating a card no longer plays anything: every type opens the
                 // pre-run page, which owns Play, the description and the heart.
                 onOpenDetail = { item ->
-                    route = Route.ItemDetail(current.credentials, current.type, item.id)
+                    detailOriginTab = when (current.type) {
+                        ContentType.MOVIES -> ShellTab.Movies
+                        ContentType.SERIES -> ShellTab.Series
+                        ContentType.LIVE -> ShellTab.Live
+                    }
+                    route = if (isSeries) Route.SeriesDetail(current.credentials, item.id)
+                        else Route.ItemDetail(current.credentials, current.type, item.id)
                 },
                 // The long-press menu keeps its direct Play. It is the deliberate
                 // shortcut for someone who already knows what the item is, and taking it
@@ -423,7 +637,7 @@ private fun TvivoApp() {
             }
             SeriesDetailScreen(
                 seriesId = current.seriesId,
-                onPlayEpisode = { episode, resumeFromMs ->
+                onPlayEpisode = { episode, resumeFromMs, episodes ->
                     // Episodes live on their own path segment and carry their own id —
                     // a string, straight from the panel, never round-tripped through Int.
                     val url = StreamUrlBuilder.episode(
@@ -431,6 +645,7 @@ private fun TvivoApp() {
                         episode.episodeId,
                         episode.containerExtension ?: "mkv"
                     )
+                    val queue = episodes.sortedWith(compareBy({ it.seasonNumber }, { it.episodeNum }))
                     context.startActivity(
                         Intent(context, PlayerActivity::class.java)
                             .putExtra(PlayerActivity.EXTRA_URL, url)
@@ -443,7 +658,27 @@ private fun TvivoApp() {
                             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_SERIES)
                             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
                             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+                            .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
+                            .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_IDS, ArrayList(queue.map { it.episodeId }))
+                            .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_URLS, ArrayList(queue.map {
+                                StreamUrlBuilder.episode(current.credentials, it.episodeId, it.containerExtension ?: "mkv")
+                            }))
+                            .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_TITLES, ArrayList(queue.map {
+                                "S${it.seasonNumber} · E${it.episodeNum}: ${it.title}"
+                            }))
+                            .putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, queue.indexOfFirst { it.episodeId == episode.episodeId })
                     )
+                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                        AppDatabase.get(context).recentlyPlayedDao().record(
+                            RecentlyPlayedEntity(
+                                profileId = accountId,
+                                accountKey = accountId,
+                                contentType = TYPE_SERIES,
+                                itemId = current.seriesId.toString(),
+                                playedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
                 }
             )
         }

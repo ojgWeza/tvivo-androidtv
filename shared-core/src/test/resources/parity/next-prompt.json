@@ -1,0 +1,18 @@
+[
+  {"name":"Episode_one_hour","kind":"Episode","duration":3600000,"expected":45000},
+  {"name":"Episode_ten_minutes","kind":"Episode","duration":600000,"expected":45000},
+  {"name":"Episode_two_minutes","kind":"Episode","duration":120000,"expected":30000},
+  {"name":"Episode_one_minute","kind":"Episode","duration":60000,"expected":15000},
+  {"name":"Episode_one_millisecond","kind":"Episode","duration":1,"expected":0},
+  {"name":"Movie_two_hours","kind":"Movie","duration":7200000,"expected":240000},
+  {"name":"Movie_one_hour","kind":"Movie","duration":3600000,"expected":180000},
+  {"name":"Movie_ten_minutes","kind":"Movie","duration":600000,"expected":30000},
+  {"name":"Movie_five_minutes","kind":"Movie","duration":300000,"expected":30000},
+  {"name":"Movie_two_minutes","kind":"Movie","duration":120000,"expected":30000},
+  {"name":"Live_has_no_lead","kind":"Live","duration":3600000,"expected":0},
+  {"name":"Series_has_no_lead","kind":"Series","duration":3600000,"expected":0},
+  {"name":"Episode_zero_duration","kind":"Episode","duration":0,"expected":0},
+  {"name":"Episode_negative_duration","kind":"Episode","duration":-1,"expected":0},
+  {"name":"Movie_zero_duration","kind":"Movie","duration":0,"expected":0},
+  {"name":"Movie_negative_duration","kind":"Movie","duration":-1,"expected":0}
+]

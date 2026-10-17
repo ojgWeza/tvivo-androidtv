@@ -1,6 +1,7 @@
 package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,13 +9,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -22,6 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,6 +51,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import com.dev.Tvivo.ui.common.HeaderIconButton
 import com.dev.Tvivo.ui.common.IconPill
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
@@ -45,8 +59,20 @@ import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.home.ContentType
+import com.dev.Tvivo.ui.SearchBackAction
+import com.dev.Tvivo.ui.searchBackAction
+import com.dev.Tvivo.home.CatalogSort
+import com.dev.Tvivo.home.CatalogLandingPolicy
+import com.dev.Tvivo.home.CatalogCategoryOrder
+import com.dev.Tvivo.data.local.NameNormalizer
+import com.dev.Tvivo.data.repository.LandingCategoryMetrics
+import com.dev.Tvivo.home.FocusLinkPolicy
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
+import com.dev.Tvivo.ui.adaptive.WindowSizeClass
+import com.dev.Tvivo.ui.shell.LocalShellFocus
 import com.dev.Tvivo.sync.CatalogSyncer
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
@@ -56,6 +82,16 @@ import androidx.activity.compose.BackHandler
 @Composable
 fun BrowseScreen(
     contentType: ContentType,
+    accountId: String? = null,
+    initialCategoryId: String? = null,
+    initialItemFilter: String? = null,
+    landingMode: Boolean = false,
+    sort: CatalogSort = CatalogSort.MostVisited,
+    onSortChanged: (CatalogSort) -> Unit = {},
+    categorySort: CatalogSort? = null,
+    onCategorySortChanged: ((CatalogSort) -> Unit)? = null,
+    categoryMetrics: Map<String, LandingCategoryMetrics> = emptyMap(),
+    onBackToLanding: () -> Unit = {},
     /** Activating a card. Opens the pre-run page; it never starts a stream. */
     onOpenDetail: (BrowseItem) -> Unit,
     /** The long-press shortcut only. Straight to the player, resume prompt included. */
@@ -65,7 +101,7 @@ fun BrowseScreen(
     // Keyed by content type: Live and Movies are separate screens with separate
     // categories, selection and focus, and must not share one instance.
     val viewModel: BrowseViewModel = viewModel(
-        key = "browse:" + contentType.name,
+        key = "browse:${accountId ?: "stored"}:${contentType.name}",
         factory = viewModelFactory {
             initializer {
                 BrowseViewModel(application, createSavedStateHandle(), contentType)
@@ -73,16 +109,57 @@ fun BrowseScreen(
         }
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val savedCategorySort by viewModel.categorySort.collectAsStateWithLifecycle()
+    val effectiveCategorySort = categorySort ?: savedCategorySort
+    val updateCategorySort = onCategorySortChanged ?: viewModel::setCategorySort
+    var categoryApplied by remember(initialCategoryId) { mutableStateOf(false) }
+    LaunchedEffect(initialCategoryId, state.visibleCategories) {
+        if (!categoryApplied && initialCategoryId != null &&
+            state.visibleCategories.any { it.categoryId == initialCategoryId }) {
+            viewModel.selectCategory(initialCategoryId, forceRecordVisit = landingMode)
+            if (!initialItemFilter.isNullOrBlank()) {
+                viewModel.setItemFilterOpen(true)
+                viewModel.onItemFilterChanged(initialItemFilter)
+            }
+            categoryApplied = true
+        }
+    }
     val items = viewModel.items.collectAsLazyPagingItems()
     var contextMenuItem by remember { mutableStateOf<BrowseItem?>(null) }
     var resumePromptItem by remember { mutableStateOf<Pair<BrowseItem, Long>?>(null) }
     val scope = rememberCoroutineScope()
-    val gridFocusRequester = remember { FocusRequester() }
+    val compactPhone = !LocalIsTelevision.current &&
+        LocalWindowSizeClass.current == WindowSizeClass.Compact
+    val railAsPanel = compactPhone || landingMode
+    var categoryPanelOpen by rememberSaveable { mutableStateOf(false) }
+    val categoriesFocusRequester = remember { FocusRequester() }
+    val gridFocusRequester = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
     val itemFilterFocusRequester = remember { FocusRequester() }
+    val sortFocusRequester = remember { FocusRequester() }
 
+    BackHandler(enabled = landingMode && !state.isItemFilterOpen && !categoryPanelOpen) {
+        onBackToLanding()
+    }
+    BackHandler(enabled = railAsPanel && categoryPanelOpen && !state.isItemFilterOpen) {
+        categoryPanelOpen = false
+        scope.launch {
+            androidx.compose.runtime.withFrameNanos {}
+            runCatching { categoriesFocusRequester.requestFocus() }
+        }
+    }
     BackHandler(enabled = state.isItemFilterOpen) {
-        viewModel.setItemFilterOpen(false)
+        // Back with text clears it and leaves the field open; empty Back closes it.
+        if (searchBackAction(state.itemFilter) == SearchBackAction.Clear)
+            viewModel.onItemFilterChanged("")
+        else viewModel.setItemFilterOpen(false)
+    }
+    LaunchedEffect(categoryPanelOpen) {
+        if (categoryPanelOpen) {
+            androidx.compose.runtime.withFrameNanos {}
+            androidx.compose.runtime.withFrameNanos {}
+            runCatching { railFocusRequester.requestFocus() }
+        }
     }
 
     // **Q-25 — the screen must open with something focused.** It did not, and an
@@ -107,12 +184,16 @@ fun BrowseScreen(
     // by `onActivate` on the way out and survives in `SavedStateHandle`. When it is
     // present the grid owns the restore ([ContentGrid] scrolls to the item and requests
     // focus onto it), so the rail must not compete for focus at all.
-    var focusPlaced by remember { mutableStateOf(false) }
+    var focusPlaced by remember(railAsPanel) { mutableStateOf(false) }
     val returningToItem = viewModel.pendingFocusItemId != null
-    LaunchedEffect(state.visibleCategories.isNotEmpty(), returningToItem) {
+    LaunchedEffect(state.visibleCategories.isNotEmpty(), returningToItem, railAsPanel, items.itemCount) {
         if (focusPlaced || returningToItem) return@LaunchedEffect
         if (state.visibleCategories.isNotEmpty()) {
-            runCatching { railFocusRequester.requestFocus() }.onSuccess { focusPlaced = true }
+            runCatching {
+                if (landingMode && items.itemCount > 0) gridFocusRequester.requestFocus()
+                else if (railAsPanel) categoriesFocusRequester.requestFocus()
+                else railFocusRequester.requestFocus()
+            }.onSuccess { focusPlaced = true }
         }
     }
 
@@ -140,24 +221,82 @@ fun BrowseScreen(
         }
     }
 
-    Row(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
-        CategoryRail(
+    var edgeDrag by remember { mutableStateOf(false) }
+    var dragDistance by remember { mutableStateOf(0f) }
+    val swipeModifier = if (landingMode) Modifier.pointerInput(categoryPanelOpen) {
+        detectHorizontalDragGestures(
+            onDragStart = { edgeDrag = it.x < 40.dp.toPx(); dragDistance = 0f },
+            onHorizontalDrag = { _, amount ->
+                if (edgeDrag && !categoryPanelOpen) {
+                    dragDistance += amount
+                    if (dragDistance > 56.dp.toPx()) categoryPanelOpen = true
+                }
+            }
+        )
+    } else Modifier
+    Row(modifier = Modifier.fillMaxSize().background(AppColors.Bg)
+        .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+        .then(swipeModifier)) {
+        if (!railAsPanel || categoryPanelOpen) CategoryRail(
             // The *filtered* list. Counts stay keyed by id, so they follow whichever
             // categories survive the filter without any extra bookkeeping.
-            categories = state.visibleCategories,
+            categories = state.virtualCategories + CatalogLandingPolicy.sorted(
+                state.visibleCategories.map { category ->
+                    val metric = categoryMetrics[category.categoryId]
+                    CatalogCategoryOrder(category.categoryId, category.name, category.ordering,
+                        metric?.visits ?: 0L, metric?.lastVisitedAt ?: 0L,
+                        metric?.latestAdded ?: 0L,
+                        normalizedName = NameNormalizer.of(category.name).normalized)
+                }, effectiveCategorySort
+            ).map { order -> state.visibleCategories.first { it.categoryId == order.id } },
             counts = state.counts,
             selectedCategoryId = state.selectedCategoryId,
             filter = state.categoryFilter,
             onFilterChanged = viewModel::onCategoryFilterChanged,
-            onSelect = { viewModel.selectCategory(it.categoryId) },
+            onSelect = {
+                viewModel.selectCategory(it.categoryId)
+                if (railAsPanel) {
+                    categoryPanelOpen = false
+                    if (items.itemCount > 0) scope.launch {
+                        repeat(5) {
+                            androidx.compose.runtime.withFrameNanos {}
+                            if (runCatching { gridFocusRequester.requestFocus() }.isSuccess)
+                                return@launch
+                        }
+                    }
+                }
+            },
             gridFocusRequester = gridFocusRequester,
-            railFocusRequester = railFocusRequester
+            railFocusRequester = railFocusRequester,
+            gridAvailable = items.itemCount > 0 && (!compactPhone || !categoryPanelOpen),
+            categorySort = effectiveCategorySort,
+            onCategorySortChanged = updateCategorySort
+        )
+
+        if (landingMode) CategoryDrawerTab(
+            focusRequester = categoriesFocusRequester,
+            contentFocusRequester = gridFocusRequester,
+            contentAvailable = items.itemCount > 0 && (!compactPhone || !categoryPanelOpen),
+            onOpen = { categoryPanelOpen = true }
         )
 
         // The rail has a fixed 280 dp width. `fillMaxSize()` here measured the content
         // against the whole Row and let its final grid column extend behind the screen
         // edge on a handset. Weight measures the remaining width after the rail instead.
-        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+        if (!compactPhone || !categoryPanelOpen) Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+            if (landingMode) {
+                Text("← All categories", color = AppColors.AccentText, style = TvType.label,
+                    modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame()
+                        .onPreviewKeyEvent { event ->
+                            val native = event.nativeKeyEvent
+                            if (native.action == android.view.KeyEvent.ACTION_DOWN &&
+                                native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
+                                runCatching { categoriesFocusRequester.requestFocus() }.isSuccess
+                            } else false
+                        }
+                        .tvClickable { onBackToLanding() }
+                        .padding(start = 24.dp, top = 12.dp, bottom = 12.dp))
+            }
             Header(
                 // **Both lists, not just the panel's.** The three virtual folders are
                 // `CategoryEntity` rows like any other, but they live in
@@ -182,6 +321,8 @@ fun BrowseScreen(
                 error = state.error,
                 hasCachedItems = items.itemCount > 0,
                 onRefresh = viewModel::refreshSelected,
+                refreshLabel = if (VirtualFolder.isVirtual(state.selectedCategoryId.orEmpty()))
+                    "Refresh ${contentType.label} library" else "Refresh category",
                 itemFilter = state.itemFilter,
                 isItemFilterOpen = state.isItemFilterOpen,
                 filteredCount = state.filteredCount,
@@ -190,7 +331,15 @@ fun BrowseScreen(
                 onItemFilterOpenChanged = viewModel::setItemFilterOpen,
                 gridFocusRequester = gridFocusRequester,
                 itemFilterFocusRequester = itemFilterFocusRequester,
-                railFocusRequester = railFocusRequester
+                railFocusRequester = railFocusRequester,
+                onToggleCategories = null,
+                categoriesFocusRequester = categoriesFocusRequester,
+                showFilter = true,
+                sort = sort,
+                onSortChanged = onSortChanged,
+                sortFocusRequester = sortFocusRequester,
+                showSort = landingMode,
+                railAvailable = !railAsPanel || categoryPanelOpen
             )
 
             when {
@@ -212,7 +361,7 @@ fun BrowseScreen(
                     items.loadState.refresh !is androidx.paging.LoadState.Loading ->
                     NoFilterMatchState(
                         query = state.itemFilter,
-                        onClear = { viewModel.setItemFilterOpen(false) }
+                        onClear = { viewModel.onItemFilterChanged("") }
                     )
 
                 items.itemCount == 0 &&
@@ -224,13 +373,16 @@ fun BrowseScreen(
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
-                    itemFilterFocusRequester = itemFilterFocusRequester,
+                    itemFilterFocusRequester = if (landingMode) sortFocusRequester
+                        else itemFilterFocusRequester,
                     onActivate = { item ->
                         viewModel.pendingFocusItemId = item.id
                         onOpenDetail(item)
                     },
                     onContextMenu = { contextMenuItem = it },
-                    onFocused = { viewModel.pendingFocusItemId = it.id }
+                    onFocused = { viewModel.pendingFocusItemId = it.id },
+                    progressFor = viewModel::progressFor,
+                    onLeadingLeft = if (landingMode) ({ runCatching { categoriesFocusRequester.requestFocus() } }) else null
                 )
             }
         }
@@ -291,6 +443,7 @@ private fun Header(
     error: AppError?,
     hasCachedItems: Boolean,
     onRefresh: () -> Unit,
+    refreshLabel: String,
     itemFilter: String,
     isItemFilterOpen: Boolean,
     filteredCount: Int?,
@@ -299,13 +452,36 @@ private fun Header(
     onItemFilterOpenChanged: (Boolean) -> Unit,
     gridFocusRequester: FocusRequester,
     itemFilterFocusRequester: FocusRequester,
-    railFocusRequester: FocusRequester
+    railFocusRequester: FocusRequester,
+    onToggleCategories: (() -> Unit)?,
+    categoriesFocusRequester: FocusRequester,
+    showFilter: Boolean,
+    sort: CatalogSort,
+    onSortChanged: (CatalogSort) -> Unit,
+    sortFocusRequester: FocusRequester,
+    showSort: Boolean,
+    railAvailable: Boolean
 ) {
     val refreshFocusRequester = remember { FocusRequester() }
+    val horizontalMargin = when {
+        LocalIsTelevision.current -> 48.dp
+        LocalWindowSizeClass.current == WindowSizeClass.Compact -> 16.dp
+        else -> 24.dp
+    }
     val statusMessage = browseStatusMessage(error, syncState, hasCachedItems)
     Column(modifier = Modifier.fillMaxWidth()) {
+        if (onToggleCategories != null && !isItemFilterOpen) {
+            Text(title, color = AppColors.Ink, style = TvType.headline,
+                maxLines = 2, modifier = Modifier.fillMaxWidth()
+                    .padding(start = horizontalMargin, end = horizontalMargin,
+                        top = if (LocalIsTelevision.current) 27.dp else 12.dp))
+        }
+        if (onToggleCategories != null && filteredCount != null && totalCount != null) {
+            Text("$filteredCount of $totalCount", color = AppColors.Dim, style = TvType.label,
+                modifier = Modifier.padding(start = horizontalMargin, end = horizontalMargin))
+        }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalMargin, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -318,10 +494,10 @@ private fun Header(
             // part that is actually changing under them.
             Column(modifier = Modifier.weight(1f)) {
                 // The header shows the category name immediately, before any row arrives.
-                if (!isItemFilterOpen) {
+                if (!isItemFilterOpen && onToggleCategories == null) {
                     Text(
                         text = title,
-                        color = Palette.Ink,
+                        color = AppColors.Ink,
                         style = TvType.headline,
                         // Two lines, never one: this panel ships `RAMADAN EGYPT 2026 SD`
                         // and `... HD`, which truncate to the same string and recreate
@@ -344,28 +520,47 @@ private fun Header(
                 } else {
                     null
                 }
-                countLine?.let {
-                    Text(text = it, color = Palette.Dim, style = TvType.label)
+                countLine?.takeIf { onToggleCategories == null }?.let {
+                    Text(text = it, color = AppColors.Dim, style = TvType.label)
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.onPreviewKeyEvent { event ->
+                    val native = event.nativeKeyEvent
+                    if (showSort && native.action == android.view.KeyEvent.ACTION_DOWN &&
+                        native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
+                        runCatching { categoriesFocusRequester.requestFocus() }.isSuccess
+                    } else false
+                }
+            ) {
+                if (showSort) CatalogSortMenu(
+                    CatalogLandingPolicy.openedListSort(sort), onSortChanged,
+                    sortFocusRequester, Modifier.padding(end = 10.dp)
+                )
+                if (onToggleCategories != null) {
+                    Text("Categories", color = AppColors.Ink, style = TvType.label,
+                        modifier = Modifier.heightIn(min = 48.dp).focusRequester(categoriesFocusRequester)
+                            .tvFocusFrame().tvClickable(onClick = onToggleCategories)
+                            .padding(end = 12.dp, top = 10.dp, bottom = 10.dp))
+                }
                 // Visible progress that dismisses at 100%. The rail counts filling in
                 // category by category are the secondary signal.
                 if (syncState == "indexing") {
                     Text(
                         text = "Indexing $syncDone…",
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp)
                     )
                 }
                 confirmation?.let {
-                    Text(text = it, color = Palette.Dim, style = TvType.label,
+                    Text(text = it, color = AppColors.Dim, style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp))
                 }
                 statusMessage?.let {
-                    Text(text = it, color = Palette.Dim, style = TvType.label,
+                    Text(text = it, color = AppColors.Dim, style = TvType.label,
                         modifier = Modifier.padding(end = 16.dp))
                 }
                 // D-8 — the same component Home uses. This was a bare text link, which
@@ -378,32 +573,31 @@ private fun Header(
                 // D-14. Collapsed it is a search pill like any other; opened it
                 // expands in place into a field with its own clear action, so the
                 // control the user pressed is the control they end up typing into.
-                if (isItemFilterOpen) {
+                if (showFilter && isItemFilterOpen) {
                     ItemFilterField(
                         value = itemFilter,
                         onValueChange = onItemFilterChanged,
-                        onClose = { onItemFilterOpenChanged(false) },
                         gridFocusRequester = gridFocusRequester,
                         itemFilterFocusRequester = itemFilterFocusRequester,
                         railFocusRequester = railFocusRequester,
-                        refreshFocusRequester = refreshFocusRequester
+                        refreshFocusRequester = refreshFocusRequester,
+                        // Only a permanent rail is always attached; the grid only exists
+                        // once there are rows (not loading / empty / no-match).
+                        railAvailable = railAvailable,
+                        gridAvailable = hasCachedItems
                     )
-                } else {
-                    IconPill(
-                        // "this category" was doing no work: the control sits inside the
-                        // category, under its title, so the scope is already said by
-                        // where the pill is. Spelling it out only made the expanded pill
-                        // wide enough to shove the rest of the header sideways.
+                } else if (showFilter) {
+                    HeaderIconButton(
                         icon = Icons.Default.Search,
-                        label = "Filter",
+                        contentDescription = "Filter items",
                         onClick = { onItemFilterOpenChanged(true) },
-                        modifier = Modifier.padding(end = 12.dp)
+                        modifier = Modifier.padding(end = 12.dp).testTag("browse-filter")
                     )
                 }
 
-                IconPill(
+                HeaderIconButton(
                     icon = Icons.Default.Refresh,
-                    label = "Refresh",
+                    contentDescription = refreshLabel,
                     enabled = !isRefreshing,
                     onClick = onRefresh,
                     modifier = Modifier.focusRequester(refreshFocusRequester)
@@ -417,9 +611,9 @@ private fun Header(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
+                    .padding(horizontal = horizontalMargin)
                     .height(3.dp)
-                    .background(Palette.Accent)
+                    .background(AppColors.Accent)
             )
         }
     }
@@ -430,11 +624,11 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
     val copy = ErrorCopy.of(error)
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = copy.message, color = Palette.Ink, style = TvType.title)
+            Text(text = copy.message, color = AppColors.Ink, style = TvType.title)
             copy.primaryAction?.let {
                 Text(
                     text = it,
-                    color = Palette.AccentText,
+                    color = AppColors.AccentText,
                     style = TvType.body,
                     modifier = Modifier.padding(top = 16.dp)
                 )
@@ -454,39 +648,46 @@ internal fun browseStatusMessage(error: AppError?, catalogSyncState: String?, ha
  * D-14. The field the search pill turns into. Focus lands in it on open, so the pill and
  * the field are one gesture rather than two.
  *
- * **Back closes it and clears the filter** (see `setItemFilterOpen`). A filter that is
+ * **Back clears text first, then closes the empty field**. A filter that is
  * hidden but still applied is a grid quietly missing rows with nothing on screen to say
  * so.
  */
 @Composable
-private fun ItemFilterField(
+internal fun ItemFilterField(
     value: String,
     onValueChange: (String) -> Unit,
-    onClose: () -> Unit,
     gridFocusRequester: FocusRequester,
     itemFilterFocusRequester: FocusRequester,
     railFocusRequester: FocusRequester,
-    refreshFocusRequester: FocusRequester
+    refreshFocusRequester: FocusRequester,
+    railAvailable: Boolean,
+    gridAvailable: Boolean
 ) {
     val focus = itemFilterFocusRequester
+    val clearFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            androidx.compose.runtime.withFrameNanos {}
+            if (runCatching { focus.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.material3.OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            label = { Text("Filter", color = Palette.Dim, style = TvType.caption) },
+            label = { Text("Filter", color = AppColors.Dim, style = TvType.caption) },
             singleLine = true,
             textStyle = TvType.body,
             colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Palette.Ink,
-                unfocusedTextColor = Palette.Ink,
-                focusedContainerColor = Palette.Elevated,
-                unfocusedContainerColor = Palette.Elevated,
-                cursorColor = Palette.Accent,
-                focusedBorderColor = Palette.Accent,
-                unfocusedBorderColor = Palette.Line
+                focusedTextColor = AppColors.Ink,
+                unfocusedTextColor = AppColors.Ink,
+                focusedContainerColor = AppColors.Elevated,
+                unfocusedContainerColor = AppColors.Elevated,
+                cursorColor = AppColors.Accent,
+                focusedBorderColor = AppColors.Focus,
+                unfocusedBorderColor = AppColors.Line
             ),
             // Without this the field traps focus and the filtered grid is
             // unreachable — see `dpadFieldNavigation`.
@@ -498,12 +699,17 @@ private fun ItemFilterField(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
             ),
             modifier = Modifier
+                .testTag("item-filter-field")
                 .width(FILTER_FIELD_WIDTH)
                 .focusRequester(focus)
                 .focusProperties {
-                    left = railFocusRequester
-                    right = refreshFocusRequester
-                    down = gridFocusRequester
+                    left = FocusLinkPolicy.targetIfRendered(
+                        railFocusRequester, railAvailable
+                    ) ?: FocusRequester.Default
+                    right = if (value.isNotEmpty()) clearFocusRequester else refreshFocusRequester
+                    down = FocusLinkPolicy.targetIfRendered(
+                        gridFocusRequester, gridAvailable
+                    ) ?: FocusRequester.Default
                 }
                 .dpadFieldNavigation(focusManager)
         )
@@ -513,12 +719,16 @@ private fun ItemFilterField(
         // something the user had not done yet, presented as though it belonged to the
         // header rather than to the field. Back already closes an empty filter, which is
         // the only thing Clear could have meant at that point.
-        if (value.isNotBlank()) {
+        if (value.isNotEmpty()) {
             IconPill(
                 icon = Icons.Default.Close,
                 label = "Clear",
-                onClick = onClose,
-                modifier = Modifier.padding(end = 12.dp)
+                onClick = { onValueChange(""); runCatching { focus.requestFocus() } },
+                modifier = Modifier.testTag("item-filter-clear")
+                    .semantics { contentDescription = "Clear" }
+                    .focusRequester(clearFocusRequester)
+                    .focusProperties { left = focus; right = refreshFocusRequester }
+                    .padding(end = 12.dp)
             )
         }
     }
@@ -536,7 +746,7 @@ private fun LoadingState() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         // Text, not a spinner: there is no progress to report for a single Room query, and
         // a spinner over a 200 ms wait is more distracting than a word.
-        Text(text = "Loading…", color = Palette.Dim, style = TvType.title)
+        Text(text = "Loading…", color = AppColors.Dim, style = TvType.title)
     }
 }
 
@@ -547,12 +757,12 @@ private fun NoFilterMatchState(query: String, onClear: () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = "Nothing here matches \"$query\"",
-                color = Palette.Ink,
+                color = AppColors.Ink,
                 style = TvType.title
             )
             Text(
                 text = "Clear filter",
-                color = Palette.AccentText,
+                color = AppColors.AccentText,
                 style = TvType.body,
                 modifier = Modifier
                     .tvFocusFrame()
@@ -567,10 +777,10 @@ private fun NoFilterMatchState(query: String, onClear: () -> Unit) {
 private fun EmptyState(onRefresh: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "Nothing in this category", color = Palette.Ink, style = TvType.title)
+            Text(text = "Nothing in this category", color = AppColors.Ink, style = TvType.title)
             Text(
                 text = "Refresh",
-                color = Palette.AccentText,
+                color = AppColors.AccentText,
                 style = TvType.body,
                 modifier = Modifier.tvClickable { onRefresh() }.padding(top = 16.dp)
             )

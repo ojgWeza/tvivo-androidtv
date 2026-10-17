@@ -10,7 +10,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.dev.Tvivo"
+        applicationId = providers.gradleProperty("appApplicationId").orElse("com.dev.Tvivo").get()
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -49,6 +49,13 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets {
+        getByName("test").resources.srcDir("src/sharedTest/fixtures")
+        getByName("test").resources.srcDir("$projectDir/schemas")
+        getByName("test").assets.srcDir("$projectDir/schemas")
+        getByName("androidTest").assets.srcDir("src/sharedTest/fixtures")
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
@@ -59,6 +66,10 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -80,6 +91,7 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-session:1.4.1")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
@@ -109,6 +121,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("app.cash.turbine:turbine:1.1.0")
     testImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.13")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))

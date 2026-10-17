@@ -1,0 +1,23 @@
+[
+  {"name":"Explicit_subtitle_off_wins","op":"subtitle","tracks":[{"key":"eng","language":"en"},{"key":"ara","language":"ar"}],"preferred":"en","off":true,"ui":"ar","expected":null},
+  {"name":"Preferred_language_accepts_iso_639_2","op":"subtitle","tracks":[{"key":"arabic","language":"ar"},{"key":"english","language":"en"}],"preferred":"eng","off":false,"ui":"ar","expected":"english"},
+  {"name":"Ui_culture_used_when_preferred_has_no_match","op":"subtitle","tracks":[{"key":"english","language":"eng"},{"key":"arabic","language":"ara"}],"preferred":"de","off":false,"ui":"ar","expected":"arabic"},
+  {"name":"First_subtitle_when_no_language_matches","op":"subtitle","tracks":[{"key":"first","language":null},{"key":"second","language":null}],"preferred":"de","off":false,"ui":"fr","expected":"first"},
+  {"name":"No_tracks_means_no_subtitle","op":"subtitle","tracks":[],"preferred":"en","off":false,"ui":"en","expected":null},
+  {"name":"No_tracks_means_no_audio_change","op":"audio","tracks":[],"preferred":"en","ui":"en","expected":null},
+  {"name":"Duplicate_languages_prefer_non_forced","op":"subtitle","tracks":[{"key":"forced","label":"English (Forced)","language":"eng"},{"key":"full","label":"English (Full)","language":"en"}],"preferred":"en","off":false,"ui":null,"expected":"full"},
+  {"name":"Duplicate_secondary_labels_keep_source_order","op":"subtitle","tracks":[{"key":"commentary","label":"English Commentary","language":"en"},{"key":"sdh","label":"English SDH","language":"eng"}],"preferred":"en","off":false,"ui":null,"expected":"commentary"},
+  {"name":"Unmatched_audio_returns_null","op":"audio","tracks":[{"key":"english","label":"English","language":"en"}],"preferred":"de","ui":"fr","expected":null},
+  {"name":"Normalize_English_ISO3","op":"normalize","language":"eng","expected":"en"},
+  {"name":"Normalize_Arabic_with_region","op":"normalize","language":"ara-EG","expected":"ar"},
+  {"name":"Opaque_label_becomes_language_name","op":"display","kind":"Audio","label":"eng","language":"en","ordinal":1,"expected":"English"},
+  {"name":"Meaningful_label_is_preserved","op":"display","kind":"Subtitle","label":"English (Full)","language":"en","ordinal":2,"expected":"English (Full)"},
+  {"name":"Missing_language_uses_track_ordinal","op":"display","kind":"Subtitle","label":"Track 2","language":null,"ordinal":2,"expected":"Subtitle track 2"},
+  {"name":"Android_track_defaults","op":"defaults","expected":{"audio":"Auto","subtitles":"Off"}},
+  {"name":"Audio_Auto_has_no_language","op":"preference","kind":"Audio","choice":"Auto","expected":null},
+  {"name":"Audio_Arabic_language","op":"preference","kind":"Audio","choice":"Arabic","expected":"ar"},
+  {"name":"Audio_English_language","op":"preference","kind":"Audio","choice":"English","expected":"en"},
+  {"name":"Subtitle_Off_has_no_language","op":"preference","kind":"Subtitle","choice":"Off","expected":null},
+  {"name":"Subtitle_Arabic_language","op":"preference","kind":"Subtitle","choice":"Arabic","expected":"ar"},
+  {"name":"Subtitle_English_language","op":"preference","kind":"Subtitle","choice":"English","expected":"en"}
+]

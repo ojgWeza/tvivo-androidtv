@@ -174,4 +174,10 @@ class NameNormalizerTest {
             NameNormalizer.of("Some Movie FHD").normalized
         )
     }
+
+    @Test
+    fun `persisted normalized names use the shared core sort key`() {
+        val names = NameNormalizer.of("  ÉCLAIR   café HD ")
+        assertEquals(com.dev.Tvivo.home.NormalizedNameKey.of(names.display), names.normalized)
+    }
 }

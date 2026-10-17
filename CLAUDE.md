@@ -1,5 +1,7 @@
 # Tvivo — Session Entry Point
 
+> **DELEGATION:** follow the global order at the top of `C:\Users\Dell\.claude\CLAUDE.md` (Sonnet orchestrates, luna implements, sol plans, Haiku tests, Opus reviews).
+
 **Read in this order:**
 
 1. `D:\HCode\DEV-BIBLE.md` — global rules for all D:\HCode projects

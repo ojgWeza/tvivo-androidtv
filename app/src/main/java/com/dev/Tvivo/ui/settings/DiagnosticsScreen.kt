@@ -29,8 +29,10 @@ import com.dev.Tvivo.diagnostics.CatalogProfiler
 import com.dev.Tvivo.diagnostics.DbMetrics
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.diagnostics.RuntimeMetrics
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.adaptiveSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,6 +46,7 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun DiagnosticsScreen() {
+    val spacing = adaptiveSpacing()
     val entries by DiagnosticLog.entries.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -60,15 +63,18 @@ fun DiagnosticsScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Palette.Bg)
-            .padding(horizontal = 96.dp, vertical = 64.dp)
+            .background(AppColors.Bg)
+            .padding(
+                horizontal = if (LocalIsTelevision.current) 96.dp else spacing.outerGutter,
+                vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
+            )
     ) {
-        Text(text = "Diagnostics", color = Palette.Ink, style = TvType.display)
+        Text(text = "Diagnostics", color = AppColors.Ink, style = TvType.display)
         Spacer(Modifier.height(4.dp))
         Text(
             text = "Sanitized activity record. Newest first; retained across restarts. " +
                 "Export never includes credentials, URLs, or titles.",
-            color = Palette.Dim,
+            color = AppColors.Dim,
             style = TvType.body
         )
         Spacer(Modifier.height(24.dp))
@@ -78,7 +84,7 @@ fun DiagnosticsScreen() {
                 text = "Storage: ${DbMetrics.formatBytes(snapshot.totalBytes)} total  " +
                     "Database ${DbMetrics.formatBytes(snapshot.databaseFootprintBytes)}  " +
                     "Images ${DbMetrics.formatBytes(snapshot.imageCacheBytes)}",
-                color = Palette.Dim,
+                color = AppColors.Dim,
                 style = TvType.caption
             )
             if (snapshot.tableBytes.isNotEmpty()) {
@@ -86,7 +92,7 @@ fun DiagnosticsScreen() {
                     text = snapshot.tableBytes.entries.joinToString("  ") { (name, bytes) ->
                         "$name ${DbMetrics.formatBytes(bytes)}"
                     },
-                    color = Palette.Dim,
+                    color = AppColors.Dim,
                     style = TvType.caption
                 )
             }
@@ -98,13 +104,13 @@ fun DiagnosticsScreen() {
                     "${DbMetrics.formatBytes(snapshot.javaMaxBytes)}  " +
                     "Native ${DbMetrics.formatBytes(snapshot.nativeHeapBytes)}  " +
                     "PSS ${DbMetrics.formatBytes(snapshot.totalPssBytes)}",
-                color = Palette.Dim,
+                color = AppColors.Dim,
                 style = TvType.caption
             )
             Text(
                 text = "GC since start: ${snapshot.gcCount ?: "unavailable"} collections, " +
                     "${snapshot.gcTimeMs ?: "unavailable"} ms",
-                color = Palette.Dim,
+                color = AppColors.Dim,
                 style = TvType.caption
             )
             Spacer(Modifier.height(12.dp))
@@ -133,13 +139,13 @@ fun DiagnosticsScreen() {
 
         catalogProfile?.let { profile ->
             if (profile.samples.isEmpty()) {
-                Text("No cached catalog is available to profile.", color = Palette.Dim, style = TvType.body)
+                Text("No cached catalog is available to profile.", color = AppColors.Dim, style = TvType.body)
             } else {
-                Text("Catalog profile (local reads only)", color = Palette.Ink, style = TvType.title)
+                Text("Catalog profile (local reads only)", color = AppColors.Ink, style = TvType.title)
                 profile.samples.forEach { sample ->
                     Text(
                         text = "${sample.label}: ${sample.elapsedMs} ms, ${sample.rowsRead} rows — ${sample.queryPlan}",
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.caption
                     )
                 }
@@ -149,7 +155,7 @@ fun DiagnosticsScreen() {
 
         if (entries.isEmpty()) {
             // Not an error state: an empty log on a healthy app is the normal case.
-            Text(text = "Nothing recorded yet.", color = Palette.Dim, style = TvType.body)
+            Text(text = "Nothing recorded yet.", color = AppColors.Dim, style = TvType.body)
             return@Column
         }
 
@@ -158,22 +164,22 @@ fun DiagnosticsScreen() {
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(
                         text = entry.time,
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.caption,
                         modifier = Modifier.width(88.dp)
                     )
                     Text(
                         text = entry.area,
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.caption,
                         modifier = Modifier.width(120.dp)
                     )
                     Text(
                         text = entry.message,
                         color = when (entry.level) {
-                            DiagnosticLog.Level.ERROR -> Palette.AccentText
-                            DiagnosticLog.Level.WARN -> Palette.AccentText
-                            DiagnosticLog.Level.INFO -> Palette.Ink
+                            DiagnosticLog.Level.ERROR -> AppColors.Error
+                            DiagnosticLog.Level.WARN -> AppColors.Error
+                            DiagnosticLog.Level.INFO -> AppColors.Ink
                         },
                         style = TvType.label
                     )

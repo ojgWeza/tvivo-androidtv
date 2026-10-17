@@ -9,6 +9,9 @@ import com.dev.Tvivo.auth.AuthRepository
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.entities.TYPE_LIVE
+import com.dev.Tvivo.data.local.entities.TYPE_SERIES
+import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.VodRepository
@@ -37,6 +40,7 @@ data class AccountUiState(
     val error: AppError? = null,
     val isRefreshing: Boolean = false,
     val refreshMessage: String? = null,
+    val lastRefreshedAt: Long? = null,
     val signedOut: Boolean = false
 ) {
     /** One line for the Home strip: enough to answer "which account, until when". */
@@ -49,8 +53,7 @@ data class AccountUiState(
 }
 
 /**
- * Account state and the whole-app actions that belong to it rather than to any one
- * content type: sign out, switch account, refresh everything, exit.
+ * Account state and the whole-app actions: sign out, switch account and refresh everything.
  *
  * The expiry, status and connection count are **re-fetched live** rather than cached
  * from the login response — a subscription that lapsed yesterday should say so today,
@@ -76,6 +79,11 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                 _state.update { it.copy(isLoading = false, signedOut = true) }
                 return@launch
             }
+            val accountId = AccountIdentity.of(credentials)
+            val lastCatalogUpdate = listOf(TYPE_VOD, TYPE_SERIES, TYPE_LIVE)
+                .mapNotNull { type -> db.catalogSyncDao().get(accountId, type) }
+                .filter { it.state == "complete" }
+                .maxOfOrNull { it.updatedAt }
             // Clearing `signedOut` here matters: it is what lets the screen be
             // re-entered after signing back in, instead of immediately bouncing to
             // Login off a stale flag.
@@ -84,7 +92,8 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                     isLoading = true,
                     signedOut = false,
                     username = credentials.username,
-                    server = credentials.hostAndPort()
+                    server = credentials.hostAndPort(),
+                    lastRefreshedAt = lastCatalogUpdate ?: it.lastRefreshedAt
                 )
             }
 
@@ -146,11 +155,15 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
             // now the only way to re-sync inside the 24 h window, so it has to cover
             // every content type — series included, or a stale series catalog would have
             // no manual escape hatch at all.
-            val vodRows = syncer.syncVod(force = true).getOrDefault(0)
-            val liveRows = syncer.syncLive(force = true).getOrDefault(0)
-            val seriesRows = syncer.syncSeries(force = true).getOrDefault(0)
+            val vodResult = syncer.syncVod(force = true)
+            val liveResult = syncer.syncLive(force = true)
+            val seriesResult = syncer.syncSeries(force = true)
+            val vodRows = vodResult.getOrDefault(0)
+            val liveRows = liveResult.getOrDefault(0)
+            val seriesRows = seriesResult.getOrDefault(0)
 
-            val failed = categories.any { it.isFailure }
+            val failed = categories.any { it.isFailure } ||
+                listOf(vodResult, liveResult, seriesResult).any { it.isFailure }
             if (failed) {
                 DiagnosticLog.warn("refresh", "Manual refresh: categories failed")
             } else {
@@ -166,7 +179,8 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                         "Could not reach the panel"
                     } else {
                         "Refreshed $vodRows movies, $liveRows channels and $seriesRows shows"
-                    }
+                    },
+                    lastRefreshedAt = if (failed) it.lastRefreshedAt else System.currentTimeMillis()
                 )
             }
             load()

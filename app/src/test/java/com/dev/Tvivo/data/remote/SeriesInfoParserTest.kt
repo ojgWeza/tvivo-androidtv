@@ -47,6 +47,18 @@ class SeriesInfoParserTest {
     """.trimIndent()
 
     @Test
+    fun `episode plot and show metadata come from the existing detail response`() {
+        val json = """{
+            "info":{"genre":"Drama","cast":"Actor One","releaseDate":"2024-02-01"},
+            "episodes":{"1":[{"id":"ep","episode_num":1,"title":"Pilot",
+                "info":{"plot":"Episode synopsis"}}]}
+        }"""
+        assertEquals("Episode synopsis", SeriesInfoParser.parse(json, ACCOUNT, SERIES_ID).single().plot)
+        assertEquals(SeriesInfoParser.ShowMetadata("Drama", "Actor One", "2024"),
+            SeriesInfoParser.parseShowMetadata(json))
+    }
+
+    @Test
     fun `parses the season-keyed object into episodes`() {
         val rows = SeriesInfoParser.parse(realShaped, ACCOUNT, SERIES_ID)
 

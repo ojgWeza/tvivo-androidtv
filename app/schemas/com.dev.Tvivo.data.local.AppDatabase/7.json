@@ -1,0 +1,1159 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 7,
+    "identityHash": "fabe810355d596316184eee977acbd82",
+    "entities": [
+      {
+        "tableName": "categories",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `type` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `name` TEXT NOT NULL, `ordering` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `type`, `categoryId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordering",
+            "columnName": "ordering",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "type",
+            "categoryId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "vod_streams",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `streamId` INTEGER NOT NULL, `categoryId` TEXT, `name` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `streamIcon` TEXT, `containerExtension` TEXT, `plot` TEXT, `rating` REAL, `added` INTEGER, `num` INTEGER, `generation` INTEGER NOT NULL, `genre` TEXT, `cast` TEXT, `year` TEXT, `durationMinutes` INTEGER, `trailer` TEXT, PRIMARY KEY(`accountId`, `streamId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamId",
+            "columnName": "streamId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameDisplay",
+            "columnName": "nameDisplay",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameNormalized",
+            "columnName": "nameNormalized",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamIcon",
+            "columnName": "streamIcon",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "containerExtension",
+            "columnName": "containerExtension",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "plot",
+            "columnName": "plot",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rating",
+            "columnName": "rating",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "added",
+            "columnName": "added",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "num",
+            "columnName": "num",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "genre",
+            "columnName": "genre",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "cast",
+            "columnName": "cast",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "durationMinutes",
+            "columnName": "durationMinutes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "trailer",
+            "columnName": "trailer",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "streamId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_vod_streams_accountId_categoryId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "categoryId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_vod_streams_accountId_categoryId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `categoryId`, `nameNormalized`)"
+          },
+          {
+            "name": "index_vod_streams_accountId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_vod_streams_accountId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `nameNormalized`)"
+          },
+          {
+            "name": "index_vod_streams_accountId_added",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "added"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_vod_streams_accountId_added` ON `${TABLE_NAME}` (`accountId`, `added`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "live_streams",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `streamId` INTEGER NOT NULL, `categoryId` TEXT, `name` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `streamIcon` TEXT, `ext` TEXT, `added` INTEGER, `num` INTEGER, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `streamId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamId",
+            "columnName": "streamId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameDisplay",
+            "columnName": "nameDisplay",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameNormalized",
+            "columnName": "nameNormalized",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamIcon",
+            "columnName": "streamIcon",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ext",
+            "columnName": "ext",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "added",
+            "columnName": "added",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "num",
+            "columnName": "num",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "streamId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_live_streams_accountId_categoryId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "categoryId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_live_streams_accountId_categoryId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `categoryId`, `nameNormalized`)"
+          },
+          {
+            "name": "index_live_streams_accountId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_live_streams_accountId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `nameNormalized`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "series",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `seriesId` INTEGER NOT NULL, `categoryId` TEXT, `name` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `streamIcon` TEXT, `plot` TEXT, `rating` REAL, `added` INTEGER, `num` INTEGER, `generation` INTEGER NOT NULL, `genre` TEXT, `cast` TEXT, `year` TEXT, PRIMARY KEY(`accountId`, `seriesId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "seriesId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameDisplay",
+            "columnName": "nameDisplay",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameNormalized",
+            "columnName": "nameNormalized",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamIcon",
+            "columnName": "streamIcon",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "plot",
+            "columnName": "plot",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rating",
+            "columnName": "rating",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "added",
+            "columnName": "added",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "num",
+            "columnName": "num",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "genre",
+            "columnName": "genre",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "cast",
+            "columnName": "cast",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "seriesId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_series_accountId_categoryId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "categoryId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_series_accountId_categoryId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `categoryId`, `nameNormalized`)"
+          },
+          {
+            "name": "index_series_accountId_nameNormalized",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "nameNormalized"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_series_accountId_nameNormalized` ON `${TABLE_NAME}` (`accountId`, `nameNormalized`)"
+          },
+          {
+            "name": "index_series_accountId_added",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "added"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_series_accountId_added` ON `${TABLE_NAME}` (`accountId`, `added`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "series_episodes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `seriesId` INTEGER NOT NULL, `episodeId` TEXT NOT NULL, `seasonNumber` INTEGER NOT NULL, `episodeNum` INTEGER NOT NULL, `title` TEXT NOT NULL, `containerExtension` TEXT, `durationSecs` INTEGER, `added` INTEGER, `plot` TEXT, PRIMARY KEY(`accountId`, `seriesId`, `episodeId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "seriesId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "episodeId",
+            "columnName": "episodeId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonNumber",
+            "columnName": "seasonNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "episodeNum",
+            "columnName": "episodeNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "containerExtension",
+            "columnName": "containerExtension",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "durationSecs",
+            "columnName": "durationSecs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "added",
+            "columnName": "added",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "plot",
+            "columnName": "plot",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "seriesId",
+            "episodeId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_series_episodes_accountId_seriesId_seasonNumber_episodeNum",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "seriesId",
+              "seasonNumber",
+              "episodeNum"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_series_episodes_accountId_seriesId_seasonNumber_episodeNum` ON `${TABLE_NAME}` (`accountId`, `seriesId`, `seasonNumber`, `episodeNum`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "sync_meta",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `contentType` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `lastSyncedAt` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `contentType`, `categoryId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "contentType",
+            "categoryId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "catalog_sync",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `contentType` TEXT NOT NULL, `state` TEXT NOT NULL, `done` INTEGER NOT NULL, `total` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `contentType`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "done",
+            "columnName": "done",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "total",
+            "columnName": "total",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "contentType"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "resume_positions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `contentType` TEXT NOT NULL, `itemId` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `profileId` TEXT NOT NULL, PRIMARY KEY(`accountId`, `profileId`, `contentType`, `itemId`), FOREIGN KEY(`accountId`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "positionMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "durationMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "profileId",
+            "contentType",
+            "itemId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_resume_positions_accountId_profileId",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "profileId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_resume_positions_accountId_profileId` ON `${TABLE_NAME}` (`accountId`, `profileId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountId",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "favourites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `contentType` TEXT NOT NULL, `itemId` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, `profileId` TEXT NOT NULL, PRIMARY KEY(`accountId`, `profileId`, `contentType`, `itemId`), FOREIGN KEY(`accountId`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "addedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId",
+            "profileId",
+            "contentType",
+            "itemId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_favourites_accountId_profileId",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "profileId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favourites_accountId_profileId` ON `${TABLE_NAME}` (`accountId`, `profileId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountId",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "profile",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `name` TEXT NOT NULL, `kind` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`accountKey`, `id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "profile_allow",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `contentType` TEXT NOT NULL, `allowKey` TEXT NOT NULL, `itemId` TEXT NOT NULL, `categoryId` TEXT, PRIMARY KEY(`accountKey`, `profileId`, `contentType`, `allowKey`), FOREIGN KEY(`accountKey`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allowKey",
+            "columnName": "allowKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "profileId",
+            "contentType",
+            "allowKey"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountKey",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "watched",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `contentType` TEXT NOT NULL, `itemId` TEXT NOT NULL, `watchedAt` INTEGER NOT NULL, PRIMARY KEY(`accountKey`, `profileId`, `contentType`, `itemId`), FOREIGN KEY(`accountKey`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "watchedAt",
+            "columnName": "watchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "profileId",
+            "contentType",
+            "itemId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountKey",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "visits",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `contentType` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `count` INTEGER NOT NULL, `lastVisitedAt` INTEGER NOT NULL, PRIMARY KEY(`accountKey`, `profileId`, `contentType`, `categoryId`), FOREIGN KEY(`accountKey`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "count",
+            "columnName": "count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastVisitedAt",
+            "columnName": "lastVisitedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "profileId",
+            "contentType",
+            "categoryId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountKey",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "shelf_visits",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `contentType` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `lastVisitedAt` INTEGER NOT NULL, PRIMARY KEY(`accountKey`, `profileId`, `contentType`, `categoryId`), FOREIGN KEY(`accountKey`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastVisitedAt",
+            "columnName": "lastVisitedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "profileId",
+            "contentType",
+            "categoryId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountKey",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "recently_played",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `contentType` TEXT NOT NULL, `itemId` TEXT NOT NULL, `playedAt` INTEGER NOT NULL, PRIMARY KEY(`accountKey`, `profileId`, `contentType`, `itemId`), FOREIGN KEY(`accountKey`, `profileId`) REFERENCES `profile`(`accountKey`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountKey",
+            "columnName": "accountKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playedAt",
+            "columnName": "playedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountKey",
+            "profileId",
+            "contentType",
+            "itemId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountKey",
+              "profileId"
+            ],
+            "referencedColumns": [
+              "accountKey",
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'fabe810355d596316184eee977acbd82')"
+    ]
+  }
+}

@@ -18,8 +18,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import com.dev.Tvivo.ui.common.ErrorCopy
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.adaptiveSpacing
 
 /**
  * D-15 — the subscription facts, on their own screen, **read-only**.
@@ -38,20 +40,24 @@ import com.dev.Tvivo.ui.theme.TvType
 @Composable
 fun SubscriptionScreen(viewModel: AccountViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val spacing = adaptiveSpacing()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Palette.Bg)
-            .padding(horizontal = 96.dp, vertical = 64.dp)
+            .background(AppColors.Bg)
+            .padding(
+                horizontal = if (LocalIsTelevision.current) 96.dp else spacing.outerGutter,
+                vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
+            )
     ) {
-        Text(text = "Subscription", color = Palette.Ink, style = TvType.display)
+        Text(text = "Subscription", color = AppColors.Ink, style = TvType.display)
         Spacer(Modifier.height(24.dp))
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Palette.Elevated)
+                .background(AppColors.Elevated)
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -68,14 +74,14 @@ fun SubscriptionScreen(viewModel: AccountViewModel = viewModel()) {
             FactRow("Connections", state.connections)
 
             if (state.isLoading) {
-                Text(text = "Checking with the panel…", color = Palette.Dim, style = TvType.label)
+                Text(text = "Checking with the panel…", color = AppColors.Dim, style = TvType.label)
             }
             state.error?.let {
                 // Offline is not signed out. The facts above are the last known ones and
                 // stay on screen; this only says the live check did not get through.
                 Text(
                     text = ErrorCopy.of(it).message,
-                    color = Palette.AccentText,
+                    color = AppColors.AccentText,
                     style = TvType.label
                 )
             }
@@ -88,12 +94,12 @@ fun SubscriptionScreen(viewModel: AccountViewModel = viewModel()) {
         Text(
             text = "Connections is what this panel reports for this account. " +
                 "If a stream fails while another device is watching, that is usually why.",
-            color = Palette.Dim,
+            color = AppColors.Dim,
             style = TvType.body
         )
 
         Spacer(Modifier.height(12.dp))
-        Text(text = "Press Back to return to Account.", color = Palette.Dim, style = TvType.label)
+        Text(text = "Press Back to return to Account.", color = AppColors.Dim, style = TvType.label)
     }
 }
 
@@ -102,13 +108,13 @@ private fun FactRow(label: String, value: String?, highlight: Boolean = false) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = label,
-            color = Palette.Dim,
+            color = AppColors.Dim,
             style = TvType.body,
             modifier = Modifier.width(200.dp)
         )
         Text(
             text = value ?: "—",
-            color = if (highlight) Palette.AccentText else Palette.Ink,
+            color = if (highlight) AppColors.AccentText else AppColors.Ink,
             style = TvType.body
         )
     }

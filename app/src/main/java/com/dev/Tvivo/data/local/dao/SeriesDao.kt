@@ -76,6 +76,47 @@ interface SeriesDao {
     @Query("SELECT * FROM series WHERE accountId = :accountId ORDER BY nameNormalized ASC")
     fun pagingAll(accountId: String): PagingSource<Int, SeriesEntity>
 
+    @Query("SELECT * FROM series WHERE accountId = :accountId ORDER BY nameNormalized, seriesId LIMIT 20")
+    suspend fun allPreview(accountId: String): List<SeriesEntity>
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, seriesId LIMIT 20""")
+    suspend fun allPreviewFiltered(accountId: String, query: String): List<SeriesEntity>
+
+    /** Alternate opened-shelf order. Default A-Z keeps the existing index-backed queries. */
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        AND (:categoryId IS NULL OR categoryId = :categoryId)
+        AND (:query = '' OR nameNormalized LIKE '%' || :query || '%' ESCAPE '\')
+        ORDER BY CASE WHEN :sort = 'recent' AND added IS NULL THEN 1 ELSE 0 END,
+            CASE WHEN :sort = 'recent' THEN added END DESC,
+            CASE WHEN :sort = 'za' THEN nameNormalized END DESC,
+            CASE WHEN :sort = 'recent' THEN NULL ELSE nameNormalized END ASC,
+            seriesId ASC""")
+    fun pagingSorted(accountId: String, categoryId: String?, query: String, sort: String):
+        PagingSource<Int, SeriesEntity>
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        AND (:categoryId IS NULL OR categoryId = :categoryId)
+        ORDER BY CASE WHEN :sort = 'recent' AND added IS NULL THEN 1 ELSE 0 END,
+            CASE WHEN :sort = 'recent' THEN added END DESC,
+            CASE WHEN :sort = 'za' THEN nameNormalized END DESC,
+            CASE WHEN :sort = 'recent' THEN NULL ELSE nameNormalized END ASC,
+            seriesId ASC LIMIT 20""")
+    suspend fun landingPreviewSorted(accountId: String, categoryId: String?, sort: String): List<SeriesEntity>
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, seriesId""")
+    fun pagingAllFiltered(accountId: String, query: String): PagingSource<Int, SeriesEntity>
+
+    @Query("""SELECT COUNT(*) FROM series WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'""")
+    fun countAllFiltered(accountId: String, query: String): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM series WHERE accountId = :accountId")
+    fun totalCount(accountId: String): Flow<Int>
+
     @Query(
         """
         SELECT * FROM series
@@ -85,6 +126,37 @@ interface SeriesDao {
     )
     fun pagingSearch(accountId: String, query: String): PagingSource<Int, SeriesEntity>
 
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, seriesId LIMIT 60""")
+    suspend fun searchPreview(accountId: String, query: String): List<SeriesEntity>
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId AND categoryId = :categoryId
+        ORDER BY nameNormalized, seriesId LIMIT 20""")
+    suspend fun categoryPreview(accountId: String, categoryId: String): List<SeriesEntity>
+
+    @Query("SELECT COUNT(*) FROM series WHERE accountId = :accountId AND categoryId = :categoryId")
+    suspend fun categoryCount(accountId: String, categoryId: String): Int
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId AND categoryId = :categoryId
+        AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        ORDER BY nameNormalized, seriesId LIMIT 20""")
+    suspend fun categoryPreviewFiltered(accountId: String, categoryId: String, query: String): List<SeriesEntity>
+
+    @Query("""SELECT categoryId, COUNT(*) AS count FROM series
+        WHERE accountId = :accountId AND nameNormalized LIKE '%' || :query || '%' ESCAPE '\'
+        GROUP BY categoryId""")
+    suspend fun matchingCategoryCounts(accountId: String, query: String): List<CategoryCount>
+
+    @Query("""SELECT categoryId, MAX(added) AS latestAdded FROM series
+        WHERE accountId = :accountId GROUP BY categoryId""")
+    suspend fun categoryLatest(accountId: String): List<CategoryLatest>
+
+    @Query("""SELECT * FROM series WHERE accountId = :accountId
+        ORDER BY (ABS(((seriesId * 1103515245 + :seed) % 2147483647)) / 2147483647.0)
+            * (1.0 + COALESCE(rating, 0.0) / 10.0) DESC, seriesId LIMIT 80""")
+    suspend fun suggestionCandidates(accountId: String, seed: Int): List<SeriesEntity>
+
     @Query(
         """
         SELECT categoryId AS categoryId, COUNT(*) AS count FROM series
@@ -93,15 +165,24 @@ interface SeriesDao {
     )
     fun countsByCategory(accountId: String): Flow<List<CategoryCount>>
 
+    @Query("SELECT COUNT(*) FROM series WHERE accountId = :accountId")
+    suspend fun countSnapshot(accountId: String): Int
+
     @Query("SELECT * FROM series WHERE accountId = :accountId AND seriesId = :seriesId")
     suspend fun byId(accountId: String, seriesId: Int): SeriesEntity?
+
+    @Query("""UPDATE series SET genre = COALESCE(:genre, genre),
+        `cast` = COALESCE(:cast, `cast`), year = COALESCE(:year, year)
+        WHERE accountId = :accountId AND seriesId = :seriesId""")
+    suspend fun updateDetails(accountId: String, seriesId: Int,
+        genre: String?, cast: String?, year: String?)
 
     /** `Recently added`, newest first. See [VodDao.recentlyAdded]. */
     @Query(
         """
         SELECT * FROM series
-        WHERE accountId = :accountId AND added IS NOT NULL
-        ORDER BY added DESC LIMIT :limit
+        WHERE accountId = :accountId
+        ORDER BY added DESC, seriesId LIMIT :limit
         """
     )
     fun recentlyAdded(accountId: String, limit: Int): Flow<List<SeriesEntity>>
@@ -117,6 +198,9 @@ interface SeriesDao {
      */
     @Query("SELECT * FROM series WHERE accountId = :accountId AND seriesId IN (:ids)")
     suspend fun byIds(accountId: String, ids: List<Int>): List<SeriesEntity>
+
+    @Query("SELECT * FROM series_episodes WHERE accountId = :accountId AND episodeId IN (:ids)")
+    suspend fun episodesByIds(accountId: String, ids: List<String>): List<EpisodeEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<SeriesEntity>)

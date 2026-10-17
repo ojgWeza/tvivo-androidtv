@@ -34,7 +34,8 @@ data class BrowseItem(
      * "unrated" placeholder on most of a 48,780-row catalog would be noise, not
      * information. Live carries none: a channel is not a title.
      */
-    val rating: Double? = null
+    val rating: Double? = null,
+    val added: Long? = null
 )
 
 /**
@@ -66,6 +67,7 @@ fun VodStreamEntity.toBrowseItem() = BrowseItem(
     imageUrl = streamIcon,
     extension = containerExtension,
     quality = NameNormalizer.qualityOf(name),
+    added = added,
     rating = rating
 )
 
@@ -74,7 +76,8 @@ fun LiveStreamEntity.toBrowseItem() = BrowseItem(
     title = nameDisplay,
     imageUrl = streamIcon,
     extension = ext,
-    quality = NameNormalizer.qualityOf(name)
+    quality = NameNormalizer.qualityOf(name),
+    added = added
 )
 
 /**
@@ -88,5 +91,6 @@ fun SeriesEntity.toBrowseItem() = BrowseItem(
     imageUrl = streamIcon,
     extension = null,
     quality = NameNormalizer.qualityOf(name),
+    added = added,
     rating = rating
 )

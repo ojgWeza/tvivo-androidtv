@@ -1,35 +1,37 @@
 package com.dev.Tvivo.ui.series
 
+import android.view.KeyEvent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,344 +39,268 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
+import com.dev.Tvivo.playback.*
+import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.WindowSizeClass
 import com.dev.Tvivo.ui.browse.ResumePrompt
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import com.dev.Tvivo.ui.common.ErrorCopy
-import com.dev.Tvivo.ui.common.IconPill
-import com.dev.Tvivo.ui.common.ScrollableText
-import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.detail.DetailHero
+import com.dev.Tvivo.ui.detail.DetailTextButton
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.launch
 
-/**
- * Season/episode picker for one show — the layer movies and live do not have.
- *
- * Deliberately the browse screen's layout rather than a new one: a rail of seasons on the
- * left, a list on the right, the same focus frame and the same LEFT/RIGHT contract. A
- * viewer arriving here from the Movies grid should not have to learn a second set of
- * navigation rules for the same D-pad.
- *
- * Back is handled by the caller, which returns to the shows grid.
- */
+/** One page from a series card to an episode. Back is owned by MainActivity. */
 @Composable
-fun SeriesDetailScreen(
-    seriesId: Int,
-    onPlayEpisode: (EpisodeEntity, Long) -> Unit
-) {
-    val application = LocalApplication()
-    val viewModel: SeriesDetailViewModel = viewModel(
-        key = "series:$seriesId",
-        factory = viewModelFactory {
-            initializer {
-                SeriesDetailViewModel(application, createSavedStateHandle(), seriesId)
-            }
-        }
-    )
-    val state by viewModel.state.collectAsStateWithLifecycle()
+fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit) {
+    val application = LocalContext.current.applicationContext as android.app.Application
+    val vm: SeriesDetailViewModel = viewModel(key = "series:$seriesId", factory = viewModelFactory {
+        initializer { SeriesDetailViewModel(application, createSavedStateHandle(), seriesId) }
+    })
+    val state by vm.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    var resumePrompt by remember { mutableStateOf<Pair<EpisodeEntity, Long>?>(null) }
-    val episodeListFocus = remember { FocusRequester() }
-
-    fun launch(episode: EpisodeEntity) {
-        scope.launch {
-            viewModel.pendingFocusEpisodeId = episode.episodeId
-            val resumeMs = viewModel.resumePositionMs(episode.episodeId)
-            if (resumeMs != null && resumeMs > 0) {
-                resumePrompt = episode to resumeMs
-            } else {
-                onPlayEpisode(episode, 0L)
-            }
-        }
-    }
-
-    // Something must be focused on arrival. Without this the screen opens with focus
-    // nowhere and the first D-pad press is spent finding it — the same defect class as
-    // the login focus trap, and invisible in code review.
+    val primaryFocus = remember { FocusRequester() }
     var initialFocusDone by remember(seriesId) { mutableStateOf(false) }
-    LaunchedEffect(state.episodes.isNotEmpty()) {
-        if (!initialFocusDone && state.episodes.isNotEmpty()) {
-            initialFocusDone = true
-            // The episode list, not the season rail: playing an episode is why the user
-            // opened the show, and the rail is one LEFT away.
-            runCatching { episodeListFocus.requestFocus() }
+    var resumePrompt by remember { mutableStateOf<Pair<EpisodeEntity, Long>?>(null) }
+    var menuEpisode by remember { mutableStateOf<EpisodeEntity?>(null) }
+    val compact = LocalWindowSizeClass.current == WindowSizeClass.Compact
+
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshPlayback()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+
+    fun play(episode: EpisodeEntity, offerPrompt: Boolean) {
+        vm.pendingFocusEpisodeId = episode.episodeId
+        scope.launch {
+            val position = vm.resumePositionMs(episode.episodeId) ?: 0L
+            if (offerPrompt && position > 0L) resumePrompt = episode to position
+            else onPlayEpisode(episode, if (offerPrompt) 0L else position, vm.playbackQueue())
         }
     }
 
-    Row(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
-        SeasonRail(
-            seasons = state.seasons,
-            selectedSeason = state.selectedSeason,
-            onSelect = { viewModel.selectSeason(it.number) },
-            episodeListFocus = episodeListFocus
-        )
-
-        Column(modifier = Modifier.fillMaxSize()) {
-            Header(
-                title = state.title,
-                plot = state.plot,
-                isRefreshing = state.isRefreshing,
-                onRefresh = viewModel::refresh
-            )
-
-            when {
-                // Cached episodes always win over an error: a failed refresh must not take
-                // a show the user could otherwise still play.
-                state.episodes.isNotEmpty() -> EpisodeList(
-                    episodes = state.episodes,
-                    pendingFocusEpisodeId = viewModel.pendingFocusEpisodeId,
-                    listFocusRequester = episodeListFocus,
-                    onPlay = { launch(it) },
-                    onFocused = { viewModel.pendingFocusEpisodeId = it.episodeId }
-                )
-
-                state.isLoading -> Message("Loading episodes…")
-
-                state.error != null -> Message(ErrorCopy.of(state.error!!).message)
-
-                // A show whose `get_series_info` parsed to nothing. Distinct from an
-                // error, and the honest thing to say.
-                else -> Message("No episodes listed for this show")
-            }
-        }
+    fun playAction(action: DetailAction) {
+        vm.playbackQueue().firstOrNull { it.episodeId == action.episodeId }?.let { play(it, false) }
     }
 
-    resumePrompt?.let { (episode, positionMs) ->
-        ResumePrompt(
-            title = episode.title,
-            positionMs = positionMs,
-            onResume = {
-                resumePrompt = null
-                onPlayEpisode(episode, positionMs)
-            },
-            onStartOver = {
-                resumePrompt = null
-                onPlayEpisode(episode, 0L)
-            },
-            onDismiss = { resumePrompt = null }
-        )
-    }
-}
-
-@Composable
-private fun LocalApplication(): android.app.Application =
-    androidx.compose.ui.platform.LocalContext.current.applicationContext as android.app.Application
-
-@Composable
-private fun SeasonRail(
-    seasons: List<SeasonTab>,
-    selectedSeason: Int?,
-    onSelect: (SeasonTab) -> Unit,
-    /** Where RIGHT goes, for the same reason [com.dev.Tvivo.ui.browse.CategoryRail] needs
-     *  it: the 2D focus search otherwise picks the header's Refresh. */
-    episodeListFocus: FocusRequester
-) {
-    LazyColumn(
-        modifier = Modifier
-            .width(280.dp)
-            .fillMaxHeight()
-            .background(Palette.Surface)
-            .focusGroup(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 24.dp)
-    ) {
-        items(seasons, key = { it.number }) { season ->
-            var focused by remember { mutableStateOf(false) }
-            val selected = season.number == selectedSeason
-            val background = when {
-                focused -> Palette.Accent
-                selected -> Palette.Elevated
-                else -> Palette.Surface
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusProperties { right = episodeListFocus }
-                    .background(background)
-                    .onFocusChanged { focused = it.isFocused }
-                    .tvClickable { onSelect(season) }
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = season.label,
-                    color = if (focused) Palette.OnAccent else Palette.Ink,
-                    style = TvType.body,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = season.episodeCount.toString(),
-                    color = if (focused) Palette.OnAccent else Palette.Dim,
-                    style = TvType.label,
-                    modifier = Modifier.padding(start = 12.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun Header(
-    title: String,
-    plot: String?,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 24.dp)) {
-                Text(text = title, color = Palette.Ink, style = TvType.headline, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis)
-                // Was `maxLines = 2` with a hard ellipsis and nothing to press: the
-                // synopsis announced that it continued and then offered no way to read
-                // the rest. Capped short here because the episode list is what this
-                // screen is for — the plot is context, not the content — but scrollable
-                // once it overflows, so "there is more" and "you can reach it" are the
-                // same affordance.
-                plot?.let {
-                    ScrollableText(
-                        text = it,
-                        style = TvType.label,
-                        maxHeight = PLOT_MAX_HEIGHT,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
+    LaunchedEffect(state.isLoading, state.actions.primary) {
+        if (!initialFocusDone && !state.isLoading && state.actions.primary != null) {
+            repeat(3) {
+                withFrameNanos { }
+                if (runCatching { primaryFocus.requestFocus() }.isSuccess) {
+                    initialFocusDone = true
+                    return@LaunchedEffect
                 }
             }
-            // The same component every other screen uses for this action. It was a bare
-            // orange text link, which broke the app's one colour rule twice over: orange
-            // means *focused* everywhere else, so an unfocused control painted in it
-            // reads as focused, and Refresh looked like a different action here than it
-            // does in the browse header or on Home. D-8 made that argument for the
-            // browse header and this screen was simply missed.
-            IconPill(
-                icon = Icons.Default.Refresh,
-                label = "Refresh",
-                enabled = !isRefreshing,
-                onClick = onRefresh
-            )
-        }
-
-        if (isRefreshing) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
-                    .height(3.dp)
-                    .background(Palette.Accent)
-            )
         }
     }
+
+    val hero: @Composable () -> Unit = {
+        DetailHero(state.title, state.coverUrl, state.plot, state.quality, state.year, state.rating,
+            genre = state.genre, cast = state.cast,
+            horizontal = !compact, modifier = Modifier.fillMaxWidth(), actions = {
+                state.actions.primary?.let { action ->
+                    DetailTextButton(actionLabel(action, vm.playbackQueue()),
+                        Modifier.testTag("series-primary").focusRequester(primaryFocus)) { playAction(action) }
+                    if (action.kind == DetailActionKind.Continue) {
+                        DetailTextButton("Start over", Modifier.testTag("series-start-over")) {
+                            vm.playbackQueue().firstOrNull { it.episodeId == action.episodeId }?.let { episode ->
+                                scope.launch {
+                                    vm.clearResumeNow(episode.episodeId)
+                                    onPlayEpisode(episode, 0L, vm.playbackQueue())
+                                }
+                            }
+                        }
+                    }
+                }
+                state.actions.secondary?.let { action ->
+                    DetailTextButton(actionLabel(action, vm.playbackQueue()),
+                        Modifier.testTag("series-next")) { playAction(action) }
+                }
+                DetailTextButton(if (state.isFavourite) "Remove from favourites" else "Add to favourites",
+                    Modifier.testTag("series-favourite")) { vm.toggleFavourite(!state.isFavourite) }
+            })
+    }
+
+    if (compact) {
+        SeriesEpisodeList(state, vm::focusedEpisodeInSeason, vm::selectSeason,
+            vm::rememberEpisodeFocus, vm::refresh,
+            onPlay = { play(it, true) }, onMenu = { menuEpisode = it },
+            header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg))
+    } else {
+        Row(Modifier.fillMaxSize().background(AppColors.Bg)
+            .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+            .padding(32.dp)) {
+            Column(Modifier.width(350.dp).verticalScroll(rememberScrollState())) { hero() }
+            Spacer(Modifier.width(32.dp))
+            SeriesEpisodeList(state, vm::focusedEpisodeInSeason, vm::selectSeason,
+                vm::rememberEpisodeFocus, vm::refresh,
+                onPlay = { play(it, true) }, onMenu = { menuEpisode = it },
+                header = null, modifier = Modifier.weight(1f).fillMaxSize())
+        }
+    }
+
+    resumePrompt?.let { (episode, position) ->
+        ResumePrompt(episode.title, position,
+            onResume = { resumePrompt = null; onPlayEpisode(episode, position, vm.playbackQueue()) },
+            onStartOver = {
+                resumePrompt = null
+                scope.launch {
+                    vm.clearResumeNow(episode.episodeId)
+                    onPlayEpisode(episode, 0L, vm.playbackQueue())
+                }
+            }, onDismiss = { resumePrompt = null })
+    }
+    menuEpisode?.let { episode ->
+        val rowState = state.playback[episode.episodeId]?.let(DetailPlaybackPolicy::rowState)
+        Dialog(onDismissRequest = { menuEpisode = null }) {
+            Column(Modifier.fillMaxWidth().background(AppColors.Elevated).padding(20.dp)) {
+                Text(episode.title, color = AppColors.Ink, style = TvType.title)
+                DetailTextButton(if (rowState == EpisodeRowState.Watched) "Mark unwatched" else "Mark watched") {
+                    vm.markWatched(episode.episodeId, rowState != EpisodeRowState.Watched)
+                    menuEpisode = null
+                }
+                if (state.playback[episode.episodeId]?.positionMs != null) {
+                    DetailTextButton("Clear resume") { vm.clearResume(episode.episodeId); menuEpisode = null }
+                }
+            }
+        }
+    }
+}
+
+private fun actionLabel(action: DetailAction, all: List<EpisodeEntity>): String {
+    val number = all.firstOrNull { it.episodeId == action.episodeId }
+        ?.let { "S${it.seasonNumber} · E${it.episodeNum}" }.orEmpty()
+    val base = when (action.kind) {
+        DetailActionKind.Continue -> "Continue $number"
+        DetailActionKind.Next -> "Next episode $number"
+        DetailActionKind.Play -> "Play $number"
+        DetailActionKind.WatchAgain -> "Watch again $number"
+    }
+    return action.remainingMs?.let { "$base · ${DetailPlaybackPolicy.remainingLabel(it)}" } ?: base
 }
 
 @Composable
-private fun EpisodeList(
-    episodes: List<EpisodeEntity>,
-    pendingFocusEpisodeId: String?,
-    listFocusRequester: FocusRequester,
+internal fun SeriesEpisodeList(
+    state: SeriesDetailUiState,
+    focusedEpisodeInSeason: (Int) -> String?,
+    onSelectSeason: (Int) -> Unit,
+    onFocusedEpisode: (Int, String) -> Unit,
+    onRetry: () -> Unit,
     onPlay: (EpisodeEntity) -> Unit,
-    onFocused: (EpisodeEntity) -> Unit
+    onMenu: (EpisodeEntity) -> Unit,
+    header: (@Composable () -> Unit)?,
+    modifier: Modifier
 ) {
     val listState = rememberLazyListState()
-    val restoreRequester = remember { FocusRequester() }
-    var restored by remember(pendingFocusEpisodeId) { mutableStateOf(pendingFocusEpisodeId == null) }
-
-    // Restoration is by episode id, not index: the season can have gained episodes while
-    // a stream was playing, and the same rule as the grid applies.
-    LaunchedEffect(pendingFocusEpisodeId, episodes) {
-        if (restored || pendingFocusEpisodeId == null) return@LaunchedEffect
-        val index = episodes.indexOfFirst { it.episodeId == pendingFocusEpisodeId }
-        if (index >= 0) {
-            listState.scrollToItem(index)
-            runCatching { restoreRequester.requestFocus() }
+    val scope = rememberCoroutineScope()
+    val listFocus = remember { FocusRequester() }
+    val targetId = state.selectedSeason?.let(focusedEpisodeInSeason)
+        ?.takeIf { id -> state.episodes.any { it.episodeId == id } }
+        ?: state.actions.primary?.episodeId?.takeIf { id -> state.episodes.any { it.episodeId == id } }
+        ?: state.episodes.firstOrNull()?.episodeId
+    val offset = (if (header == null) 1 else 2) +
+        (if (state.isRefreshing) 1 else 0) + (if (state.error != null) 1 else 0)
+    LaunchedEffect(state.selectedSeason) { listState.scrollToItem(0) }
+    LazyColumn(state = listState, modifier = modifier.testTag("series-episode-list"),
+        contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (header != null) item("hero") { header() }
+        item("seasons") {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .testTag("series-seasons"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.seasons.forEach { season ->
+                    DetailTextButton(season.label + if (state.selectedSeason == season.number) " ▾" else "",
+                        Modifier.width(150.dp).testTag("season-${season.number}")
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
+                                    targetId != null) {
+                                    scope.launch {
+                                        val index = state.episodes.indexOfFirst { it.episodeId == targetId }
+                                        listState.scrollToItem(index + offset)
+                                        runCatching { listFocus.requestFocus() }
+                                    }
+                                    true
+                                } else false
+                            }) { onSelectSeason(season.number) }
+                }
+            }
         }
-        restored = true
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .focusGroup()
-            .focusRequester(listFocusRequester),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = 24.dp,
-            vertical = 8.dp
-        )
-    ) {
-        items(episodes, key = { it.episodeId }) { episode ->
-            EpisodeRow(
-                episode = episode,
-                modifier = if (episode.episodeId == pendingFocusEpisodeId) {
-                    Modifier.focusRequester(restoreRequester)
-                } else {
-                    Modifier
-                },
-                onPlay = { onPlay(episode) },
-                onFocused = { onFocused(episode) }
-            )
+        if (state.isRefreshing) item("refreshing") {
+            Text("Updating episodes…", color = AppColors.Dim, style = TvType.label)
+        }
+        state.error?.let { error -> item("error") {
+            Text(ErrorCopy.of(error).message, color = AppColors.Dim, style = TvType.label)
+            DetailTextButton("Retry") { onRetry() }
+        } }
+        if (state.episodes.isEmpty()) item("status") {
+            val message = when {
+                state.isLoading -> "Loading episodes…"
+                state.error != null -> "Episodes are unavailable"
+                else -> "No episodes listed for this show"
+            }
+            Text(message, color = AppColors.Dim, style = TvType.body)
+        }
+        items(state.episodes, key = { it.episodeId }) { episode ->
+            val progress = state.playback[episode.episodeId]
+            EpisodeRow(episode, progress?.let(DetailPlaybackPolicy::rowState) ?: EpisodeRowState.Unstarted,
+                progress?.positionMs, progress?.durationMs,
+                highlighted = episode.episodeId == state.actions.primary?.episodeId,
+                modifier = if (episode.episodeId == targetId) Modifier.focusRequester(listFocus) else Modifier,
+                onFocus = { onFocusedEpisode(episode.seasonNumber, episode.episodeId) },
+                onPlay = { onPlay(episode) }, onMenu = { onMenu(episode) })
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodeRow(
     episode: EpisodeEntity,
-    modifier: Modifier = Modifier,
+    state: EpisodeRowState,
+    positionMs: Long?,
+    durationMs: Long?,
+    highlighted: Boolean,
+    modifier: Modifier,
+    onFocus: () -> Unit,
     onPlay: () -> Unit,
-    onFocused: () -> Unit
+    onMenu: () -> Unit
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .tvFocusFrame()
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .tvClickable { onPlay() }
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = episode.episodeNum.toString().padStart(2, '0'),
-            color = Palette.Dim,
-            style = TvType.body,
-            modifier = Modifier.width(48.dp)
-        )
-        Text(
-            text = episode.title,
-            color = Palette.Ink,
-            style = TvType.title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        episode.durationSecs?.takeIf { it > 0 }?.let {
-            Text(
-                text = "${it / 60} min",
-                color = Palette.Dim,
-                style = TvType.label,
-                modifier = Modifier.padding(start = 16.dp)
-            )
+    Column(modifier.fillMaxWidth().background(if (highlighted) AppColors.Accent.copy(alpha = 0.18f) else AppColors.Surface)
+        .tvFocusFrame().testTag("episode-${episode.episodeId}")
+        .onFocusChanged { if (it.isFocused) onFocus() }
+        .onPreviewKeyEvent {
+            if (it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_MENU &&
+                it.nativeKeyEvent.action == KeyEvent.ACTION_UP) { onMenu(); true } else false
+        }
+        .semantics { contentDescription = "Episode ${episode.episodeNum}, ${episode.title}, ${state.name}" }
+        .combinedClickable(onClick = onPlay, onLongClick = onMenu)
+        .padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (highlighted) Text("▶ ", color = AppColors.AccentText, style = TvType.label)
+            Text(episode.episodeNum.toString().padStart(2, '0'), color = AppColors.Dim,
+                style = TvType.body, modifier = Modifier.width(48.dp))
+            Text(episode.title, color = AppColors.Ink, style = TvType.title,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            episode.durationSecs?.takeIf { it > 0 }?.let {
+                Text("${it / 60} min", color = AppColors.Dim, style = TvType.label)
+            }
+            if (state == EpisodeRowState.Watched) Text(" ✓", color = AppColors.Good, style = TvType.title)
+        }
+        episode.plot?.let { plot ->
+            Text(plot, color = AppColors.Dim, style = TvType.label, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 48.dp, top = 4.dp))
+        }
+        if (state == EpisodeRowState.Partial && positionMs != null && durationMs != null && durationMs > 0) {
+            Box(Modifier.fillMaxWidth().height(4.dp).padding(start = 48.dp).background(AppColors.Line)) {
+                Box(Modifier.fillMaxWidth((positionMs.toFloat() / durationMs).coerceIn(0f, 1f))
+                    .height(4.dp).background(AppColors.Accent))
+            }
         }
     }
 }
-
-@Composable
-private fun Message(text: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = text, color = Palette.Ink, style = TvType.title)
-    }
-}
-
-/**
- * Roughly three lines of `label`. The header is a strip above the episode list, not a
- * synopsis pane — anything taller starts pushing episodes off the first screen, which is
- * the one thing this screen must not do.
- */
-private val PLOT_MAX_HEIGHT = 64.dp

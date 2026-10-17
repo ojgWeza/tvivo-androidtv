@@ -21,14 +21,16 @@ Read in this order:
 1. Read `D:\HCode\DEV-BIBLE.md`, `D:\HCode\bible-detail\todo-and-bible-maintenance.md`, this file
 2. Read `TODO.md` to identify open work
 3. Read memory index to check for carry-over notes
-4. If working via Herdr: check for existing Codex pane before starting a new one (see §6)
+4. Delegate to Codex through the installed skill or background `codex exec` (see §6)
 5. Pick work from `TODO.md` directly; do not wait for the user to restate
 
 ---
 
 ## §1 Build State
 
-**What this is:** An Android TV app (POC first, native Kotlin) that connects to an Xtream Codes IPTV panel and lets the user browse and play Live TV, Movies, and Series. Built by Hoda as a personal project, separate from her Health Insights / Medica Cloud Care work.
+**What this is:** An Android app (native Kotlin, one codebase for TV, phone and tablet) that connects to an Xtream Codes IPTV panel and lets the user browse and play Live TV, Movies, and Series. Built by Hoda as a personal project, separate from her Health Insights / Medica Cloud Care work.
+
+**Scope change 2026-10-07:** the app is being taken to a **public Google Play release for TV + phone + tablet**, adopting WinUI's mature identity and its My Tvivo shelf model, with an English/Arabic UI and an optional "Tvivo Plus" (Play Billing). The authoritative plan is **`docs/android-production-plan.md`** (phases 0–7, §12 for monetization, setup QR, pairing and the free/Plus split). Where older text below says "Android TV only" or "TV-only", this scope change governs. The Phase 5 "Hardening" item in §3 is superseded by that plan's phases.
 
 ### Current state (as of 2026-09-16)
 
@@ -44,7 +46,7 @@ Read in this order:
 
 **The rail leads with three synthetic folders** the panel does not publish — `RECENTLY ADDED` (100), `CONTINUE WATCHING` (50), and `FAVOURITES` in that order, above the panel`s categories. They are `CategoryEntity` rows with `__`-prefixed ids; see `docs/architecture.md`.
 
-**Room DB is v5, on real migrations.** Never restore `fallbackToDestructiveMigration` — it drops `favourites` and `resume_positions`, which are the only user data the app holds and the two tables those folders are built from. v5 adds `rating` to `vod_streams` and `series`; nothing back-fills it, so ratings appear per category as each one re-syncs.
+**Room DB is v7 (in development; v5 is the last shipped version), on real migrations.** Never restore `fallbackToDestructiveMigration` — it drops critical user data including `favourites`, `resume_positions`, and watched state. v5 added `rating` to `vod_streams` and `series`; nothing back-fills it, so ratings appear per category as each one re-syncs. v6 (2026-10-07) adds profiles (`profile`, `profile_allow`), `watched`, `visits`, `shelf_visits`, `recently_played` and a `profileId` on `favourites`/`resume_positions`; because SQLite cannot widen a primary key in place, `MIGRATION_5_6` rebuilds those two user tables by a transactional copy-and-swap, so it is verified by tests from v3, v4 and v5 and by an independent review before release. v7 adds nullable detail metadata with `MIGRATION_6_7`, preserving all user tables (see `docs/decisions.md`).
 
 ### Focus handling (complex, both restore paths required)
 
@@ -75,6 +77,13 @@ Use `tools/emulator.sh`, never bare `emulator.exe`. It stops the Gradle daemons 
 - Streams are `.mkv`, `.mp4`, `.ts` direct files (not HLS manifests) for movie/series/live — progressive download, not adaptive streaming
 - All playback URLs are constructed client-side from `stream_id`/`episode_id` + `container_extension` (or `ext` for live) — see the URL pattern table in `docs/xtream-api-reference.md`
 - Never assume a `direct_source` field is populated; it`s typically empty on this panel
+
+**Neutrality, setup QR and Plus (2026-10-07):**
+- Tvivo stays a **neutral player**: no provider name, host or logo in code, assets, listing, screenshots or marketing; no white-label builds or provider portal for unlicensed providers. Store screenshots and the Play reviewer demo come from a fixture catalog, never the real panel.
+- **Setup QR/code** is an open documented format; always show an editable confirm screen before saving or contacting a server; treat it as a secret (store straight into Tink, never log, never export in diagnostics); an unsigned QR carries plain text only, no images.
+- **Phone-to-TV pairing:** the TV shows a one-time 4-digit code (about 5 minutes, single use, attempt-limited); credentials are encrypted to the TV's per-session key; same Wi-Fi first, no server. An encrypted-only relay is built only if same-Wi-Fi proves unreliable.
+- **Plus gate:** every Plus feature checks a single `PlusEntitlement` interface (Play Billing now, signed partner token later). The free path must work offline and without Play Services. Never offer to sell Plus in the app by any route except Play Billing. If Plus lapses nothing is deleted; existing profiles keep working and only creation/editing locks.
+- **No ads, no analytics SDK.** Crash diagnostics stay local with user-initiated export unless an explicit decision changes it.
 
 **Visual:**
 - **Card sizes are an image-pipeline input, not styling.** `POSTER(220×330 px)` and `CHANNEL(220×124 px)`. Posters are downsampled to card size before caching, so changing either means re-encoding the whole cache.
@@ -110,7 +119,7 @@ Use `tools/emulator.sh`, never bare `emulator.exe`. It stops the Gradle daemons 
 
 **Phase 4 (DONE):** Series — one extra layer (category → shows → `get_series_info` → season/episode picker → play). Episode ids are **strings**; `duration_secs` is wrong on this panel (read `duration`); empty `get_series_info` must never wipe a cached season. Adds `ui/series/`: a show is not playable, so activating one opens the season/episode picker and `MainActivity` routes on content type. Browse UI stays typed to `BrowseItem`, not to any entity.
 
-**Phase 5 (ACTIVE):** Hardening — RTL, empty/loading/error states, `RefreshWorker`, physical TV
+**Phase 5 (SUPERSEDED 2026-10-07):** Hardening — RTL, empty/loading/error states, `RefreshWorker`, physical TV. Replaced by phases 0–7 in `docs/android-production-plan.md` (Unblock and decide, Design system and adaptive shell, Data and policy ports, Player, My Tvivo and browse, Settings/observability/handset polish, Release engineering, Hardening and rollout). Hardening items carry over into those phases.
 
 ### Design pass (2026-09-08, decided and unbuilt)
 
@@ -168,6 +177,8 @@ Takes effect only on emulator restart. **This directly conflicts with the Esc-as
 
 **Touchscreen:** Android TV AVDs have no touchscreen (`hw.screen=no-touch`). Mouse clicks do nothing by design; `input tap` never works. Drive with `keyevent` or arrow keys.
 
+**Device matrix (2026-10-07, phone/tablet in scope):** TV AVD API 34 (1080p, no-touch), TV AVD API 28–30, phone AVD (about 360 dp), tablet AVD (landscape), foldable AVD, physical Xiaomi Mi 10, and a low-RAM (≤ 2 GB) TV box if obtainable. Touch AVDs accept `input tap`; the no-touch rule above applies to TV AVDs only. Every phase exit runs a release (R8) build smoke on each form factor, since minification regressions only appear in release. Playback checks use the local mock Xtream provider in `tools/mock-provider/` (run instructions: `tools/mock-provider/README.md`; start with `node tools/mock-provider/server.mjs`). Its media is generated locally with ffmpeg by `tools/mock-provider/generate-media.mjs`. Automated tests never open streams. The real panel is reserved for one-at-a-time short checks on the TV emulator during hardening.
+
 ---
 
 ## §5 Conventions
@@ -185,58 +196,45 @@ Takes effect only on emulator restart. **This directly conflicts with the Esc-as
 
 ---
 
-## §6 Claude/Codex Division of Labor (Herdr-coordinated)
+## §6 Claude/Codex Division of Labor
 
-**Binding.** This workflow makes the process self-sustaining instead of something the user has to re-explain every session.
+**Binding.** Codex is reached through the installed Codex skill/plugin or plain background `codex exec` (prompt from a handoff file, `< /dev/null`). There are no panes to manage and nothing to clear: every run starts fresh, so each handoff must be self-contained.
 
 ### Roles (fixed, do not renegotiate per-task)
 
-**Claude plans and executes.**
-- Writes the plan and acceptance criteria for any open item before touching code
-- Does the implementation
-- Owns closing the item out
+**Codex plans and implements.**
+- Writes the plan for any substantial item (read-only pass) and implements approved slices
+- Default model `gpt-6-sol`, effort `high`; the owner may name a cheaper tier (e.g. `gpt-6-luna`) for routine slices
+- Each slice ships with tests and a written report (files, decisions, exact test counts, what is runtime-only, manual test script)
 
-**Codex reviews and tests, never self-marks its own work done.**
-- Adversarially reviews Claude's plan for edge cases before execution
-- Codex wrote the original desktop LibVLC/native code, so its own past blind spots there are exactly what to check hardest
-- After the fix, tests against the plan's acceptance criteria with observable evidence — a screenshot, dumped UI string, log line — never "build is green" or "no exception thrown" alone
-- (`D-Desktop-10` shipped "fixed" twice on that weaker bar; this rule exists because of that)
+**Claude orchestrates, reviews and verifies.**
+- Writes the handoff (scope, do-not-touch list, acceptance criteria that name observable evidence)
+- Has the plan reviewed independently (a stronger model reviews before implementation starts), folds in the corrections, then dispatches slices in order
+- Compiles and runs the unit-test gate after each slice (standing go-ahead); reads the report and spot-checks risky claims instead of re-verifying everything
+- Never claims "fixed" or "running" without evidence: a log line, a test count, a screenshot, or a crash log. Anything not yet seen on a device is listed as PENDING
+- Owns closing the item: check it off `TODO.md`, add the closure note to `docs/decisions.md`, tell the user what changed
 
 **The user approves.**
-- Neither agent pushes, deploys, or opens a PR without the user seeing the diff first
-- Neither agent builds/installs/deploys without asking first — standing rule independent of this workflow
+- Neither agent pushes, deploys or opens a PR without the user seeing the diff first
+- Emulator/device installs and deploys need the user's go-ahead (compile and JVM tests are pre-approved)
 
 ### The loop, per item
 
-1. Claude writes the plan + acceptance criteria (what to observe, not just what to build)
-2. Claude hands the plan to Codex (`herdr agent prompt <name> "..." --wait`) for edge-case review
-3. Claude revises the plan if Codex found a real gap, then executes — asking the user before any build/deploy step
-4. Codex tests the result against acceptance criteria with evidence, reports pass/fail
-5. Claude closes the loop: check the item off `TODO.md`, add its closure note to `docs/decisions.md`'s "Archived todo-tree closures" (matching existing format), report to user what changed and what review/test caught
+1. Claude writes the handoff and acceptance criteria (what to observe, not only what to build)
+2. Codex produces the plan; an independent review checks it against the real code and logs
+3. Claude revises the plan from the review, then dispatches slices to Codex one at a time
+4. Claude runs the gate (`:shared-core:test :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest` for Android) and reads the slice report
+5. The user tests the build; their findings become the next fixes handoff. A fix is only closed when the symptom is gone on the device or the cause is proven in a log
 
-### Context measurement (part of the PoC, not optional once running)
+### Evidence rules
 
-Record per item closed: context/tokens spent on each side, and **how much of Codex's raw tool output stayed in its own Herdr pane and never had to be read into Claude's context.** Report this alongside closure note so process value is a number, not a vibe.
-
-### Codex context harness (added 2026-09-14, post QA-10 PoC)
-
-QA-10 closed with Claude spending a small fraction of Codex's context for equivalent work. The split worked as intended, none of Codex's raw output crossed into Claude's context. But 57% for a two-screen visual check is too much fuel per item.
-
-**Mechanical overspend causes (rules to fix them):**
-- **`uiautomator dump` was piped to `/dev/tty`** (~300-390 lines XML per check). **Rule: dump to file only** (`uiautomator dump path.xml`), then extract just the `text="..."` values that matter via `Select-String`/`grep -o 'text="[^"]*"'`. Never print a full hierarchy to console.
-- **Blind trial-and-error navigation** (wrong category tap, filter-text guess) cost a full dump-and-inspect per failed attempt. **Rule: plan the exact tap/filter sequence against a known layout before executing**, not probing and re-dumping after each guess. If layout is unknown, one exploratory dump, extract coordinates, then execute the rest blind.
-- **Full-file reads used `Skip N -First M` blocks** (35-90 lines) even when plan already named exact line numbers. **Rule: when plan cites file:line, read a tight window (±10-15 lines), not an arbitrary block** — prefer `rg`/grep for a symbol over paging.
-- **Screenshots are most expensive** (vision tokens per image) and one was viewed twice. **Rule: capture once, verify it's settled before viewing (short sleep after action), view each evidence image at most once.**
-
-**Standing budget:** State a rough context ceiling in test-handoff prompt itself (e.g. "target finishing under ~25% of your context"). If trending over, stop expanding evidence and report with what exists — same as any acceptance-criteria shortfall.
-
-**Reporting requirement:** Codex's final report must state its own context-used percentage (copy from status line into written report, don't leave implicit) so number is comparable run-to-run.
-
-**Auto-clear at ~35%** (added 2026-09-15): Once Codex's status shows ~35% used, Claude resets it with `herdr agent send-keys <name> /clear` (Codex's own in-CLI context-reset command — not exiting, since exit loses the `codex resume` handle) before handing it the next task. Do this proactively between tasks, not waiting for Codex to balloon.
+- A green build is not a fixed feature. Prefer the crash log (`adb logcat -b crash`) and a reproduction over reasoning from source alone
+- UI checks dump to a file and extract only the strings that matter; never print a full hierarchy to the console
+- Read a tight window around cited file:line, not whole files; capture each screenshot once, after the screen settles
 
 ### Escalation
 
-If Codex's review surfaces a scope/architecture disagreement (not a straightforward correction), **stop and ask the user** rather than Claude unilaterally overruling it. If Codex's test fails, the loop returns to Claude, not back to Codex to patch directly — Codex is the more error-prone party on the exact subsystem (native/FFI desktop code) where the "fixed twice, still broken" pattern happened.
+If Codex's plan or the review surfaces a scope/architecture disagreement (not a straightforward correction), **stop and ask the user** rather than overruling it. If a slice fails its tests, it goes back to Codex with the exact failing output; Claude fixes directly only small, obviously mechanical breakages (e.g. a missing parameter) and says so.
 
 ---
 
@@ -250,19 +248,20 @@ If Codex's review surfaces a scope/architecture disagreement (not a straightforw
 
 **Result:** Single unified bible (§0-7), crystal-clear session protocol, ~209 lines upfront but zero ambiguity afterward. Eliminated need to maintain 17 separate files.
 
-### 2026-09-14 (D-Desktop-10-REGR, Herdr workflow PoC)
+### 2026-09-14 (D-Desktop-10-REGR, plan-review-evidence workflow)
 
-**Decision:** Adopted Herdr-coordinated Claude/Codex workflow with visible side-by-side progress, plan review before execution, test evidence requirements.
+**Decision:** Adopted a Claude/Codex workflow with plan review before execution and test evidence requirements.
 
 **Why:** Prior "fixed twice" incident on D-Desktop-10 showed that build-success ≠ feature-works; need structured plan+review+evidence.
 
-**Result:** QA-10 closed cleanly with measurable context savings (Codex output stayed in its own pane). Context harness added to prevent overspend on larger items.
+**Result:** QA-10 closed cleanly; evidence rules now live in §6.
 
 ---
 
 ## §8 Related Documentation
 
 For implementation details, architecture, and decisions:
+- **`docs/android-production-plan.md`** — Android production release plan: identity, form factors, features, phases, Play compliance, monetization (§12)
 - **`docs/architecture.md`** — system shape, caching logic, focus restoration
 - **`docs/decisions.md`** — rationale for build choices, archived closure notes
 - **`docs/ui-scope.md`** — layout system, type scale, card dimensions, state table

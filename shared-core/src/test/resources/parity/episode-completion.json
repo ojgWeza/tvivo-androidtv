@@ -1,0 +1,23 @@
+[
+  {"name":"Ninety_percent_of_a_twenty_minute_episode_is_not_finished","op":"episode","position":1080000,"duration":1200000,"ended":false,"expected":false},
+  {"name":"Two_minutes_left_is_not_finished","op":"episode","position":1080000,"duration":1200000,"ended":false,"expected":false},
+  {"name":"Fifteen_seconds_and_one_millisecond_left","op":"episode","position":1184999,"duration":1200000,"ended":false,"expected":false},
+  {"name":"Last_fifteen_seconds_are_finished","op":"episode","position":1185000,"duration":1200000,"ended":false,"expected":true},
+  {"name":"Episode_end_without_known_length","op":"episode","position":0,"duration":null,"ended":true,"expected":false},
+  {"name":"Movie_end_without_known_length","op":"movie","position":0,"duration":null,"ended":true,"expected":false},
+  {"name":"Episode_without_length_or_end","op":"episode","position":5000000,"duration":null,"ended":false,"expected":false},
+  {"name":"Very_short_clip_at_start","op":"episode","position":0,"duration":30000,"ended":false,"expected":false},
+  {"name":"Film_five_minutes_left","op":"movie","position":5700000,"duration":6000000,"ended":false,"expected":false},
+  {"name":"Film_four_minutes_left","op":"movie","position":5760000,"duration":6000000,"ended":false,"expected":true},
+  {"name":"Film_one_minute_left","op":"movie","position":5940000,"duration":6000000,"ended":false,"expected":true},
+  {"name":"Short_film_three_minutes_left","op":"movie","position":2220000,"duration":2400000,"ended":false,"expected":false},
+  {"name":"Short_film_two_minutes_left","op":"movie","position":2280000,"duration":2400000,"ended":false,"expected":true},
+  {"name":"Film_without_length_or_end","op":"movie","position":6000000,"duration":null,"ended":false,"expected":false},
+  {"name":"Film_without_length_with_end","op":"movie","position":0,"duration":null,"ended":true,"expected":false},
+  {"name":"Early_end_more_than_thirty_seconds_left","op":"end","position":1169999,"duration":1200000,"ended":true,"expected":false},
+  {"name":"Genuine_end_thirty_seconds_left","op":"end","position":1170000,"duration":1200000,"ended":true,"expected":true},
+  {"name":"No_end_signal_at_duration","op":"end","position":1200000,"duration":1200000,"ended":false,"expected":false},
+  {"name":"Early_movie_end_overrides_credits_tail","op":"movie","position":5880000,"duration":6000000,"ended":true,"expected":false},
+  {"name":"Episode_tail_without_end_signal","op":"episode","position":1185000,"duration":1200000,"ended":false,"expected":true},
+  {"name":"Movie_credits_without_end_signal","op":"movie","position":5880000,"duration":6000000,"ended":false,"expected":true}
+]

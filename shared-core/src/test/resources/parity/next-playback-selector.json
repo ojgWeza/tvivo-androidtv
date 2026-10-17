@@ -1,0 +1,10 @@
+[
+  {"name":"Sequential_next_returns_following_item_and_none_at_end","playlist":["one","two","three"],"shuffle":false,"steps":[{"current":"one","expected":"two"},{"current":"three","expected":null}]},
+  {"name":"Shuffle_never_repeats_within_round_and_never_picks_current","playlist":["one","two","three","four"],"shuffle":true,"randomIndex":0,"steps":[{"current":"one","expected":"two"},{"current":"two","expected":"three"},{"current":"three","expected":"four"}]},
+  {"name":"Shuffle_prefers_unfinished_and_starts_new_round","playlist":["current","finished","unwatched"],"finished":["current","finished"],"shuffle":true,"randomIndex":0,"steps":[{"current":"current","expected":"unwatched"},{"current":"unwatched","expected":"finished"},{"current":"finished","expected":"unwatched"}]},
+  {"name":"Shuffle_empty_playlist","playlist":[],"shuffle":true,"randomIndex":0,"steps":[{"current":"missing","expected":null}]},
+  {"name":"Shuffle_single_item_playlist","playlist":["only"],"shuffle":true,"randomIndex":0,"steps":[{"current":"only","expected":null}]},
+  {"name":"Shuffle_is_deterministic_for_same_seed","playlist":["one","two","three","four","five"],"shuffle":true,"seed":42,"repeatFromSeed":true,"steps":[{"current":"one"},{"current":"$previous"},{"current":"$previous"},{"current":"$previous"}],"expected":{"sameRuns":true,"uniqueCount":4}},
+  {"name":"Sequential_deduplicates_visible_ids","playlist":["one","one","two"],"shuffle":false,"steps":[{"current":"one","expected":"two"}]},
+  {"name":"Reset_clears_shuffle_round","playlist":["one","two","three"],"shuffle":true,"randomIndex":0,"steps":[{"current":"one","expected":"two"},{"reset":true,"current":"one","expected":"two"}]}
+]

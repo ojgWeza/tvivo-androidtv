@@ -1,23 +1,28 @@
 package com.dev.Tvivo.ui.browse
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -25,16 +30,24 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.Popup
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvClickable
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.common.tvFocusFrame
+import com.dev.Tvivo.ui.common.HeaderIconButton
+import com.dev.Tvivo.ui.common.sortIconVector
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import com.dev.Tvivo.diagnostics.DiagnosticLog
+import com.dev.Tvivo.home.FocusLinkPolicy
+import com.dev.Tvivo.home.CatalogSort
 
 /** D-3. Was 360 dp, which bought nothing: no panel name fits on one line at either
  *  width, so the extra 80 dp only narrowed the grid. */
@@ -50,6 +63,7 @@ private val COUNT_COLUMN = 48.dp
  * Counts come from one grouped query exposed as a Flow, so they fill in live as the
  * background sync lands rather than appearing all at once at the end.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CategoryRail(
     categories: List<CategoryEntity>,
@@ -65,32 +79,84 @@ fun CategoryRail(
     /** The screen's resting focus. Requested once categories arrive, so the first D-pad
      *  press has somewhere to move *from* — see [BrowseScreen]. */
     railFocusRequester: FocusRequester,
+    gridAvailable: Boolean,
+    categorySort: CatalogSort = CatalogSort.MostVisited,
+    onCategorySortChanged: (CatalogSort) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filterFocusRequester = remember { FocusRequester() }
+    val categorySortFocusRequester = remember { FocusRequester() }
+    val selectedRowRequester = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    var sortExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedCategoryId, categories) {
+        val index = categories.indexOfFirst { it.categoryId == selectedCategoryId }
+        if (index > 1 && listState.layoutInfo.visibleItemsInfo.none { it.index == index }) {
+            listState.scrollToItem(index)
+        }
+    }
     Column(
         modifier = modifier
             .width(RAIL_WIDTH)
             .fillMaxHeight()
-            .background(Palette.Surface)
+            .background(AppColors.Surface)
     ) {
-        // D-13. Pinned above the list rather than scrolling with it: a filter that
-        // scrolls out of view while you are looking at its results is a filter you
-        // forget is applied.
-        CategoryFilterField(
-            value = filter,
-            onValueChange = onFilterChanged,
-            gridFocusRequester = gridFocusRequester,
-            focusRequester = filterFocusRequester
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // D-13. The filter stays pinned above the category list; order is now a
+            // compact adjacent action so the list begins directly below this row.
+            CategoryFilterField(
+                value = filter,
+                onValueChange = onFilterChanged,
+                focusRequester = filterFocusRequester,
+                sortFocusRequester = categorySortFocusRequester,
+                modifier = Modifier.weight(1f)
+            )
+            androidx.compose.foundation.layout.Box {
+                HeaderIconButton(sortIconVector(), "Order categories",
+                    onClick = { sortExpanded = true },
+                    modifier = Modifier.focusRequester(categorySortFocusRequester)
+                        .testTag("category-order"))
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false },
+                    modifier = Modifier.background(AppColors.Elevated)) {
+                    listOf(CatalogSort.MostVisited, CatalogSort.AlphabeticalAsc,
+                        CatalogSort.AlphabeticalDesc, CatalogSort.RecentlyAdded).forEach { option ->
+                        val label = when (option) {
+                            CatalogSort.MostVisited -> "Most visited"
+                            CatalogSort.AlphabeticalAsc -> "A–Z"
+                            CatalogSort.AlphabeticalDesc -> "Z–A"
+                            CatalogSort.RecentlyAdded -> "Recently added"
+                        }
+                        DropdownMenuItem(text = { Text(
+                            text = if (option == categorySort) "✓ $label" else label,
+                            color = AppColors.Ink, style = TvType.label
+                        ) }, onClick = {
+                            sortExpanded = false
+                            onCategorySortChanged(option)
+                        })
+                    }
+                }
+            }
+        }
 
         LazyColumn(
+            state = listState,
             // Requesting focus on a focus *group* delegates to its first focusable
             // child, which is what makes this safe against a LazyColumn whose rows are
             // not composed yet. The same pattern the grid already uses.
             modifier = Modifier
                 .fillMaxHeight()
                 .focusRequester(railFocusRequester)
+                .focusProperties {
+                    enter = { runCatching {
+                        if (listState.layoutInfo.visibleItemsInfo.any { info ->
+                                categories.getOrNull(info.index)?.categoryId == selectedCategoryId
+                            }) selectedRowRequester else FocusRequester.Default
+                    }.getOrDefault(FocusRequester.Default) }
+                }
                 .focusGroup(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
         ) {
@@ -104,6 +170,8 @@ fun CategoryRail(
                         onSelect(category)
                     },
                     gridFocusRequester = gridFocusRequester,
+                    gridAvailable = gridAvailable,
+                    selectedRowRequester = selectedRowRequester.takeIf { category.categoryId == selectedCategoryId },
                     // Only the first row sends UP to the filter. Declared per-row rather
                     // than on the group, or UP from row 40 would jump to the filter
                     // instead of row 39.
@@ -117,7 +185,7 @@ fun CategoryRail(
                 item {
                     Text(
                         text = "No category matches \"$filter\"",
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.label,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                     )
@@ -144,8 +212,9 @@ fun CategoryRail(
 private fun CategoryFilterField(
     value: String,
     onValueChange: (String) -> Unit,
-    gridFocusRequester: FocusRequester,
-    focusRequester: FocusRequester
+    focusRequester: FocusRequester,
+    sortFocusRequester: FocusRequester,
+    modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
     androidx.compose.material3.OutlinedTextField(
@@ -154,17 +223,17 @@ private fun CategoryFilterField(
         // `Filter`, not `Search`: it narrows a list that is already on screen. Search
         // is the thing that goes and finds rows you are not looking at, and this is not
         // that — promising it here would be promising the wrong feature.
-        label = { Text("Filter categories", color = Palette.Dim, style = TvType.caption) },
+        label = { Text("Filter categories", color = AppColors.Dim, style = TvType.caption) },
         singleLine = true,
         textStyle = TvType.body,
         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Palette.Ink,
-            unfocusedTextColor = Palette.Ink,
-            focusedContainerColor = Palette.Elevated,
-            unfocusedContainerColor = Palette.Elevated,
-            cursorColor = Palette.Accent,
-            focusedBorderColor = Palette.Accent,
-            unfocusedBorderColor = Palette.Line
+            focusedTextColor = AppColors.Ink,
+            unfocusedTextColor = AppColors.Ink,
+            focusedContainerColor = AppColors.Elevated,
+            unfocusedContainerColor = AppColors.Elevated,
+            cursorColor = AppColors.Accent,
+            focusedBorderColor = AppColors.Focus,
+            unfocusedBorderColor = AppColors.Line
         ),
         // `Next` rather than `Done`: the natural next move after typing a filter is
         // into the list it just produced.
@@ -177,9 +246,12 @@ private fun CategoryFilterField(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .then(modifier)
             .focusRequester(focusRequester)
-            .focusProperties { right = gridFocusRequester }
+            .focusProperties {
+                right = FocusLinkPolicy.targetIfRendered(sortFocusRequester, isRendered = true)
+                    ?: FocusRequester.Default
+            }
             .dpadFieldNavigation(focusManager)
     )
 }
@@ -191,6 +263,8 @@ private fun RailRow(
     selected: Boolean,
     onSelect: () -> Unit,
     gridFocusRequester: FocusRequester,
+    gridAvailable: Boolean,
+    selectedRowRequester: FocusRequester? = null,
     /** Non-null on the first row only: UP from the top of the list opens the filter. */
     filterFocusRequester: FocusRequester? = null
 ) {
@@ -198,22 +272,24 @@ private fun RailRow(
     var overflowed by remember { mutableStateOf(false) }
 
     val background = when {
-        focused -> Palette.Accent
+        focused -> AppColors.Accent
         // Last-active state: when focus leaves the rail for the grid, the row the user
         // came from stays marked, or they lose their place entirely.
-        selected -> Palette.Accent.copy(alpha = 0.40f)
-        else -> Palette.Surface
+        selected -> AppColors.Accent.copy(alpha = 0.40f)
+        else -> AppColors.Surface
     }
-    val textColor = if (focused) Palette.OnAccent else Palette.Ink
+    val textColor = if (focused) AppColors.OnAccent else AppColors.Ink
 
     Row(
         modifier = Modifier
+            .then(if (selectedRowRequester != null) Modifier.focusRequester(selectedRowRequester) else Modifier)
             .fillMaxWidth()
             // The override belongs on the focused node itself: declared on the parent
             // focus group it is not consulted, and the 2D search picks the header's
             // Refresh instead — also to the right, and nothing weighs it as further.
             .focusProperties {
-                right = gridFocusRequester
+                right = FocusLinkPolicy.targetIfRendered(gridFocusRequester, gridAvailable)
+                    ?: FocusRequester.Default
                 // **Q-25 — UP from the top of the list is how the filter is reached.**
                 // The field is pinned above the list and is not part of it, so without
                 // this the 2D search is free to leave the rail entirely and hand UP to
@@ -221,6 +297,7 @@ private fun RailRow(
                 filterFocusRequester?.let { up = it }
             }
             .background(background)
+            .then(if (selected && !focused) Modifier.border(2.dp, AppColors.AccentText) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .tvClickable { onSelect() }
             .padding(horizontal = 24.dp, vertical = 14.dp),
@@ -244,8 +321,8 @@ private fun RailRow(
             // Blank, never `0`: `0` claims the category is empty, which is a different
             // and false statement while the sync is still running.
             text = count?.toString() ?: "",
-            color = if (focused) Palette.OnAccent else Palette.Dim,
-            style = TvType.caption,
+            color = if (focused) AppColors.OnAccent else AppColors.Ink,
+            style = TvType.label,
             textAlign = TextAlign.End,
             maxLines = 1,
             modifier = Modifier
@@ -261,11 +338,11 @@ private fun RailRow(
         Popup(offset = IntOffset(x = 0, y = 0)) {
             Text(
                 text = name,
-                color = Palette.Ink,
+                color = AppColors.Ink,
                 style = TvType.title,
                 modifier = Modifier
                     .width(RAIL_WIDTH)
-                    .background(Palette.Elevated)
+                    .background(AppColors.Elevated)
                     .padding(horizontal = 24.dp, vertical = 14.dp)
             )
         }

@@ -5,6 +5,7 @@ import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.NameNormalizer
+import com.dev.Tvivo.home.CatalogSort
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
@@ -64,6 +65,21 @@ class SeriesRepository(
         db.seriesDao().countInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
 
     fun pagingAll(): PagingSource<Int, SeriesEntity> = db.seriesDao().pagingAll(accountId)
+
+    fun pagingSorted(categoryId: String?, query: String, sort: CatalogSort): PagingSource<Int, SeriesEntity> =
+        db.seriesDao().pagingSorted(accountId, categoryId, NameNormalizer.escapeLikeQuery(query),
+            sort.toSqlKey())
+
+    suspend fun landingPreviewSorted(categoryId: String?, sort: CatalogSort): List<SeriesEntity> =
+        db.seriesDao().landingPreviewSorted(accountId, categoryId, sort.toSqlKey())
+
+    fun pagingAllFiltered(query: String): PagingSource<Int, SeriesEntity> =
+        db.seriesDao().pagingAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun countAllFiltered(query: String): Flow<Int> =
+        db.seriesDao().countAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun totalCount(): Flow<Int> = db.seriesDao().totalCount(accountId)
 
     fun pagingSearch(query: String): PagingSource<Int, SeriesEntity> =
         db.seriesDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
@@ -155,9 +171,16 @@ class SeriesRepository(
                     }
                     val json = response.body()?.string().orEmpty()
                     lastSeasonNames = SeriesInfoParser.parseSeasonNames(json)
+                    lastShowMetadata = SeriesInfoParser.parseShowMetadata(json)
                     SeriesInfoParser.parse(json, accountId, seriesId)
                 },
-                write = { rows -> db.seriesDao().replaceEpisodes(accountId, seriesId, rows) }
+                write = { rows ->
+                    db.seriesDao().replaceEpisodes(accountId, seriesId, rows)
+                    lastShowMetadata?.let { metadata ->
+                        db.seriesDao().updateDetails(accountId, seriesId,
+                            metadata.genre, metadata.cast, metadata.year)
+                    }
+                }
             )
         }
 
@@ -169,6 +192,9 @@ class SeriesRepository(
     var lastSeasonNames: Map<Int, String> = emptyMap()
         private set
 
+    var lastShowMetadata: SeriesInfoParser.ShowMetadata? = null
+        private set
+
     companion object {
         /**
          * A distinct `sync_meta` content type so a show id can never be mistaken for a
@@ -176,4 +202,10 @@ class SeriesRepository(
          */
         const val TYPE_SERIES_INFO = "series_info"
     }
+}
+
+private fun CatalogSort.toSqlKey() = when (this) {
+    CatalogSort.AlphabeticalDesc -> "za"
+    CatalogSort.RecentlyAdded -> "recent"
+    CatalogSort.MostVisited, CatalogSort.AlphabeticalAsc -> "az"
 }

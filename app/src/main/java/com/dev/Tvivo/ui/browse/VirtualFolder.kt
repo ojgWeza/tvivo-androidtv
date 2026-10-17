@@ -1,10 +1,10 @@
 package com.dev.Tvivo.ui.browse
 
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import com.dev.Tvivo.home.VirtualFolderKey
 
 /**
- * The three folders the panel does not publish: `CONTINUE WATCHING`, `FAVOURITES` and
- * `RECENTLY ADDED`. They sit at the top of the rail, above the panel's own categories.
+ * Virtual folders sit at the top of the rail, above the panel's own categories.
  *
  * **They are modelled as [CategoryEntity] on purpose.** The rail, the header, the counts
  * and the focus contract are all written against a category, and a parallel "virtual
@@ -14,15 +14,18 @@ import com.dev.Tvivo.data.local.entities.CategoryEntity
  *
  * **The id prefix is what keeps them from colliding.** Panel category ids are numeric
  * strings (`"770"`, `"898"`), so a `__` prefix cannot ever be one — and `isVirtual` is a
- * prefix test rather than a set membership test so that adding a fourth folder does not
+ * prefix test rather than a set membership test so that adding another folder does not
  * mean remembering to update a list somewhere else.
  */
 enum class VirtualFolder(val id: String, val title: String) {
 
+    /** Paged across the whole type; displayed first for one-step access from the rail. */
+    ALL("__all", "ALL"),
+
     /**
-     * **First, and deliberately.** The rail opens on its top row, so that row is what a
-     * user sees before they have decided anything — and it is the only one of the three
-     * with content on a fresh install. Continue watching and Favourites are both empty
+     * **The opening selection, deliberately.** ALL leads the rail for quick access, but
+     * Recently added is what the grid shows on first entry and it has content on a
+     * fresh install. Continue watching and Favourites are both empty
      * until the user has done something, and opening on an empty folder makes a full
      * catalog look like a broken app.
      *
@@ -38,6 +41,9 @@ enum class VirtualFolder(val id: String, val title: String) {
      * one nobody opens twice.
      */
     CONTINUE_WATCHING("__continue", "CONTINUE WATCHING"),
+
+    /** Live's last opened channels; a channel has no resume position. */
+    RECENTLY_PLAYED("__played", "LAST WATCHED"),
 
     /** Backed by `favourites`. The only folder whose contents the user chose directly. */
     FAVOURITES("__favourites", "FAVOURITES");
@@ -58,12 +64,21 @@ enum class VirtualFolder(val id: String, val title: String) {
 
         fun of(categoryId: String?) = entries.firstOrNull { it.id == categoryId }
 
+        /** Android-side adapter for the platform-neutral landing destination key. */
+        fun fromKey(key: VirtualFolderKey) = when (key) {
+            VirtualFolderKey.ContinueWatching -> CONTINUE_WATCHING
+            VirtualFolderKey.RecentlyAdded -> RECENTLY_ADDED
+            VirtualFolderKey.RecentlyPlayed -> RECENTLY_PLAYED
+            VirtualFolderKey.Favorites -> FAVOURITES
+        }
+
         /**
          * Live has no resume point — a channel is a stream, not a position — so it gets
          * Favourites and Recently added but never Continue watching. Offering a folder
          * that is structurally always empty is worse than not offering it.
          */
         fun forContentType(isLive: Boolean): List<VirtualFolder> =
-            if (isLive) listOf(RECENTLY_ADDED, FAVOURITES) else entries
+            if (isLive) listOf(ALL, RECENTLY_ADDED, RECENTLY_PLAYED, FAVOURITES)
+            else listOf(ALL, RECENTLY_ADDED, CONTINUE_WATCHING, FAVOURITES)
     }
 }

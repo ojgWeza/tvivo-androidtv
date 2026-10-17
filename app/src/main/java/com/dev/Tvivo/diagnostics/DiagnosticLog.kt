@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Base64
 import android.util.Log
+import com.dev.Tvivo.AppIdentity
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,7 @@ import java.util.regex.Pattern
  */
 object DiagnosticLog {
 
-    private const val TAG = "Tvivo"
+    private const val TAG = "AppDiagnostics"
     private const val FILE_NAME = "diagnostics.log"
     private const val EXPORT_FILE_NAME = "tvivo-diagnostics.txt"
 
@@ -124,7 +125,7 @@ object DiagnosticLog {
     fun export(context: Context, appendix: String = "") {
         val export = File(context.cacheDir, EXPORT_FILE_NAME)
         runCatching {
-            export.writeText(render(_entries.value, appendix), Charsets.UTF_8)
+            export.writeText(render(_entries.value, appendix, AppIdentity.name(context)), Charsets.UTF_8)
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.diagnostics",
@@ -135,7 +136,7 @@ object DiagnosticLog {
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             context.startActivity(
-                Intent.createChooser(share, "Export Tvivo diagnostics")
+                Intent.createChooser(share, "Export ${AppIdentity.name(context)} diagnostics")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }.onFailure { error("diagnostics", "Export failed: ${it.javaClass.simpleName}") }
@@ -187,8 +188,8 @@ object DiagnosticLog {
         ).joinToString("\t")
     }
 
-    private fun render(entries: List<Entry>, appendix: String = ""): String = buildString {
-        appendLine("Tvivo diagnostics — newest first")
+    private fun render(entries: List<Entry>, appendix: String = "", appName: String): String = buildString {
+        appendLine("$appName diagnostics — newest first")
         appendLine("Credentials, URLs, and catalogue titles are never recorded.")
         if (appendix.isNotBlank()) {
             appendLine()

@@ -10,13 +10,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 
 /**
@@ -43,18 +45,26 @@ fun ConfirmDialog(
     onDismiss: () -> Unit
 ) {
     val safeFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { safeFocus.requestFocus() }
+    // The dialog's content is attached in its own window, so the focus modifier can still be
+    // missing in the first frame and `requestFocus()` then throws IllegalStateException. Wait a
+    // frame and retry a few times instead of crashing; the safe button must hold focus on open.
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            withFrameNanos { }
+            if (runCatching { safeFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .width(560.dp)
-                .background(Palette.Elevated)
+                .background(AppColors.Elevated)
                 .padding(28.dp)
         ) {
-            Text(text = title, color = Palette.Ink, style = TvType.title)
+            Text(text = title, color = AppColors.Ink, style = TvType.title)
             Spacer(Modifier.height(8.dp))
-            Text(text = consequence, color = Palette.Dim, style = TvType.body)
+            Text(text = consequence, color = AppColors.Dim, style = TvType.body)
             Spacer(Modifier.height(20.dp))
 
             DialogAction(
@@ -75,9 +85,10 @@ private fun DialogAction(
 ) {
     Text(
         text = label,
-        color = Palette.Ink,
+        color = AppColors.Ink,
         style = TvType.title,
         modifier = modifier
+            .testTag("confirm-dialog-$label")
             .fillMaxWidth()
             .tvFocusFrame()
             .tvClickable { onClick() }

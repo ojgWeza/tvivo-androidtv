@@ -8,6 +8,77 @@ See `TODO-ARCHIVE.md` for closed items and `docs/decisions.md` for rationale.
 
 ---
 
+## Android production release — TV + phone + tablet, Play Store (plan: `docs/android-production-plan.md`)
+
+Scope decided 2026-10-07. Phases are ordered by dependency; each closes with its exit gate and driven-on-emulator evidence. Nothing is built, installed or deployed without presenting the change set and getting an explicit go-ahead.
+
+**Phase 0 — Unblock and decide**
+- [ ] Re-verify Q-14 (phone launch crash) is gone on the Mi 10 with a clean current build; close it, or capture `adb logcat -d AndroidRuntime:E *:S` if it recurs.
+- [ ] **BLOCKED on the product name (postponed 2026-10-07; Tvivo is only the working name because `tvivo.es` is an unrelated IPTV seller).** Once the name is final: trademark search (TMview, EUIPO, USPTO, WIPO), Play and App Store search incl. Arabic, `.app` domain, then final `applicationId` (permanent once uploaded; `com.dev.Tvivo` is a placeholder), store name, wordmark, launcher icon / adaptive icon / TV banner. Candidates looked at so far: Ishara (preferred), Lamha, Ehna/e7na, Mawja, Sahra, Fourga/Forga (taken), TVido (close to Vidio). The developer account already exists. Do not buy a domain or upload anything before this is settled.
+- [ ] Re-check local crash reporting and Compose Desktop retirement choices (plan §9).
+- [ ] Final Plus prices (plan §12.7 are hypotheses) and confirm the Plus v1 list (§12.8).
+- [x] Slice 0A done 2026-10-07: shared Xtream fixture (`app/src/sharedTest/fixtures/xtream-fixture/`) + MockWebServer contract tests (`XtreamFixtureContractTest`); compiled, unit tests pass.
+- [x] Slice 0B mock provider — closed; see `TODO-ARCHIVE.md#android-production-phase-0`.
+- [ ] Triage the "implemented, emulator verification pending" items below (Q-4, Q-5, Q-11, Q-21, QA-3…QA-9, U-13, U-14) against the mock provider; close or re-open each with evidence.
+
+**Phase 1 — Design system and adaptive shell**
+- [x] Slice 1A done 2026-10-07 (compiled, 183 unit tests pass): single app-identity source (`AppIdentity.kt`), semantic colour seam (`AppColors.kt`) with `AccentSoft`/`Good`/`Favourite`/`Deep` and a contrast test, adaptive type/spacing, `LocalIsTelevision` + size class. Characterization tests (login, grid focus, current-screen focus) ran on a dedicated API 34 TV emulator (`tvivo_test_tv34`) 2026-10-07: all 15 instrumented tests pass (after fixing test setup and one real robustness bug in `ConfirmDialog`, see Q-30/Q-31 below).
+- [ ] Remaining Phase 1 tokens work: 12 dp shape tokens in use across components; re-measure contrast on a real device.
+- [ ] Components: Card, Pill (quality/NEW), ProgressBar, FadeSwap, Tabs. Start/end layout rules from day one (Arabic RTL).
+- [ ] `LocalIsTelevision` + `WindowSizeClass`; shells: top bar (TV), rail (tablet), bottom bar (phone). Wordmark and splash.
+- [ ] Decide `androidx.tv.material3` vs plain Material 3 with own focus frame.
+- [~] Material 3 candidate spike (debug-only `M3CandidateSpike.kt` + `M3CandidateSpikeTest.kt`, checklist `docs/design/m3-candidate-checklist.md`) written, compiled and **passed on the emulator 2026-10-07** (TV arrows/OK/Back with exactly one `AccentSoft` frame, touch activation without a gesture shim and 48 dp targets, RTL mirroring of arrows and focus order, text metrics and colour roles equal to the current theme). The full `tv-material` migration still waits on the shell (1C) and the shelf-focus spike (1E), and needs the Opus review items (both themes carrying identical tokens during the migration, M3 48 dp minimum gated per form factor, ripple off).
+- [ ] **Focus spike:** shelf grid on TV proves enter-from-rail and return-from-detail restore by item id (both paths) before committing the shelf rewrite.
+
+**Phase 2 — Data and policy ports**
+- [~] Room v5→v6 written, compiled and unit-tested 2026-10-07 (`MIGRATION_5_6`, `profile`, `profile_allow`, `watched`, `visits`, `shelf_visits`, `recently_played`, `profileId` on favourites/resume, schema export on). Opus review done and its corrections applied (profile ensured on every write, graceful unknown-profile failure, `ON DELETE CASCADE`, chain/count/interruption tests). The real v5 schema was reconstructed from git (`app/schemas/.../5.json`, built from commit 2d14e95 in a throwaway worktree) and the migration is validated through Room against it, with a guard proving the hand-built v5 test fixture matches the real v5 exactly. The instrumented twin `MigrationInstrumentedTest` (Room's own `MigrationTestHelper` on the real `5.json`) passed on the API 34 emulator 2026-10-07. Open: an API 24 run (older SQLite), and a test on a read-only copy of a real device database (never the live app data).
+- [~] `shared-core` policy ports done 2026-10-07 (`EpisodeCompletion`, `PlaybackMode`, `NextPlaybackSelector`, `NextPrompt`, `HeldSeekAccelerator`, `TrackSelection`, `StallRecoveryPolicy`) with 105 JSON golden vectors (`shared-core/src/test/resources/parity/`), Kotlin tests pass. Open: the C# runner that loads the same vectors (touches `windows-spike`) and device verification of progress presentation.
+- [ ] Resilience: 429 retry with backoff and quiet refresh, gzip catalog, byte counter; verify `AccountIdentity` http/https separation test; verify optional-port parsing (empty port = default, never in URLs).
+- [~] Setup code: format spec `docs/setup-code-format.md` and the pure-Kotlin codec/validator (`shared-core` `com.dev.Tvivo.setup`, 38 vectors) done 2026-10-07; scheme is a single placeholder constant until the name is chosen. Open: confirm screen, camera scan, share-to-app and photo/paste import UI, "Share source as QR", saved sources (two free), phone-to-TV pairing (TV shows 4-digit code, same Wi-Fi, encrypted to the TV's key).
+
+**Phase 3 — Player**
+- [x] Player service, controls and correctness implementation — closed; see `TODO-ARCHIVE.md#android-production-phase-3-player`. Device acceptance remains open below.
+- [ ] Fixture-driven acceptance on TV, phone and tablet (screen off/background, PiP, timer expiry, stall, 429, multi-track, early EOF and end-of-stream autoplay); close Q-4, Q-5, Q-11, U-14 with evidence after owner-approved deployment. No automated test opens a real provider stream.
+
+**Device-unverified / follow-ups**
+- [ ] Verify the Retry overlay under a real playback failure.
+- [ ] Verify the second-connection HTTP 403 path.
+- [ ] Verify PiP close-X behavior on an emulator.
+- [ ] Verify keyguard media controls.
+- [ ] Investigate the decoder error after about five minutes of continuous playback on the emulator software codec; check on a real phone.
+- [ ] Recheck Q-14 on a physical phone; no physical phone run has happened yet.
+- [ ] Fix the stale ended view from a previous title flashing when another title opens immediately after timer-ended stop; Back clears it. The race is between the PlayerActivity snapshot read and the service clearing it on new play.
+- [ ] Supply a movie playlist source for movie play-next.
+- [ ] Add notification prompt actions for background play-next.
+- [ ] Verify the D-pad path for “End of current item” after moving it above the preset items in the menu.
+- [ ] Verify the five-minute minimum timer step.
+- [ ] Confirm the Plus themes boundary; Dark/Light is free by owner decision.
+- [ ] Complete the real-provider pass on the phone AVD after sign-in is available.
+
+**Phase 4 — My Tvivo and browse**
+- [ ] Finish Phase 4: branded artwork fallback and Android TV Watch Next row. Verify the shelf landing, sort, search, focus, NEW, progress, and redesigned detail pages on TV, phone and tablet in an owner-approved device run.
+- [ ] Success test: someone who did not build it finds, plays and resumes a title on all three form factors unaided.
+
+**Phase 5 — Settings, Plus, handset polish**
+- [ ] Settings (Library / Player / Account), player preferences, routine structured diagnostic events (T-D4), About + OSS notices, Wi-Fi-only sync and metered-data warning.
+- [x] Persisted Dark/Light preference (Dark default) — closed; see `TODO-ARCHIVE.md#android-production-phase-5-theme`.
+- [ ] Arabic UI with RTL mirroring (language setting; D-pad focus order mirrors); update any English-only assumptions.
+- [ ] `PlusEntitlement` + Play Billing; Plus v1 (profiles incl. parent-curated Kids profile, unlimited sources, backup/restore, additional themes subject to the free Dark/Light decision, advanced subtitles, home customization and custom lists); 30-day dismissible support prompt.
+- [ ] TalkBack pass, font scale 1.3×, 48 dp targets, reduced motion.
+
+**Phase 6 — Release engineering and Play compliance**
+- [ ] R8 minify + keep rules, upload key outside the repo + Play App Signing, version scheme (drop "-poc"), AAB, raise `targetSdk` to what Play requires at submission; verify media-playback foreground service type and `FOREGROUND_SERVICE`/`FOREGROUND_SERVICE_MEDIA_PLAYBACK`/`POST_NOTIFICATIONS` manifest handling against that target.
+- [ ] TV store assets (banner, 1920×1080 shots), phone/tablet assets, adaptive icon; screenshots and reviewer demo from the fixture catalog, never the real panel.
+- [ ] Privacy policy URL, data-safety form (credentials encrypted on device only, no ads, no analytics), content-policy wording ("bring your own source"), check the Families policy text, Play payments policy for partner entitlements, closed-testing requirements, cleartext-HTTP justification.
+- [ ] Baseline Profile + Macrobenchmark; release build smoke on every form factor.
+
+**Phase 7 — Hardening and rollout**
+- [ ] One authorised real-panel session on the single connection (live, movie, episode, seek, stall, source switch); soak test; performance budgets measured; internal → closed → staged production with Android vitals watched.
+
+**Later, not v1:** signed partner entitlement verifier (only once a licensed partner exists), encrypted pairing relay (only if same-Wi-Fi fails), watch-history/stats page, data-saver quality caps, cloud sync, EPG guide (needs provider support), external subtitle files.
+
+---
+
 ## Desktop (Priority — active batch)
 
 ### D-Desktop-16 (partially complete; revise `D-DESKTOP-16-PLAN.md` before implementation)
@@ -66,6 +137,8 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 
 ## Android TV — UI & Rendering
 
+- [ ] **Q-30 (Login IME manual verification):** The scrollable, IME-padded form and 297 dp action-row assertion are implemented. Verify on a TV IME that Sign in / Show password / Clear remain visible and D-pad reachable while typing; verify the handset keyboard path too.
+- [ ] **Q-31 (ConfirmDialog safe focus):** `ConfirmDialog` requested focus before its node was attached, which can throw `IllegalStateException` (seen in a Compose test); fixed 2026-10-07 to wait a frame and retry up to five times. A Compose test cannot prove the safe button holds focus on open (the dialog is its own window and gets no window focus under test; `focused=false` is logged), so verify by hand or with the mock provider on a signed-in emulator that "Keep me signed in" is focused when the sign-out and exit dialogs open.
 - [ ] **Q-8:** Movie title block eats vertical space. Low severity, user requested defer. Titles render below poster on up to two lines, pushing grid rhythm for long Arabic titles.
 - [ ] **Q-21 (Item filter overlap):** Fixed, not yet driven on-emulator. Expanded filter overlaps category title; fix: title `Column` gets `Modifier.weight(1f)` so actions measure first. Screenshot needed with long category name + filter open.
 - [ ] **QA-3 (Arabic text direction):** Implemented, emulator verification pending. Paragraph *direction* wrong; short final line hangs left instead of flush right (movie pre-run page, episode-picker header).
@@ -86,7 +159,7 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 
 ## Android TV — Streaming & Resilience
 
-- [ ] **Q-14 (APK crash on phone):** High blocker. Sideloaded APK crashes on launch, every attempt, no logcat captured. Phone is not target (scope is Android TV), but must get trace before determining if "unsupported, should fail clearly" is the answer. Get `adb logcat -c`, launch, `adb logcat -d AndroidRuntime:E *:S`. Candidates: `androidx.tv.material3` TV-only; layout geometry fixed to 1920×1080. See 2026-09-14 cross-project lesson (PrayerQiblaApp, Xiaomi Mi 10).
+- [ ] **Q-14 (APK crash on phone):** Owner reports it no longer crashes (2026-10-07); manifest now has `leanback required=false` and a normal `LAUNCHER` entry. Root cause was never captured, so treat as not reproducing. Phone is now a shipping target: re-verify on the Mi 10 with a clean current build (tracked in Phase 0 above), then close. If it recurs, `adb logcat -c`, launch, `adb logcat -d AndroidRuntime:E *:S` first. Layout is still fixed to 1920×1080 until Phase 1.
 - [ ] **Repeated image-load `IllegalStateException` on Mi 10:** No crash, investigate separately if it affects visible artwork.
 
 ---
@@ -154,7 +227,7 @@ Each stage below is independently testable and should close with a verification 
 - [ ] **Cinema transition fade live check** — toggle repeatedly between cinema and normal mode with both LibVLC and native playback; confirm the app-canvas fade covers resize frames, the image returns cleanly, and cursor/transport behavior is unchanged. `BACK-TRACE` now logs the transition frame and video-surface sizes.
 - [x] **Real player control surface — keyboard/wheel shortcuts added and runtime-verified live, 2026-10-01.** Pause/resume, seek ±10s, seek-bar drag, and volume slider work via mouse/UI (`PauseButton_Click`, `RewindButton_Click`, `ForwardButton_Click`, `SeekTo`, `VolumeSlider_ValueChanged`). Added keyboard/wheel shortcuts in `WindowRoot_KeyDown`/`WindowRoot_PointerWheelInput` (`MainWindow.xaml.cs`): Space toggles pause, Left/Right seek ±10s, Up/Down or mouse wheel adjusts volume ±5 — all gated on `_currentPage == ShellPage.Player`. New `AdjustVolume` helper clamps to the slider's min/max. Build clean (`dotnet build -p:Platform=x64`, 0 warnings/errors). **Runtime-verified live via UIA** (`windows-spike/perf/Test-PlayerShortcuts.ps1`, new script) against the local Gate-9 fixture video — not the real provider account, so the single-connection constraint was never touched: seek RIGHT/LEFT moved the real `ProgressSlider` value by ~10s each way, SPACE toggled the Pause/Play button label both directions, UP/DOWN and mouse-wheel both moved the real `VolumeSlider` value by ±5 and back. Incidental fix needed to make this testable: `CatalogLandingPage.xaml.cs`'s `ModeButtons` panel (hosting the DEBUG-only fixture button) was permanently `Visibility="Collapsed"` with nothing ever setting it visible — a pre-existing, unrelated dead-UI state; now set to `Visible` in the `#if DEBUG` fixture-button block only, so this has no effect on Release builds.
 - [x] ~~OSC title + owned overlay~~ — moot for WinUI: this was carried over from Compose's mpv-OSC items (Req 4 / D-Desktop-21). WinUI has no mpv and no OSC (engines are LibVLC `WindowsPlaybackEngine.cs` and FFmpegInterop `FFmpegInteropPlaybackEngine.cs`); it already ships its own XAML transport UI with native transport controls disabled (`AreTransportControlsEnabled = false`, `MainWindow.xaml:173`, `MainWindow.xaml.cs:383,1650`), and the app assigns the player title directly for movie/live/episode playback (`MainWindow.xaml.cs:683,823`). Any remaining control-surface gap is tracked by the keyboard-shortcut PARTIAL item above.
-- [x] **Mid-playback stall detection/recovery — added 2026-10-01, partially verified.** Both engines still only enforce a 30s *startup* deadline (unchanged: `WindowsPlaybackEngine.cs:30`, `FFmpegInteropPlaybackEngine.cs:9`); the new watchdog sits one layer up in `MainWindow.xaml.cs`'s existing `PlaybackUiTimer_Tick` (already polls `_engine.Timeline` every 500ms) rather than inside either engine, to avoid touching their existing concurrency-sensitive start/stop gating. Tracks last-seen position + timestamp while `IsPlaying`/`IsBuffering` and not paused/dragging/ended; if position hasn't advanced for `StallTimeout` (12s), logs `event=playback.stall ... outcome=reconnecting`, makes one reconnect attempt via `StartPlaybackAsync` at the stalled position (`HandleStall`), and if a second stall hits the same session, logs `outcome=retry-exhausted` and surfaces `StatusText`/`PauseButton.Content="Retry"` instead of looping forever. Build clean. **Verified live:** ran the local Gate-9 fixture for 16s (longer than the 12s threshold) and confirmed zero false-positive `event=playback.stall` lines in `tvivo-launch.log` — the "reset tracker on real progress" logic is sound under normal playback. **Not verified live:** the actual reconnect/retry-exhausted branch — a local file never naturally stalls, and there was no way to induce a genuine network-level stall against this fixture without touching the real provider account (out of scope to risk on a single-connection account). That branch is code-reviewed only, built on already-verified primitives (`StartPlaybackAsync`, `StatusText`, `PauseButton`), not independently exercised.
+- [x] **Mid-playback stall detection/recovery — added 2026-10-01, partially verified. (Superseded 2026-10-08: logic now lives in `StallRecoveryPolicy`, see the playback reliability section below.)** Both engines still only enforce a 30s *startup* deadline (unchanged: `WindowsPlaybackEngine.cs:30`, `FFmpegInteropPlaybackEngine.cs:9`); the new watchdog sits one layer up in `MainWindow.xaml.cs`'s existing `PlaybackUiTimer_Tick` (already polls `_engine.Timeline` every 500ms) rather than inside either engine, to avoid touching their existing concurrency-sensitive start/stop gating. Tracks last-seen position + timestamp while `IsPlaying`/`IsBuffering` and not paused/dragging/ended; if position hasn't advanced for `StallTimeout` (12s), logs `event=playback.stall ... outcome=reconnecting`, makes one reconnect attempt via `StartPlaybackAsync` at the stalled position (`HandleStall`), and if a second stall hits the same session, logs `outcome=retry-exhausted` and surfaces `StatusText`/`PauseButton.Content="Retry"` instead of looping forever. Build clean. **Verified live:** ran the local Gate-9 fixture for 16s (longer than the 12s threshold) and confirmed zero false-positive `event=playback.stall` lines in `tvivo-launch.log` — the "reset tracker on real progress" logic is sound under normal playback. **Not verified live:** the actual reconnect/retry-exhausted branch — a local file never naturally stalls, and there was no way to induce a genuine network-level stall against this fixture without touching the real provider account (out of scope to risk on a single-connection account). That branch is code-reviewed only, built on already-verified primitives (`StartPlaybackAsync`, `StatusText`, `PauseButton`), not independently exercised.
 
 ### Stage 3 — Personalization & continuity — DONE (2026-09-30)
 - [x] **Home activity shelves (Continue Watching + Suggested) — done 2026-09-30.** `HomePage.xaml(.cs)` now renders both shelves via `SqliteCatalogRepository.GetContinueWatching`/`GetSuggestions`, wired through `MainWindow.LoadAsync`. Runtime-verified live: played a movie, confirmed `resume_ms` written to the DB during playback, closed and relaunched the app, and the item appeared in Continue Watching with correct artwork on the next launch — full round trip confirmed, not just code review.
@@ -178,7 +251,7 @@ Each stage below is independently testable and should close with a verification 
 ### Stage 6 — Resilience & observability — DONE except MSI packaging (2026-09-30)
 - [ ] Extend the cache-first empty/loading/error state machine to Movies/Series — likely done given Stage 1's completion but not independently line-by-line re-verified; re-check before closing.
 - [x] **Cache refresh destroying user state — fixed.** `ReplaceSnapshot` (`SqliteCatalogRepository.cs:265-282`) now does `INSERT ... ON CONFLICT DO UPDATE SET` touching only `category_id,title,title_sort,artwork,extension,added_at` — favourite/resume/visit columns survive a refresh untouched. The old delete-all `ReplaceLiveSnapshot` no longer exists.
-- [x] **Idle/featured experience — done 2026-09-30.** 5-minute idle timer + full-window featured overlay in `MainWindow.xaml(.cs)`, matching the Compose reference behavior: pauses when playback is active, window unfocused, or a `ContentDialog` is open; first keyboard/pointer/wheel input dismisses without activating underlying content (event consumed via `Handled = true`); timer stops cleanly on window close. Featured content sourced via `SqliteCatalogRepository.GetFeaturedSeriesTitles` (bounded, rating-ordered, LIMIT 20 — moved into the repository proper after an initial version bypassed it with a raw ad-hoc SQLite connection, caught in review). Show/dismiss events logged (`event=idle.overlay.show/dismiss reason=...`) after a perf run showed there was no way to confirm the overlay fired without launching a debugger. **Not visually runtime-verified this session** (only code-reviewed + log-instrumented) — the app was launched for playback/resume verification but the idle overlay's 5-minute trigger was not specifically exercised live.
+- [x] **Idle/featured experience — built 2026-09-30, later REMOVED by the owner (see `docs/decisions.md`: overlay, timer and `GetFeaturedSeriesTitles` are gone); the text below is historical.** 5-minute idle timer + full-window featured overlay in `MainWindow.xaml(.cs)`, matching the Compose reference behavior: pauses when playback is active, window unfocused, or a `ContentDialog` is open; first keyboard/pointer/wheel input dismisses without activating underlying content (event consumed via `Handled = true`); timer stops cleanly on window close. Featured content sourced via `SqliteCatalogRepository.GetFeaturedSeriesTitles` (bounded, rating-ordered, LIMIT 20 — moved into the repository proper after an initial version bypassed it with a raw ad-hoc SQLite connection, caught in review). Show/dismiss events logged (`event=idle.overlay.show/dismiss reason=...`) after a perf run showed there was no way to confirm the overlay fired without launching a debugger. **Not visually runtime-verified this session** (only code-reviewed + log-instrumented) — the app was launched for playback/resume verification but the idle overlay's 5-minute trigger was not specifically exercised live.
 - [x] **Routine diagnostics — done 2026-09-30.** `LaunchDiagnostics.Write` now emits structured `event=` lines for catalog cache load/refresh (with outcome + duration), shelf browse-open, playback start/stop (tagged with reason: user-cancelled/timeout/completed/error), per-engine resource release confirmation, resume-position saves, and idle-overlay show/dismiss. Includes URL/credential-field redaction, 4096-char truncation, and 1MB log rotation — all unit-tested (`LaunchDiagnosticsTests.cs`). `WriteException`/`WriteExceptionDetails` (used for genuine crash diagnostics) still log full exception text + stack trace, routed through the same redaction.
 - [x] **Catalog-scale memory/query safeguards — generalized.** The 100-row paging (`GetChannels` limit, `SqliteCatalogRepository.cs:293,297`) now applies to all `CatalogItemType`s, not just Live. Not load-tested for sustained scroll — a perf pass is still worth doing but the structural safeguard exists.
 - [x] **Artwork cache/decode budget — done 2026-09-30.** The existing 6-slot/cancellation/decode-sizing pipeline now also tracks actual decoded bytes and evicts on a 96 MiB budget (`ArtworkMemoryBudget`, unit-tested) in addition to the old 128-entry count cap. Home's shelf artwork was previously binding images directly, bypassing this pipeline entirely — now routed through the same shared, bounded cache via `LoadHomeArtwork`/`UnloadHomeArtwork`.
@@ -246,13 +319,28 @@ See `windows-spike/docs/PLAN-winui-moderate-features.md` for the full combined p
 
 ---
 
-## Phase 5 (Hardening) — Pending
+## Windows (WinUI) — Playback reliability, data usage and refresh (plan: `.codex-autopilot-plan-v2.md`, started 2026-10-06)
 
-Phase 5 work depends on open QA items closing. Planned scope:
-- RTL text layout
-- Empty/loading/error states
-- `RefreshWorker` improvements
-- Physical TV validation (once `max_connections` > 1 or test pool available)
+Driven by a friend's report (some episodes of one series fail on both engines while another app plays them; 4K starts slowly) plus data-usage measurements. Pipeline: Codex plans, Opus reviews, Codex implements slice by slice. Slice patches live in `D:\Scratch\autopilot-slices\`. Nothing below has been exercised in the live app yet unless stated.
+
+- [x] **S0a stall reconnect (`1c7c6ef`)** — `StallRecoveryPolicy`: one automatic reconnect per user start; a freeze before first real progress shows Retry and opens nothing. Replaces the 2026-10-01 watchdog described above.
+- [x] **S0b genuine end (`1c7c6ef`)** — `PlaybackEndPolicy`: an end counts only with a known duration and position within 30 s of it; an early EOF or unknown duration keeps progress, shows Retry, never marks watched or auto-advances.
+- [x] **S0c late failures (`d0588b8`)** — Native `MediaFailed` and LibVLC `Failed` after start show Retry once per session (`PlaybackFailurePolicy`).
+- [x] **S1a-1 diagnostics privacy (`5fa5c25`)** — value-based `SecretScrubber` (host/user/password raw + URL-encoded), scrubbed bounded export, a temporary **Copy diagnostics** button in the player top bar. Stack traces are no longer written to the launch log.
+- [x] **S1a-2 passive evidence (`6a2e62f`)** — Warning+ log rings for both engines, Native failure details, phase timings, Native open bounded by `rw_timeout`/`timeout` 15 s with awaited cleanup before the next open. **The real FFmpeg timeout and socket release are unverified** (only a fake open was tested). `FFmpegInteropPlaybackEngine.Dispose()` throws if an open is still closing; use `DisposeAsync`.
+- [x] **S3/S4 refresh policy (`c76d5e6`, `db3dd7c`)** — per-type success stamps, suspicious-empty guard, retry/cooldown, four user policies (default: older than 1 day), per-tab Updated/Refresh, Refresh all. Automatic failures are silent; only a user-started refresh shows a plain message.
+- [x] **S5/S6a/S6b artwork disk cache (`25accc6`, `5cdeaf7`, `63c5ee3`)** — URL-hashed cache, 30-day TTL, 200 MB cap, one fetch per URL; spotlight warms six images and rotates with no idle requests; Account has Clear artwork cache.
+- [x] **Optional provider port (`6d73d0c`)** — empty port means the scheme default and no port in any URL; a login no longer replaces it with the panel-reported port. Unit-tested only; **not yet tried against the no-port provider**.
+- [ ] **S2a/S2b EPG gate** — EPG default OFF at service, coordinator and UI (decision: EPG postponed). In progress.
+- [ ] **LIVE-APP TEST ROUND (owner-gated)** — walk through everything above in the real app, after the Android emulator testing finishes: early-EOF Retry, late-failure Retry, stall reconnect, Copy diagnostics, refresh policies + per-tab Refresh, artwork cache + carousel, optional port, three-launch startup check.
+- [ ] **Friend diagnostic build (owner approval needed)** — build an MSI with S0/S1a; the friend opens one failing and one working episode on each engine (4 opens) and sends Copy diagnostics. The result decides S7–S10.
+- [ ] **S1b typed evidence contract, S7a/S7b autopilot resolver, S8 recipe memory, S9 measured 4K tuning, S10 shared playback menu** — parked until the friend's evidence is in. S8 and S10 depend on S7.
+- [ ] **Live pause/rewind (timeshift)** — LibVLC core timeshift does not work for this stream type; an app-side rolling buffer would be needed. Owner has not decided to build it.
+- [ ] **Rebuild the Windows 11 MSI** with all of the above once the slices are accepted (Win10 edition 1.0.2 already has the optional port).
+
+## Phase 5 (Hardening) — Superseded 2026-10-07
+
+Replaced by the "Android production release" section at the top of this file (phases 0–7). Its items carry over: Arabic RTL (Phase 5), empty/loading/error states (Phase 5), `RefreshWorker` improvements (Phase 2 resilience), physical TV validation (Phase 7, via the mock provider plus one authorised real-panel session).
 
 ---
 
@@ -260,9 +348,12 @@ Phase 5 work depends on open QA items closing. Planned scope:
 
 ## Out of Scope (Explicitly Deferred or Declined)
 
-See `PROJECT-BIBLE.md` §5 for rationale. These include:
-- Idle dim / screensaver
+See `PROJECT-BIBLE.md` §5 and `PRODUCT-BIBLE.md` for rationale. These include:
+- Idle dim / screensaver / idle featured overlay (removed from WinUI too)
 - Voice search
 - Second TV target (LG webOS)
-- Favorite folders (separate persistence item with own plan)
-- Home Settings screen (unscoped, no priority)
+- Provider white-label builds, provider portals, ads
+- Casting/DLNA
+- Cloud sync and EPG guide until a server / provider support exists
+
+Brought into scope 2026-10-07: favourite folders (now Plus "custom favourite lists") and a Settings screen (Library / Player / Account).

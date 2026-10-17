@@ -5,6 +5,7 @@ import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.NameNormalizer
+import com.dev.Tvivo.home.CatalogSort
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
@@ -54,6 +55,21 @@ class LiveRepository(
         db.liveDao().countInCategoryFiltered(accountId, categoryId, NameNormalizer.normalizeQuery(query))
 
     fun pagingAll(): PagingSource<Int, LiveStreamEntity> = db.liveDao().pagingAll(accountId)
+
+    fun pagingSorted(categoryId: String?, query: String, sort: CatalogSort): PagingSource<Int, LiveStreamEntity> =
+        db.liveDao().pagingSorted(accountId, categoryId, NameNormalizer.escapeLikeQuery(query),
+            sort.toSqlKey())
+
+    suspend fun landingPreviewSorted(categoryId: String?, sort: CatalogSort): List<LiveStreamEntity> =
+        db.liveDao().landingPreviewSorted(accountId, categoryId, sort.toSqlKey())
+
+    fun pagingAllFiltered(query: String): PagingSource<Int, LiveStreamEntity> =
+        db.liveDao().pagingAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun countAllFiltered(query: String): Flow<Int> =
+        db.liveDao().countAllFiltered(accountId, NameNormalizer.escapeLikeQuery(query))
+
+    fun totalCount(): Flow<Int> = db.liveDao().totalCount(accountId)
 
     fun pagingSearch(query: String): PagingSource<Int, LiveStreamEntity> =
         db.liveDao().pagingSearch(accountId, NameNormalizer.normalizeQuery(query))
@@ -117,4 +133,10 @@ class LiveRepository(
                 write = { rows -> db.liveDao().replaceCategory(accountId, categoryId, rows) }
             )
         }
+}
+
+private fun CatalogSort.toSqlKey() = when (this) {
+    CatalogSort.AlphabeticalDesc -> "za"
+    CatalogSort.RecentlyAdded -> "recent"
+    CatalogSort.MostVisited, CatalogSort.AlphabeticalAsc -> "az"
 }

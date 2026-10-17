@@ -29,7 +29,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.launch
 
@@ -67,7 +67,7 @@ fun ScrollableText(
     text: String,
     modifier: Modifier = Modifier,
     maxHeight: Dp = 220.dp,
-    color: Color = Palette.Dim,
+    color: Color = AppColors.Dim,
     style: androidx.compose.ui.text.TextStyle = TvType.body
 ) {
     val scroll = rememberScrollState()
@@ -108,7 +108,7 @@ fun ScrollableText(
                         Modifier
                             .border(
                                 width = if (focused) 2.dp else 0.dp,
-                                color = if (focused) Palette.Accent else Color.Transparent,
+                                color = if (focused) AppColors.Focus else Color.Transparent,
                                 shape = RoundedCornerShape(6.dp)
                             )
                             .onFocusChanged { focused = it.isFocused }
@@ -153,7 +153,7 @@ fun ScrollableText(
         if (overflows && scroll.value < scroll.maxValue) {
             Text(
                 text = "▾ more",
-                color = if (focused) Palette.AccentText else Palette.Dim,
+                color = if (focused) AppColors.AccentText else AppColors.Dim,
                 style = TvType.caption,
                 modifier = Modifier.padding(top = 4.dp, start = 6.dp)
             )

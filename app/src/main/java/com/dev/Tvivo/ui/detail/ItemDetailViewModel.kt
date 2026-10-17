@@ -5,10 +5,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.CredentialsStore
+import com.dev.Tvivo.auth.AppErrorException
+import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
+import com.dev.Tvivo.data.local.entities.WatchedEntity
+import androidx.room.withTransaction
 import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
@@ -17,6 +22,7 @@ import com.dev.Tvivo.ui.home.ContentType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -32,10 +38,18 @@ data class ItemDetailUiState(
      */
     val rating: Double? = null,
     val quality: String? = null,
+    val year: String? = null,
+    val durationMinutes: Int? = null,
+    val durationMs: Long? = null,
+    val genre: String? = null,
+    val cast: String? = null,
+    val trailer: String? = null,
     val isFavourite: Boolean = false,
+    val isWatched: Boolean = false,
     /** Non-null once we know there is somewhere to resume from. */
     val resumeFromMs: Long? = null,
     val isLoading: Boolean = true,
+    val plotError: AppError? = null,
     /** The row is gone from the catalog — a favourite whose item was removed upstream. */
     val notFound: Boolean = false
 )
@@ -62,6 +76,8 @@ class ItemDetailViewModel(
     val state: StateFlow<ItemDetailUiState> = _state.asStateFlow()
 
     private var playback: PlaybackStateRepository? = null
+    private var accountId: String? = null
+    private var vodRepository: VodRepository? = null
 
     private val typeKey = when (contentType) {
         ContentType.LIVE -> TYPE_LIVE
@@ -73,8 +89,19 @@ class ItemDetailViewModel(
         viewModelScope.launch {
             val credentials = store.load() ?: return@launch
             val accountId = AccountIdentity.of(credentials)
+            this@ItemDetailViewModel.accountId = accountId
             val pb = PlaybackStateRepository(db, accountId)
             playback = pb
+            if (contentType == ContentType.MOVIES) launch {
+                db.resumeDao().observe(accountId, typeKey, itemId.toString()).collect { progress ->
+                    _state.update { current -> current.copy(
+                        resumeFromMs = progress?.positionMs?.takeIf { it > 0 },
+                        durationMs = progress?.durationMs?.takeIf { it > 0 },
+                        durationMinutes = progress?.durationMs?.takeIf { it > 0 }
+                            ?.div(60_000L)?.toInt() ?: current.durationMinutes,
+                    ) }
+                }
+            }
 
             when (contentType) {
                 ContentType.LIVE -> LiveRepository(db, credentials, accountId)
@@ -87,6 +114,7 @@ class ItemDetailViewModel(
                                 // confirmation step, not a synopsis.
                                 plot = null,
                                 imageUrl = row.streamIcon,
+                                quality = NameNormalizer.qualityOf(row.name),
                                 extension = row.ext,
                                 isLoading = false
                             )
@@ -102,6 +130,10 @@ class ItemDetailViewModel(
                                 plot = row.plot?.takeIf { p -> p.isNotBlank() },
                                 imageUrl = row.streamIcon,
                                 rating = row.rating,
+                                quality = NameNormalizer.qualityOf(row.name),
+                                year = row.year ?: Regex("\\b(?:19|20)\\d{2}\\b").find(row.name)?.value,
+                                genre = row.genre,
+                                cast = row.cast,
                                 isLoading = false
                             )
                         }
@@ -109,6 +141,7 @@ class ItemDetailViewModel(
 
                 else -> {
                     val repo = VodRepository(db, credentials, accountId)
+                    vodRepository = repo
                     val row = repo.byId(itemId)
                     if (row == null) {
                         markNotFound()
@@ -121,6 +154,12 @@ class ItemDetailViewModel(
                                 imageUrl = row.streamIcon,
                                 extension = row.containerExtension,
                                 rating = row.rating,
+                                quality = NameNormalizer.qualityOf(row.name),
+                                year = row.year ?: Regex("\\b(?:19|20)\\d{2}\\b").find(row.name)?.value,
+                                genre = row.genre,
+                                cast = row.cast,
+                                durationMinutes = row.durationMinutes,
+                                trailer = row.trailer,
                                 isLoading = false
                             )
                         }
@@ -131,13 +170,7 @@ class ItemDetailViewModel(
                         // and never awaited by anything the user can see: the poster,
                         // the title and Play are all up, and the description fills in
                         // underneath them or does not.
-                        if (cached == null) {
-                            launch {
-                                repo.fetchPlot(itemId)?.let { fetched ->
-                                    _state.update { it.copy(plot = fetched) }
-                                }
-                            }
-                        }
+                        if (cached == null) retryPlot()
                     }
                 }
             }
@@ -145,8 +178,7 @@ class ItemDetailViewModel(
             // Live has no resume point, and a *show* resumes per episode rather than as
             // a whole — neither may raise a "continue from" the page cannot honour.
             if (contentType == ContentType.MOVIES) {
-                val ms = pb.resumePosition(typeKey, itemId.toString())?.positionMs
-                if (ms != null && ms > 0) _state.update { it.copy(resumeFromMs = ms) }
+                refreshPlayback()
             }
 
             launch {
@@ -172,8 +204,57 @@ class ItemDetailViewModel(
 
     /** Dismissing the resume choice by starting over must also forget the position. */
     fun clearResume() {
+        viewModelScope.launch { clearResumeNow() }
+    }
+
+    suspend fun clearResumeNow() {
         val pb = playback ?: return
-        viewModelScope.launch { pb.clearResume(typeKey, itemId.toString()) }
+        pb.clearResume(typeKey, itemId.toString())
         _state.update { it.copy(resumeFromMs = null) }
+    }
+
+    fun refreshPlayback() {
+        val pb = playback ?: return
+        val account = accountId ?: return
+        if (contentType != ContentType.MOVIES) return
+        viewModelScope.launch {
+            val watched = db.watchedDao().get(account, account, typeKey, itemId.toString()) != null
+            _state.update { current -> current.copy(
+                isWatched = watched
+            ) }
+        }
+    }
+
+    fun toggleWatched() {
+        val account = accountId ?: return
+        val next = !_state.value.isWatched
+        viewModelScope.launch {
+            db.withTransaction {
+                if (next) {
+                    db.watchedDao().mark(WatchedEntity(account, account, typeKey,
+                        itemId.toString(), System.currentTimeMillis()))
+                    db.resumeDao().remove(account, typeKey, itemId.toString())
+                } else db.watchedDao().unmark(account, account, typeKey, itemId.toString())
+            }
+            refreshPlayback()
+        }
+    }
+
+    fun retryPlot() {
+        val repo = vodRepository ?: return
+        _state.update { it.copy(plotError = null) }
+        viewModelScope.launch {
+            repo.fetchDetails(itemId)
+                .onSuccess { details -> if (details != null) _state.update { current ->
+                    current.copy(plot = details.plot ?: current.plot,
+                        genre = details.genre, cast = details.cast,
+                        year = details.year ?: current.year,
+                        durationMinutes = details.durationMinutes ?: current.durationMinutes,
+                        trailer = details.trailer)
+                } }
+                .onFailure { error -> _state.update {
+                    it.copy(plotError = (error as? AppErrorException)?.error ?: AppError.Unreachable)
+                } }
+        }
     }
 }

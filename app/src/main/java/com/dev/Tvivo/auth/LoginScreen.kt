@@ -51,8 +51,9 @@ import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.common.dpadFieldNavigation
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.diagnostics.DiagnosticLog
-import com.dev.Tvivo.ui.theme.Palette
+import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
+import com.dev.Tvivo.AppIdentity
 
 /**
  * The first impression, on the worst input device. A realistic credential set is ~44
@@ -83,7 +84,7 @@ fun LoginScreen(
     var hadVisibleIme by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        serverFocus.requestFocus()
+        runCatching { serverFocus.requestFocus() }
         // A TV remote needs an explicit invitation to type. On a handset, opening the
         // keyboard before the user taps a field obscures the form for no benefit.
         if (isTelevision) keyboard?.show()
@@ -114,7 +115,7 @@ fun LoginScreen(
     LaunchedEffect(state.refocusPassword) {
         if (state.refocusPassword) {
             passwordField = passwordField.copy(selection = TextRange(0, passwordField.text.length))
-            passwordFocus.requestFocus()
+            runCatching { passwordFocus.requestFocus() }
             keyboard?.show()
         }
     }
@@ -127,38 +128,18 @@ fun LoginScreen(
         viewModel.submit()
     }
 
-    // **D-1 — the TV layout is the fix, not the insets.**
-    //
-    // Everything focusable is positioned above the IME ceiling (y = 297 dp) by layout,
-    // rather than scrolled into view after the fact. That distinction is the whole of
-    // Q-11: a `verticalScroll` column only brings the *focused* child into view, so the
-    // action row below it stayed under the keyboard no matter how correct the insets
-    // were. There is no scroll here and no `imePadding()` — the content is ~290 dp tall,
-    // top-anchored, and simply never reaches the keyboard.
-    //
-    // Q-28 adds a separate handset path below. Its smaller, stacked form is scrollable
-    // and uses IME insets because a phone keyboard is not the TV IME ceiling problem.
-    // `WindowCompat.setDecorFitsSystemWindows(window, false)` stays in `MainActivity`:
-    // it is a precondition for insets working anywhere in the app, and it is what made
-    // `imePadding()` stop being a silent no-op. It is just not what saves this screen.
+    // The form can scroll when the IME takes space, while imePadding keeps the action
+    // row in the remaining viewport. The TV content also stays within the measured
+    // 297 dp focus ceiling; the handset keeps its safe drawing inset.
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .then(
-                if (isHandset) {
-                    Modifier
-                        // Edge-to-edge is required for Compose to observe IME insets, but
-                        // a handset status bar must not overlay the wordmark or first field.
-                        .safeDrawingPadding()
-                        .imePadding()
-                        .verticalScroll(rememberScrollState())
-                } else {
-                    Modifier
-                }
-            )
+            .then(if (isHandset) Modifier.safeDrawingPadding() else Modifier)
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(
                 horizontal = if (isHandset) HANDSET_HORIZONTAL_PADDING else 48.dp,
-                vertical = if (isHandset) 16.dp else 24.dp
+                vertical = 16.dp
             ),
         // Centred, not left-aligned against an empty right half.
         contentAlignment = Alignment.TopCenter
@@ -172,15 +153,15 @@ fun LoginScreen(
             // and the action row have taken their share.
             if (isHandset) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
-                    Text(text = "Sign in to your provider", color = Palette.Dim, style = TvType.body)
+                    Text(text = AppIdentity.name(), color = AppColors.Ink, style = TvType.display)
+                    Text(text = "Sign in to your provider", color = AppColors.Dim, style = TvType.body)
                 }
             } else {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(text = "Tvivo", color = Palette.Ink, style = TvType.display)
+                    Text(text = AppIdentity.name(), color = AppColors.Ink, style = TvType.display)
                     Text(
                         text = "Sign in to your provider",
-                        color = Palette.Dim,
+                        color = AppColors.Dim,
                         style = TvType.body,
                         modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
                     )
@@ -193,8 +174,8 @@ fun LoginScreen(
             androidx.compose.material3.OutlinedTextField(
                 value = state.server,
                 onValueChange = viewModel::onServerChanged,
-                label = { Text("Server", color = Palette.Dim) },
-                placeholder = { Text("host:port", color = Palette.Dim) },
+                label = { Text("Server", color = AppColors.Dim) },
+                placeholder = { Text("host:port", color = AppColors.Dim) },
                 singleLine = true,
                 isError = state.serverFieldError != null,
                 keyboardOptions = KeyboardOptions(
@@ -205,7 +186,7 @@ fun LoginScreen(
                 ),
                 keyboardActions = KeyboardActions(onNext = {
                     viewModel.onServerCommitted()
-                    usernameFocus.requestFocus()
+                    runCatching { usernameFocus.requestFocus() }
                 }),
                 colors = fieldColors(),
                 modifier = Modifier
@@ -234,13 +215,13 @@ fun LoginScreen(
                 androidx.compose.material3.OutlinedTextField(
                     value = state.username,
                     onValueChange = viewModel::onUsernameChanged,
-                    label = { Text("Username", color = Palette.Dim) },
+                    label = { Text("Username", color = AppColors.Dim) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         autoCorrect = false,
                         imeAction = ImeAction.Next
                     ),
-                    keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
+                    keyboardActions = KeyboardActions(onNext = { runCatching { passwordFocus.requestFocus() } }),
                     colors = fieldColors(),
                     modifier = credentialsModifier
                         .focusRequester(usernameFocus)
@@ -256,7 +237,7 @@ fun LoginScreen(
                         passwordField = it
                         viewModel.onPasswordChanged(it.text)
                     },
-                    label = { Text("Password", color = Palette.Dim) },
+                    label = { Text("Password", color = AppColors.Dim) },
                     singleLine = true,
                     visualTransformation = if (state.showPassword) {
                         VisualTransformation.None
@@ -296,7 +277,7 @@ fun LoginScreen(
                 if (message != null) {
                     Text(
                         text = message,
-                        color = Palette.AccentText,
+                        color = AppColors.Error,
                         style = TvType.body,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -364,11 +345,11 @@ private val ERROR_LINE_HEIGHT = 22.dp
 
 @Composable
 private fun fieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = Palette.Ink,
-    unfocusedTextColor = Palette.Ink,
-    focusedContainerColor = Palette.Elevated,
-    unfocusedContainerColor = Palette.Elevated,
-    cursorColor = Palette.Accent,
-    focusedBorderColor = Palette.Accent,
-    unfocusedBorderColor = Palette.Line
+    focusedTextColor = AppColors.Ink,
+    unfocusedTextColor = AppColors.Ink,
+    focusedContainerColor = AppColors.Elevated,
+    unfocusedContainerColor = AppColors.Elevated,
+    cursorColor = AppColors.Accent,
+    focusedBorderColor = AppColors.AccentSoft,
+    unfocusedBorderColor = AppColors.Line
 )
