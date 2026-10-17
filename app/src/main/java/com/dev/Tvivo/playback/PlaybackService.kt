@@ -267,20 +267,20 @@ class PlaybackService : MediaSessionService() {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
                 if (!PlaybackSessionPolicy.mayControlSession(controller.uid, applicationInfo.uid, controller.isTrusted))
                     return MediaSession.ConnectionResult.reject()
-                val commands: SessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                    .add(PlaybackCommands.command(PlaybackCommands.PLAY))
+                // Privileged commands (PLAY with a URL, tracks, timer) are for this app only;
+                // trusted system controllers get the default commands plus STOP.
+                val builder = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                     .add(PlaybackCommands.command(PlaybackCommands.STOP))
-                    .add(PlaybackCommands.command(PlaybackCommands.STATUS))
-                    .add(PlaybackCommands.command(PlaybackCommands.SELECT_TRACK))
-                    .add(PlaybackCommands.command(PlaybackCommands.RETRY))
-                    .add(PlaybackCommands.command(PlaybackCommands.CANCEL_NEXT))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_START_PRESET))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_START_CUSTOM))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_START_END_OF_ITEM))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_EXTEND_15))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_CANCEL))
-                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_STATUS))
-                    .build()
+                if (PlaybackSessionPolicy.mayRunPrivilegedCommands(controller.uid, applicationInfo.uid)) {
+                    listOf(
+                        PlaybackCommands.PLAY, PlaybackCommands.STATUS, PlaybackCommands.SELECT_TRACK,
+                        PlaybackCommands.RETRY, PlaybackCommands.CANCEL_NEXT,
+                        PlaybackCommands.TIMER_START_PRESET, PlaybackCommands.TIMER_START_CUSTOM,
+                        PlaybackCommands.TIMER_START_END_OF_ITEM, PlaybackCommands.TIMER_EXTEND_15,
+                        PlaybackCommands.TIMER_CANCEL, PlaybackCommands.TIMER_STATUS,
+                    ).forEach { builder.add(PlaybackCommands.command(it)) }
+                }
+                val commands: SessionCommands = builder.build()
                 return MediaSession.ConnectionResult.accept(commands, MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
             }
 

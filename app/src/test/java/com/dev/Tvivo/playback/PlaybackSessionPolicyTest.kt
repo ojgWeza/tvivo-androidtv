@@ -45,4 +45,10 @@ class PlaybackSessionPolicyTest {
         override fun handleAudioFocus(enabled: Boolean) { focusEnabled = enabled }
         override fun pauseWhenBecomingNoisy(enabled: Boolean) { noisyPauseEnabled = enabled }
     }
+
+    @Test
+    fun privilegedCommandsAreOwnAppOnly() {
+        assertTrue(PlaybackSessionPolicy.mayRunPrivilegedCommands(10, 10))
+        assertFalse(PlaybackSessionPolicy.mayRunPrivilegedCommands(20, 10))
+    }
 }

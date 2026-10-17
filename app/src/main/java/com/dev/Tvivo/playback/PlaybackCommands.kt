@@ -47,6 +47,7 @@ internal object PlaybackCommands {
     fun item(bundle: Bundle): PlaybackHandoff.Item? {
         val requestId = bundle.getString(REQUEST_ID) ?: return null
         val url = bundle.getString(URL)?.takeIf { it.isNotBlank() } ?: return null
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return null
         return PlaybackHandoff.Item(
             requestId, url, bundle.getString(TITLE).orEmpty().ifBlank { "Now playing" },
             bundle.getString(ACCOUNT_ID), bundle.getString(CONTENT_TYPE), bundle.getString(ITEM_ID),

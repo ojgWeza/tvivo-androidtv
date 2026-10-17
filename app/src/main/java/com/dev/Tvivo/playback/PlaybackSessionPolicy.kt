@@ -10,6 +10,8 @@ internal object PlaybackSessionPolicy {
     fun mayControlSession(controllerUid: Int, appUid: Int, trusted: Boolean): Boolean =
         controllerUid == appUid || trusted
 
+    fun mayRunPrivilegedCommands(controllerUid: Int, appUid: Int): Boolean = controllerUid == appUid
+
     fun displayTitle(title: String): String {
         val cleaned = title.trim().replace(Regex("[\\r\\n\\t]+"), " ")
         return if (cleaned.isBlank() || Regex("(?i)(https?|rtmp|file)://|\\b\\S+@\\S+\\b").containsMatchIn(cleaned)) {
