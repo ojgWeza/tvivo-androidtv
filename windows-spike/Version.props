@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <TvivoVersion>1.0.1</TvivoVersion>
+    <TvivoVersion>1.1.0</TvivoVersion>
     <Version>$(TvivoVersion)</Version>
   </PropertyGroup>
 </Project>
