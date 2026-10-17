@@ -1,0 +1,97 @@
+using Tvivo.Core;
+using Xunit;
+
+namespace Tvivo.Core.Tests;
+
+public sealed class SpotlightSelectorTests
+{
+    private static readonly DateOnly Day = new(2026, 10, 16);
+    private static SpotlightCandidate Item(CatalogItemType type, string id, string category = "a", string? year = null,
+        int? ageDays = null) => new(type, id, category, SpotlightSelector.Normalize(id), year,
+        ageDays is null ? null : DateTimeOffset.UtcNow.AddDays(-ageDays.Value));
+    private static SpotlightSettings Settings(SpotlightSourceMode mode = SpotlightSourceMode.RecentlyAdded,
+        params string[] folders) => new(new(mode, folders), new(mode, folders));
+
+    [Fact]
+    public void Movies_and_series_pages_are_isolated_and_daily_order_is_stable()
+    {
+        var movies = Enumerable.Range(0, 24).Select(i => Item(CatalogItemType.Movie, $"m{i}")).ToArray();
+        var series = Enumerable.Range(0, 24).Select(i => Item(CatalogItemType.Series, $"s{i}")).ToArray();
+        var settings = Settings();
+        var first = SpotlightSelector.Select(SpotlightPageKind.Movies, "opaque-a", Day, settings, movies, series);
+        var sameDay = SpotlightSelector.Select(SpotlightPageKind.Movies, "opaque-a", Day, settings, movies, series);
+        var nextDay = SpotlightSelector.Select(SpotlightPageKind.Movies, "opaque-a", Day.AddDays(1), settings, movies, series);
+        Assert.Equal(12, first.Items.Count);
+        Assert.All(first.Items, item => Assert.Equal(CatalogItemType.Movie, item.Type));
+        Assert.Equal(first.Items.Select(i => i.ItemId), sameDay.Items.Select(i => i.ItemId));
+        Assert.NotEqual(first.Items.Select(i => i.ItemId), nextDay.Items.Select(i => i.ItemId));
+        Assert.All(SpotlightSelector.Select(SpotlightPageKind.Series, "opaque-a", Day, settings, movies, series).Items,
+            item => Assert.Equal(CatalogItemType.Series, item.Type));
+    }
+
+    [Fact]
+    public void For_you_alternates_six_each_and_borrows_unused_slots()
+    {
+        var movies = Enumerable.Range(0, 20).Select(i => Item(CatalogItemType.Movie, $"m{i}")).ToArray();
+        var series = Enumerable.Range(0, 20).Select(i => Item(CatalogItemType.Series, $"s{i}")).ToArray();
+        var full = SpotlightSelector.Select(SpotlightPageKind.ForYou, "opaque-a", Day, Settings(), movies, series);
+        Assert.Equal(12, full.Items.Count);
+        Assert.Equal(6, full.Items.Count(i => i.Type == CatalogItemType.Movie));
+        Assert.Equal(6, full.Items.Count(i => i.Type == CatalogItemType.Series));
+        Assert.Equal(new[] { CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Movie, CatalogItemType.Series,
+            CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Movie, CatalogItemType.Series,
+            CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Movie, CatalogItemType.Series }, full.Items.Select(i => i.Type));
+        var borrowed = SpotlightSelector.Select(SpotlightPageKind.ForYou, "opaque-a", Day, Settings(), movies,
+            new[] { Item(CatalogItemType.Series, "s1") });
+        Assert.Equal(12, borrowed.Items.Count);
+        Assert.Equal(11, borrowed.Items.Count(i => i.Type == CatalogItemType.Movie));
+        Assert.Equal(1, borrowed.Items.Count(i => i.Type == CatalogItemType.Series));
+    }
+
+    [Fact]
+    public void Specific_folders_round_robin_deduplicate_and_deleted_ids_do_not_fall_back()
+    {
+        var settings = Settings(SpotlightSourceMode.SpecificFolders, "a", "b", "deleted");
+        var pool = new[] { Item(CatalogItemType.Movie, "Same", "a", "2020"),
+            Item(CatalogItemType.Movie, "Same", "b", "2020"), Item(CatalogItemType.Movie, "Same", "b", "2021"),
+            Item(CatalogItemType.Movie, "Other", "a") };
+        var selected = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, pool, Array.Empty<SpotlightCandidate>());
+        Assert.Equal(new[] { "Same", "Other", "Same" }, selected.Items.Select(item => item.ItemId));
+        var empty = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings,
+            new[] { Item(CatalogItemType.Movie, "unrelated", "other") }, Array.Empty<SpotlightCandidate>());
+        Assert.Empty(empty.Items);
+        Assert.Equal(SpotlightEmptyReason.NoSelectedFolderCandidates, empty.EmptyReason);
+    }
+
+    [Fact]
+    public void Sparse_empty_and_refresh_preserve_present_items_in_place()
+    {
+        var settings = Settings();
+        var input = Enumerable.Range(0, 15).Select(i => Item(CatalogItemType.Movie, $"m{i}")).ToArray();
+        var first = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, input, Array.Empty<SpotlightCandidate>());
+        var refreshedPool = input.Where(item => item.ItemId != first.Items[2].ItemId).Append(Item(CatalogItemType.Movie, "new"))
+            .ToArray();
+        var refreshed = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, refreshedPool,
+            Array.Empty<SpotlightCandidate>(), first.Items);
+        Assert.Equal(first.Items[0].ItemId, refreshed.Items[0].ItemId);
+        Assert.DoesNotContain(first.Items[2].ItemId, refreshed.Items.Select(i => i.ItemId));
+        Assert.Equal(12, refreshed.Items.Count);
+        var sparse = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings,
+            input.Take(2).ToArray(), Array.Empty<SpotlightCandidate>());
+        Assert.Equal(2, sparse.Items.Count);
+        var empty = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings,
+            Array.Empty<SpotlightCandidate>(), Array.Empty<SpotlightCandidate>());
+        Assert.Equal(SpotlightEmptyReason.NoEligibleCandidates, empty.EmptyReason);
+    }
+
+    [Fact]
+    public void Candidate_pool_and_result_are_bounded_and_live_is_never_selected()
+    {
+        var items = Enumerable.Range(0, 500).Select(i => Item(i % 2 == 0 ? CatalogItemType.Movie : CatalogItemType.Live, $"i{i}"))
+            .ToArray();
+        var result = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, Settings(), items,
+            Array.Empty<SpotlightCandidate>());
+        Assert.Equal(12, result.Items.Count);
+        Assert.All(result.Items, item => Assert.Equal(CatalogItemType.Movie, item.Type));
+    }
+}

@@ -591,6 +591,65 @@ public sealed class SqliteCatalogRepository : IDisposable
         }
     }
 
+    /// <summary>Returns a bounded Spotlight pool ordered by effective add time. Only movie and series pools are supported.</summary>
+    public IReadOnlyList<Channel> GetSpotlightRecentlyAddedCandidates(ProviderAccount account, CatalogItemType type,
+        ProviderConnection? connection = null, int limit = 200)
+    {
+        ValidateSpotlightType(type);
+        var capped = Math.Clamp(limit, 0, 200);
+        if (capped == 0) return Array.Empty<Channel>();
+        var pool = GetOrderedItems(account, type, connection,
+            "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
+            "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC,id ASC",
+            Math.Min(800, capped * 4), useRecentlyAddedSortKey: true);
+        return pool.GroupBy(DuplicateTitleKey, StringComparer.Ordinal).Select(group => group.First()).Take(capped).ToArray();
+    }
+
+    /// <summary>Returns a bounded Spotlight pool from one selected category; a missing category yields no rows.</summary>
+    public IReadOnlyList<Channel> GetSpotlightCategoryCandidates(ProviderAccount account, CatalogItemType type,
+        string categoryId, ProviderConnection? connection = null, int limit = 200)
+    {
+        ValidateSpotlightType(type);
+        if (string.IsNullOrWhiteSpace(categoryId)) return Array.Empty<Channel>();
+        var capped = Math.Clamp(limit, 0, 200);
+        if (capped == 0) return Array.Empty<Channel>();
+        using var database = Open();
+        using var command = database.CreateCommand();
+        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast] FROM items WHERE account_id=$a AND type=$type AND category_id=$category ORDER BY MAX(added_at,COALESCE(first_indexed_at,0)) DESC,id ASC LIMIT $limit";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$category", categoryId);
+        command.Parameters.AddWithValue("$limit", Math.Min(800, capped * 4));
+        var rows = new List<Channel>(capped);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            var title = CleanTitle(reader.GetString(2));
+            DateTimeOffset? added = reader.IsDBNull(5) || reader.GetInt64(5) == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(5));
+            rows.Add(new Channel(account.AccountId, id, reader.IsDBNull(1) ? null : reader.GetString(1), title, title,
+                Uri.TryCreate(reader.IsDBNull(3) ? null : reader.GetString(3), UriKind.Absolute, out var artwork) ? artwork : null,
+                added, null, StreamSourceFor(connection, type, id, reader.IsDBNull(4) ? null : reader.GetString(4)), ReadChannelMetadata(reader, 6)));
+        }
+        return rows.GroupBy(DuplicateTitleKey, StringComparer.Ordinal).Select(group => group.First()).Take(capped).ToArray();
+    }
+
+    /// <summary>Applies the existing unexplored-folder eligibility rule without adding a Live TV path.</summary>
+    public IReadOnlyList<Channel> GetSpotlightUnexploredCandidates(ProviderAccount account, CatalogItemType type,
+        ProviderConnection? connection, IReadOnlyCollection<string>? recentlyOpenedCategoryIds = null,
+        int categoryLimit = 6, int itemsPerCategory = 3)
+    {
+        ValidateSpotlightType(type);
+        return GetSpotlightCandidates(account, type, connection,
+            recentlyOpenedCategoryIds ?? Array.Empty<string>(), categoryLimit, itemsPerCategory);
+    }
+
+    private static void ValidateSpotlightType(CatalogItemType type)
+    {
+        if (type is not (CatalogItemType.Movie or CatalogItemType.Series))
+            throw new ArgumentOutOfRangeException(nameof(type), "Spotlight supports movies and series only.");
+    }
+
     public IReadOnlyList<Channel> GetSpotlightCandidates(
         ProviderAccount account,
         CatalogItemType type,

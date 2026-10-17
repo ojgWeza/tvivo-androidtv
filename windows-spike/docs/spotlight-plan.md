@@ -86,3 +86,7 @@ This was a read-only plan. I did not edit, build, run tests, or inspect a live w
 Codex session ID: 01a14231-8da6-7e42-be3a-34b02e3b0c32
 Resume in Codex: codex resume 01a14231-8da6-7e42-be3a-34b02e3b0c32
 
+### L1 status — implemented (2026-10-16)
+
+Core now provides `SpotlightSelector` and its policy/settings/candidate types. Infrastructure adds bounded movie/series candidate queries, account-scoped versioned settings, and a bounded daily ID-list store. The legacy App Spotlight implementation and repository method remain in place for L3 replacement. Core tests pass (378); Infrastructure tests pass except five existing DPAPI tests blocked by the runner's user-profile protection context. Full solution build/test limitations and exact environment errors are recorded in the implementation handoff; App/UI behavior remains for L3-L5.
+
