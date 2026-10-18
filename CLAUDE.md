@@ -62,3 +62,9 @@ Same skill, applied to the Android app — ViewModel → Repository method → R
     regex can't see through, so it shows as a route "not defined" even though the real call
     (`repo.countInCategoryFiltered(...)`) is captured correctly one line away.
 - Oracle (source of meaning, not structure): `PROJECT-BIBLE.md`.
+
+## Branches, worktrees, commit and push (owner rule 2026-10-18)
+
+- One git worktree folder per branch and per agent: Windows = `D:\HCode\Tvivo-windows` (branch `codex/winui-catalog-design-plan`), Android = `D:\HCode\Tvivo` (branch `android/finalize-parity`). Never run `git checkout`/`switch` in a folder another session uses.
+- Before every commit run `git branch --show-current`; if it is not the branch you expect, stop and say so.
+- Commit after each verified slice (build 0 errors + tests green) and push your branch to origin at the end of each slice or session. Never force-push.

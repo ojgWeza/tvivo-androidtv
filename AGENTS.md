@@ -166,3 +166,9 @@ without executing something, say so and stop rather than guessing.
 Match surrounding code. Unit tests are JUnit + kotlinx-coroutines-test + Turbine,
 Room in-memory for DAO work, MockWebServer for API contract. Keep docs updated
 in place rather than appending new files.
+
+## Branches, worktrees, commit and push (owner rule 2026-10-18)
+
+- One git worktree folder per branch and per agent: Windows = `D:\HCode\Tvivo-windows` (branch `codex/winui-catalog-design-plan`), Android = `D:\HCode\Tvivo` (branch `android/finalize-parity`). Never run `git checkout`/`switch` in a folder another session uses.
+- Before every commit run `git branch --show-current`; if it is not the branch you expect, stop and say so.
+- Commit after each verified slice (build 0 errors + tests green) and push your branch to origin at the end of each slice or session. Never force-push.
