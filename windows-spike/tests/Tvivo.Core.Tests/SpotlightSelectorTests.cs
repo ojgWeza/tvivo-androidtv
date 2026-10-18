@@ -94,4 +94,29 @@ public sealed class SpotlightSelectorTests
         Assert.Equal(12, result.Items.Count);
         Assert.All(result.Items, item => Assert.Equal(CatalogItemType.Movie, item.Type));
     }
+
+    [Fact]
+    public void Folder_search_is_case_insensitive_and_keeps_complete_matching_rows()
+    {
+        var folders = new[]
+        {
+            new SpotlightFolderOption("one", "Classic Films", 12),
+            new SpotlightFolderOption("two", "Drama Series", 8),
+        };
+
+        var result = SpotlightFolderList.Filter(folders, "CLASSIC");
+
+        Assert.Equal(new[] { folders[0] }, result);
+        Assert.Equal(12, result[0].ItemCount);
+    }
+
+    [Fact]
+    public void Deleted_folder_detection_retains_only_saved_ids_without_a_catalog_row()
+    {
+        var folders = new[] { new SpotlightFolderOption("available", "Available", 1) };
+
+        var missing = SpotlightFolderList.FindMissing(new[] { "available", "deleted", "deleted" }, folders);
+
+        Assert.Equal(new[] { "deleted" }, missing);
+    }
 }

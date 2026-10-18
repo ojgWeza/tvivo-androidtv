@@ -72,4 +72,24 @@ public sealed class SpotlightStoresTests
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
+
+    [Fact]
+    public void Daily_store_invalidate_removes_cached_selection_for_account()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-spotlight-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SpotlightDailySelectionStore(directory);
+            var day = new DateOnly(2026, 10, 16);
+            var selection = new SpotlightDailySelection("account", SpotlightPageKind.ForYou, day,
+                SpotlightSourceMode.RecentlyAdded, "fingerprint",
+                new[] { new SpotlightDailyItem(CatalogItemType.Movie, "item") });
+            store.Write(selection);
+
+            store.Invalidate("account");
+
+            Assert.Null(store.Read("account", selection.Page, day, selection.SourceMode, selection.FolderFingerprint));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
 }

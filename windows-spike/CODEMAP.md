@@ -30,7 +30,7 @@
 | [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L14) | CALL | — ⚠️ | [`For`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L14) | — | — | — |
 | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L465) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetAllChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L465) | — | — | — |
 | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L449) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryMatchCounts`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L449) | `GetCategoryMatchCounts` | _direct SQL, see §7_ | `items` |
-| [`GetCategoryShelfDescriptors`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L362) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryShelfDescriptors`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L362) | `GetCategoryShelfDescriptors` | — | `categories`<br>`items` |
+| [`GetCategoryShelfDescriptors`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L362) | CALL | `Pages/AccountPage.xaml.cs`<br>`Pages/CatalogLandingPage.xaml.cs` | [`GetCategoryShelfDescriptors`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L362) | `GetCategoryShelfDescriptors` | — | `categories`<br>`items` |
 | [`GetChannel`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L398) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannel`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L398) | `GetChannel` | _direct SQL, see §7_ | `items` |
 | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L394) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannels`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L394) | `GetChannels` | _direct SQL, see §7_ | `items` |
 | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L484) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetChannelsGroupedByCategory`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L484) | `GetChannelsGroupedByCategory` | _direct SQL, see §7_ | `items` |
@@ -157,4 +157,4 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 
 ---
 
-Indexed 44 routes · 44 backend methods · 27 procs · 7 tables · 17 frontend files · 0 SQL files.
+Indexed 44 routes · 44 backend methods · 27 procs · 7 tables · 18 frontend files · 0 SQL files.

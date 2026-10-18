@@ -90,3 +90,7 @@ Resume in Codex: codex resume 01a14231-8da6-7e42-be3a-34b02e3b0c32
 
 Core now provides `SpotlightSelector` and its policy/settings/candidate types. Infrastructure adds bounded movie/series candidate queries, account-scoped versioned settings, and a bounded daily ID-list store. The legacy App Spotlight implementation and repository method remain in place for L3 replacement. Core tests pass (378); Infrastructure tests pass except five existing DPAPI tests blocked by the runner's user-profile protection context. Full solution build/test limitations and exact environment errors are recorded in the implementation handoff; App/UI behavior remains for L3-L5.
 
+### L2 status — implemented (2026-10-18)
+
+Settings → For You now has independent Movies and Series Spotlight source controls, searchable folder selection with unavailable-folder removal, local title-only previews, and explicit Save/Cancel behavior. `SpotlightSettingsService.ReadEffectiveSettings(accountKey)` is the App accessor for L3; saving writes through `SpotlightSettingsStore` and invalidates that account's cached daily selection. The save log records only modes and selected-folder counts. Core and Infrastructure tests were added for folder filtering/deleted-folder detection and daily-selection invalidation. Build, automated tests, and live visual/Narrator checks were not run in this environment.
+
