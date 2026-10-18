@@ -19,6 +19,37 @@ public sealed class SpotlightSettingsService
 
     public SpotlightSettings ReadEffectiveSettings(string opaqueAccountKey) => _settingsStore.Read(opaqueAccountKey);
 
+    public SpotlightSelectionResult Select(ProviderAccount account, SpotlightPageKind page,
+        DateOnly utcDate, IReadOnlyList<Channel>? moviePool = null,
+        IReadOnlyList<Channel>? seriesPool = null)
+    {
+        var settings = ReadEffectiveSettings(account.AccountId);
+        var movieChannels = page == SpotlightPageKind.Series ? Array.Empty<Channel>() : moviePool ?? GetChannels(account, CatalogItemType.Movie, settings);
+        var seriesChannels = page == SpotlightPageKind.Movies ? Array.Empty<Channel>() : seriesPool ?? GetChannels(account, CatalogItemType.Series, settings);
+        var candidates = movieChannels.Concat(seriesChannels).Select(SpotlightCandidate.FromChannel).ToArray();
+        var pageSource = page switch
+        {
+            SpotlightPageKind.Movies => settings.Movies.SourceMode,
+            SpotlightPageKind.Series => settings.Series.SourceMode,
+            _ => settings.Movies.SourceMode,
+        };
+        var sourceLabel = page == SpotlightPageKind.ForYou
+            ? $"Movies:{settings.Movies.SourceMode},Series:{settings.Series.SourceMode}"
+            : pageSource.ToString();
+        var fingerprint = SpotlightSelector.SelectedFolderFingerprint(settings);
+        var previous = _dailyStore.Read(account.AccountId, page, utcDate, pageSource, fingerprint)?.Items
+            .Select(item => candidates.FirstOrDefault(candidate => candidate.Type == item.Type && candidate.ItemId == item.ItemId))
+            .Where(candidate => candidate is not null).Cast<SpotlightCandidate>().ToArray();
+        var selected = SpotlightSelector.Select(page, account.AccountId, utcDate, settings,
+            movieChannels.Select(SpotlightCandidate.FromChannel).ToArray(), seriesChannels.Select(SpotlightCandidate.FromChannel).ToArray(), previous);
+        _dailyStore.Write(new SpotlightDailySelection(account.AccountId, page, utcDate, pageSource, fingerprint,
+            selected.Items.Select(item => new SpotlightDailyItem(item.Type, item.ItemId)).ToArray()));
+        var dayHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(utcDate.ToString("yyyy-MM-dd"))))[..12];
+        LaunchDiagnostics.Write($"event=spotlight.selection page={page} source={sourceLabel} count={selected.Items.Count} dayHash={dayHash}");
+        return selected;
+    }
+
     public static void LogSaved(SpotlightSettings settings) => LaunchDiagnostics.Write(
         $"event=spotlight.settings.saved moviesMode={settings.Movies.SourceMode} moviesFolders={settings.Movies.SelectedCategoryIds?.Count ?? 0} " +
         $"seriesMode={settings.Series.SourceMode} seriesFolders={settings.Series.SelectedCategoryIds?.Count ?? 0}");
@@ -42,6 +73,9 @@ public sealed class SpotlightSettingsService
                 movies, series)
             .Items.Take(3).Select(item => displayTitles.GetValueOrDefault(item.ItemId, item.NormalizedTitle)).ToArray();
     }
+
+    public IReadOnlyList<Channel> GetChannelsForSelection(ProviderAccount account, CatalogItemType type, SpotlightSettings settings) =>
+        GetChannels(account, type, settings);
 
     private IReadOnlyList<Channel> GetChannels(ProviderAccount account, CatalogItemType type, SpotlightSettings settings)
     {

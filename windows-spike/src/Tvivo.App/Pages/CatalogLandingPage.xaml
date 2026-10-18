@@ -8,6 +8,9 @@
         <ItemsPanelTemplate x:Key="HorizontalShelfPanel">
             <ItemsStackPanel Orientation="Horizontal" />
         </ItemsPanelTemplate>
+        <ItemsPanelTemplate x:Key="SpotlightStripPanel">
+            <StackPanel Orientation="Horizontal" Spacing="8" />
+        </ItemsPanelTemplate>
         <ItemsPanelTemplate x:Key="CatalogGridPanel">
             <ItemsWrapGrid Orientation="Horizontal" />
         </ItemsPanelTemplate>
@@ -421,66 +424,70 @@
                         </ListView.ItemContainerStyle>
                         <ListView.Header>
                         <StackPanel>
-                            <Border x:Name="SpotlightPanel"
-                                    Margin="0,0,0,30"
-                                    Padding="20,12"
-                                    CornerRadius="16">
+                            <Border x:Name="SpotlightPanel" Margin="0,0,0,30" Padding="12,8" CornerRadius="16">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                         <GradientStop Color="{ThemeResource AppSurfaceRaisedColor}" Offset="0" />
                                         <GradientStop Color="{ThemeResource AppSurfaceColor}" Offset="1" />
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <Grid ColumnSpacing="24">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="176" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Spacing="8" VerticalAlignment="Center">
-                                        <Border x:Name="SpotlightArtworkTarget" Width="176" Height="99" CornerRadius="12"
-                                                Tapped="SpotlightArtwork_Tapped"
-                                                AutomationProperties.Name="Open spotlight item">
-                                            <Grid>
-                                                <ContentControl x:Name="SpotlightArtworkFallback" Content="Tvivo"
-                                                                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                                                                ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
-                                                <Image x:Name="SpotlightArtwork" Stretch="UniformToFill" Opacity="0"
-                                                       Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded" />
-                                            </Grid>
-                                        </Border>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
-                                        <TextBlock x:Name="SpotlightEyebrow"
-                                                   Style="{StaticResource AppEyebrowTextStyle}"
-                                                   Text="TVIVO SPOTLIGHT" />
-                                        <TextBlock x:Name="SpotlightTitle"
-                                                   Foreground="{ThemeResource AppTextBrush}"
-                                                   FontSize="26"
-                                                   FontWeight="SemiBold"
-                                                   TextWrapping="WrapWholeWords" />
-                                        <TextBlock x:Name="SpotlightSubtitle"
-                                                   Foreground="{ThemeResource AppMutedTextBrush}"
-                                                   FontSize="15" />
-                                    </StackPanel>
-                                        <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                                                    VerticalAlignment="Bottom" Spacing="3">
-                                            <Button x:Name="SpotlightPreviousButton" Content="‹"
-                                                    Width="30" Height="30" MinWidth="30" MinHeight="30" Padding="0"
-                                                    Foreground="{ThemeResource AppMutedTextBrush}"
-                                                    FontSize="20" Style="{StaticResource AppCaptionButtonStyle}"
-                                                    Click="SpotlightPrevious_Click"
-                                                    AutomationProperties.Name="Previous spotlight item"
-                                                    ToolTipService.ToolTip="{x:Null}" />
-                                            <StackPanel x:Name="SpotlightIndicatorRow" Orientation="Horizontal"
-                                                        VerticalAlignment="Center" Spacing="2" />
-                                            <Button x:Name="SpotlightNextButton" Content="›"
-                                                    Width="30" Height="30" MinWidth="30" MinHeight="30" Padding="0"
-                                                    Foreground="{ThemeResource AppMutedTextBrush}"
-                                                    FontSize="20" Style="{StaticResource AppCaptionButtonStyle}"
-                                                    Click="SpotlightNext_Click"
-                                                    AutomationProperties.Name="Next spotlight item"
-                                                    ToolTipService.ToolTip="{x:Null}" />
-                                        </StackPanel>
+                                <Grid RowSpacing="6">
+                                    <Grid.RowDefinitions><RowDefinition Height="320" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                    <ScrollViewer x:Name="SpotlightStripViewer" HorizontalScrollMode="Enabled"
+                                                  HorizontalScrollBarVisibility="Visible" VerticalScrollMode="Disabled"
+                                                  VerticalScrollBarVisibility="Disabled" ViewChanged="SpotlightStripViewer_ViewChanged"
+                                                  SizeChanged="SpotlightStripViewer_SizeChanged">
+                                        <ItemsControl x:Name="SpotlightStripItems" ItemsPanel="{StaticResource SpotlightStripPanel}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Height="320" Padding="{Binding SpotlightPadding}"
+                                                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                                            Background="{ThemeResource AppSurfaceColor}" BorderThickness="0"
+                                                            Click="SpotlightItem_Click" PointerEntered="SpotlightItem_PointerEntered"
+                                                            PointerExited="SpotlightItem_PointerExited" GotFocus="SpotlightItem_GotFocus"
+                                                            LostFocus="SpotlightItem_LostFocus"
+                                                            KeyDown="SpotlightItem_KeyDown" IsTabStop="{Binding SpotlightIsTabStop}"
+                                                            AutomationProperties.Name="{Binding SpotlightAutomationName}"
+                                                            Loaded="SpotlightItem_Loaded">
+                                                        <Grid ColumnSpacing="20">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <Border Width="{Binding SpotlightPosterWidth}" Height="{Binding SpotlightPosterHeight}"
+                                                                    CornerRadius="8" VerticalAlignment="Center" Clip="{x:Null}">
+                                                                <Grid>
+                                                                    <ContentControl x:Name="ArtworkFallback" Content="Tvivo" ContentTemplate="{StaticResource TvivoArtworkPlaceholderTemplate}" />
+                                                                    <Image Stretch="{Binding SpotlightImageStretch}" Opacity="0"
+                                                                           Loaded="ArtworkImage_Loaded" Unloaded="ArtworkImage_Unloaded" />
+                                                                </Grid>
+                                                            </Border>
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="12"
+                                                                        Visibility="{Binding SpotlightTextVisibility}">
+                                                                <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold"
+                                                                           Foreground="{ThemeResource AppTextBrush}" TextWrapping="WrapWholeWords" />
+                                                                <TextBlock Text="{Binding SpotlightDetails}" FontSize="17"
+                                                                           Foreground="{ThemeResource AppTextBrush}" TextWrapping="WrapWholeWords" />
+                                                                <TextBlock Text="{Binding SpotlightSummary}" FontSize="18" MaxLines="4"
+                                                                           TextTrimming="CharacterEllipsis" TextWrapping="WrapWholeWords"
+                                                                           Foreground="{ThemeResource AppTextBrush}" />
+                                                                <TextBlock Text="More details · Select to play or view" FontSize="16"
+                                                                           Foreground="{ThemeResource AppAccentBrush}" />
+                                                            </StackPanel>
+                                                            <Border Grid.ColumnSpan="2" BorderThickness="3" BorderBrush="{ThemeResource AppAccentBrush}"
+                                                                    IsHitTestVisible="False" Visibility="{Binding SpotlightFocusVisibility}" />
+                                                        </Grid>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                    <Grid Grid.Row="1" ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="SpotlightPositionText" FontSize="14" Foreground="{ThemeResource AppTextBrush}"
+                                                   AutomationProperties.LiveSetting="Polite" />
+                                        <TextBlock x:Name="SpotlightTouchHint" Grid.Column="1" Text="Select once to open; select again to play or view"
+                                                   FontSize="14" Foreground="{ThemeResource AppTextBrush}" />
+                                        <Button x:Name="SpotlightEmptySettingsButton" Grid.Column="2" Content="Settings → Spotlight"
+                                                Visibility="Collapsed" Click="SpotlightEmptySettingsButton_Click" />
+                                    </Grid>
                                 </Grid>
                             </Border>
                         </StackPanel>

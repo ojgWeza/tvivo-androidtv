@@ -27,20 +27,6 @@ public static class CatalogReloadPolicy
         hasSuccessfulLoad && sameAccount && dataVersionMatches;
 }
 
-public static class SpotlightIndicatorPolicy
-{
-    public const int MaximumVisibleIndicators = 7;
-
-    public static (int StartIndex, int Count) GetVisibleWindow(int itemCount, int selectedIndex)
-    {
-        if (itemCount <= 0) return (0, 0);
-        var count = Math.Min(itemCount, MaximumVisibleIndicators);
-        var selected = Math.Clamp(selectedIndex, 0, itemCount - 1);
-        var start = Math.Clamp(selected - count / 2, 0, itemCount - count);
-        return (start, count);
-    }
-}
-
 public static class FavoriteTargetResolver
 {
     public static (CatalogItemType Type, string Id) Resolve(Channel channel) =>

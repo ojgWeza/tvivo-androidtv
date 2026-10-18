@@ -72,6 +72,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private long _browseRestoreGeneration;
     private readonly SemaphoreSlim _modeTransitionGate = new(1, 1);
     private CatalogCard? _spotlightCard;
+    private readonly ObservableCollection<CatalogCard> _spotlightCards = new();
+    private readonly SpotlightSettingsService _spotlightSettingsService;
+    private SpotlightStripState _spotlightState = SpotlightStripState.Create(0);
+    private CancellationTokenSource? _spotlightDwellCts;
+    private CancellationTokenSource? _spotlightMetadataCts;
+    private readonly Windows.UI.ViewManagement.UISettings _uiSettings = new();
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
     private long _snapshotCacheBytes;
@@ -90,22 +96,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly Dictionary<(CatalogMode Mode, string ShelfId), BrowsePosition> _browsePositions = new();
     private IReadOnlyDictionary<string, PlaybackProgress> _movieProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesProgressById = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
-    private readonly Dictionary<CatalogMode, CatalogCard> _spotlightByMode = new();
-    private readonly Dictionary<CatalogMode, DateOnly> _spotlightSelectionDateByMode = new();
-    private readonly Dictionary<CatalogMode, int> _spotlightStartIndexByMode = new();
-    private readonly Dictionary<CatalogMode, string> _spotlightOrderHashByMode = new();
-    private bool _spotlightPresented;
-    private string _spotlightSelectionSource = "new-day";
-    private int _spotlightExcludedCategoryCount;
-    private readonly HashSet<string> _spotlightWarmUrls = new(StringComparer.Ordinal);
     // Managed-retention estimates; decoded artwork has a separate 128-entry / 96 MiB budget.
     private const int SnapshotCacheCapacity = 8;
     private const long SnapshotCacheByteLimit = 64L * 1024 * 1024;
-    private const int SpotlightWarmUrlCapacity = 256;
     private const int BrowsePositionCapacity = 64;
     private const int ArtworkFailureCategoryCapacity = 64;
     private const int EpgLoadedAccountCapacity = 32;
-    private const int SpotlightWarmCandidateLimit = 6;
     private static readonly Regex QualityToken = new(
         @"(?i)(?<![\p{L}\p{N}])(?<quality>FULL[\s_\-]?HD|FHD|UHD|4K|2160p|1080[pi]|720p|576p|480p|HD|SD)(?![\p{L}\p{N}])",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -116,6 +112,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private static readonly Regex RepeatedSpaces = new(@"\s{2,}", RegexOptions.Compiled);
     private readonly HashSet<GridView> _wiredShelfGrids = new();
     private readonly SemaphoreSlim _artworkSlots = new(6);
+    private readonly SemaphoreSlim _spotlightArtworkSlots = new(2);
     private static readonly TimeSpan ArtworkRequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient ArtworkClient = CreateArtworkClient();
     private static readonly ArtworkDiskCache ArtworkBytes = new(ArtworkClient);
@@ -195,7 +192,6 @@ public sealed partial class CatalogLandingPage : UserControl
         client.DefaultRequestHeaders.Accept.ParseAdd("image/jpeg,image/png,image/gif,image/*;q=0.8");
         return client;
     }
-    private readonly DispatcherTimer _spotlightTimer = new() { Interval = TimeSpan.FromSeconds(8) };
     private readonly DispatcherTimer _epgTimer = new() { Interval = TimeSpan.FromSeconds(60) };
     private readonly SemaphoreSlim _epgQueryGate = new(1, 1);
     private readonly SemaphoreSlim _epgStartGate = new(1, 1);
@@ -229,6 +225,7 @@ public sealed partial class CatalogLandingPage : UserControl
     // Raised when the user changes what they are browsing (mode, category, sort, search), so
     // deferred visit ranking can be applied then and not while a returning list is on screen.
     public event EventHandler? BrowseContextChanging;
+    public event EventHandler? NavigateToSpotlightSettingsRequested;
 
     public Task<string?> GetCategoryNameForAsync(Channel channel)
     {
@@ -268,15 +265,20 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         PerfScope.Logger = LaunchDiagnostics.Write;
         _hoverMetadataLookup = new HoverMetadataLookup(_provider, _repository, log: LaunchDiagnostics.Write);
+        _spotlightSettingsService = App.Services.GetRequiredService<SpotlightSettingsService>();
         _refreshTasks = new CatalogRefreshTasks((account, type, cancellationToken) =>
             Task.Run(() => _refresh.RefreshTypeAsync(account, type, cancellationToken), cancellationToken));
         lock (ArtworkPagesLock) ArtworkPages.Add(new WeakReference<CatalogLandingPage>(this));
         InitializeComponent();
+        SpotlightTouchHint.Visibility = Windows.Devices.Input.PointerDevice.GetPointerDevices()
+            .Any(device => device.PointerDeviceType == Windows.Devices.Input.PointerDeviceType.Touch)
+            ? Visibility.Visible : Visibility.Collapsed;
         ShelvesItems.ContainerContentChanging += ShelfContainerContentChanging;
         OpenShelfGrid.ContainerContentChanging += CatalogCardContainerContentChanging;
         OpenShelfGrid.Unloaded += OpenShelfGrid_Unloaded;
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
-        _spotlightTimer.Tick += SpotlightTimer_Tick;
+        SpotlightStripItems.ItemsSource = _spotlightCards;
+        _uiSettings.ColorValuesChanged += UiSettings_ColorValuesChanged;
         _epgTimer.Tick += EpgTimer_Tick;
         _perfSummaryTimer.Tick += PerfSummaryTimer_Tick;
         _lastPerfGc0Count = GC.CollectionCount(0);
@@ -310,15 +312,6 @@ public sealed partial class CatalogLandingPage : UserControl
             ApplySearchCategoryChipState(button, string.Equals(groupId, _selectedGroupId ?? string.Empty, StringComparison.Ordinal));
         }
 
-        if (_renderedSnapshot is { } snapshot)
-        {
-            var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
-            var selectedIndex = _spotlightCard is null
-                ? -1
-                : Array.FindIndex(candidates, candidate => candidate.Id == _spotlightCard.Id);
-            RenderSpotlightIndicators(candidates, selectedIndex);
-        }
-
         ApplyCardToolTipTheme();
     }
 
@@ -341,8 +334,8 @@ public sealed partial class CatalogLandingPage : UserControl
         if (!active) CancelHoverRequest();
         if (active) ScheduleShelfViewportUpdate("activate");
         else _shelfViewportPollTimer?.Stop();
-        if (active && !PerfToggles.IsDisabled("spotlight")) _spotlightTimer.Start();
-        else _spotlightTimer.Stop();
+        if (!active) CancelSpotlightAsyncWork();
+        else UpdateSpotlightArtworkWindow();
         UpdateEpgLifecycle();
     }
 
@@ -372,12 +365,8 @@ public sealed partial class CatalogLandingPage : UserControl
         _modeStates.Clear();
         _browsePositions.Clear();
         SetSearchTextWithoutReload(string.Empty);
-        _spotlightByMode.Clear();
-        _spotlightSelectionDateByMode.Clear();
-        _spotlightStartIndexByMode.Clear();
-        _spotlightOrderHashByMode.Clear();
-        _spotlightPresented = false;
-        _spotlightWarmUrls.Clear();
+        CancelSpotlightAsyncWork();
+        _spotlightCards.Clear();
         _scheduledRetries.Clear();
         _activityDataDirty = false;
         _favoriteDataDirty = false;
@@ -404,8 +393,8 @@ public sealed partial class CatalogLandingPage : UserControl
     public void Shutdown()
     {
         CancelSavedStartupAuthentication();
-        _spotlightTimer.Stop();
-        _spotlightTimer.Tick -= SpotlightTimer_Tick;
+        CancelSpotlightAsyncWork();
+        _uiSettings.ColorValuesChanged -= UiSettings_ColorValuesChanged;
         _epgTimer.Stop();
         _epgTimer.Tick -= EpgTimer_Tick;
         _perfSummaryTimer.Stop();
@@ -734,16 +723,13 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var images = _artworkLoads.Keys.Concat(_appliedArtwork.Keys).Distinct().ToArray();
         CancelArtworkLoads();
-        _spotlightWarmUrls.Clear();
         _artworkBitmapCache.Clear();
         _artworkBitmapLru.Clear();
         _artworkBitmapCacheBytes = 0;
         foreach (var image in images)
         {
             var item = image.DataContext;
-            var url = ReferenceEquals(image, SpotlightArtwork)
-                ? _spotlightCard?.ArtworkUrl
-                : item switch
+            var url = item switch
                 {
                     CatalogCard card => card.ArtworkUrl,
                     HomePage.HomeShelfCard homeCard => homeCard.ArtworkUrl,
@@ -797,7 +783,7 @@ public sealed partial class CatalogLandingPage : UserControl
         UpdateEpgLifecycle();
         var keepVisibleSnapshot = _renderedSnapshot is not null;
         _showModeLoadingFrame = !keepVisibleSnapshot;
-        _spotlightTimer.Stop();
+        CancelSpotlightAsyncWork();
         _openShelfType = null;
         if (_modeStates.TryGetValue(mode, out var state))
         {
@@ -937,11 +923,8 @@ public sealed partial class CatalogLandingPage : UserControl
             _firstCatalogLoadCompleted = false;
             _modeStates.Clear();
             _browsePositions.Clear();
-            _spotlightByMode.Clear();
-            _spotlightSelectionDateByMode.Clear();
-            _spotlightStartIndexByMode.Clear();
-            _spotlightOrderHashByMode.Clear();
-            _spotlightPresented = false;
+            CancelSpotlightAsyncWork();
+            _spotlightCards.Clear();
             _selectedGroupId = null;
             _openShelfId = null;
             _openShelfType = null;
@@ -1398,29 +1381,26 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyList<CatalogShelf> BuildSpotlightShelves(
         ProviderAccount account, CatalogMode mode, IReadOnlyList<CatalogShelf> fallback)
     {
-        var types = mode == CatalogMode.MyTvivo
-            ? AllRefreshTypes
-            : new[] { TypeForMode(mode) };
-        var channels = new List<Channel>();
-        foreach (var type in types)
+        if (mode is not (CatalogMode.MyTvivo or CatalogMode.Movies or CatalogMode.Series)) return Array.Empty<CatalogShelf>();
+        var settings = _spotlightSettingsService.ReadEffectiveSettings(account.AccountId);
+        var page = mode switch
         {
-            var recentCategories = GetRecentlyOpenedCategoryIds(account, type, DateTimeOffset.UtcNow);
-            channels.AddRange(_repository.GetSpotlightCandidates(account, type, _connection,
-                recentCategories, categoryLimit: 6, itemsPerCategory: 3));
-        }
-        var distinct = channels
-            .OrderByDescending(channel => channel.AddedAt)
-            .ThenBy(channel => channel.Source.Kind)
-            .ThenBy(channel => channel.Id, StringComparer.Ordinal)
-            .GroupBy(SpotlightTitleKey, StringComparer.Ordinal)
-            .Select(group => group.First())
-            .ToArray();
-        if (!SpotlightSelection.ShouldUseDiscovery(distinct.Length)) return fallback;
-
-        var cards = distinct.Select(channel => ToCard(channel, TypeForSource(channel.Source.Kind))).ToArray();
-        return new[] { CreateShelf(account, "__spotlight_discovery", "Explore",
-            CountLabel(cards.Length, "title"), cards, TypeForSource(distinct[0].Source.Kind), null, false,
-            distinct.Where(channel => channel.AddedAt.HasValue).Select(channel => channel.AddedAt).Max()) };
+            CatalogMode.Movies => SpotlightPageKind.Movies,
+            CatalogMode.Series => SpotlightPageKind.Series,
+            _ => SpotlightPageKind.ForYou,
+        };
+        var moviePool = mode == CatalogMode.Series ? Array.Empty<Channel>() :
+            _spotlightSettingsService.GetChannelsForSelection(account, CatalogItemType.Movie, settings);
+        var seriesPool = mode == CatalogMode.Movies ? Array.Empty<Channel>() :
+            _spotlightSettingsService.GetChannelsForSelection(account, CatalogItemType.Series, settings);
+        var selection = _spotlightSettingsService.Select(account, page,
+            DateOnly.FromDateTime(DateTime.UtcNow), moviePool, seriesPool);
+        var channels = moviePool.Concat(seriesPool).ToDictionary(channel => (TypeForSource(channel.Source.Kind), channel.Id));
+        var cards = selection.Items.Select(item => channels.TryGetValue((item.Type, item.ItemId), out var channel)
+            ? ToCard(channel, item.Type) : null).Where(card => card is not null).Cast<CatalogCard>().ToArray();
+        return cards.Length == 0 ? Array.Empty<CatalogShelf>() :
+            new[] { CreateShelf(account, "__spotlight_strip", "Spotlight", CountLabel(cards.Length, "title"), cards,
+                cards[0].Type, null, false, null) };
     }
 
     private static string SpotlightTitleKey(Channel channel) =>
@@ -1990,11 +1970,8 @@ public sealed partial class CatalogLandingPage : UserControl
             ? Enumerable.Empty<CatalogCard>()
             : _renderedSnapshot.Shelves.Concat(_renderedSnapshot.SpotlightShelves).SelectMany(shelf => shelf.Cards);
         var openCards = OpenShelfGrid.Items.OfType<CatalogCard>();
-        var spotlightCards = _spotlightCard is { } spotlightCard
-            ? new[] { spotlightCard }
-            : Array.Empty<CatalogCard>();
+        var spotlightCards = _spotlightCards.ToArray();
         return snapshotCards.Concat(renderedCards).Concat(_renderedShelves.SelectMany(shelf => shelf.Cards)).Concat(openCards)
-            .Concat(_spotlightByMode.Values)
             .Concat(spotlightCards)
             .Distinct();
     }
@@ -2307,7 +2284,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private static void ApplyArtworkClip(Image image)
     {
         if (PerfToggles.IsDisabled("clips") || PerfToggles.IsDisabled("shelfclip")) return;
-        if (VisualTreeHelper.GetParent(image) is not Grid viewport || image.DataContext is not CatalogCard card ||
+        if (VisualTreeHelper.GetParent(image) is not Grid viewport || image.DataContext is not CatalogCard card || card.SpotlightIndex >= 0 ||
             card.Width <= 0 || card.Height <= 0)
             return;
         var visual = ElementCompositionPreview.GetElementVisual(viewport);
@@ -2578,7 +2555,6 @@ public sealed partial class CatalogLandingPage : UserControl
             contentApplied = true;
             if (_isActive && _activeMode == CatalogMode.LiveTv)
                 _ = RefreshVisibleEpgAsync();
-            if (_isActive && !PerfToggles.IsDisabled("spotlight")) _spotlightTimer.Start();
             applyScope.Dispose();
             applyScope = default;
         }
@@ -2680,274 +2656,261 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
-        var previousCard = _spotlightCard;
-        var candidates = GetSpotlightCandidates(shelves);
-        if (!PerfToggles.IsDisabled("spotlightart"))
-            WarmSpotlightCandidates(candidates.Take(SpotlightWarmCandidateLimit));
-        SpotlightPreviousButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
-        SpotlightNextButton.Visibility = candidates.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var accountId = _account?.AccountId ?? string.Empty;
-        var typeKey = _activeMode == CatalogMode.MyTvivo ? _activeMode.ToString() : TypeForMode(_activeMode).ToString();
-        var orderedIds = candidates.Select(candidate => candidate.Id).ToArray();
-        _spotlightOrderHashByMode[_activeMode] = SpotlightSelection.OrderedIdsHash(orderedIds);
-        _spotlightExcludedCategoryCount = CountSpotlightExcludedCategories(_account, _activeMode);
-        var hasTodaySelection = _spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) && selectedDate == today;
-        var card = hasTodaySelection
-            ? candidates.FirstOrDefault(candidate => _spotlightByMode.TryGetValue(_activeMode, out var selected) && selected.Id == candidate.Id)
-            : null;
-        if (card is null && candidates.Length > 0)
+        var oldId = _spotlightCard?.Id;
+        _spotlightCards.Clear();
+        var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(12).ToArray();
+        foreach (var card in cards) _spotlightCards.Add(card);
+        _spotlightState = SpotlightStripState.Create(cards.Length);
+        if (oldId is not null)
         {
-            var saved = ReadSpotlightDailySelection(accountId, typeKey, today);
-            var candidateIndex = saved is null
-                ? SpotlightSelection.Index(accountId, typeKey, today, candidates.Length)
-                : SpotlightSelection.RestoreIndex(orderedIds, saved.CandidateId, saved.Index);
-            card = candidates[candidateIndex];
-            _spotlightByMode[_activeMode] = card;
-            _spotlightSelectionDateByMode[_activeMode] = today;
-            _spotlightStartIndexByMode[_activeMode] = candidateIndex;
-            _spotlightSelectionSource = saved is null ? "new-day" :
-                orderedIds.Contains(saved.CandidateId, StringComparer.Ordinal) ? "restored" : "fallback";
-            if (saved is null)
-                WriteSpotlightDailySelection(new SpotlightDailySelection(accountId, typeKey, today, card.Id, candidateIndex,
-                    _spotlightOrderHashByMode[_activeMode]));
+            var preserved = Array.FindIndex(cards, card => card.Id == oldId);
+            if (preserved >= 0) _spotlightState = _spotlightState.Open(preserved);
         }
-        var unchanged = card is not null && previousCard?.Id == card.Id && SpotlightArtwork.Source is not null;
-        _spotlightCard = card;
-        SpotlightPanel.Visibility = card is null ? Visibility.Collapsed : Visibility.Visible;
-        RenderSpotlightIndicators(candidates, card is null
-            ? -1
-            : Array.FindIndex(candidates, candidate => candidate.Id == card.Id));
-        if (card is null) return;
-        if (unchanged)
-        {
-            _spotlightPresented = true;
-            return;
-        }
+        _spotlightCard = _spotlightState.OpenIndex >= 0 ? cards[_spotlightState.OpenIndex] : null;
+        SpotlightPanel.Visibility = _openShelfId is null && _renderedSnapshot?.IsFlatSearch != true &&
+            _activeMode != CatalogMode.LiveTv ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightEmptySettingsButton.Visibility = cards.Length == 0 && SpotlightPanel.Visibility == Visibility.Visible
+            ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightPositionText.Text = cards.Length == 0 ? "Nothing to show yet" : $"Item {_spotlightState.OpenIndex + 1} of {cards.Length}";
+        UpdateSpotlightCardStates();
+        if (_spotlightCard is not null) ScheduleSpotlightMetadata(_spotlightCard);
+        UpdateSpotlightArtworkWindow();
+    }
 
-        StopArtwork(SpotlightArtwork);
-        SpotlightArtworkFallback.Visibility = Visibility.Visible;
-        SpotlightArtwork.Visibility = PerfToggles.IsDisabled("spotlightart") ? Visibility.Collapsed : Visibility.Visible;
-        if (PerfToggles.IsDisabled("spotlightart"))
+    private void UpdateSpotlightCardStates(int previousOpenIndex = -1, int newOpenIndex = -1)
+    {
+        var viewport = Math.Max(776, SpotlightStripViewer.ActualWidth);
+        for (var i = 0; i < _spotlightCards.Count; i++)
         {
-            SpotlightArtworkFallback.Visibility = Visibility.Collapsed;
-            SpotlightArtwork.Source = null;
-        }
-        SpotlightTitle.Text = card.Channel?.DisplayName ?? card.Title;
-        SpotlightSubtitle.Text = card.Channel is { } spotlightChannel
-            ? SubtitleFor(spotlightChannel.Source.Kind)
-            : card.Subtitle;
-        SpotlightEyebrow.Text = $"TVIVO SPOTLIGHT - {TypeLabel(card.Channel?.Source.Kind)}";
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SpotlightArtworkTarget,
-            card.Channel is null ? "Open shelf" : card.Channel.Source.Kind switch
+            var card = _spotlightCards[i];
+            card.SetSpotlightState(i, _spotlightCards.Count, i == _spotlightState.OpenIndex,
+                i == _spotlightState.OpenIndex ? SpotlightStripState.OpenWidth(viewport) : 64,
+                i == _spotlightState.OpenIndex);
+            if (card.SpotlightButton is { } button)
             {
-                StreamKind.Movie => "Play movie",
-                StreamKind.Series => "Open series",
-                _ => "Open channel",
-            });
-        if (!PerfToggles.IsDisabled("spotlightart"))
-            StartArtwork(SpotlightArtwork, card.ArtworkUrl);
-        LogSpotlightSelection(card, candidates, today, _spotlightSelectionSource);
-        DispatcherQueue.TryEnqueue(() => _spotlightPresented = SpotlightPanel.Visibility == Visibility.Visible);
-    }
-
-    // The first SpotlightWarmCandidateLimit candidates are the ones the carousel auto-rotates through,
-    // so they must mix content types. Sorting by card id alone put every Live card ("...:Live:...")
-    // ahead of Movie and Series, so the auto-rotation only ever showed live channels.
-    private static CatalogCard[] GetSpotlightCandidates(IReadOnlyList<CatalogShelf> shelves)
-    {
-        if (shelves.Any(shelf => shelf.Id == "__spotlight_discovery"))
-            return shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null)
-                .OrderByDescending(card => card.Channel!.AddedAt)
-                .ThenBy(card => card.Id, StringComparer.Ordinal).ToArray();
-
-        var byKind = shelves.SelectMany(shelf => shelf.Cards)
-            .Where(card => card.Channel is not null)
-            .GroupBy(card => card.Id, StringComparer.Ordinal)
-            .Select(group => group.First())
-            .GroupBy(card => card.Channel!.Source.Kind)
-            .OrderBy(group => group.Key switch { StreamKind.Movie => 0, StreamKind.Series => 1, _ => 2 })
-            .Select(group => group.OrderBy(card => card.Id, StringComparer.Ordinal).ToArray())
-            .ToArray();
-        var result = new List<CatalogCard>();
-        for (var index = 0; byKind.Any(cards => index < cards.Length); index++)
-            foreach (var cards in byKind)
-                if (index < cards.Length) result.Add(cards[index]);
-        return result.ToArray();
-    }
-
-    private void SpotlightTimer_Tick(object? sender, object args)
-    {
-        using var perfScope = PerfScope.Begin("SpotlightTimerTick");
-        if (!_spotlightPresented || _openShelfId is not null || _renderedSnapshot is not { } snapshot ||
-            ContentState.Visibility != Visibility.Visible) return;
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        if (!_spotlightSelectionDateByMode.TryGetValue(_activeMode, out var selectedDate) || selectedDate != today)
-        {
-            RenderSpotlight(snapshot.SpotlightShelves);
-            return;
-        }
-        AdvanceSpotlight(1, snapshot, automatic: true);
-    }
-
-    private void SpotlightPrevious_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(-1);
-
-    private void SpotlightNext_Click(object sender, RoutedEventArgs args) => AdvanceSpotlight(1);
-
-    private void AdvanceSpotlight(int delta, CatalogSnapshot? snapshot = null, bool automatic = false)
-    {
-        snapshot ??= _renderedSnapshot;
-        if (snapshot is null) return;
-        var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
-        if (candidates.Length < 2) return;
-        var index = Array.FindIndex(candidates, card => card.Id == _spotlightCard?.Id);
-        var nextIndex = NextSpotlightIndex(candidates.Length, index, delta, automatic);
-        if (nextIndex < 0) return;
-        _spotlightByMode[_activeMode] = candidates[nextIndex];
-        _spotlightSelectionDateByMode[_activeMode] = DateOnly.FromDateTime(DateTime.UtcNow);
-        _spotlightSelectionSource = "timer";
-        RenderSpotlight(snapshot.SpotlightShelves);
-    }
-
-    private int CountSpotlightExcludedCategories(ProviderAccount? account, CatalogMode mode)
-    {
-        if (account is null) return 0;
-        var types = mode == CatalogMode.MyTvivo ? AllRefreshTypes : new[] { TypeForMode(mode) };
-        return types.Sum(type => GetRecentlyOpenedCategoryIds(account, type, DateTimeOffset.UtcNow).Count);
-    }
-
-    private static string SpotlightSelectionPath => TvivoDataPaths.For("spotlight-selections.json");
-
-    private static SpotlightDailySelection? ReadSpotlightDailySelection(string accountId, string type, DateOnly utcDay)
-    {
-        try
-        {
-            if (!File.Exists(SpotlightSelectionPath)) return null;
-            return JsonSerializer.Deserialize<List<SpotlightDailySelection>>(File.ReadAllText(SpotlightSelectionPath))?
-                .LastOrDefault(selection => selection.AccountId == accountId && selection.Type == type && selection.UtcDay == utcDay);
-        }
-        catch { return null; }
-    }
-
-    private static void WriteSpotlightDailySelection(SpotlightDailySelection selection)
-    {
-        try
-        {
-            var existing = File.Exists(SpotlightSelectionPath)
-                ? JsonSerializer.Deserialize<List<SpotlightDailySelection>>(File.ReadAllText(SpotlightSelectionPath)) ?? new()
-                : new List<SpotlightDailySelection>();
-            existing.RemoveAll(item => item.AccountId == selection.AccountId && item.Type == selection.Type && item.UtcDay == selection.UtcDay);
-            existing.Add(selection);
-            Directory.CreateDirectory(Path.GetDirectoryName(SpotlightSelectionPath)!);
-            File.WriteAllText(SpotlightSelectionPath, JsonSerializer.Serialize(existing));
-        }
-        catch { /* Spotlight selection is a convenience; catalog rendering must still work. */ }
-    }
-
-    private void LogSpotlightSelection(CatalogCard selected, IReadOnlyList<CatalogCard> candidates, DateOnly utcDay, string source)
-    {
-        var currentIndex = Array.FindIndex(candidates.ToArray(), candidate => candidate.Id == selected.Id);
-        var startIndex = _spotlightStartIndexByMode.GetValueOrDefault(_activeMode, currentIndex);
-        LaunchDiagnostics.Write($"event=spotlight.selection mode={_activeMode} utcDay={utcDay:yyyy-MM-dd} startIndex={startIndex} currentIndex={currentIndex} candidateCount={candidates.Count} excludedCategoryCount={_spotlightExcludedCategoryCount} source={source} orderedIdsHash={_spotlightOrderHashByMode.GetValueOrDefault(_activeMode, string.Empty)} selectedIdHash={SpotlightSelection.ShortHash(selected.Id)}");
-    }
-
-    private sealed record SpotlightDailySelection(string AccountId, string Type, DateOnly UtcDay,
-        string CandidateId, int Index, string OrderedIdsHash);
-
-    public static int SpotlightWarmCount(int candidateCount) => Math.Clamp(candidateCount, 0, SpotlightWarmCandidateLimit);
-
-    public static int NextSpotlightIndex(int candidateCount, int currentIndex, int delta, bool automatic)
-    {
-        var count = automatic ? SpotlightWarmCount(candidateCount) : candidateCount;
-        if (count <= 0) return -1;
-        if (currentIndex < 0) currentIndex = delta > 0 ? -1 : 0;
-        return ((currentIndex + delta) % count + count) % count;
-    }
-
-    private void WarmSpotlightCandidates(IEnumerable<CatalogCard> candidates)
-    {
-        foreach (var card in candidates)
-        {
-            if (!Uri.TryCreate(card.ArtworkUrl, UriKind.Absolute, out var uri) ||
-                uri.Scheme is not ("http" or "https")) continue;
-            if (_spotlightWarmUrls.Count >= SpotlightWarmUrlCapacity)
-                _spotlightWarmUrls.Clear();
-            if (!_spotlightWarmUrls.Add(uri.AbsoluteUri)) continue;
-            _ = WarmSpotlightArtworkAsync(uri);
-        }
-    }
-
-    private async Task WarmSpotlightArtworkAsync(Uri uri)
-    {
-        var cacheKey = $"{uri.AbsoluteUri}|600x336";
-        if (TryGetCachedArtworkBitmap(cacheKey, out _)) return;
-        var slotAcquired = false;
-        try
-        {
-            var bytes = await ArtworkBytes.GetAsync(uri);
-            if (bytes is null) return;
-            await _artworkSlots.WaitAsync();
-            slotAcquired = true;
-            var bitmap = new BitmapImage { DecodePixelWidth = 600, DecodePixelHeight = 336 };
-            using var imageStream = new InMemoryRandomAccessStream();
-            using (var writer = new DataWriter(imageStream))
-            {
-                writer.WriteBytes(bytes);
-                await writer.StoreAsync();
-                writer.DetachStream();
+                var text = FindDescendant<StackPanel>(button);
+                if (text is not null)
+                {
+                    if (card.SpotlightExpanded && _uiSettings.AnimationsEnabled && i == newOpenIndex)
+                    {
+                        text.Opacity = 0;
+                        var reveal = new DoubleAnimation
+                        {
+                            From = 0,
+                            To = 1,
+                            Duration = TimeSpan.FromMilliseconds(120),
+                            EnableDependentAnimation = false,
+                        };
+                        Storyboard.SetTarget(reveal, text);
+                        Storyboard.SetTargetProperty(reveal, "Opacity");
+                        var revealStoryboard = new Storyboard();
+                        revealStoryboard.Children.Add(reveal);
+                        revealStoryboard.Begin();
+                    }
+                    else if (!card.SpotlightExpanded) text.Opacity = 0;
+                    else text.Opacity = 1;
+                }
+                if (_uiSettings.AnimationsEnabled && (i == previousOpenIndex || i == newOpenIndex) &&
+                    button.ActualWidth > 0 && Math.Abs(button.ActualWidth - card.SpotlightWidth) > 0.5)
+                {
+                    var animation = new DoubleAnimation
+                    {
+                        From = button.ActualWidth,
+                        To = card.SpotlightWidth,
+                        Duration = TimeSpan.FromMilliseconds(220),
+                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                        EnableDependentAnimation = true,
+                    };
+                    Storyboard.SetTarget(animation, button);
+                    Storyboard.SetTargetProperty(animation, "Width");
+                    var storyboard = new Storyboard();
+                    storyboard.Children.Add(animation);
+                    storyboard.Begin();
+                }
+                else button.Width = card.SpotlightWidth;
             }
-            imageStream.Seek(0);
-            await bitmap.SetSourceAsync(imageStream);
-            CacheArtworkBitmap(cacheKey, bitmap);
         }
-        catch (Exception exception)
+        if (_spotlightState.OpenIndex >= 0)
+            SpotlightPositionText.Text = $"Item {_spotlightState.OpenIndex + 1} of {_spotlightCards.Count}";
+    }
+
+    private void OpenSpotlight(int index, string via, bool announce = false)
+    {
+        if (index < 0 || index >= _spotlightCards.Count || index == _spotlightState.OpenIndex) return;
+        var previousOpenIndex = _spotlightState.OpenIndex;
+        _spotlightState = _spotlightState.Open(index);
+        _spotlightCard = _spotlightCards[index];
+        UpdateSpotlightCardStates(previousOpenIndex, index);
+        EnsureSpotlightVisible(index);
+        ScheduleSpotlightMetadata(_spotlightCard);
+        UpdateSpotlightArtworkWindow();
+        LaunchDiagnostics.Write($"event=spotlight.open index={index + 1} via={via}");
+        if (announce)
         {
-            LaunchDiagnostics.Write($"Spotlight artwork warm-up failed: type={exception.GetType().Name}; HRESULT=0x{exception.HResult:X8}");
-        }
-        finally
-        {
-            if (slotAcquired) _artworkSlots.Release();
+            SpotlightPositionText.Text = SpotlightStripState.Announcement(_spotlightCard.Title, index, _spotlightCards.Count);
         }
     }
 
-    private void RenderSpotlightIndicators(IReadOnlyList<CatalogCard> candidates, int selectedIndex)
+    private void SpotlightItem_Click(object sender, RoutedEventArgs args)
     {
-        SpotlightIndicatorRow.Children.Clear();
-        if (selectedIndex < 0 || candidates.Count == 0) return;
-        var (firstIndex, visibleCount) = SpotlightIndicatorPolicy.GetVisibleWindow(candidates.Count, selectedIndex);
-        var lastIndex = firstIndex + visibleCount;
-        for (var index = firstIndex; index < lastIndex; index++)
+        if (sender is not Button { DataContext: CatalogCard card }) return;
+        if (card.SpotlightIndex != _spotlightState.OpenIndex)
         {
-            var button = new Button
+            OpenSpotlight(card.SpotlightIndex, "click");
+            return;
+        }
+        if (card.Channel is { } channel) RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray());
+    }
+
+    private async void SpotlightItem_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        if (sender is not Button { DataContext: CatalogCard card }) return;
+        _spotlightDwellCts?.Cancel();
+        var cancellation = _spotlightDwellCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(350, cancellation.Token);
+            DispatcherQueue.TryEnqueue(() => OpenSpotlight(card.SpotlightIndex, "hover"));
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void SpotlightItem_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _spotlightDwellCts?.Cancel();
+        _spotlightDwellCts = null;
+    }
+
+    private void SpotlightItem_GotFocus(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { DataContext: CatalogCard card } button) return;
+        var keyboard = button.FocusState == FocusState.Keyboard;
+        if (keyboard && card.SpotlightIndex != _spotlightState.OpenIndex)
+            OpenSpotlight(card.SpotlightIndex, "keyboard", keyboard);
+        card.SetSpotlightFocused(true);
+    }
+
+    private void SpotlightItem_LostFocus(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { DataContext: CatalogCard card }) card.SetSpotlightFocused(false);
+    }
+
+    private void SpotlightItem_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (sender is not Button { DataContext: CatalogCard card }) return;
+        var next = args.Key switch
+        {
+            Windows.System.VirtualKey.Left => Math.Max(0, card.SpotlightIndex - 1),
+            Windows.System.VirtualKey.Right => Math.Min(_spotlightCards.Count - 1, card.SpotlightIndex + 1),
+            _ => card.SpotlightIndex,
+        };
+        if (next == card.SpotlightIndex) return;
+        args.Handled = true;
+        OpenSpotlight(next, "keyboard", announce: true);
+        _spotlightCards[next].SpotlightButton?.Focus(FocusState.Programmatic);
+    }
+
+    private void SpotlightItem_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { DataContext: CatalogCard card }) card.SpotlightButton = (Button)sender;
+        UpdateSpotlightArtworkWindow();
+    }
+
+    private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args) => UpdateSpotlightArtworkWindow();
+
+    private void SpotlightStripViewer_SizeChanged(object sender, SizeChangedEventArgs args) => UpdateSpotlightCardStates();
+
+    private void EnsureSpotlightVisible(int index)
+    {
+        if (index < 0 || index >= _spotlightCards.Count) return;
+        var button = _spotlightCards[index].SpotlightButton;
+        if (button is null) return;
+        var transform = button.TransformToVisual(SpotlightStripViewer);
+        var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+        var target = SpotlightStripState.ScrollIntoViewTarget(point.X + SpotlightStripViewer.HorizontalOffset,
+            button.ActualWidth, SpotlightStripViewer.HorizontalOffset, SpotlightStripViewer.ViewportWidth);
+        SpotlightStripViewer.ChangeView(target, null, null, true);
+    }
+
+    private void UpdateSpotlightArtworkWindow()
+    {
+        if (SpotlightPanel.Visibility != Visibility.Visible) return;
+        var viewport = Math.Max(0, SpotlightStripViewer.ViewportWidth);
+        var visibleIndices = new List<int>();
+        foreach (var card in _spotlightCards)
+        {
+            if (card.SpotlightButton is not { } button) continue;
+            try
             {
-                Content = index == selectedIndex ? "●" : "○",
-                Tag = index,
-                Width = 20,
-                Height = 30,
-                MinWidth = 20,
-                MinHeight = 30,
-                Padding = new Thickness(0),
-                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-                Style = (Style)Application.Current.Resources["AppCaptionButtonStyle"],
-                Foreground = ThemeBrush(index == selectedIndex ? "AppAccentBrush" : "AppMutedTextBrush"),
-                FontSize = 10,
-            };
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,
-                $"Spotlight item {index + 1} of {candidates.Count}");
-            ToolTipService.SetToolTip(button, null);
-            button.Click += SpotlightIndicator_Click;
-            SpotlightIndicatorRow.Children.Add(button);
+                var point = button.TransformToVisual(SpotlightStripViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
+                if (point.X + button.ActualWidth > 0 && point.X < viewport) visibleIndices.Add(card.SpotlightIndex);
+            }
+            catch (InvalidOperationException) { }
         }
+        var first = visibleIndices.Count == 0 ? _spotlightState.OpenIndex : visibleIndices.Min();
+        var last = visibleIndices.Count == 0 ? first : visibleIndices.Max();
+        var windowFirst = Math.Max(0, first - 1);
+        var windowLast = Math.Min(_spotlightCards.Count - 1, last + 1);
+        foreach (var card in _spotlightCards)
+        {
+            if (card.SpotlightButton is null) continue;
+            var inWindow = card.SpotlightIndex >= windowFirst && card.SpotlightIndex <= windowLast;
+            if (FindDescendant<Image>(card.SpotlightButton) is { } image)
+                if (inWindow && image.Source is null) StartArtwork(image, card.ArtworkUrl);
+                else if (!inWindow) StopArtwork(image);
+        }
+        if (_spotlightCard is { } openCard && !visibleIndices.Contains(openCard.SpotlightIndex))
+            _spotlightMetadataCts?.Cancel();
+        else if (_spotlightCard is { } visibleOpen && visibleOpen.SpotlightSummary == "Summary unavailable")
+            ScheduleSpotlightMetadata(visibleOpen);
     }
 
-    private void SpotlightIndicator_Click(object sender, RoutedEventArgs args)
+    private async void ScheduleSpotlightMetadata(CatalogCard card)
     {
-        if (sender is not Button { Tag: int index } || _renderedSnapshot is not { } snapshot) return;
-        var candidates = GetSpotlightCandidates(snapshot.SpotlightShelves);
-        if (index < 0 || index >= candidates.Length) return;
-        _spotlightByMode[_activeMode] = candidates[index];
-        _spotlightSelectionDateByMode[_activeMode] = DateOnly.FromDateTime(DateTime.UtcNow);
-        RenderSpotlight(snapshot.SpotlightShelves);
+        _spotlightMetadataCts?.Cancel();
+        var cancellation = _spotlightMetadataCts = new CancellationTokenSource();
+        var token = cancellation.Token;
+        try
+        {
+            await Task.Delay(350, token);
+            if (token.IsCancellationRequested || !ReferenceEquals(_spotlightCard, card) ||
+                SpotlightPanel.Visibility != Visibility.Visible || _account is not { } account || card.Channel is not { } channel ||
+                !HoverMetadataLookup.NeedsLookup(channel.Metadata.GetValueOrDefault("plot"))) return;
+            var metadata = await _hoverMetadataLookup.GetAsync(account, card.Type, channel.Id, token);
+            if (metadata is null || token.IsCancellationRequested) return;
+            await RunOnUiThreadAsync(() =>
+            {
+                if (token.IsCancellationRequested || !ReferenceEquals(_spotlightCard, card)) return;
+                card.ApplyMetadata(metadata);
+                card.NotifyMetadataChanged();
+            });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch { }
+    }
+
+    private void SpotlightEmptySettingsButton_Click(object sender, RoutedEventArgs args) =>
+        NavigateToSpotlightSettingsRequested?.Invoke(this, EventArgs.Empty);
+
+    private void CancelSpotlightAsyncWork()
+    {
+        _spotlightDwellCts?.Cancel();
+        _spotlightDwellCts = null;
+        _spotlightMetadataCts?.Cancel();
+        _spotlightMetadataCts = null;
+        foreach (var card in _spotlightCards)
+            if (card.SpotlightButton is not null)
+                if (FindDescendant<Image>(card.SpotlightButton) is { } image) StopArtwork(image);
+    }
+
+    private void UiSettings_ColorValuesChanged(Windows.UI.ViewManagement.UISettings sender, object args) =>
+        DispatcherQueue.TryEnqueue(() => UpdateSpotlightCardStates());
+
+    private bool ShouldLoadSpotlightArtwork(CatalogCard card)
+    {
+        var visible = Math.Max(1, (int)Math.Floor((Math.Max(0, SpotlightStripViewer.ViewportWidth - 480) + 8) / 72));
+        return card.SpotlightIndex >= Math.Max(0, _spotlightState.OpenIndex - 1) &&
+            card.SpotlightIndex <= _spotlightState.OpenIndex + visible + 1;
     }
 
     private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
@@ -3292,14 +3255,14 @@ public sealed partial class CatalogLandingPage : UserControl
         if (VisualTreeHelper.GetParent(image) is not Grid host) return null;
         for (var index = 0; index < VisualTreeHelper.GetChildrenCount(host); index++)
             if (VisualTreeHelper.GetChild(host, index) is FrameworkElement child &&
-                child.Name is "ArtworkFallback" or "SpotlightArtworkFallback") return child;
+                child.Name == "ArtworkFallback") return child;
         return null;
     }
 
     private void ArtworkImage_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
     {
         using var perfScope = PerfScope.Begin("ArtworkDataContextChanged");
-        if (sender is Image image && !ReferenceEquals(image, SpotlightArtwork) && image.IsLoaded)
+        if (sender is Image image && image.IsLoaded)
             StartArtwork(image, (image.DataContext as CatalogCard)?.ArtworkUrl);
     }
 
@@ -3314,12 +3277,10 @@ public sealed partial class CatalogLandingPage : UserControl
         image.ImageOpened += ArtworkImage_Opened;
         image.ImageFailed += ArtworkImage_Failed;
         if (_loadedArtworkImages.Add(image)) Interlocked.Increment(ref _artworkImagesLoaded);
-        if (ReferenceEquals(image, SpotlightArtwork) && _openShelfId is not null) return;
-        if (!ReferenceEquals(image, SpotlightArtwork)) ApplyArtworkClip(image);
+        if (image.DataContext is CatalogCard spotlightCard && _spotlightCards.Contains(spotlightCard) && !ShouldLoadSpotlightArtwork(spotlightCard)) return;
+        ApplyArtworkClip(image);
 
-        var url = ReferenceEquals(image, SpotlightArtwork)
-            ? _spotlightCard?.ArtworkUrl
-            : (image.DataContext as CatalogCard)?.ArtworkUrl;
+        var url = (image.DataContext as CatalogCard)?.ArtworkUrl;
         StartArtwork(image, url);
     }
 
@@ -3406,16 +3367,16 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private async void StartArtwork(Image image, string? url)
     {
-        if (ReferenceEquals(image, SpotlightArtwork) && PerfToggles.IsDisabled("spotlightart"))
+        var isSpotlightCard = image.DataContext is CatalogCard stripCard && _spotlightCards.Contains(stripCard);
+        if (isSpotlightCard && PerfToggles.IsDisabled("spotlightart"))
         {
             image.Source = null;
             image.Opacity = 0;
             image.Visibility = Visibility.Collapsed;
-            SpotlightArtworkFallback.Visibility = Visibility.Collapsed;
             return;
         }
 
-        var card = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
+        var card = image.DataContext as CatalogCard;
         var homeCard = image.DataContext as HomePage.HomeShelfCard;
         var itemKey = card?.Id ?? (homeCard is null ? "card:unresolved" : $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}");
         if ((card is not null || homeCard is not null) && _appliedArtwork.TryGetValue(image, out var applied) &&
@@ -3439,9 +3400,9 @@ public sealed partial class CatalogLandingPage : UserControl
         load.ItemKey = itemKey;
         load.Url = url!;
         _artworkLoads[image] = load;
-        var spotlight = ReferenceEquals(image, SpotlightArtwork);
-        var decodeWidth = spotlight ? 600 : homeCard is not null ? 320 : 380;
-        var decodeHeight = spotlight ? 336 : homeCard is not null ? 450 : card?.Height == 138 ? 276 : 500;
+        var scale = Math.Clamp(image.XamlRoot?.RasterizationScale ?? 1, 1, 2);
+        var decodeWidth = homeCard is not null ? 320 : isSpotlightCard ? (int)Math.Ceiling(190 * scale) : 380;
+        var decodeHeight = homeCard is not null ? 450 : isSpotlightCard ? (int)Math.Ceiling(285 * scale) : card?.Height == 138 ? 276 : 500;
         var cacheKey = $"{uri.AbsoluteUri}|{decodeWidth}x{decodeHeight}";
         if (TryGetCachedArtworkBitmap(cacheKey, out var cachedBitmap))
         {
@@ -3464,6 +3425,11 @@ public sealed partial class CatalogLandingPage : UserControl
 
             stage = "decode-permit-wait";
             load.Stage = stage;
+            if (isSpotlightCard)
+            {
+                await _spotlightArtworkSlots.WaitAsync(load.Cancellation.Token);
+                load.SpotlightSlotAcquired = true;
+            }
             await _artworkSlots.WaitAsync(load.Cancellation.Token);
             load.SlotAcquired = true;
             stage = "decode";
@@ -3564,7 +3530,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool IsCurrentArtworkTarget(Image image, ArtworkLoad load)
     {
         if (!image.IsLoaded || image.XamlRoot is null) return false;
-        var currentCard = ReferenceEquals(image, SpotlightArtwork) ? _spotlightCard : image.DataContext as CatalogCard;
+        var currentCard = image.DataContext as CatalogCard;
         if (image.DataContext is HomePage.HomeShelfCard homeCard)
             return $"home:{homeCard.Channel.Source.Kind}:{homeCard.Channel.Id}" == load.ItemKey && homeCard.ArtworkUrl == load.Url;
         return currentCard is not null && currentCard.Id == load.ItemKey && currentCard.ArtworkUrl == load.Url;
@@ -3661,9 +3627,16 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ReleaseArtworkSlot(Image image, ArtworkLoad load, string reason)
     {
-        if (!load.SlotAcquired || load.SlotReleased) return;
-        load.SlotReleased = true;
-        _artworkSlots.Release();
+        if (load.SlotAcquired && !load.SlotReleased)
+        {
+            load.SlotReleased = true;
+            _artworkSlots.Release();
+        }
+        if (load.SpotlightSlotAcquired && !load.SpotlightSlotReleased)
+        {
+            load.SpotlightSlotReleased = true;
+            _spotlightArtworkSlots.Release();
+        }
     }
 
     private void CancelArtworkLoads()
@@ -3680,11 +3653,9 @@ public sealed partial class CatalogLandingPage : UserControl
         OpenShelfHeader.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
         OpenShelfGrid.Visibility = isOpen || isSearch ? Visibility.Visible : Visibility.Collapsed;
         ShelvesItems.Visibility = isOpen || isSearch ? Visibility.Collapsed : Visibility.Visible;
-        SpotlightPanel.Visibility = isOpen || isSearch || _spotlightCard is null ? Visibility.Collapsed : Visibility.Visible;
-        if (isOpen || isSearch)
-            StopArtwork(SpotlightArtwork);
-        else if (!PerfToggles.IsDisabled("spotlightart") && _spotlightCard is not null && SpotlightArtwork.Source is null)
-            StartArtwork(SpotlightArtwork, _spotlightCard.ArtworkUrl);
+        SpotlightPanel.Visibility = isOpen || isSearch || snapshot.Mode == CatalogMode.LiveTv ? Visibility.Collapsed : Visibility.Visible;
+        if (SpotlightPanel.Visibility != Visibility.Visible) CancelSpotlightAsyncWork();
+        else UpdateSpotlightArtworkWindow();
         PagerPanel.Visibility = isOpen || isSearch ? Visibility.Visible : Visibility.Collapsed;
         PageSearchPanel.Visibility = Visibility.Collapsed;
 
@@ -4466,20 +4437,6 @@ public sealed partial class CatalogLandingPage : UserControl
         return null;
     }
 
-    private void SpotlightAction_Click(object sender, RoutedEventArgs args)
-    {
-        if (_spotlightCard?.Channel is { } channel)
-        {
-            var siblings = _renderedSnapshot?.SpotlightShelves
-                .FirstOrDefault(shelf => shelf.Cards.Any(card => card.Id == _spotlightCard.Id))?
-                .Cards.Where(card => card.Channel is not null).Select(card => card.Channel!).ToArray();
-            RaiseChannelSelected(channel, siblings);
-        }
-    }
-
-    private void SpotlightArtwork_Tapped(object sender, TappedRoutedEventArgs args) =>
-        SpotlightAction_Click(sender, new RoutedEventArgs());
-
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs args)
     {
         if (_suppressSearchChanged || !_isReadyForInteraction) return;
@@ -5078,6 +5035,8 @@ public sealed partial class CatalogLandingPage : UserControl
         public string Stage { get; set; } = "queued";
         public bool SlotAcquired { get; set; }
         public bool SlotReleased { get; set; }
+        public bool SpotlightSlotAcquired { get; set; }
+        public bool SpotlightSlotReleased { get; set; }
     }
     private sealed record CachedArtworkBitmap(string CacheKey, BitmapImage Bitmap, long DecodedBytes);
     private sealed record ModeInteractionState(string? OpenShelfId, CatalogItemType? OpenShelfType, string? SelectedGroupId, string Filter, int Offset);
@@ -5253,6 +5212,22 @@ public sealed partial class CatalogLandingPage : UserControl
         public string? ArtworkUrl { get; } = artworkUrl;
         public double Width { get; } = width;
         public double Height { get; } = height;
+        public int SpotlightIndex { get; private set; } = -1;
+        public double SpotlightWidth { get; private set; } = 64;
+        public double SpotlightPosterWidth => SpotlightExpanded ? (SpotlightWidth >= 600 ? 190 : 164) : 64;
+        public double SpotlightPosterHeight => SpotlightExpanded ? (SpotlightWidth >= 600 ? 285 : 246) : 304;
+        public Stretch SpotlightImageStretch => SpotlightExpanded ? Stretch.Uniform : Stretch.UniformToFill;
+        public Visibility SpotlightTextVisibility => SpotlightExpanded ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility SpotlightFocusVisibility { get; private set; } = Visibility.Collapsed;
+        public bool SpotlightIsTabStop => SpotlightExpanded;
+        public Thickness SpotlightPadding => SpotlightExpanded ? new Thickness(12) : new Thickness(0);
+        public bool SpotlightExpanded { get; private set; }
+        public string SpotlightDetails => DetailsLine;
+        public string SpotlightSummary => string.IsNullOrWhiteSpace(HoverPlot) ? "Summary unavailable" : HoverPlot!;
+        public string SpotlightAutomationName => SpotlightStripState.AutomationName(Title,
+            Type == CatalogItemType.Movie, SpotlightIndex, Math.Max(1, SpotlightItemCount), SpotlightExpanded);
+        private int SpotlightItemCount { get; set; } = 1;
+        public Button? SpotlightButton { get; set; }
         public Channel? Channel { get; private set; } = channel;
         public string? QualityBadge { get; } = qualityBadge;
         public CatalogItemType Type { get; } = type;
@@ -5336,6 +5311,32 @@ public sealed partial class CatalogLandingPage : UserControl
         public void SetHoverMetadata(CatalogMetadata? metadata)
         {
             _hoverMetadata = metadata;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightSummary)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightDetails)));
+        }
+
+        public void SetSpotlightState(int index, int itemCount, bool expanded, double width, bool isFocusedTabStop)
+        {
+            SpotlightIndex = index;
+            SpotlightItemCount = Math.Max(1, itemCount);
+            SpotlightExpanded = expanded;
+            SpotlightWidth = width;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightIndex)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightExpanded)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightWidth)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightPosterWidth)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightPosterHeight)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightImageStretch)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightTextVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightIsTabStop)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightPadding)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightAutomationName)));
+        }
+
+        public void SetSpotlightFocused(bool focused)
+        {
+            SpotlightFocusVisibility = focused ? Visibility.Visible : Visibility.Collapsed;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightFocusVisibility)));
         }
 
         public void ApplyWatchProgress(PlaybackProgress? progress)

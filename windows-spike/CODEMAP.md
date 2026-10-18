@@ -45,7 +45,7 @@
 | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L567) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyAdded`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L567) | `GetRecentlyAdded` | _direct SQL, see §7_ | `items` |
 | [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L737) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetRecentlyPlayed`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L737) | — | — | — |
 | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L768) | CALL | `MainWindow.xaml.cs` | [`GetResumePosition`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L768) | `GetResumePosition` | _direct SQL, see §7_ | `items` |
-| [`GetSpotlightCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L653) | CALL | `Pages/CatalogLandingPage.xaml.cs` | [`GetSpotlightCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L653) | `GetSpotlightCandidates` | _direct SQL, see §7_ | `favorites`<br>`items`<br>`media_progress`<br>`series_playback` |
+| [`GetSpotlightCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L653) | CALL | — ⚠️ | [`GetSpotlightCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L653) | `GetSpotlightCandidates` | _direct SQL, see §7_ | `favorites`<br>`items`<br>`media_progress`<br>`series_playback` |
 | [`GetSpotlightCategoryCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L609) | CALL | — ⚠️ | [`GetSpotlightCategoryCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L609) | `GetSpotlightCategoryCandidates` | _direct SQL, see §7_ | `items` |
 | [`GetSpotlightRecentlyAddedCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L595) | CALL | — ⚠️ | [`GetSpotlightRecentlyAddedCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L595) | `GetSpotlightRecentlyAddedCandidates` | _direct SQL, see §7_ | `items` |
 | [`GetSpotlightUnexploredCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L638) | CALL | — ⚠️ | [`GetSpotlightUnexploredCandidates`](src/Tvivo.Infrastructure/SqliteCatalogRepository.cs#L638) | — | — | — |
@@ -83,6 +83,7 @@ Dead endpoint, or called by a host page / another consumer outside this repo.
 - `CatalogPage` (CALL)
 - `Dispose` (CALL)
 - `For` (CALL)
+- `GetSpotlightCandidates` (CALL)
 - `GetSpotlightCategoryCandidates` (CALL)
 - `GetSpotlightRecentlyAddedCandidates` (CALL)
 - `GetSpotlightUnexploredCandidates` (CALL)

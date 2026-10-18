@@ -202,7 +202,7 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
-    public async Task Spotlight_warm_set_rotates_offline_and_clear_refetches_lazily()
+    public async Task Spotlight_artwork_cache_reuses_downloaded_bytes_offline()
     {
         var root = Path.Combine("D:/Scratch", $"tvivo-spotlight-artwork-{Guid.NewGuid():N}", "artwork-cache");
         Directory.CreateDirectory(root);
@@ -221,27 +221,10 @@ public sealed class AppSmokeTests
             var urls = Enumerable.Range(0, 10)
                 .Select(index => new Uri($"https://images.example.test/spotlight-{index}"))
                 .ToArray();
-            var warmCount = CatalogLandingPage.SpotlightWarmCount(urls.Length);
-
-            Assert.Equal(6, warmCount);
-            Assert.Equal(6, CatalogLandingPage.NextSpotlightIndex(10, 5, 1, automatic: false));
-            for (var index = 0; index < warmCount; index++)
+            var warmCount = urls.Length;
+            for (var index = 0; index < urls.Length; index++)
                 Assert.NotNull(await cache.GetAsync(urls[index]));
             Assert.Equal(warmCount, onlineGets);
-
-            var selected = 0;
-            for (var rotation = 0; rotation < warmCount * 2; rotation++)
-            {
-                selected = CatalogLandingPage.NextSpotlightIndex(urls.Length, selected, 1, automatic: true);
-                Assert.InRange(selected, 0, warmCount - 1);
-                Assert.NotNull(await cache.GetAsync(urls[selected]));
-            }
-            Assert.Equal(warmCount, onlineGets);
-
-            var manualIndex = CatalogLandingPage.NextSpotlightIndex(urls.Length, warmCount - 1, 1, automatic: false);
-            Assert.Equal(warmCount, manualIndex);
-            Assert.NotNull(await cache.GetAsync(urls[manualIndex]));
-            Assert.Equal(warmCount + 1, onlineGets);
 
             var offlineGets = 0;
             using var offlineClient = new HttpClient(new ArtworkHandler(() =>
@@ -250,14 +233,14 @@ public sealed class AppSmokeTests
                 return Task.FromException<HttpResponseMessage>(new HttpRequestException("offline"));
             }));
             var restartedCache = new ArtworkDiskCache(offlineClient, root);
-            for (var index = 0; index < warmCount; index++)
+            for (var index = 0; index < urls.Length; index++)
                 Assert.NotNull(await restartedCache.GetAsync(urls[index]));
             Assert.Equal(0, offlineGets);
 
             cache.Clear();
             Assert.Equal(0, cache.TotalBytes);
             Assert.NotNull(await cache.GetAsync(urls[0]));
-            Assert.Equal(warmCount + 2, onlineGets);
+            Assert.Equal(warmCount + 1, onlineGets);
         }
         finally
         {
@@ -387,17 +370,6 @@ public sealed class AppSmokeTests
             var directory = Path.GetDirectoryName(path)!;
             if (Directory.Exists(directory)) Directory.Delete(directory);
         }
-    }
-
-    [Fact]
-    public void Spotlight_indicator_window_stays_small_and_keeps_the_selected_item_visible()
-    {
-        var (start, count) = SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 40, selectedIndex: 23);
-
-        Assert.Equal(7, count);
-        Assert.InRange(23, start, start + count - 1);
-        Assert.Equal((0, 0), SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 0, selectedIndex: 0));
-        Assert.Equal((33, 7), SpotlightIndicatorPolicy.GetVisibleWindow(itemCount: 40, selectedIndex: 39));
     }
 
     [Fact]

@@ -86,11 +86,18 @@ This was a read-only plan. I did not edit, build, run tests, or inspect a live w
 Codex session ID: 01a14231-8da6-7e42-be3a-34b02e3b0c32
 Resume in Codex: codex resume 01a14231-8da6-7e42-be3a-34b02e3b0c32
 
+### L3/L4 status — implemented (2026-10-18)
+
+The landing page now builds movie-only, series-only, or For You mixed selections through the L1 selector and L2 settings/daily store. The old carousel, indicator pager, six-artwork warm-up, and eight-second rotation paths are removed. Spotlight renders up to twelve buttons in one horizontal strip, keeps the selected item stable across refreshes, scrolls an opened item into view, opens on 350 ms pointer dwell or keyboard focus, and uses click/Enter/Space for open-then-activate behavior. Core owns and tests the open index, clamped keyboard movement, dwell threshold, width formula, scroll target, announcement/name text, and touch two-step semantics.
+
+Artwork loading is limited to visible cards plus one neighbor, uses the shared decoded bitmap cache at rasterization-scale poster dimensions, and is capped at two concurrent Spotlight decodes. Only the open visible card schedules the delayed metadata lookup; superseded lookups are canceled. Open-width and text opacity transitions use 220 ms and 120 ms when Windows animations are enabled. The cards expose updated automation names and a 3-DIP keyboard focus border; the position text is a polite live region.
+
+The empty-state Settings button raises `NavigateToSpotlightSettingsRequested`; the existing shell navigation is in `MainWindow.xaml.cs`, which was outside this slice's permitted files, so the event still needs to be connected there before the button navigates. A dedicated ExpandCollapse automation peer is pending; buttons expose Invoke and the expanded/collapsed name today. Motion, Narrator, High Contrast, touch, DPI/text scaling, and strip visibility during vertical deep-scroll need live-app validation. These are not measured acceptance results.
+
 ### L1 status — implemented (2026-10-16)
 
-Core now provides `SpotlightSelector` and its policy/settings/candidate types. Infrastructure adds bounded movie/series candidate queries, account-scoped versioned settings, and a bounded daily ID-list store. The legacy App Spotlight implementation and repository method remain in place for L3 replacement. Core tests pass (378); Infrastructure tests pass except five existing DPAPI tests blocked by the runner's user-profile protection context. Full solution build/test limitations and exact environment errors are recorded in the implementation handoff; App/UI behavior remains for L3-L5.
+Core now provides `SpotlightSelector` and its policy/settings/candidate types. Infrastructure adds bounded movie/series candidate queries, account-scoped versioned settings, and a bounded daily ID-list store. The old App rotation was removed in L3/L4; the generic repository candidate query remains because the opt-in unexplored-folder query still uses it. Core tests passed (378 at L1); Infrastructure tests had five existing DPAPI failures from the runner's user-profile protection context. Build/test limitations were recorded in the implementation handoff.
 
 ### L2 status — implemented (2026-10-18)
 
 Settings → For You now has independent Movies and Series Spotlight source controls, searchable folder selection with unavailable-folder removal, local title-only previews, and explicit Save/Cancel behavior. `SpotlightSettingsService.ReadEffectiveSettings(accountKey)` is the App accessor for L3; saving writes through `SpotlightSettingsStore` and invalidates that account's cached daily selection. The save log records only modes and selected-folder counts. Core and Infrastructure tests were added for folder filtering/deleted-folder detection and daily-selection invalidation. Build, automated tests, and live visual/Narrator checks were not run in this environment.
-
