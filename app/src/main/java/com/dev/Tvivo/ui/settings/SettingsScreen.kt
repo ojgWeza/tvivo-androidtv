@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.semantics
@@ -65,6 +66,9 @@ fun SettingsScreen(
     onSwitchAccount: () -> Unit,
     onShowSubscription: () -> Unit,
     onShowDiagnostics: () -> Unit,
+    onShowNetworkDiagnostics: () -> Unit = {},
+    focusNetworkDiagnostics: Boolean = false,
+    onNetworkDiagnosticsFocusConsumed: () -> Unit = {},
     onRefreshLibrary: () -> Unit = {},
     viewModel: AccountViewModel? = null,
     stateOverride: AccountUiState? = null,
@@ -76,6 +80,7 @@ fun SettingsScreen(
     val state = if (stateOverride != null) stateOverride
         else requireNotNull(activeViewModel).state.collectAsStateWithLifecycle().value
     val firstAction = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
+    val networkDiagnosticsFocus = remember { FocusRequester() }
     var confirmingSignOut by remember { mutableStateOf(false) }
     val appContext = LocalContext.current
     val preferenceStore = remember(appContext) { PlayerPreferencesStore(appContext) }
@@ -83,9 +88,15 @@ fun SettingsScreen(
     val modes by preferenceStore.modes.collectAsStateWithLifecycle(initialValue = com.dev.Tvivo.playback.PlaybackModePreferences.AndroidDefaults)
     val tracks by preferenceStore.tracks.collectAsStateWithLifecycle(initialValue = com.dev.Tvivo.playback.TrackPreferences.AndroidDefaults)
     val themeMode by preferenceStore.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.Dark)
+    var appLanguage by remember(appContext) { mutableStateOf(AppLanguage.current(appContext)) }
     val spacing = adaptiveSpacing()
 
-    LaunchedEffect(Unit) { runCatching { firstAction.requestFocus() } }
+    LaunchedEffect(Unit) {
+        runCatching {
+            if (focusNetworkDiagnostics) networkDiagnosticsFocus.requestFocus() else firstAction.requestFocus()
+        }
+        if (focusNetworkDiagnostics) onNetworkDiagnosticsFocusConsumed()
+    }
     LaunchedEffect(state.signedOut) { if (state.signedOut) onSignedOut() }
 
     // **Q-23 — this Column must scroll.** Its content is 451 dp against 412 dp of
@@ -106,26 +117,40 @@ fun SettingsScreen(
                 vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
             )
     ) {
-        Text(text = "Account", color = AppColors.Ink, style = TvType.display)
+        Text(text = stringResource(com.dev.Tvivo.R.string.settings_account), color = AppColors.Ink, style = TvType.display)
         Spacer(Modifier.height(24.dp))
-        Text(text = "Player", color = AppColors.Ink, style = TvType.title)
+        Text(text = stringResource(com.dev.Tvivo.R.string.settings_player), color = AppColors.Ink, style = TvType.title)
         Text(text = stringResource(com.dev.Tvivo.R.string.appearance), color = AppColors.Ink, style = TvType.title)
         ActionRow(stringResource(com.dev.Tvivo.R.string.theme), stringResource(com.dev.Tvivo.R.string.theme_hint), value = stringResource(if (themeMode == ThemeMode.Dark) com.dev.Tvivo.R.string.theme_dark else com.dev.Tvivo.R.string.theme_light), onClick = {
             scope.launch { preferenceStore.setThemeMode(if (themeMode == ThemeMode.Dark) ThemeMode.Light else ThemeMode.Dark) }
         })
-        ActionRow("Episodes", "Play next mode · Off, Next or Shuffle", value = modes.episodeMode.name, onClick = {
+        ActionRow(
+            label = stringResource(com.dev.Tvivo.R.string.language_title),
+            hint = stringResource(com.dev.Tvivo.R.string.settings_language_hint),
+            value = stringResource(when (appLanguage) {
+                AppLanguage.System -> com.dev.Tvivo.R.string.language_system_default
+                AppLanguage.English -> com.dev.Tvivo.R.string.language_english
+                AppLanguage.Arabic -> com.dev.Tvivo.R.string.language_arabic
+            }),
+            onClick = {
+                appLanguage = appLanguage.next()
+                AppLanguage.set(appContext, appLanguage)
+                (appContext as? android.app.Activity)?.recreate()
+            }
+        )
+        ActionRow(stringResource(com.dev.Tvivo.R.string.settings_episodes), stringResource(com.dev.Tvivo.R.string.settings_play_next_hint), value = stringResource(when (modes.episodeMode) { PlaybackMode.Off -> com.dev.Tvivo.R.string.playback_mode_off; PlaybackMode.Next -> com.dev.Tvivo.R.string.playback_mode_next; PlaybackMode.Shuffle -> com.dev.Tvivo.R.string.playback_mode_shuffle }), onClick = {
             val next = when (modes.episodeMode) { PlaybackMode.Off -> PlaybackMode.Next; PlaybackMode.Next -> PlaybackMode.Shuffle; PlaybackMode.Shuffle -> PlaybackMode.Off }
             scope.launch { preferenceStore.setEpisodeMode(next) }
         })
-        ActionRow("Movies", "Play next mode · Off, Next or Shuffle", value = modes.movieMode.name, onClick = {
+        ActionRow(stringResource(com.dev.Tvivo.R.string.settings_movies), stringResource(com.dev.Tvivo.R.string.settings_play_next_hint), value = stringResource(when (modes.movieMode) { PlaybackMode.Off -> com.dev.Tvivo.R.string.playback_mode_off; PlaybackMode.Next -> com.dev.Tvivo.R.string.playback_mode_next; PlaybackMode.Shuffle -> com.dev.Tvivo.R.string.playback_mode_shuffle }), onClick = {
             val next = when (modes.movieMode) { PlaybackMode.Off -> PlaybackMode.Next; PlaybackMode.Next -> PlaybackMode.Shuffle; PlaybackMode.Shuffle -> PlaybackMode.Off }
             scope.launch { preferenceStore.setMovieMode(next) }
         })
-        ActionRow("Preferred audio", "Auto, Arabic or English", value = tracks.audio.name, onClick = {
+        ActionRow(stringResource(com.dev.Tvivo.R.string.settings_preferred_audio), stringResource(com.dev.Tvivo.R.string.settings_audio_hint), value = stringResource(when (tracks.audio) { PreferredAudio.Auto -> com.dev.Tvivo.R.string.playback_audio_auto; PreferredAudio.Arabic -> com.dev.Tvivo.R.string.playback_audio_arabic; PreferredAudio.English -> com.dev.Tvivo.R.string.playback_audio_english }), onClick = {
             val next = when (tracks.audio) { PreferredAudio.Auto -> PreferredAudio.Arabic; PreferredAudio.Arabic -> PreferredAudio.English; PreferredAudio.English -> PreferredAudio.Auto }
             scope.launch { preferenceStore.setAudio(next) }
         })
-        ActionRow("Preferred subtitles", "Off, Arabic or English", value = tracks.subtitles.name, onClick = {
+        ActionRow(stringResource(com.dev.Tvivo.R.string.settings_preferred_subtitles), stringResource(com.dev.Tvivo.R.string.settings_subtitles_hint), value = stringResource(when (tracks.subtitles) { PreferredSubtitles.Off -> com.dev.Tvivo.R.string.playback_subtitles_off; PreferredSubtitles.Arabic -> com.dev.Tvivo.R.string.playback_audio_arabic; PreferredSubtitles.English -> com.dev.Tvivo.R.string.playback_audio_english }), onClick = {
             val next = when (tracks.subtitles) { PreferredSubtitles.Off -> PreferredSubtitles.Arabic; PreferredSubtitles.Arabic -> PreferredSubtitles.English; PreferredSubtitles.English -> PreferredSubtitles.Off }
             scope.launch { preferenceStore.setSubtitles(next) }
         })
@@ -136,10 +161,11 @@ fun SettingsScreen(
         Spacer(Modifier.height(32.dp))
 
         ActionRow(
-            label = if (state.isRefreshing) "Refreshing library…" else "Refresh library",
+            label = stringResource(if (state.isRefreshing) com.dev.Tvivo.R.string.settings_refreshing_library else com.dev.Tvivo.R.string.settings_refresh_library),
             hint = state.lastRefreshedAt?.let {
-                "Last refreshed " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it))
-            } ?: "No completed library refresh yet",
+                stringResource(com.dev.Tvivo.R.string.settings_last_refreshed,
+                    java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)))
+            } ?: stringResource(com.dev.Tvivo.R.string.settings_no_refresh),
             modifier = Modifier.focusRequester(firstAction),
             onClick = onRefreshLibrary
         )
@@ -148,19 +174,25 @@ fun SettingsScreen(
         }
 
         ActionRow(
-            label = "Show subscription",
-            hint = "Status, expiry and connections, as this panel reports them",
+            label = stringResource(com.dev.Tvivo.R.string.settings_show_subscription),
+            hint = stringResource(com.dev.Tvivo.R.string.settings_subscription_hint),
             onClick = onShowSubscription
         )
         ActionRow(
-            label = "Sign in to a different account",
-            hint = "Keeps this account signed in until the new one is accepted",
+            label = stringResource(com.dev.Tvivo.R.string.settings_switch_account),
+            hint = stringResource(com.dev.Tvivo.R.string.settings_switch_account_hint),
             onClick = onSwitchAccount
         )
         ActionRow(
-            label = "Diagnostics",
-            hint = "What the app has done since it started, for when something looks wrong",
+            label = stringResource(com.dev.Tvivo.R.string.settings_diagnostics),
+            hint = stringResource(com.dev.Tvivo.R.string.settings_diagnostics_hint),
             onClick = onShowDiagnostics
+        )
+        ActionRow(
+            label = stringResource(com.dev.Tvivo.R.string.network_diagnostics_entry),
+            hint = stringResource(com.dev.Tvivo.R.string.network_diagnostics_entry_hint),
+            modifier = Modifier.focusRequester(networkDiagnosticsFocus).testTag("networkDiagnosticsEntry"),
+            onClick = onShowNetworkDiagnostics
         )
 
         // **D-12 — everything reversible is above this line.**
@@ -179,10 +211,10 @@ fun SettingsScreen(
         Spacer(Modifier.height(20.dp))
 
         ActionRow(
-            label = "Sign out",
+            label = stringResource(com.dev.Tvivo.R.string.settings_sign_out),
             // The consequence, not the mechanism. "Forgets the stored credentials" reads
             // like a preference being reset; this says what the user actually loses.
-            hint = "Erases the saved credentials from this device. They cannot be recovered.",
+            hint = stringResource(com.dev.Tvivo.R.string.settings_sign_out_hint),
             destructive = true,
             onClick = { confirmingSignOut = true }
         )
@@ -190,14 +222,13 @@ fun SettingsScreen(
 
     if (confirmingSignOut) {
         ConfirmDialog(
-            title = "Sign out of ${state.username ?: "this account"}?",
+            title = stringResource(com.dev.Tvivo.R.string.settings_sign_out_title,
+                state.username ?: stringResource(com.dev.Tvivo.R.string.settings_this_account)),
             // The Tink keyset is not exportable, so this is not recoverable from a backup
             // either — the only way back is re-typing ~44 characters on a D-pad.
-            consequence = "The saved credentials are erased from this device and cannot " +
-                "be recovered. You would have to type the server, username and password " +
-                "in again on the remote.",
-            confirmLabel = "Sign out",
-            safeLabel = "Keep me signed in",
+            consequence = stringResource(com.dev.Tvivo.R.string.settings_sign_out_consequence),
+            confirmLabel = stringResource(com.dev.Tvivo.R.string.settings_sign_out_confirm),
+            safeLabel = stringResource(com.dev.Tvivo.R.string.settings_sign_out_keep),
             onConfirm = {
                 confirmingSignOut = false
                 if (activeViewModel != null) activeViewModel.signOut()

@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Button
@@ -118,11 +119,11 @@ fun DiagnosticsScreen() {
 
         Row {
             Button(onClick = { DiagnosticLog.export(context, exportAppendix(metrics, runtime, catalogProfile)) }) {
-                Text("Export log")
+                Text(stringResource(com.dev.Tvivo.R.string.diagnostics_export_log))
             }
             Spacer(Modifier.width(12.dp))
             Button(onClick = DiagnosticLog::clear) {
-                Text("Clear log")
+                Text(stringResource(com.dev.Tvivo.R.string.diagnostics_clear_log))
             }
             Spacer(Modifier.width(12.dp))
             Button(onClick = {
@@ -132,16 +133,16 @@ fun DiagnosticsScreen() {
                     }
                 }
             }) {
-                Text("Profile catalog")
+                Text(stringResource(com.dev.Tvivo.R.string.diagnostics_profile_catalog))
             }
         }
         Spacer(Modifier.height(20.dp))
 
         catalogProfile?.let { profile ->
             if (profile.samples.isEmpty()) {
-                Text("No cached catalog is available to profile.", color = AppColors.Dim, style = TvType.body)
+                Text(stringResource(com.dev.Tvivo.R.string.diagnostics_no_catalog), color = AppColors.Dim, style = TvType.body)
             } else {
-                Text("Catalog profile (local reads only)", color = AppColors.Ink, style = TvType.title)
+                Text(stringResource(com.dev.Tvivo.R.string.diagnostics_catalog_profile), color = AppColors.Ink, style = TvType.title)
                 profile.samples.forEach { sample ->
                     Text(
                         text = "${sample.label}: ${sample.elapsedMs} ms, ${sample.rowsRead} rows — ${sample.queryPlan}",

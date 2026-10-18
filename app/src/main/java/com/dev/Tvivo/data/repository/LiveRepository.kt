@@ -14,6 +14,8 @@ import com.dev.Tvivo.data.remote.CategoryListParser
 import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.data.remote.LiveStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -94,6 +96,7 @@ class LiveRepository(
                 fetch = {
                     val response = api.getLiveCategories(credentials.username, credentials.password)
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "live categories")
                         throw AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     }
                     CategoryListParser.parse(
@@ -120,6 +123,7 @@ class LiveRepository(
                         categoryId
                     )
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "live streams")
                         throw AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     }
                     val rows = ArrayList<LiveStreamEntity>()

@@ -62,6 +62,35 @@ app/
 app/src/main/res/xml/network_security_config.xml   // cleartext permitted, strict TLS
 ```
 
+## Adaptive first paint and navigation
+
+`LocalIsTelevision` selects the TV shell and D-pad interaction model, while
+`LocalWindowSizeClass` selects phone/tablet layouts and their density. TV shelf,
+grid and shell dimensions are derived from the available window dp and font scale;
+phone/tablet navigation and card spacing retain their own branches. The image cache
+contract remains fixed at 220×330 px for posters and 220×124 px for channels.
+
+My Tvivo holds a bounded process-local last-good snapshot per account. A route return
+renders that snapshot immediately and updates it from Room only when its value changes.
+An empty catalog remains in the nonfocusable loading skeleton while any catalog sync
+is unknown or active; first-run actions appear only after sync is resolved. TV first-run
+actions are text targets, without large route-art tiles. Search keeps its previous
+results during debounce and puts the selected type heading and See all target above the
+filtered result grid.
+
+Category picker data is assembled by `categoryPickerModel`: virtual folders are put
+first, then repeated ids and repeated titles are discarded. Picker lazy keys remain
+occurrence-safe as a separate Compose identity guard. Open state, query, selected
+category, and `LazyListState` are saveable across configuration changes on phone/tablet
+and TV.
+
+On TV only, opened grids map Page Up/Down and Channel Up/Down to an 85%-viewport
+move, Move Home/End to the first/last currently loaded item, and held D-pad Up/Down
+to progressively faster row movement. Moves keep the nearest loaded item in the same
+column when possible and are rate-limited while scroll/focus work is active. Media
+Fast Forward/Rewind remain reserved for playback and system transport. Phone/tablet
+grids do not intercept those remote-only keys.
+
 ## Credentials
 
 Stored with **Jetpack DataStore + Tink**, not `EncryptedSharedPreferences`
@@ -92,6 +121,16 @@ The persisted form is deliberately not `stackTraceToString()`: exception
 messages may contain request URLs and therefore credentials. It allowlists only
 exception class names and bounded stack frames, with no URL, title, account,
 content id, or viewing history.
+
+Network diagnostics adds a separate account-partitioned event ring and a user-run
+quick check. The check calls the disclosed Google 204 endpoint and Cloudflare DNS /
+download endpoints, plus only the configured panel's control API. It does not build
+or request a playback URL. While playback is active it skips panel, clock, IP-family,
+request-sample, and throughput probes. The optional download is capped to 3 MiB
+and an 8-second read budget; metered links require an extra confirmation. Gateway
+reachability uses a bounded TCP connect to the default gateway on ports 53/80 and
+reports that method. Export includes typed outcomes and timings only; it excludes
+request URLs and panel identifiers.
 
 ## Transport
 
@@ -127,6 +166,11 @@ resume positions. On account change, wipe atomically.
   where it is wrong at catalog scale. That delete-then-insert **refuses an empty
   list**: a rejected `get_series_info` parses to zero episodes, and wiping a
   cached season on that makes an already-cached show unplayable offline
+- Episode display and playback titles use the provider title as the primary
+  label. `EpisodeTitlePolicy` removes matching show-name and quality prefixes,
+  falls back to `Episode N` only for blank or generic titles, and shows a small
+  ordinal only when the cleaned title contains an `SxxExx` marker. Provider
+  episode ordering remains the queue order.
 - `resume_positions(account_id, content_type, item_id, position_ms, updated_at)`
   — the composite key matters; `item_id` alone collides across accounts
 - `favourites(account_id, content_type, item_id, added_at)` — same composite-key
@@ -452,6 +496,18 @@ write.
 **Query mechanics.** Browse uses `PagingSource`; global Search uses three
 bounded Room queries. Both debounce typed item filters by 300 ms.
 
+Search lays out phone/tablet results in two, four or six columns by window
+width. Android TV uses five columns with 48 dp outer gutters and a focus group,
+matching Browse's minimum poster cell width at the 960 dp TV viewport. Returning
+from an opened result scrolls and requests focus on the matching stable key.
+
+The category picker mode is a pure decision over `LocalIsTelevision` and
+`LocalWindowSizeClass`: TV and Expanded windows use a 34% start-aligned drawer
+over the unchanged page; Compact and Medium non-TV windows use a full-screen
+picker. The drawer confines horizontal D-pad movement to its filter, sort and
+category list. Its focus group enters on the selected category, and Back returns
+focus to the Categories action.
+
 **FTS remains deferred, but the reasoning has changed and must be measured.**
 The original argument was that a category is only a few thousand rows. Content-
 type search is ~48,751, and `LIKE '%query%'` has a leading wildcard so no index
@@ -561,6 +617,14 @@ Watchdogs:
 ```
 
 Progressive live streams cannot seek at all — **hide the scrub bar for live**.
+
+The player control overlay leaves the center transparent and uses soft black
+gradients only behind the top and bottom controls. PiP actions are rebuilt with
+playback state and queue changes: rewind, play/pause, and next episode when a
+next queue item is available (otherwise forward). The notification custom
+layout prioritizes previous, play/pause, and next, then seek and Stop controls.
+Queue navigation goes through the service's serialized `PlaybackHandoff` and
+checks the sleep timer before opening a replacement stream.
 
 ## Errors
 
@@ -703,3 +767,18 @@ accepted risk, with the live `.ts` path carrying the most exposure).
 - EPG / program guide.
 - Timeshift/catch-up playback for archived channels.
 - CI / release signing / GitHub Releases — deferred until there is a release.
+
+### Deep stream check
+
+Network diagnostics has two explicit levels: **Run check** performs bounded neutral and
+provider control probes without opening media; **Deep stream check** requires a
+separate confirmation and uses the existing MediaSession stop command, including its
+acknowledgement, before touching one cached VOD item (shortest known duration first)
+or a live fallback. A process-wide gate rejects playback starts while the deep check
+runs. The probe observes HTTP status, connection/first-byte timing, bytes per second,
+and read stalls for at most 18 seconds. The recent-stream cooldown is tracked for the
+current process; cancellation, timeout, or leaving the screen disconnects the HTTP
+request and releases the gate. The stream URL, title, host, and credentials are not
+stored in diagnostics or the redacted export. For VOD, average bitrate is estimated
+from response content length and cached duration; live streams or missing metadata
+leave it unknown. The estimate is compared with measured stream throughput.

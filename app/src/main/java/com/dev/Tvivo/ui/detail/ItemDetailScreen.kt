@@ -26,6 +26,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -87,7 +88,7 @@ fun ItemDetailScreen(
 
     if (state.notFound) {
         Box(Modifier.fillMaxSize().background(AppColors.Bg), contentAlignment = Alignment.Center) {
-            Text("This item is no longer in the catalog.", color = AppColors.Dim, style = TvType.body)
+            Text(stringResource(com.dev.Tvivo.R.string.detail_unavailable), color = AppColors.Dim, style = TvType.body)
         }
         return
     }
@@ -96,7 +97,7 @@ fun ItemDetailScreen(
         .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
         .verticalScroll(rememberScrollState())
         .padding(if (compact) 16.dp else 48.dp)) {
-        if (state.isLoading) Text("Loading details…", color = AppColors.Dim, style = TvType.label)
+        if (state.isLoading) Text(stringResource(com.dev.Tvivo.R.string.detail_loading), color = AppColors.Dim, style = TvType.label)
         DetailHero(
             title = state.title,
             imageUrl = state.imageUrl,
@@ -123,12 +124,12 @@ fun ItemDetailScreen(
                     }
                     else -> "Play"
                 }
-                DetailTextButton(primaryLabel, Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
+                if (!state.isLoading) DetailTextButton(primaryLabel, Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
                     if (isSeries) onOpenEpisodes() else onPlay(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
                         state.extension, state.title)
                 }
-                if (movie.showStartOver) DetailTextButton("Start over", Modifier.testTag("detail-start-over")) {
+                if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
                     scope.launch {
                         if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
                         onPlay(0L, state.extension, state.title)
@@ -138,12 +139,8 @@ fun ItemDetailScreen(
                     Modifier.testTag("detail-favourite")) {
                     if (vm != null) vm.toggleFavourite() else onToggleFavouriteOverride()
                 }
-                if (contentType == ContentType.MOVIES) {
-                    DetailTextButton(if (state.isWatched) "Mark unwatched" else "Mark watched",
-                        Modifier.testTag("detail-watched")) { vm?.toggleWatched() }
-                }
                 state.trailer?.let { trailer ->
-                    DetailTextButton("Watch trailer", Modifier.testTag("detail-trailer")) {
+                    DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_watch_trailer), Modifier.testTag("detail-trailer")) {
                         val url = if (trailer.startsWith("https://")) trailer
                             else "https://www.youtube.com/watch?v=${Uri.encode(trailer)}"
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -153,7 +150,7 @@ fun ItemDetailScreen(
         )
         state.plotError?.let { error ->
             Text(ErrorCopy.of(error).message, color = AppColors.Dim, style = TvType.label)
-            DetailTextButton("Retry details") { vm?.retryPlot() }
+            DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_retry)) { vm?.retryPlot() }
         }
     }
 }

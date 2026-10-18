@@ -24,7 +24,8 @@ data class DurationParts(val hours: Int, val minutes: Int, val seconds: Int) {
 enum class PlayerBackAction { DismissMenu, StopPlayer }
 
 object PlayerBackPolicy {
-    fun action(menuOpen: Boolean) = if (menuOpen) PlayerBackAction.DismissMenu else PlayerBackAction.StopPlayer
+    fun action(menuOpen: Boolean, television: Boolean = false) =
+        if (menuOpen && !television) PlayerBackAction.DismissMenu else PlayerBackAction.StopPlayer
 }
 
 object PlayerOverlayLogic {

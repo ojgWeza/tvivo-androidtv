@@ -14,6 +14,8 @@ import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.data.remote.VodInfoParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -97,7 +99,10 @@ class VodRepository(
     suspend fun fetchDetails(streamId: Int): Result<VodInfoParser.Details?> = withContext(Dispatchers.IO) {
         runCatching {
             val response = api.getVodInfo(credentials.username, credentials.password, streamId)
-            if (!response.isSuccessful) throw com.dev.Tvivo.auth.AppErrorException(ErrorMapper.fromHttpCode(response.code()))
+            if (!response.isSuccessful) {
+                NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "vod details")
+                throw com.dev.Tvivo.auth.AppErrorException(ErrorMapper.fromHttpCode(response.code()))
+            }
             val body = response.body() ?: return@runCatching null
             VodInfoParser.parseDetails(body)?.also { details ->
                 db.vodDao().updateDetails(accountId, streamId, details.plot,
@@ -116,6 +121,7 @@ class VodRepository(
                 fetch = {
                     val response = api.getVodCategories(credentials.username, credentials.password)
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "vod categories")
                         throw com.dev.Tvivo.auth.AppErrorException(
                             ErrorMapper.fromHttpCode(response.code())
                         )
@@ -148,6 +154,7 @@ class VodRepository(
                         categoryId
                     )
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "vod streams")
                         throw com.dev.Tvivo.auth.AppErrorException(
                             ErrorMapper.fromHttpCode(response.code())
                         )

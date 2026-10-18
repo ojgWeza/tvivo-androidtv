@@ -35,6 +35,16 @@ class DiagnosticLogTest {
     }
 
     @Test
+    fun `redaction removes bare hosts addresses and encoded URLs`() {
+        val sanitized = DiagnosticLog.redact(
+            "host=panel.example.invalid 192.168.1.42 2001:db8::1 https%3A%2F%2Fuser%3Apass%40secret.example%2Fapi token%3Dsecret"
+        )
+        listOf("panel.example.invalid", "192.168.1.42", "2001:db8::1", "secret.example", "secret", "user", "pass").forEach {
+            assertFalse("leaked $it in $sanitized", sanitized.contains(it, ignoreCase = true))
+        }
+    }
+
+    @Test
     fun `serialized entries restore after a process restart`() {
         val file = File.createTempFile("tvivo-diagnostics", ".log")
         val expected = DiagnosticLog.Entry(7L, "Home", "route state mutated", "contentType=LIVE", DiagnosticLog.Level.INFO)

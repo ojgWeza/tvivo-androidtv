@@ -33,11 +33,11 @@ internal fun CatalogSortControl(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = (if (rowRequester != null) Modifier.focusRequester(rowRequester) else Modifier)
             .focusGroup()) {
-        item(key = "scope") {
+        item(key = "sort:scope") {
             Text(scopeLabel, color = AppColors.Dim, style = TvType.label,
                 modifier = Modifier.heightIn(min = 48.dp).padding(horizontal = 6.dp, vertical = 12.dp))
         }
-        items(options, key = { it.name }) { sort ->
+        items(options, key = { "sort:option:${it.name}" }) { sort ->
             val label = when (sort) {
                 CatalogSort.MostVisited -> "Most visited"
                 CatalogSort.AlphabeticalAsc -> "A–Z"
@@ -51,6 +51,6 @@ internal fun CatalogSortControl(
                     .tvFocusFrame().tvClickable { onSelect(sort) }
                     .padding(horizontal = 10.dp, vertical = 12.dp))
         }
-        if (trailingAction != null) item(key = "trailing-action") { trailingAction() }
+        if (trailingAction != null) item(key = "sort:trailing-action") { trailingAction() }
     }
 }

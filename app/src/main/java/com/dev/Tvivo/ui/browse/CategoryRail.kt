@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Popup
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,15 +80,21 @@ fun CategoryRail(
     /** The screen's resting focus. Requested once categories arrive, so the first D-pad
      *  press has somewhere to move *from* — see [BrowseScreen]. */
     railFocusRequester: FocusRequester,
+    listState: LazyListState,
     gridAvailable: Boolean,
     categorySort: CatalogSort = CatalogSort.MostVisited,
     onCategorySortChanged: (CatalogSort) -> Unit = {},
+    fullScreen: Boolean = false,
+    overlayDrawer: Boolean = false,
+    confineFocus: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val filterFocusRequester = remember { FocusRequester() }
     val categorySortFocusRequester = remember { FocusRequester() }
     val selectedRowRequester = remember { FocusRequester() }
-    val listState = rememberLazyListState()
+    val categoryKeys = remember(categories) {
+        CatalogLazyKeys.categoryPicker(categories.map { it.categoryId })
+    }
     var sortExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(selectedCategoryId, categories) {
         val index = categories.indexOfFirst { it.categoryId == selectedCategoryId }
@@ -97,7 +104,7 @@ fun CategoryRail(
     }
     Column(
         modifier = modifier
-            .width(RAIL_WIDTH)
+            .then(if (fullScreen || overlayDrawer) Modifier.fillMaxWidth() else Modifier.width(RAIL_WIDTH))
             .fillMaxHeight()
             .background(AppColors.Surface)
     ) {
@@ -116,7 +123,7 @@ fun CategoryRail(
                 modifier = Modifier.weight(1f)
             )
             androidx.compose.foundation.layout.Box {
-                HeaderIconButton(sortIconVector(), "Order categories",
+                HeaderIconButton(sortIconVector(), androidx.compose.ui.res.stringResource(com.dev.Tvivo.R.string.category_order_accessibility),
                     onClick = { sortExpanded = true },
                     modifier = Modifier.focusRequester(categorySortFocusRequester)
                         .testTag("category-order"))
@@ -160,9 +167,17 @@ fun CategoryRail(
                 .focusGroup(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
         ) {
-            itemsIndexed(categories, key = { _, it -> it.categoryId }) { index, category ->
+            itemsIndexed(categories, key = { index, _ -> categoryKeys[index] }) { index, category ->
+                val localizedName = when (category.categoryId) {
+                    VirtualFolder.ALL.id -> stringResource(com.dev.Tvivo.R.string.folder_all)
+                    VirtualFolder.RECENTLY_ADDED.id -> stringResource(com.dev.Tvivo.R.string.folder_recently_added)
+                    VirtualFolder.CONTINUE_WATCHING.id -> stringResource(com.dev.Tvivo.R.string.folder_continue_watching)
+                    VirtualFolder.RECENTLY_PLAYED.id -> stringResource(com.dev.Tvivo.R.string.folder_last_watched)
+                    VirtualFolder.FAVOURITES.id -> stringResource(com.dev.Tvivo.R.string.folder_favourites)
+                    else -> category.name
+                }
                 RailRow(
-                    name = category.name,
+                    name = localizedName,
                     count = counts[category.categoryId],
                     selected = category.categoryId == selectedCategoryId,
                     onSelect = {
@@ -171,6 +186,7 @@ fun CategoryRail(
                     },
                     gridFocusRequester = gridFocusRequester,
                     gridAvailable = gridAvailable,
+                    confineFocus = confineFocus,
                     selectedRowRequester = selectedRowRequester.takeIf { category.categoryId == selectedCategoryId },
                     // Only the first row sends UP to the filter. Declared per-row rather
                     // than on the group, or UP from row 40 would jump to the filter
@@ -184,7 +200,7 @@ fun CategoryRail(
             if (categories.isEmpty() && filter.isNotBlank()) {
                 item {
                     Text(
-                        text = "No category matches \"$filter\"",
+                        text = androidx.compose.ui.res.stringResource(com.dev.Tvivo.R.string.category_no_match, filter),
                         color = AppColors.Dim,
                         style = TvType.label,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
@@ -223,7 +239,7 @@ private fun CategoryFilterField(
         // `Filter`, not `Search`: it narrows a list that is already on screen. Search
         // is the thing that goes and finds rows you are not looking at, and this is not
         // that — promising it here would be promising the wrong feature.
-        label = { Text("Filter categories", color = AppColors.Dim, style = TvType.caption) },
+        label = { Text(androidx.compose.ui.res.stringResource(com.dev.Tvivo.R.string.category_filter_hint), color = AppColors.Dim, style = TvType.caption) },
         singleLine = true,
         textStyle = TvType.body,
         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
@@ -257,6 +273,7 @@ private fun CategoryFilterField(
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun RailRow(
     name: String,
     count: Int?,
@@ -264,6 +281,7 @@ private fun RailRow(
     onSelect: () -> Unit,
     gridFocusRequester: FocusRequester,
     gridAvailable: Boolean,
+    confineFocus: Boolean,
     selectedRowRequester: FocusRequester? = null,
     /** Non-null on the first row only: UP from the top of the list opens the filter. */
     filterFocusRequester: FocusRequester? = null
@@ -288,8 +306,13 @@ private fun RailRow(
             // focus group it is not consulted, and the 2D search picks the header's
             // Refresh instead — also to the right, and nothing weighs it as further.
             .focusProperties {
-                right = FocusLinkPolicy.targetIfRendered(gridFocusRequester, gridAvailable)
-                    ?: FocusRequester.Default
+                if (confineFocus) {
+                    left = FocusRequester.Cancel
+                    right = FocusRequester.Cancel
+                } else {
+                    right = FocusLinkPolicy.targetIfRendered(gridFocusRequester, gridAvailable)
+                        ?: FocusRequester.Default
+                }
                 // **Q-25 — UP from the top of the list is how the filter is reached.**
                 // The field is pinned above the list and is not part of it, so without
                 // this the 2D search is free to leave the rail entirely and hand UP to

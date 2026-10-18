@@ -106,15 +106,25 @@ data class LandingSpec(
             MyTvivoShelfKind.Favorites -> "favorites"
         }
 
-        private fun emptyRuleFor(kind: MyTvivoShelfKind) =
-            if (kind == MyTvivoShelfKind.RecentlyPlayed) EmptyShelfRule.ShowHintWhenEmpty
-            else EmptyShelfRule.HideWhenEmpty
+        private fun emptyRuleFor(kind: MyTvivoShelfKind) = EmptyShelfRule.HideWhenEmpty
     }
 }
 
 enum class EmptyShelfRule { HideWhenEmpty, ShowHintWhenEmpty }
 enum class SeeAllRule { KnownTotalExceedsPreview }
 enum class ShelfLoadState { Loading, Loaded }
+enum class CatalogFirstPaint { Loading, FirstRun, Content }
+
+object CatalogFirstPaintPolicy {
+    fun decide(catalogCount: Int, syncStates: List<String?>): CatalogFirstPaint {
+        if (catalogCount > 0) return CatalogFirstPaint.Content
+        val pending = syncStates.isEmpty() || syncStates.any {
+            it == null || it == "not_started" || it == "indexing" || it == "partial"
+        }
+        return if (pending) CatalogFirstPaint.Loading else CatalogFirstPaint.FirstRun
+    }
+}
+
 sealed interface ShelfDecision {
     data object Loading : ShelfDecision
     data object Hidden : ShelfDecision

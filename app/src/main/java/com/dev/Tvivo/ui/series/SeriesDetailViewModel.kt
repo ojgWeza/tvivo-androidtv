@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
-import androidx.room.withTransaction
 import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.CredentialsStore
@@ -12,7 +11,6 @@ import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
-import com.dev.Tvivo.data.local.entities.WatchedEntity
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
@@ -174,22 +172,6 @@ class SeriesDetailViewModel(
     suspend fun clearResumeNow(episodeId: String) {
         playbackState?.clearResume(TYPE_SERIES, episodeId)
         refreshPlayback()
-    }
-
-    fun markWatched(episodeId: String, watched: Boolean) {
-        val account = accountId ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            if (watched) {
-                db.withTransaction {
-                    db.watchedDao().mark(WatchedEntity(account, account, TYPE_SERIES, episodeId,
-                        System.currentTimeMillis()))
-                    db.resumeDao().remove(account, TYPE_SERIES, episodeId)
-                }
-            } else {
-                db.watchedDao().unmark(account, account, TYPE_SERIES, episodeId)
-            }
-            refreshPlayback()
-        }
     }
 
     fun refreshPlayback() {

@@ -17,6 +17,11 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface VodDao {
 
+    @Query("""SELECT * FROM vod_streams WHERE accountId = :accountId
+        ORDER BY CASE WHEN durationMinutes IS NULL THEN 1 ELSE 0 END,
+            durationMinutes ASC, streamId ASC LIMIT 1""")
+    suspend fun deepCheckCandidate(accountId: String): VodStreamEntity?
+
     @Query(
         """
         SELECT * FROM vod_streams

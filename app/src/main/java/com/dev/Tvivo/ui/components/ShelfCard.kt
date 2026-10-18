@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.televisionDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,11 +43,15 @@ fun ShelfCard(
     onContextMenu: () -> Unit
 ) {
     val channel = card.type == ContentType.LIVE
+    val television = LocalIsTelevision.current
+    val density = if (television) televisionDensity() else null
     val context = LocalContext.current
-    val height = if (channel) 62.dp else 165.dp
+    val width = if (television) density!!.posterWidth.dp else 110.dp
+    val height = if (television) { if (channel) density!!.channelHeight.dp else density!!.posterHeight.dp }
+        else if (channel) 62.dp else 165.dp
     Column(
         modifier = modifier
-            .width(110.dp)
+            .width(width)
             .testTag("shelf-card-${card.key}")
             .tvFocusFrame(RoundedCornerShape(8.dp))
             .onPreviewKeyEvent {
@@ -88,11 +94,18 @@ fun ShelfCard(
             }
         }
         Text(card.item.title, color = AppColors.Ink, style = TvType.label,
-            maxLines = if (card.typeBadge == null) 1 else 2, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 5.dp))
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = if (television) Modifier.height(density!!.titleHeight.dp).padding(top = 4.dp)
+                else Modifier.padding(top = 5.dp))
         card.typeBadge?.let { badge ->
-            Text(badge, color = AppColors.AccentText, style = TvType.caption,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val localizedBadge = when (badge) {
+                "Movie" -> androidx.compose.ui.res.stringResource(com.dev.Tvivo.R.string.content_type_movie)
+                else -> badge
+            }
+            Text(localizedBadge, color = AppColors.AccentText,
+                style = if (television) TvType.label else TvType.caption,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = if (television) Modifier.height(20.dp) else Modifier)
         }
     }
 }

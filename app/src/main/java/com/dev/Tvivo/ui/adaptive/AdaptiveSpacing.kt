@@ -3,6 +3,7 @@ package com.dev.Tvivo.ui.adaptive
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalConfiguration
 
 data class AdaptiveSpacing(
     val outerGutter: Dp,
@@ -21,13 +22,26 @@ data class AdaptiveSpacing(
         val Television = AdaptiveSpacing(48.dp, 24.dp, 20.dp)
         val Tablet = AdaptiveSpacing(32.dp, 24.dp, 16.dp)
         val Phone = AdaptiveSpacing(16.dp, 16.dp, 12.dp)
+
+        fun forEnvironment(isTelevision: Boolean, sizeClass: WindowSizeClass): AdaptiveSpacing =
+            if (isTelevision) Television else when (sizeClass) {
+                WindowSizeClass.Compact -> Phone
+                WindowSizeClass.Medium, WindowSizeClass.Expanded -> Tablet
+            }
     }
 }
 
 @Composable
 fun adaptiveSpacing(): AdaptiveSpacing = if (LocalIsTelevision.current) {
-    AdaptiveSpacing.Television
-} else when (LocalWindowSizeClass.current) {
-    WindowSizeClass.Compact -> AdaptiveSpacing.Phone
-    WindowSizeClass.Medium, WindowSizeClass.Expanded -> AdaptiveSpacing.Tablet
+    val configuration = LocalConfiguration.current
+    val tokens = TelevisionDensityPolicy.calculate(configuration.screenWidthDp,
+        configuration.screenHeightDp, configuration.fontScale)
+    AdaptiveSpacing(tokens.sideGutter.dp, tokens.sectionGap.dp, tokens.cardGap.dp)
+} else AdaptiveSpacing.forEnvironment(false, LocalWindowSizeClass.current)
+
+@Composable
+fun televisionDensity(): TelevisionDensity {
+    val configuration = LocalConfiguration.current
+    return TelevisionDensityPolicy.calculate(configuration.screenWidthDp,
+        configuration.screenHeightDp, configuration.fontScale)
 }

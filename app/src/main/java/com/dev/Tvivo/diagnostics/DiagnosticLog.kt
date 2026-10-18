@@ -193,11 +193,11 @@ object DiagnosticLog {
         appendLine("Credentials, URLs, and catalogue titles are never recorded.")
         if (appendix.isNotBlank()) {
             appendLine()
-            append(appendix.trimEnd())
+            append(redact(appendix.trimEnd()))
             appendLine()
         }
         entries.forEach { entry ->
-            appendLine("${entry.time}\t${entry.severity}\t${entry.screen}\t${entry.event}\t${entry.payload}")
+            appendLine("${entry.time}\t${entry.severity}\t${redact(entry.screen)}\t${redact(entry.event)}\t${redact(entry.payload)}")
         }
     }
 
@@ -210,17 +210,31 @@ object DiagnosticLog {
     /** Last line of defence: diagnostics must remain safe when a caller gets careless. */
     internal fun redact(value: String): String {
         var result = value
+        result = ENCODED_URL.matcher(result).replaceAll("<redacted-url>")
+        result = FULL_URL.matcher(result).replaceAll("<redacted-url>")
         result = URL_CREDENTIALS.matcher(result).replaceAll("\$1<redacted>@")
         result = URL_HOST.matcher(result).replaceAll("\$1<redacted-host>")
         result = SECRET_FIELD.matcher(result).replaceAll("\$1=<redacted>")
         result = AUTHORIZATION.matcher(result).replaceAll("\$1 <redacted>")
+        result = ENCODED_SECRET.matcher(result).replaceAll("<redacted>")
+        result = IPV4.matcher(result).replaceAll("<redacted-ip>")
+        result = BRACKETED_IPV6.matcher(result).replaceAll("[<redacted-ip>]")
+        result = IPV6.matcher(result).replaceAll("<redacted-ip>")
+        result = BARE_HOST.matcher(result).replaceAll("<redacted-host>")
         return result
     }
 
+    private val ENCODED_URL = Pattern.compile("(?i)https?%3a%2f%2f[^\\s]+")
+    private val FULL_URL = Pattern.compile("(?i)\\b(?:https?|rtmp|file)://[^\\s]+")
     private val URL_CREDENTIALS = Pattern.compile("(https?://)[^/@\\s:]+:[^/@\\s]+@", Pattern.CASE_INSENSITIVE)
     private val URL_HOST = Pattern.compile("(https?://)(?:[^/@\\s]+@)?[^/\\s?#]+", Pattern.CASE_INSENSITIVE)
     private val SECRET_FIELD = Pattern.compile("\\b(password|pass|token|authorization|username|user|host|server)\\s*[=:]\\s*[^\\s,;]+", Pattern.CASE_INSENSITIVE)
     private val AUTHORIZATION = Pattern.compile("\\b(Bearer|Basic)\\s+[^\\s]+", Pattern.CASE_INSENSITIVE)
+    private val ENCODED_SECRET = Pattern.compile("(?i)(?:password|username|token|authorization)(?:=|%3d)[^&\\s]+")
+    private val IPV4 = Pattern.compile("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
+    private val BRACKETED_IPV6 = Pattern.compile("\\[(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}%?[^]]*]")
+    private val IPV6 = Pattern.compile("(?<![A-Za-z0-9])(?=[0-9a-fA-F:]*:)[0-9a-fA-F]{0,4}:(?:[0-9a-fA-F]{0,4}:){1,6}[0-9a-fA-F]{0,4}(?![A-Za-z0-9])")
+    private val BARE_HOST = Pattern.compile("(?i)\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}(?::[0-9]{1,5})?\\b")
 
     private val TIME_FORMAT = SimpleDateFormat("HH:mm:ss", Locale.US)
 }

@@ -104,6 +104,16 @@ class CatalogDaoTest {
         assertEquals(listOf(1, 2), db.liveDao().allPreview(account).map { it.streamId })
     }
 
+    @Test fun searchPreviewsReturnAllMatchingRowsUpToTheBoundedLimit() = runTest {
+        db.vodDao().insertAll((1..24).map { vod(it, "10", "Synthetic Film %02d".format(it)) })
+        db.seriesDao().insertAll((1..16).map { series(it, "10", "Synthetic Series %02d".format(it)) })
+        db.liveDao().insertAll((1..16).map { live(it, "10", "Generated Live Loop %02d".format(it)) })
+
+        assertEquals(24, db.vodDao().searchPreview(account, "e").size)
+        assertEquals(16, db.seriesDao().searchPreview(account, "e").size)
+        assertEquals(16, db.liveDao().searchPreview(account, "e").size)
+    }
+
     @Test fun liveCategoryCountIsScopedToTheSelectedCategoryAndAccount() = runTest {
         db.liveDao().insertAll(listOf(live(1, "10"), live(2, "10"), live(3, "20")))
         assertEquals(2, db.liveDao().categoryCount(account, "10"))

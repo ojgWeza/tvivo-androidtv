@@ -47,6 +47,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -60,6 +61,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.Dialog
@@ -68,6 +70,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.safeDrawing
 import com.dev.Tvivo.R
 import com.dev.Tvivo.playback.HeldSeekAccelerator
+import com.dev.Tvivo.playback.PlaybackFailureKind
 import com.dev.Tvivo.ui.adaptive.adaptiveSpacing
 import com.dev.Tvivo.ui.adaptive.adaptiveType
 import com.dev.Tvivo.ui.common.tvClickable
@@ -94,6 +97,10 @@ data class PlayerOverlayState(
     val hasResume: Boolean = false,
     val seekFeedback: String? = null,
     val playbackState: String = "playing",
+    val failureKind: PlaybackFailureKind? = null,
+    val retryAttempt: Int = 1,
+    val retryMax: Int = 1,
+    val retryNextSeconds: Int = -1,
     val nextPrompt: Boolean = false,
     val nextTitle: String? = null,
     val sleepTimer: SleepTimerUiState = SleepTimerUiState(),
@@ -144,6 +151,7 @@ fun PlayerOverlay(
                 (when (state.playbackState) {
                     "retry" -> retryFocus
                     "stopped" -> stoppedBackFocus
+                    "reconnecting" -> backFocus
                     else -> playFocus
                 }).requestFocus()
             }
@@ -213,6 +221,9 @@ fun PlayerOverlay(
                 Text(state.title, color = AppColors.MediaText, style = type.title)
                 Spacer(Modifier.height(24.dp))
                 Text(stringResource(R.string.playback_stopped), color = AppColors.MediaText, style = type.body)
+                Spacer(Modifier.height(8.dp))
+                Text(stringResource(R.string.player_error_stopped), color = AppColors.MediaText,
+                    style = type.body, textAlign = TextAlign.Center)
                 TextButton(onClick = onBack, modifier = Modifier.height(48.dp).focusRequester(stoppedBackFocus)) {
                     Text(stringResource(R.string.back))
                 }
@@ -220,7 +231,16 @@ fun PlayerOverlay(
         } else if (visible) {
             Box(
                 Modifier.fillMaxSize()
-                    .background(AppColors.MediaScrim)
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = 0.52f),
+                            0.18f to Color.Black.copy(alpha = 0.28f),
+                            0.42f to Color.Transparent,
+                            0.58f to Color.Transparent,
+                            0.82f to Color.Black.copy(alpha = 0.34f),
+                            1f to Color.Black.copy(alpha = 0.55f),
+                        )
+                    )
                     .padding(WindowInsets.safeDrawing.asPaddingValues())
                     .padding(horizontal = spacing.outerGutter, vertical = 12.dp)
                     .onPreviewKeyEvent {
@@ -274,7 +294,8 @@ fun PlayerOverlay(
                     Modifier.align(Alignment.TopCenter).padding(top = 72.dp).background(AppColors.MediaBase.copy(alpha = 0.94f), RoundedCornerShape(12.dp)).padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Next: ${state.nextTitle ?: "Up next"}", color = AppColors.MediaText, style = type.title)
+                    Text(stringResource(R.string.player_next_label,
+                        state.nextTitle ?: stringResource(R.string.player_up_next)), color = AppColors.MediaText, style = type.title)
                     Spacer(Modifier.width(16.dp))
                     OverlayButton(IconKind.Back, stringResource(R.string.player_cancel_next), onClick = onCancelNext)
                 }
@@ -284,10 +305,32 @@ fun PlayerOverlay(
                     Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (state.playbackState == "retry") Button(
-                        onClick = onRetry, modifier = Modifier.height(48.dp).focusRequester(retryFocus).testTag("retry")
-                    ) { Text("Retry") }
-                    if (state.playbackState == "reconnecting") Text("Reconnecting…", color = AppColors.MediaText, style = type.title)
+                    if (state.playbackState == "retry" || state.playbackState == "reconnecting") {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                            Text(stringResource(if (state.playbackState == "retry") R.string.playback_stopped
+                                else R.string.player_reconnecting), color = AppColors.MediaText,
+                                style = type.title, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(12.dp))
+                            Text(stringResource(playbackFailureString(state.failureKind)),
+                                color = AppColors.MediaText, style = type.body, textAlign = TextAlign.Center)
+                            if (state.playbackState == "reconnecting") {
+                                Spacer(Modifier.height(12.dp))
+                                Text(if (state.retryNextSeconds >= 0)
+                                    stringResource(R.string.player_retry_countdown,
+                                        state.retryAttempt, state.retryMax, state.retryNextSeconds)
+                                    else stringResource(R.string.player_retry_attempt,
+                                        state.retryAttempt, state.retryMax),
+                                    color = AppColors.MediaText, style = type.body, textAlign = TextAlign.Center)
+                            } else {
+                                Spacer(Modifier.height(16.dp))
+                                Button(onClick = onRetry,
+                                    modifier = Modifier.height(48.dp).focusRequester(retryFocus).testTag("retry")) {
+                                    Text(stringResource(R.string.common_retry))
+                                }
+                            }
+                        }
+                    }
                     if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.scrubber) OverlayButton(
                         IconKind.Rewind, stringResource(R.string.player_rewind), Modifier.testTag("player_rewind"),
                         onClick = { onSeek(-10_000L) },
@@ -352,7 +395,7 @@ fun PlayerOverlay(
                                 style = type.caption,
                                 modifier = Modifier.semantics { contentDescription = spokenSeekLabel }
                             )
-                        } else if (state.isLive) Text("LIVE", color = AppColors.MediaText, style = type.label)
+                        } else if (state.isLive) Text(stringResource(R.string.player_live), color = AppColors.MediaText, style = type.label)
                         else Text("${formatPlayerTime(state.positionMs)} / --:--", color = AppColors.MediaText, style = type.caption)
                         Spacer(Modifier.weight(1f))
                         if (controls.startOver) OverlayButton(IconKind.Rewind, stringResource(R.string.player_start_over), Modifier.testTag("player_start_over"), onStartOver)
@@ -438,7 +481,7 @@ private fun OverlayButton(
     val ink = AppColors.MediaText
     Box(
         modifier.size(56.dp).tvFocusFrame(CircleShape)
-            .background(AppColors.MediaBase.copy(alpha = if (plain) 0.72f else 0.72f), CircleShape)
+            .background(Color.Black.copy(alpha = if (plain) 0.22f else 0.30f), CircleShape)
             .semantics { contentDescription = label; role = Role.Button }
             .onPreviewKeyEvent { event ->
                 val native = event.nativeKeyEvent
@@ -482,7 +525,11 @@ private fun OverlayButton(
                 IconKind.Play -> triangle(.30f, .76f)
                 IconKind.Pause -> { drawRect(ink, Offset(.28f*w, .2f*h), androidx.compose.ui.geometry.Size(.16f*w, .6f*h)); drawRect(ink, Offset(.56f*w, .2f*h), androidx.compose.ui.geometry.Size(.16f*w, .6f*h)) }
                 IconKind.Rewind -> { triangle(.50f, .12f); triangle(.87f, .49f) }
-                IconKind.Forward, IconKind.Next -> { triangle(.12f, .50f); triangle(.49f, .87f) }
+                IconKind.Forward -> { triangle(.12f, .50f); triangle(.49f, .87f) }
+                IconKind.Next -> {
+                    triangle(.16f, .66f)
+                    drawRect(ink, Offset(.70f*w, .18f*h), androidx.compose.ui.geometry.Size(.14f*w, .64f*h))
+                }
                 IconKind.Timer -> {
                     drawCircle(ink, radius = .35f * w, style = Stroke(2.dp.toPx()))
                     drawLine(ink, Offset(.5f*w, .5f*h), Offset(.5f*w, .28f*h), 2.dp.toPx())
@@ -635,6 +682,21 @@ private fun formatPlayerTime(ms: Long): String {
     val minutes = seconds / 60
     return if (minutes >= 60) "%d:%02d:%02d".format(minutes / 60, minutes % 60, seconds % 60)
     else "%d:%02d".format(minutes, seconds % 60)
+}
+
+private fun playbackFailureString(kind: PlaybackFailureKind?): Int = when (kind) {
+    PlaybackFailureKind.Offline -> R.string.player_error_offline
+    PlaybackFailureKind.NetworkDrop -> R.string.player_error_network
+    PlaybackFailureKind.TooManyRequests -> R.string.player_error_throttled
+    PlaybackFailureKind.ConnectionLimit -> R.string.player_error_connection_limit
+    PlaybackFailureKind.ProviderRefused -> R.string.player_error_refused
+    PlaybackFailureKind.StreamUnavailable -> R.string.player_error_unavailable
+    PlaybackFailureKind.ProviderUnavailable -> R.string.player_error_provider
+    PlaybackFailureKind.HttpClientError -> R.string.player_error_request
+    PlaybackFailureKind.UnsupportedFormat -> R.string.player_error_format
+    PlaybackFailureKind.BufferingTimeout -> R.string.player_error_stall
+    PlaybackFailureKind.EarlyEnd -> R.string.player_error_early_end
+    PlaybackFailureKind.Unknown, null -> R.string.player_error_unknown
 }
 
 @Composable

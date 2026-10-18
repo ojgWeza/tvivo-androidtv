@@ -1,6 +1,7 @@
 package com.dev.Tvivo.ui.home
 
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.tv.material3.Icon
@@ -64,6 +66,7 @@ import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.repository.HomeCard
 import com.dev.Tvivo.data.repository.HomeRepository
 import com.dev.Tvivo.data.repository.HomeSnapshot
+import com.dev.Tvivo.data.repository.HomeSnapshotMemoryCache
 import com.dev.Tvivo.data.repository.HomeShelf
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.roomKey
@@ -79,6 +82,7 @@ import com.dev.Tvivo.ui.components.landingContentPadding
 import com.dev.Tvivo.ui.components.LandingLoadingSkeleton
 import com.dev.Tvivo.ui.components.ShelfFocusRegistry
 import com.dev.Tvivo.ui.components.navigateBetweenShelves
+import com.dev.Tvivo.ui.components.navigateShelfPage
 import com.dev.Tvivo.home.ShelfVerticalDirection
 import com.dev.Tvivo.home.VirtualFolderKey
 import com.dev.Tvivo.ui.shell.LocalShellFocus
@@ -95,6 +99,13 @@ import kotlin.random.Random
 
 enum class ContentType(val label: String) {
     LIVE("Live TV"), MOVIES("Movies"), SERIES("Series");
+
+    @get:StringRes
+    val labelResource: Int get() = when (this) {
+        LIVE -> R.string.nav_live_tv
+        MOVIES -> R.string.nav_movies
+        SERIES -> R.string.nav_series
+    }
 
     @get:DrawableRes
     val art: Int get() = when (this) {
@@ -132,7 +143,7 @@ fun HomeScreen(
     val playback = remember(accountId) { PlaybackStateRepository(AppDatabase.get(context), accountId) }
     val seed = rememberSaveable(accountId) { Random.nextInt(1, Int.MAX_VALUE / 2) }
     var reload by remember { mutableIntStateOf(0) }
-    var snapshot by remember(accountId) { mutableStateOf<HomeSnapshot?>(null) }
+    var snapshot by remember(accountId) { mutableStateOf(HomeSnapshotMemoryCache.get(accountId)) }
     var menuCard by remember { mutableStateOf<HomeCard?>(null) }
     var resumePromptCard by remember { mutableStateOf<Pair<HomeCard, Long>?>(null) }
     var seeAllShelf by remember { mutableStateOf<HomeShelf?>(null) }
@@ -160,10 +171,16 @@ fun HomeScreen(
         }
     }
     LaunchedEffect(accountId, seed, reload, isRefreshing) {
-        if (!isRefreshing) snapshot = repo.load(seed)
+        if (!isRefreshing) {
+            val loaded = repo.load(seed)
+            HomeSnapshotMemoryCache.put(accountId, loaded)
+            if (snapshot != loaded) snapshot = loaded
+        }
     }
-    val shelves = snapshot?.shelves.orEmpty()
+    // Remove resolved empty groups before building row indices and focus targets.
+    val shelves = snapshot?.shelves.orEmpty().filter { it.cards.isNotEmpty() }
     val shellFocus = LocalShellFocus.current
+    val television = LocalIsTelevision.current
     val firstNonEmptyShelfId = shelves.firstOrNull { it.cards.isNotEmpty() }?.id
     val rowRequesters = remember(shelves.map { it.id }, firstNonEmptyShelfId, shellFocus) {
         shelves.map { shelf ->
@@ -211,7 +228,7 @@ fun HomeScreen(
         val shelfId = restoreKey.substringBefore('|')
         val cardKey = restoreKey.substringAfter('|', missingDelimiterValue = "")
         val loadedShelves = androidx.compose.runtime.snapshotFlow { snapshot?.shelves }
-            .filterNotNull().first()
+            .filterNotNull().first().filter { it.cards.isNotEmpty() }
         val index = loadedShelves.indexOfFirst { shelf ->
             shelf.id == shelfId && shelf.cards.any { it.key == cardKey }
         }
@@ -224,13 +241,13 @@ fun HomeScreen(
         modifier = Modifier.nestedScroll(pull),
         contentPadding = landingContentPadding()
     ) {
-        item(key = "header") {
+        item(key = "home:header") {
             Column(Modifier.fillMaxWidth().screenHeadingRequester(screenHeadingRequester)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (!LocalIsTelevision.current) Text(AppIdentity.personalLibrary(),
+                    if (!LocalIsTelevision.current) Text(stringResource(R.string.nav_my_tvivo),
                         color = AppColors.Ink, style = TvType.headline)
                     Spacer(Modifier.weight(1f))
-                    if (phone) Icon(Icons.Default.Settings, contentDescription = "Settings",
+                    if (phone) Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.nav_settings),
                         tint = AppColors.Ink,
                         modifier = Modifier.testTag("home-settings")
                             .heightIn(min = 48.dp).widthIn(min = 48.dp)
@@ -242,17 +259,23 @@ fun HomeScreen(
                         refreshMessage.contains("error", true) || refreshMessage.contains("could not", true)
                     Text(if (failed) "Couldn't refresh. Showing saved titles" else refreshMessage,
                         color = AppColors.Dim, style = TvType.label)
-                    if (failed && !isRefreshing) HeaderAction("Retry", onRefreshEverything)
+                    if (failed && !isRefreshing) HeaderAction(stringResource(R.string.browse_retry), onRefreshEverything)
                 }
             }
         }
-        if (snapshot == null) {
-            item(key = "loading") { LandingLoadingSkeleton() }
+        if (snapshot == null || snapshot?.isCatalogLoading == true) {
+            item(key = "home:loading") { LandingLoadingSkeleton() }
         } else if (snapshot?.isFirstRun == true) {
-            item(key = "first-run") {
+            item(key = "home:first-run") {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text("Your library is ready to explore", color = AppColors.Ink, style = TvType.title)
-                    BoxWithConstraints {
+                    Text(stringResource(R.string.home_first_run_title), color = AppColors.Ink, style = TvType.title)
+                    if (television) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            listOf(ContentType.MOVIES, ContentType.SERIES, ContentType.LIVE).forEach {
+                                    HeaderAction(stringResource(it.labelResource), onClick = { onSelect(it) })
+                            }
+                        }
+                    } else BoxWithConstraints {
                         if (maxWidth < 600.dp) {
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 listOf(ContentType.MOVIES, ContentType.SERIES, ContentType.LIVE).forEach {
@@ -271,11 +294,11 @@ fun HomeScreen(
                             }
                         }
                     }
-                    HeaderAction("Refresh", onRefreshEverything)
+                    HeaderAction(stringResource(R.string.common_refresh), onRefreshEverything)
                 }
             }
         } else {
-            items(shelves.size, key = { shelves[it].id }) { index ->
+            items(shelves.size, key = { "home:shelf:${shelves[it].id}" }) { index ->
                 val shelf = shelves[index]
                 ShelfRow(shelf, rowRequesters[index],
                     aboveRequester = shellFocus?.topBar.takeIf { shelf.id == firstNonEmptyShelfId },
@@ -287,7 +310,12 @@ fun HomeScreen(
                     focusRegistry = shelfFocusRegistry,
                     onVerticalNavigate = { direction ->
                         navigateBetweenShelves(scope, listState, shelfFocusRegistry,
-                            nonEmptyShelfIds, shelfRowIndexes, shelf.id, direction)
+                            nonEmptyShelfIds, shelfRowIndexes, shelf.id, direction,
+                            requestHeader = television && direction == ShelfVerticalDirection.Down)
+                    },
+                    onPageNavigate = { direction ->
+                        navigateShelfPage(scope, listState, shelfFocusRegistry,
+                            nonEmptyShelfIds, shelfRowIndexes, direction)
                     },
                     onSeeAll = {
                         lastFocusedShelfId = shelf.id
@@ -354,7 +382,14 @@ fun HomeScreen(
         Dialog(onDismissRequest = { seeAllShelf = null }) {
             Column(Modifier.background(AppColors.Elevated).padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("See all ${shelf.title.lowercase()}", color = AppColors.Ink,
+                val shelfTitle = when (shelf.destination) {
+                    VirtualFolderKey.ContinueWatching -> stringResource(R.string.shelf_continue_watching)
+                    VirtualFolderKey.RecentlyAdded -> stringResource(R.string.shelf_recently_added)
+                    VirtualFolderKey.RecentlyPlayed -> stringResource(R.string.shelf_last_watched)
+                    VirtualFolderKey.Favorites -> stringResource(R.string.shelf_favourites)
+                    null -> shelf.title
+                }
+                Text("${stringResource(R.string.search_see_all_titles)} $shelfTitle", color = AppColors.Ink,
                     style = TvType.title)
                 shelf.typeCounts.filterValues { it > 0 }.keys.forEachIndexed { index, type ->
                     HeaderAction(type.label, onClick = {
@@ -370,14 +405,15 @@ fun HomeScreen(
                             typeCounts = emptyMap()))
                     }, modifier = if (index == 0) Modifier.focusRequester(choiceFocus) else Modifier)
                 }
-                HeaderAction("Cancel", onClick = { seeAllShelf = null })
+                HeaderAction(stringResource(R.string.common_cancel), onClick = { seeAllShelf = null })
             }
         }
     }
     if (confirmingExit) ConfirmDialog(
-        title = "Exit ${AppIdentity.name()}?",
-        consequence = "Closes the app. Your account and saved titles stay here.",
-        confirmLabel = "Exit", safeLabel = "Stay in ${AppIdentity.name()}",
+        title = stringResource(R.string.home_exit_title, AppIdentity.name()),
+        consequence = stringResource(R.string.home_exit_consequence),
+        confirmLabel = stringResource(R.string.home_exit_confirm),
+        safeLabel = stringResource(R.string.home_exit_stay, AppIdentity.name()),
         onConfirm = { confirmingExit = false; onExit() },
         onDismiss = { confirmingExit = false }
     )
@@ -397,7 +433,7 @@ private fun RouteTile(type: ContentType, modifier: Modifier, onSelect: (ContentT
             modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
             0f to Color.Transparent, 1f to AppColors.MediaBase.copy(alpha = 0.95f))))
-        Text(type.label, color = AppColors.MediaText, style = TvType.headline,
+        Text(stringResource(type.labelResource), color = AppColors.MediaText, style = TvType.headline,
             modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
     }
 }

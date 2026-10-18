@@ -173,6 +173,7 @@ Remaining work across suggestions, recently-added ordering, fullscreen/OSC, and 
 ## Android TV — Diagnostics & Logging
 
 - [ ] **T-D4 (Routine event logging):** Not a defect. `DiagnosticLog` today records start, sync lifecycle, failures only — nearly empty on healthy session. Adding category selection and `get_vod_info`/`get_series_info` events would add visibility at cost of verbosity.
+- [ ] **Network diagnostics device acceptance:** Slices 1–6 include passive observation, safe quick checks, and an explicitly confirmed deep stream check. Verify TV D-pad focus/Back restoration (including Cancel default focus), stop acknowledgement and cooldown countdown, deep-check cancel/background release and playback recovery, Arabic RTL, light/dark, best-effort Wi-Fi details, timeline across loss/reconnect/restart, account filtering, metered confirmation, and redacted copy/export on TV, phone, and tablet. Runtime endpoint behavior, OEM gateway probing, real stream timing/status classification, and cancellation while a socket is blocked remain device-pending.
 
 ---
 

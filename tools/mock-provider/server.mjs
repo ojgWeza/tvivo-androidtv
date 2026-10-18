@@ -34,11 +34,34 @@ function snapshot() { return { ...state, catalog429Remaining, activeConnections:
 const liveCategories = [{ category_id: '101', category_name: 'Generated Live', parent_id: 0 }];
 const vodCategories = [{ category_id: '201', category_name: 'Generated Movies', parent_id: 0 }];
 const seriesCategories = [{ category_id: 301, category_name: 'Generated Series', parent_id: 0 }];
-const vodStreams = [{ num: 1, name: 'Synthetic Film', stream_id: 2001, category_id: '201', stream_icon: '', container_extension: 'mp4', added: '1700000001' }];
-const series = [{ num: 1, name: 'Synthetic Series', series_id: 3001, category_id: 301, cover: '', last_modified: '1700000002' }];
+const vodStreams = Array.from({ length: 24 }, (_, index) => ({
+  num: index + 1,
+  name: `Synthetic Film ${String(index + 1).padStart(2, '0')}`,
+  stream_id: 2001 + index,
+  category_id: '201',
+  stream_icon: '',
+  container_extension: 'mp4',
+  added: String(1700000001 + index),
+}));
+const series = Array.from({ length: 16 }, (_, index) => ({
+  num: index + 1,
+  name: `Synthetic Series ${String(index + 1).padStart(2, '0')}`,
+  series_id: 3001 + index,
+  category_id: 301,
+  cover: '',
+  last_modified: String(1700000002 + index),
+}));
 const episode = (id, n, title) => ({ id, episode_num: String(n), title, container_extension: 'mp4', duration: '00:02:00', duration_secs: 120 });
 const seriesInfo = { seasons: [{ season_number: 1, name: 'Season 1' }], episodes: { '1': [episode('episode-A1', 1, 'Episode 1'), episode('episode-B1', 2, 'Episode 2')] } };
-const liveStreams = [{ num: 1, name: 'Generated Live Loop', stream_id: 1001, category_id: '101', stream_icon: '', ext: 'ts', added: '1700000000' }];
+const liveStreams = Array.from({ length: 16 }, (_, index) => ({
+  num: index + 1,
+  name: index === 0 ? 'Generated Live Loop' : `Synthetic Live Channel ${String(index + 1).padStart(2, '0')}`,
+  stream_id: 1001 + index,
+  category_id: '101',
+  stream_icon: '',
+  ext: 'ts',
+  added: String(1700000000 + index),
+}));
 
 function apiResponse(url) {
   const action = url.searchParams.get('action');
@@ -48,10 +71,15 @@ function apiResponse(url) {
     case 'get_live_streams': return liveStreams;
     case 'get_vod_categories': return vodCategories;
     case 'get_vod_streams': return vodStreams;
-    case 'get_vod_info': return { info: { plot: 'Generated test video; no third-party content.' }, movie_data: { stream_id: 2001, container_extension: 'mp4' } };
+    case 'get_vod_info': {
+      const streamId = Number(url.searchParams.get('vod_id'));
+      return vodStreams.some((item) => item.stream_id === streamId)
+        ? { info: { plot: 'Generated test video; no third-party content.' }, movie_data: { stream_id: streamId, container_extension: 'mp4' } }
+        : {};
+    }
     case 'get_series_categories': return seriesCategories;
     case 'get_series': return series;
-    case 'get_series_info': return seriesInfo;
+    case 'get_series_info': return series.some((item) => item.series_id === Number(url.searchParams.get('series_id'))) ? seriesInfo : {};
     default: return [];
   }
 }
@@ -152,8 +180,8 @@ const server = http.createServer(async (req, res) => {
     const [, kind, user, pass, id, ext] = match;
     if (user !== username || pass !== password) return json(res, 401, { error: 'Invalid credentials' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'GET or HEAD required' });
-    if (kind === 'live' && (id !== '1001' || ext !== 'ts')) return json(res, 404, { error: 'Unknown live stream' });
-    if (kind === 'movie' && (id !== '2001' || ext !== 'mp4')) return json(res, 404, { error: 'Unknown movie' });
+    if (kind === 'live' && (!liveStreams.some((item) => String(item.stream_id) === id) || ext !== 'ts')) return json(res, 404, { error: 'Unknown live stream' });
+    if (kind === 'movie' && (!vodStreams.some((item) => String(item.stream_id) === id) || ext !== 'mp4')) return json(res, 404, { error: 'Unknown movie' });
     if (kind === 'series' && (!['episode-A1', 'episode-B1'].includes(id) || ext !== 'mp4')) return json(res, 404, { error: 'Unknown episode' });
     return streamFile(req, res, url, kind, id, ext);
   }

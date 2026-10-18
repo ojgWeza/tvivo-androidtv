@@ -24,6 +24,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +41,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
+import com.dev.Tvivo.data.remote.EpisodeTitlePolicy
 import com.dev.Tvivo.playback.*
 import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
@@ -55,7 +58,8 @@ import kotlinx.coroutines.launch
 /** One page from a series card to an episode. Back is owned by MainActivity. */
 @Composable
 fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit) {
-    val application = LocalContext.current.applicationContext as android.app.Application
+    val context = LocalContext.current
+    val application = context.applicationContext as android.app.Application
     val vm: SeriesDetailViewModel = viewModel(key = "series:$seriesId", factory = viewModelFactory {
         initializer { SeriesDetailViewModel(application, createSavedStateHandle(), seriesId) }
     })
@@ -109,7 +113,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                     DetailTextButton(actionLabel(action, vm.playbackQueue()),
                         Modifier.testTag("series-primary").focusRequester(primaryFocus)) { playAction(action) }
                     if (action.kind == DetailActionKind.Continue) {
-                        DetailTextButton("Start over", Modifier.testTag("series-start-over")) {
+                        DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("series-start-over")) {
                             vm.playbackQueue().firstOrNull { it.episodeId == action.episodeId }?.let { episode ->
                                 scope.launch {
                                     vm.clearResumeNow(episode.episodeId)
@@ -123,7 +127,8 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                     DetailTextButton(actionLabel(action, vm.playbackQueue()),
                         Modifier.testTag("series-next")) { playAction(action) }
                 }
-                DetailTextButton(if (state.isFavourite) "Remove from favourites" else "Add to favourites",
+                DetailTextButton(stringResource(if (state.isFavourite)
+                    com.dev.Tvivo.R.string.series_remove_favourite else com.dev.Tvivo.R.string.series_add_favourite),
                     Modifier.testTag("series-favourite")) { vm.toggleFavourite(!state.isFavourite) }
             })
     }
@@ -131,7 +136,9 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
     if (compact) {
         SeriesEpisodeList(state, vm::focusedEpisodeInSeason, vm::selectSeason,
             vm::rememberEpisodeFocus, vm::refresh,
-            onPlay = { play(it, true) }, onMenu = { menuEpisode = it },
+            onPlay = { play(it, true) }, onMenu = {
+                if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
+            },
             header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg))
     } else {
         Row(Modifier.fillMaxSize().background(AppColors.Bg)
@@ -141,7 +148,9 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
             Spacer(Modifier.width(32.dp))
             SeriesEpisodeList(state, vm::focusedEpisodeInSeason, vm::selectSeason,
                 vm::rememberEpisodeFocus, vm::refresh,
-                onPlay = { play(it, true) }, onMenu = { menuEpisode = it },
+                onPlay = { play(it, true) }, onMenu = {
+                    if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
+                },
                 header = null, modifier = Modifier.weight(1f).fillMaxSize())
         }
     }
@@ -158,30 +167,28 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
             }, onDismiss = { resumePrompt = null })
     }
     menuEpisode?.let { episode ->
-        val rowState = state.playback[episode.episodeId]?.let(DetailPlaybackPolicy::rowState)
         Dialog(onDismissRequest = { menuEpisode = null }) {
             Column(Modifier.fillMaxWidth().background(AppColors.Elevated).padding(20.dp)) {
                 Text(episode.title, color = AppColors.Ink, style = TvType.title)
-                DetailTextButton(if (rowState == EpisodeRowState.Watched) "Mark unwatched" else "Mark watched") {
-                    vm.markWatched(episode.episodeId, rowState != EpisodeRowState.Watched)
-                    menuEpisode = null
-                }
                 if (state.playback[episode.episodeId]?.positionMs != null) {
-                    DetailTextButton("Clear resume") { vm.clearResume(episode.episodeId); menuEpisode = null }
+                    DetailTextButton(stringResource(com.dev.Tvivo.R.string.episode_clear_resume)) {
+                        vm.clearResume(episode.episodeId); menuEpisode = null
+                    }
                 }
             }
         }
     }
 }
 
+@Composable
 private fun actionLabel(action: DetailAction, all: List<EpisodeEntity>): String {
     val number = all.firstOrNull { it.episodeId == action.episodeId }
         ?.let { "S${it.seasonNumber} · E${it.episodeNum}" }.orEmpty()
     val base = when (action.kind) {
-        DetailActionKind.Continue -> "Continue $number"
-        DetailActionKind.Next -> "Next episode $number"
-        DetailActionKind.Play -> "Play $number"
-        DetailActionKind.WatchAgain -> "Watch again $number"
+        DetailActionKind.Continue -> stringResource(com.dev.Tvivo.R.string.episode_action_continue, number)
+        DetailActionKind.Next -> stringResource(com.dev.Tvivo.R.string.episode_action_next, number)
+        DetailActionKind.Play -> stringResource(com.dev.Tvivo.R.string.episode_action_play, number)
+        DetailActionKind.WatchAgain -> stringResource(com.dev.Tvivo.R.string.episode_action_watch_again, number)
     }
     return action.remainingMs?.let { "$base · ${DetailPlaybackPolicy.remainingLabel(it)}" } ?: base
 }
@@ -198,6 +205,7 @@ internal fun SeriesEpisodeList(
     header: (@Composable () -> Unit)?,
     modifier: Modifier
 ) {
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val listFocus = remember { FocusRequester() }
@@ -232,21 +240,21 @@ internal fun SeriesEpisodeList(
             }
         }
         if (state.isRefreshing) item("refreshing") {
-            Text("Updating episodes…", color = AppColors.Dim, style = TvType.label)
+            Text(stringResource(com.dev.Tvivo.R.string.episodes_updating), color = AppColors.Dim, style = TvType.label)
         }
         state.error?.let { error -> item("error") {
             Text(ErrorCopy.of(error).message, color = AppColors.Dim, style = TvType.label)
-            DetailTextButton("Retry") { onRetry() }
+            DetailTextButton(stringResource(com.dev.Tvivo.R.string.common_retry)) { onRetry() }
         } }
         if (state.episodes.isEmpty()) item("status") {
             val message = when {
-                state.isLoading -> "Loading episodes…"
-                state.error != null -> "Episodes are unavailable"
-                else -> "No episodes listed for this show"
+                state.isLoading -> context.getString(com.dev.Tvivo.R.string.episodes_loading)
+                state.error != null -> context.getString(com.dev.Tvivo.R.string.episodes_unavailable)
+                else -> context.getString(com.dev.Tvivo.R.string.episodes_none)
             }
             Text(message, color = AppColors.Dim, style = TvType.body)
         }
-        items(state.episodes, key = { it.episodeId }) { episode ->
+        items(state.episodes, key = { "episode:${it.episodeId}" }) { episode ->
             val progress = state.playback[episode.episodeId]
             EpisodeRow(episode, progress?.let(DetailPlaybackPolicy::rowState) ?: EpisodeRowState.Unstarted,
                 progress?.positionMs, progress?.durationMs,
@@ -271,6 +279,15 @@ private fun EpisodeRow(
     onPlay: () -> Unit,
     onMenu: () -> Unit
 ) {
+    val context = LocalContext.current
+    val displayTitle = if (EpisodeTitlePolicy.isGenericTitle(episode.title))
+        stringResource(com.dev.Tvivo.R.string.episode_generic_title, episode.episodeNum)
+    else episode.title
+    val stateLabel = stringResource(when (state) {
+        EpisodeRowState.Unstarted -> com.dev.Tvivo.R.string.episode_state_unstarted
+        EpisodeRowState.Partial -> com.dev.Tvivo.R.string.episode_state_partial
+        EpisodeRowState.Watched -> com.dev.Tvivo.R.string.episode_watched
+    })
     Column(modifier.fillMaxWidth().background(if (highlighted) AppColors.Accent.copy(alpha = 0.18f) else AppColors.Surface)
         .tvFocusFrame().testTag("episode-${episode.episodeId}")
         .onFocusChanged { if (it.isFocused) onFocus() }
@@ -278,17 +295,20 @@ private fun EpisodeRow(
             if (it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_MENU &&
                 it.nativeKeyEvent.action == KeyEvent.ACTION_UP) { onMenu(); true } else false
         }
-        .semantics { contentDescription = "Episode ${episode.episodeNum}, ${episode.title}, ${state.name}" }
+        .semantics { contentDescription = "$displayTitle, $stateLabel" }
         .combinedClickable(onClick = onPlay, onLongClick = onMenu)
         .padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (highlighted) Text("▶ ", color = AppColors.AccentText, style = TvType.label)
-            Text(episode.episodeNum.toString().padStart(2, '0'), color = AppColors.Dim,
-                style = TvType.body, modifier = Modifier.width(48.dp))
-            Text(episode.title, color = AppColors.Ink, style = TvType.title,
+            if (EpisodeTitlePolicy.showOrdinal(episode.title)) {
+                Text(episode.episodeNum.toString().padStart(2, '0'), color = AppColors.Dim,
+                    style = TvType.label, modifier = Modifier.width(48.dp))
+            }
+            Text(displayTitle, color = AppColors.Ink, style = TvType.title,
                 maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             episode.durationSecs?.takeIf { it > 0 }?.let {
-                Text("${it / 60} min", color = AppColors.Dim, style = TvType.label)
+                Text(pluralStringResource(com.dev.Tvivo.R.plurals.duration_minutes, it / 60, it / 60),
+                    color = AppColors.Dim, style = TvType.label)
             }
             if (state == EpisodeRowState.Watched) Text(" ✓", color = AppColors.Good, style = TvType.title)
         }

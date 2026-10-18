@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -26,7 +27,9 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +38,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -45,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
+import kotlinx.coroutines.launch
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -55,6 +60,7 @@ import com.dev.Tvivo.ui.theme.TvType
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
 import com.dev.Tvivo.ui.adaptive.WindowSizeClass
+import com.dev.Tvivo.data.repository.HomeCard
 
 /**
  * The one grid, for every content type. Four things live here rather than in hardening,
@@ -86,6 +92,12 @@ fun ContentGrid(
     val gridState = rememberLazyGridState()
     val restoreRequester = remember { FocusRequester() }
     var restored by remember(pendingFocusItemId) { mutableStateOf(pendingFocusItemId == null) }
+    var focusedIndex by remember { mutableIntStateOf(0) }
+    var navigationTargetIndex by remember { mutableIntStateOf(-1) }
+    var lastRemoteMoveAt by remember { mutableStateOf(Long.MIN_VALUE) }
+    var remoteMoveInProgress by remember { mutableStateOf(false) }
+    val remoteScope = rememberCoroutineScope()
+    val television = LocalIsTelevision.current
 
     /**
      * The card focus should come back to when focus **re-enters** the grid from outside
@@ -159,7 +171,7 @@ fun ContentGrid(
     // adapt to the available TV, tablet, or handset width.
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val horizontalPadding = when {
-            LocalIsTelevision.current -> 48.dp
+            LocalIsTelevision.current -> 32.dp
             LocalWindowSizeClass.current == WindowSizeClass.Compact -> 16.dp
             else -> 24.dp
         }
@@ -169,6 +181,7 @@ fun ContentGrid(
             .toInt()
             .coerceAtLeast(1)
 
+        Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minCellWidth),
             state = gridState,
@@ -194,12 +207,68 @@ fun ContentGrid(
                     }.getOrDefault(FocusRequester.Default)
                 }
             }
-            .focusGroup(),
+            .focusGroup()
+            .onPreviewKeyEvent { event ->
+                val native = event.nativeKeyEvent
+                if (!television) return@onPreviewKeyEvent false
+                if (native.action == KeyEvent.ACTION_UP &&
+                    native.keyCode in setOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) {
+                    lastRemoteMoveAt = Long.MIN_VALUE
+                    return@onPreviewKeyEvent false
+                }
+                if (native.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
+                if (remoteMoveInProgress) return@onPreviewKeyEvent true
+                val move = TvRemoteNavigationPolicy.move(native.keyCode, television,
+                    native.repeatCount, native.eventTime - native.downTime)
+                val pagingMove = move is TvGridMove.Page || move == TvGridMove.First || move == TvGridMove.Last
+                val heldMove = move is TvGridMove.HeldRows
+                if ((!pagingMove && !heldMove) ||
+                    (native.repeatCount > 0 && !TvRemoteNavigationPolicy.acceptRepeat(native.eventTime, lastRemoteMoveAt)))
+                    return@onPreviewKeyEvent false
+                lastRemoteMoveAt = native.eventTime
+                val visible = gridState.layoutInfo.visibleItemsInfo
+                val columns = visible.maxOfOrNull { it.column + 1 }?.coerceAtLeast(1) ?: 1
+                val viewportRows = ((gridState.layoutInfo.viewportSize.height * 0.85f) /
+                    (visible.firstOrNull()?.size?.height?.coerceAtLeast(1) ?: 1)).toInt().coerceAtLeast(1)
+                val firstLoaded = items.itemSnapshotList.placeholdersBefore
+                val lastLoaded = (firstLoaded + items.itemSnapshotList.items.size - 1).coerceAtLeast(firstLoaded)
+                val target = when (move) {
+                    is TvGridMove.Page -> focusedIndex + move.direction * viewportRows * columns
+                    TvGridMove.First -> firstLoaded
+                    TvGridMove.Last -> lastLoaded
+                    is TvGridMove.HeldRows -> focusedIndex + move.direction *
+                        (if (move.rows == 0) viewportRows else move.rows) * columns
+                    TvGridMove.Ignore -> focusedIndex
+                }.coerceIn(firstLoaded, lastLoaded)
+                val direction = when (move) {
+                    is TvGridMove.Page -> move.direction
+                    is TvGridMove.HeldRows -> move.direction
+                    else -> 1
+                }
+                val loadedTarget = generateSequence(target) { it + if (it <= focusedIndex) -1 else 1 }
+                    .takeWhile { it in firstLoaded..lastLoaded }
+                    .firstOrNull { items.peek(it) != null } ?: return@onPreviewKeyEvent false
+                navigationTargetIndex = loadedTarget
+                remoteMoveInProgress = true
+                remoteScope.launch {
+                    try {
+                        gridState.scrollToItem(loadedTarget)
+                        repeat(6) {
+                            withFrameNanos {}
+                            if (runCatching { restoreRequester.requestFocus() }.isSuccess) return@launch
+                        }
+                    } finally {
+                        remoteMoveInProgress = false
+                        navigationTargetIndex = -1
+                    }
+                }
+                direction != 0
+            },
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = horizontalPadding,
-            top = if (LocalIsTelevision.current) 27.dp else 16.dp,
+            top = 16.dp,
             end = horizontalPadding,
-            bottom = 48.dp
+            bottom = if (LocalIsTelevision.current) 16.dp else 48.dp
         ),
         horizontalArrangement = Arrangement.spacedBy(gridGap),
         verticalArrangement = Arrangement.spacedBy(gridGap)
@@ -208,7 +277,7 @@ fun ContentGrid(
             count = items.itemCount,
             // Without stable keys, recomposition after an append rebinds focus onto the
             // wrong item.
-            key = items.itemKey { it.id }
+            key = items.itemKey { "content:${it.id}" }
             ) { index ->
                 val item = items[index]
                 val isRestoreTarget = item != null && item.id == lastFocusedId
@@ -216,7 +285,7 @@ fun ContentGrid(
                 StreamCard(
                     item = item,
                     cardShape = cardShape,
-                    modifier = (if (isRestoreTarget) {
+                    modifier = (if (isRestoreTarget || index == navigationTargetIndex) {
                         Modifier.focusRequester(restoreRequester)
                     } else {
                     Modifier
@@ -235,6 +304,8 @@ fun ContentGrid(
                     onLongPress = { item?.let(onContextMenu) },
                     onFocused = {
                         item?.let {
+                            focusedIndex = index
+                            if (index == navigationTargetIndex) navigationTargetIndex = -1
                             lastFocusedId = it.id
                             onFocused(it)
                         }
@@ -259,8 +330,37 @@ fun ContentGrid(
                 }
             }
         }
+        if (television) Text(stringResource(com.dev.Tvivo.R.string.remote_page_hint),
+            color = AppColors.Dim, style = TvType.caption,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = horizontalPadding))
+        }
     }
 }
+
+/** Search cards share the same decoded image sizes, title treatment, and focus surface as Browse. */
+@Composable
+internal fun SearchContentCard(
+    card: HomeCard,
+    onActivate: (HomeCard) -> Unit,
+    focusRequester: FocusRequester? = null
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        StreamCard(
+            item = card.item,
+            cardShape = if (card.type == com.dev.Tvivo.ui.home.ContentType.LIVE)
+                CardShape.CHANNEL else CardShape.POSTER,
+            modifier = Modifier.widthIn(max = searchCardMaxWidthDp(maxWidth.value.toInt()).dp)
+                .fillMaxWidth().testTag("search-result-${card.key}"),
+            focusRequester = focusRequester,
+            onActivate = { onActivate(card) },
+            onLongPress = { onActivate(card) },
+            onFocused = {},
+            progressFor = { card.progress }
+        )
+    }
+}
+
+internal fun searchCardMaxWidthDp(columnWidthDp: Int): Int = columnWidthDp.coerceAtMost(220)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -268,6 +368,7 @@ private fun StreamCard(
     item: BrowseItem?,
     cardShape: CardShape,
     modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null,
     itemFilterFocusRequester: FocusRequester? = null,
     onActivate: () -> Unit,
     onLongPress: () -> Unit,
@@ -286,6 +387,7 @@ private fun StreamCard(
                 .fillMaxWidth()
                 .aspectRatio(cardShape.aspectRatio())
                 .testTag("catalog-item-${item?.id ?: "placeholder"}")
+                .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                 .background(AppColors.Elevated)
                 // The shared focus frame is static: no scale or lazy-row clipping risk.
                 .tvFocusFrame()

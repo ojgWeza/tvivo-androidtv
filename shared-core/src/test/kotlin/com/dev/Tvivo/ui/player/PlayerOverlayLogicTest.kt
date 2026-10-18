@@ -36,6 +36,8 @@ class PlayerOverlayLogicTest {
     @Test fun backDismissesMenuBeforeStoppingPlayback() {
         assertEquals(PlayerBackAction.DismissMenu, PlayerBackPolicy.action(menuOpen = true))
         assertEquals(PlayerBackAction.StopPlayer, PlayerBackPolicy.action(menuOpen = false))
+        assertEquals(PlayerBackAction.StopPlayer,
+            PlayerBackPolicy.action(menuOpen = true, television = true))
     }
 
     @Test fun dpadCanReachTimerAndKeepsOverlayVisibleBriefly() {

@@ -11,8 +11,10 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.drawable.Icon
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
@@ -43,10 +45,13 @@ import androidx.core.content.ContextCompat
 import com.dev.Tvivo.playback.HeldSeekAccelerator
 import com.dev.Tvivo.playback.PlaybackCommands
 import com.dev.Tvivo.playback.PlaybackHandoff
+import com.dev.Tvivo.playback.PlaybackFailureKind
 import com.dev.Tvivo.playback.PlaybackService
+import com.dev.Tvivo.diagnostics.DeepStreamCheckGate
 import com.dev.Tvivo.playback.SleepTimerEndedSnapshot
 import com.dev.Tvivo.playback.TrackKind
 import com.dev.Tvivo.playback.TrackSelectionPolicy
+import com.dev.Tvivo.R
 import com.dev.Tvivo.ui.adaptive.AdaptiveEnvironment
 import com.dev.Tvivo.ui.ThemeMode
 import com.dev.Tvivo.playback.PlayerPreferencesStore
@@ -69,6 +74,10 @@ import kotlin.math.roundToInt
 
 /** Render surface and controls. Playback continues through the service when this Activity stops. */
 class PlayerActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(com.dev.Tvivo.ui.settings.AppLanguage.wrap(newBase))
+    }
+
     private lateinit var initialThemeMode: ThemeMode
     private var player: MediaController? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
@@ -87,6 +96,7 @@ class PlayerActivity : ComponentActivity() {
     private var lastPipEntry: PipPolicy.Entry? = null
     private var lastPipPlaying: Boolean? = null
     private var lastPipAspectRatio: Rational? = null
+    private var lastPipHasNext: Boolean? = null
     private var positionTicker: Job? = null
     private var autoHideJob: Job? = null
     private var feedbackJob: Job? = null
@@ -159,6 +169,8 @@ class PlayerActivity : ComponentActivity() {
         val resumeFromMs = intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L)
         itemId = intent.getStringExtra(EXTRA_ITEM_ID)
         contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
+        Log.i("PlaybackResume", "activity create type=$contentType resume=$resumeFromMs " +
+            "start=$pendingStart recreated=${savedInstanceState != null} reopen=$reopensSession")
         overlayState = PlayerOverlayState(
             intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Now playing" }, isLive,
             hasResume = resumeFromMs > 0
@@ -233,17 +245,23 @@ class PlayerActivity : ComponentActivity() {
         root.addView(compose)
         setContentView(root)
         ContextCompat.registerReceiver(this, pipActionReceiver, IntentFilter().apply {
-            addAction(ACTION_PIP_PLAY_PAUSE)
-            addAction(ACTION_PIP_CLOSE)
+            addAction(PipPlaybackAction.PLAY_PAUSE)
+            addAction(PipPlaybackAction.CLOSE)
+            addAction(PipPlaybackAction.REWIND)
+            addAction(PipPlaybackAction.FORWARD)
+            addAction(PipPlaybackAction.NEXT)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         pipReceiverRegistered = true
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (PlayerBackPolicy.action(openMenus.isNotEmpty()) == PlayerBackAction.DismissMenu) {
+                if (PlayerBackPolicy.action(openMenus.isNotEmpty(), isTelevisionDevice()) == PlayerBackAction.DismissMenu) {
                     dismissMenus++
                     openMenus = emptySet()
                     rearmControls()
-                } else stopAndFinish()
+                } else {
+                    openMenus = emptySet()
+                    stopAndFinish(finishImmediately = isTelevisionDevice())
+                }
             }
         })
         connectController()
@@ -336,6 +354,8 @@ class PlayerActivity : ComponentActivity() {
             val extras = runCatching { future.get().extras }.getOrNull() ?: return@addListener
             val active = extras.getString(PlaybackCommands.REQUEST_ID)
             val activeItem = extras.getString(PlaybackCommands.ITEM_ID)
+            Log.i("PlaybackResume", "session verify type=$contentType active=${active != null} " +
+                "matches=${active == expected} queued=${activeItem != null && intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.contains(activeItem) == true}")
             val queuedItem = activeItem != null && intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.contains(activeItem) == true
             if (!stopPending && !isFinishing && expected != null && intent.getStringExtra(EXTRA_REQUEST_ID) == expected && active != expected && !queuedItem)
                 finish()
@@ -362,6 +382,13 @@ class PlayerActivity : ComponentActivity() {
             playlistIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, -1),
         )
         val controller = player ?: return
+        if (DeepStreamCheckGate.isHeld) {
+            android.widget.Toast.makeText(this, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        Log.i("PlaybackResume", "activity play type=${item.contentType} resume=${item.resumeFromMs} " +
+            "live=${item.isLive}")
         val result = controller.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.PLAY), PlaybackCommands.bundle(item))
         pendingStart = false
         if (replayStarting) result.addListener({
@@ -374,32 +401,40 @@ class PlayerActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun stopAndFinish() {
+    private fun stopAndFinish(finishImmediately: Boolean = false) {
         if (stopPending) return
         stopPending = true
         pendingStart = false
         updatePipParams()
-        if (player != null) requestStopAndFinish() else finish()
+        if (player != null) requestStopAndFinish(finishImmediately) else finish()
     }
 
-    private fun requestStopAndFinish() {
+    private fun requestStopAndFinish(finishImmediately: Boolean = false) {
         val future = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
         if (future == null) { finish(); return }
         stopResultFuture = future
-        // Keep the previous screen covered until Room has committed the final position.
         future.addListener({ finish() }, ContextCompat.getMainExecutor(this))
+        if (finishImmediately) finish()
     }
 
     private val pipActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (Build.VERSION.SDK_INT < 26 || stopPending) return
-            when (intent.action) {
-                ACTION_PIP_PLAY_PAUSE -> if (isInPictureInPictureMode) player?.let {
+            when (PipPlaybackAction.command(intent.action)) {
+                PipPlaybackAction.Command.PlayPause -> if (isInPictureInPictureMode) player?.let {
                     if (it.isPlaying) it.pause() else it.play()
                 }
-                ACTION_PIP_CLOSE -> if (pipWindowOpen &&
+                PipPlaybackAction.Command.Rewind -> if (isInPictureInPictureMode) player?.let {
+                    it.seekTo((it.currentPosition - SEEK_INCREMENT_MS).coerceAtLeast(0L))
+                }
+                PipPlaybackAction.Command.Forward -> if (isInPictureInPictureMode) player?.let { p ->
+                    p.seekTo((p.currentPosition + SEEK_INCREMENT_MS).coerceAtMost(p.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                }
+                PipPlaybackAction.Command.Next -> if (isInPictureInPictureMode) playNextEpisode()
+                PipPlaybackAction.Command.Close -> if (pipWindowOpen &&
                     PipPolicy.exit(true, player?.playWhenReady == true, explicitClose = true) ==
                     PipPolicy.Exit.StopPlayback) stopAndFinish()
+                null -> Unit
             }
         }
     }
@@ -431,13 +466,22 @@ class PlayerActivity : ComponentActivity() {
     private fun pipParams(entry: PipPolicy.Entry): PictureInPictureParams {
         val isPlaying = player?.isPlaying == true
         val toggle = pipAction(
-            ACTION_PIP_PLAY_PAUSE, if (isPlaying) "Pause" else "Play",
+            PipPlaybackAction.PLAY_PAUSE, if (isPlaying) "Pause" else "Play",
             if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, 1,
         )
-        val close = pipAction(ACTION_PIP_CLOSE, "Close", android.R.drawable.ic_menu_close_clear_cancel, 2)
+        val hasNext = nextIndex() != null
+        val seek = pipAction(PipPlaybackAction.REWIND, "Rewind 10 seconds", android.R.drawable.ic_media_rew, 3)
+        val nextOrForward = pipAction(
+            if (hasNext) PipPlaybackAction.NEXT else PipPlaybackAction.FORWARD,
+            if (hasNext) "Next episode" else "Forward 10 seconds",
+            if (hasNext) android.R.drawable.ic_media_next else android.R.drawable.ic_media_ff, 4,
+        )
+        val close = pipAction(PipPlaybackAction.CLOSE, "Close", android.R.drawable.ic_menu_close_clear_cancel, 2)
+        val sourceRect = Rect().takeIf { playerView?.getGlobalVisibleRect(it) == true }
         return PictureInPictureParams.Builder()
             .setAspectRatio(videoAspectRatio)
-            .setActions(listOf(toggle, close))
+            .setActions(listOf(seek, toggle, nextOrForward).take(getMaxNumPictureInPictureActions()))
+            .apply { sourceRect?.let(::setSourceRectHint) }
             .apply {
                 if (Build.VERSION.SDK_INT >= 31) setAutoEnterEnabled(entry == PipPolicy.Entry.AutoEnter)
                 if (Build.VERSION.SDK_INT >= 33) setCloseAction(close)
@@ -450,11 +494,13 @@ class PlayerActivity : ComponentActivity() {
             !packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
         val entry = pipEntry()
         val playing = player?.isPlaying == true
-        if (entry == lastPipEntry && playing == lastPipPlaying && videoAspectRatio == lastPipAspectRatio) return
+        val hasNext = nextIndex() != null
+        if (entry == lastPipEntry && playing == lastPipPlaying && videoAspectRatio == lastPipAspectRatio && hasNext == lastPipHasNext) return
         setPictureInPictureParams(pipParams(entry))
         lastPipEntry = entry
         lastPipPlaying = playing
         lastPipAspectRatio = videoAspectRatio
+        lastPipHasNext = hasNext
     }
 
     override fun onUserLeaveHint() {
@@ -546,6 +592,7 @@ class PlayerActivity : ComponentActivity() {
                 else break
             }
             if (openMenus.isEmpty() && !timerUiPinned && overlayState.playbackState != "retry" &&
+                overlayState.playbackState != "reconnecting" &&
                 overlayState.playbackState != "stopped" &&
                 !overlayState.sleepTimer.isWarning && !overlayState.sleepTimer.isEnded)
                 visibility = visibility.onTimeout()
@@ -591,6 +638,12 @@ class PlayerActivity : ComponentActivity() {
                 val index = extras.getInt("queue_index", -1)
                 if (index >= 0) intent.putExtra(EXTRA_EPISODE_INDEX, index)
                 val newState = extras.getString(PlaybackCommands.STATE) ?: "playing"
+                val failureKind = extras.getString(PlaybackCommands.FAILURE_KIND)?.let { name ->
+                    PlaybackFailureKind.values().firstOrNull { it.name == name }
+                }
+                val retryAttempt = extras.getInt(PlaybackCommands.RETRY_ATTEMPT, 1)
+                val retryMax = extras.getInt(PlaybackCommands.RETRY_MAX, 1)
+                val retryNextSeconds = extras.getInt(PlaybackCommands.RETRY_NEXT_SECONDS, -1)
                 val prompt = extras.getBoolean(PlaybackCommands.NEXT_PROMPT)
                 val title = extras.getString(PlaybackCommands.NEXT_TITLE)
                 val endedTitle = extras.getString(PlaybackCommands.TITLE)
@@ -605,21 +658,26 @@ class PlayerActivity : ComponentActivity() {
                 )
                 if (overlayState.sleepTimer.isEnded && !timerUi.isEnded) return@addListener
                 if (overlayState.playbackState != newState || overlayState.nextPrompt != prompt ||
-                    overlayState.nextTitle != title || overlayState.sleepTimer != timerUi
+                    overlayState.nextTitle != title || overlayState.sleepTimer != timerUi ||
+                    overlayState.failureKind != failureKind || overlayState.retryAttempt != retryAttempt ||
+                    overlayState.retryMax != retryMax || overlayState.retryNextSeconds != retryNextSeconds
                 ) {
                     if ((overlayState.sleepTimer.isWarning && !timerUi.isWarning && !timerUi.isEnded) ||
                         (overlayState.playbackState == "retry" && newState != "retry" &&
                             !timerUi.isWarning && !timerUi.isEnded))
                         timerUiPinned = false
+                    val wasRecovering = overlayState.playbackState == "reconnecting"
                     overlayState = overlayState.copy(
                         playbackState = newState, nextPrompt = prompt, nextTitle = title,
-                        sleepTimer = timerUi,
+                        sleepTimer = timerUi, failureKind = failureKind,
+                        retryAttempt = retryAttempt, retryMax = retryMax,
+                        retryNextSeconds = retryNextSeconds,
                     )
-                    if (newState == "retry" || timerUi.isWarning || timerUi.isEnded) {
-                        timerUiPinned = true
+                    if (newState == "retry" || newState == "reconnecting" || timerUi.isWarning || timerUi.isEnded) {
+                        if (newState == "retry" || timerUi.isWarning || timerUi.isEnded) timerUiPinned = true
                         visibility = visibility.onInput()
                         rearmControls()
-                    }
+                    } else if (wasRecovering) rearmControls()
                 }
             }, ContextCompat.getMainExecutor(this))
         }
@@ -730,12 +788,25 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTelevisionDevice() && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                openMenus = emptySet()
+                stopAndFinish(finishImmediately = true)
+            }
+            return true
+        }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_CENTER) {
             lastDpadAtMs = android.os.SystemClock.elapsedRealtime()
             if (visibility.visible) rearmControls()
         }
         return super.dispatchKeyEvent(event)
     }
+
+    private fun isTelevisionDevice(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION ||
+            (!packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) &&
+                packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK))
 
     private fun seekTo(positionMs: Long) {
         val exo = player ?: return
@@ -813,6 +884,7 @@ class PlayerActivity : ComponentActivity() {
         itemId = ids[next]
         overlayState = overlayState.copy(title = titles[next], hasResume = false, positionMs = 0L)
         sendPlayRequest()
+        updatePipParams()
         showControls()
     }
 
@@ -924,7 +996,5 @@ class PlayerActivity : ComponentActivity() {
         private const val CONTROLS_TIMEOUT_MS = 5_000L
         private const val DPAD_IDLE_MS = 8_000L
         private const val SEEK_FEEDBACK_TIMEOUT_MS = 1_000L
-        private const val ACTION_PIP_PLAY_PAUSE = "com.dev.Tvivo.player.PIP_PLAY_PAUSE"
-        private const val ACTION_PIP_CLOSE = "com.dev.Tvivo.player.PIP_CLOSE"
     }
 }

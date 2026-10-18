@@ -1,6 +1,7 @@
 package com.dev.Tvivo.ui.detail
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dev.Tvivo.auth.AccountIdentity
@@ -12,8 +13,6 @@ import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
-import com.dev.Tvivo.data.local.entities.WatchedEntity
-import androidx.room.withTransaction
 import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
@@ -45,7 +44,6 @@ data class ItemDetailUiState(
     val cast: String? = null,
     val trailer: String? = null,
     val isFavourite: Boolean = false,
-    val isWatched: Boolean = false,
     /** Non-null once we know there is somewhere to resume from. */
     val resumeFromMs: Long? = null,
     val isLoading: Boolean = true,
@@ -92,14 +90,25 @@ class ItemDetailViewModel(
             this@ItemDetailViewModel.accountId = accountId
             val pb = PlaybackStateRepository(db, accountId)
             playback = pb
-            if (contentType == ContentType.MOVIES) launch {
-                db.resumeDao().observe(accountId, typeKey, itemId.toString()).collect { progress ->
-                    _state.update { current -> current.copy(
-                        resumeFromMs = progress?.positionMs?.takeIf { it > 0 },
-                        durationMs = progress?.durationMs?.takeIf { it > 0 },
-                        durationMinutes = progress?.durationMs?.takeIf { it > 0 }
-                            ?.div(60_000L)?.toInt() ?: current.durationMinutes,
-                    ) }
+            if (contentType == ContentType.MOVIES) {
+                // Play becomes available when the catalog row loads. Resolve the saved
+                // position first so a fast tap after recreation cannot launch at zero.
+                val progress = pb.resumePosition(typeKey, itemId.toString())
+                Log.i("PlaybackResume", "detail loaded type=$typeKey position=${progress?.positionMs ?: 0L} " +
+                    "duration=${progress?.durationMs ?: 0L}")
+                _state.update { current -> current.copy(
+                    resumeFromMs = progress?.positionMs?.takeIf { it > 0 },
+                    durationMs = progress?.durationMs?.takeIf { it > 0 },
+                ) }
+                launch {
+                    db.resumeDao().observe(accountId, typeKey, itemId.toString()).collect { observed ->
+                        _state.update { current -> current.copy(
+                            resumeFromMs = observed?.positionMs?.takeIf { it > 0 },
+                            durationMs = observed?.durationMs?.takeIf { it > 0 },
+                            durationMinutes = observed?.durationMs?.takeIf { it > 0 }
+                                ?.div(60_000L)?.toInt() ?: current.durationMinutes,
+                        ) }
+                    }
                 }
             }
 
@@ -177,10 +186,6 @@ class ItemDetailViewModel(
 
             // Live has no resume point, and a *show* resumes per episode rather than as
             // a whole — neither may raise a "continue from" the page cannot honour.
-            if (contentType == ContentType.MOVIES) {
-                refreshPlayback()
-            }
-
             launch {
                 pb.isFavourite(typeKey, itemId.toString()).collect { fav ->
                     _state.update { it.copy(isFavourite = fav) }
@@ -202,6 +207,21 @@ class ItemDetailViewModel(
         viewModelScope.launch { pb.toggleFavourite(typeKey, itemId.toString(), next) }
     }
 
+    /** Re-read playback state after returning from the player Activity. */
+    fun refreshPlayback() {
+        val pb = playback ?: return
+        if (contentType != ContentType.MOVIES) return
+        viewModelScope.launch {
+            val resume = pb.resumePosition(typeKey, itemId.toString())
+            _state.update { current -> current.copy(
+                resumeFromMs = resume?.positionMs?.takeIf { it > 0 },
+                durationMs = resume?.durationMs?.takeIf { it > 0 },
+                durationMinutes = resume?.durationMs?.takeIf { it > 0 }
+                    ?.div(60_000L)?.toInt() ?: current.durationMinutes
+            ) }
+        }
+    }
+
     /** Dismissing the resume choice by starting over must also forget the position. */
     fun clearResume() {
         viewModelScope.launch { clearResumeNow() }
@@ -211,33 +231,6 @@ class ItemDetailViewModel(
         val pb = playback ?: return
         pb.clearResume(typeKey, itemId.toString())
         _state.update { it.copy(resumeFromMs = null) }
-    }
-
-    fun refreshPlayback() {
-        val pb = playback ?: return
-        val account = accountId ?: return
-        if (contentType != ContentType.MOVIES) return
-        viewModelScope.launch {
-            val watched = db.watchedDao().get(account, account, typeKey, itemId.toString()) != null
-            _state.update { current -> current.copy(
-                isWatched = watched
-            ) }
-        }
-    }
-
-    fun toggleWatched() {
-        val account = accountId ?: return
-        val next = !_state.value.isWatched
-        viewModelScope.launch {
-            db.withTransaction {
-                if (next) {
-                    db.watchedDao().mark(WatchedEntity(account, account, typeKey,
-                        itemId.toString(), System.currentTimeMillis()))
-                    db.resumeDao().remove(account, typeKey, itemId.toString())
-                } else db.watchedDao().unmark(account, account, typeKey, itemId.toString())
-            }
-            refreshPlayback()
-        }
     }
 
     fun retryPlot() {

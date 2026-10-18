@@ -20,7 +20,11 @@ internal object PlaybackSessionPolicy {
     }
 
     fun positionToSave(currentPositionMs: Long, lastGoodPositionMs: Long, failed: Boolean): Long =
-        (if (failed) lastGoodPositionMs else currentPositionMs).coerceAtLeast(0L)
+        (if (failed || currentPositionMs <= 0L && lastGoodPositionMs > 0L)
+            lastGoodPositionMs else currentPositionMs).coerceAtLeast(0L)
+
+    fun allowCompletionOnStop(ended: Boolean, timed: Boolean, timerArmed: Boolean, retrying: Boolean): Boolean =
+        ended || !timed && !timerArmed && !retrying
 
     interface AudioTarget {
         fun handleAudioFocus(enabled: Boolean)

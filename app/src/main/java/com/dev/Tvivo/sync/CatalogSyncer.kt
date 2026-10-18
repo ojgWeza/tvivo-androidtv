@@ -11,6 +11,8 @@ import com.dev.Tvivo.data.remote.SeriesListParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
 import com.dev.Tvivo.diagnostics.DiagnosticLog
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -130,6 +132,7 @@ class CatalogSyncer(
         try {
             val response = request()
             if (!response.isSuccessful) {
+                NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "catalog sync")
                 setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
                 DiagnosticLog.error(AREA, "$contentType: sync failed, HTTP ${response.code()}")
                 return@withContext Result.failure(IllegalStateException("HTTP ${response.code()}"))
@@ -185,6 +188,7 @@ class CatalogSyncer(
             if (t is CancellationException) {
                 DiagnosticLog.info(AREA, "$contentType: sync cancelled")
             } else {
+                NetworkEventRecorder.failure(NetworkEventSource.CATALOG, accountId, t, "catalog sync")
                 DiagnosticLog.error(AREA, "$contentType: sync failed, ${t.javaClass.simpleName}")
             }
             Result.failure(t)

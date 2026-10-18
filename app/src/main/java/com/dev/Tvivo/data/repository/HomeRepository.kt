@@ -8,6 +8,8 @@ import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.home.HomeRules
 import com.dev.Tvivo.home.LandingSpec
 import com.dev.Tvivo.home.CatalogSort
+import com.dev.Tvivo.home.CatalogFirstPaint
+import com.dev.Tvivo.home.CatalogFirstPaintPolicy
 import com.dev.Tvivo.home.EmptyShelfRule
 import com.dev.Tvivo.home.MyTvivoShelfKind
 import com.dev.Tvivo.home.ShelfContentType
@@ -49,7 +51,23 @@ data class HomeShelf(
     val emptyRule: EmptyShelfRule = EmptyShelfRule.HideWhenEmpty
 )
 
-data class HomeSnapshot(val shelves: List<HomeShelf>, val isFirstRun: Boolean)
+data class HomeSnapshot(
+    val shelves: List<HomeShelf>,
+    val isFirstRun: Boolean,
+    val isCatalogLoading: Boolean = false
+)
+
+/** Bounded process-local last-good snapshots keep My Tvivo ready across route changes. */
+object HomeSnapshotMemoryCache {
+    private val snapshots = LinkedHashMap<String, HomeSnapshot>(4, 0.75f, true)
+
+    @Synchronized fun get(accountId: String): HomeSnapshot? = snapshots[accountId]
+
+    @Synchronized fun put(accountId: String, snapshot: HomeSnapshot) {
+        snapshots[accountId] = snapshot
+        while (snapshots.size > 4) snapshots.remove(snapshots.keys.first())
+    }
+}
 
 data class LandingCategoryMetrics(val visits: Long, val lastVisitedAt: Long, val latestAdded: Long)
 
@@ -242,8 +260,16 @@ class HomeRepository(private val db: AppDatabase, private val accountId: String)
         }
         val catalogCount = db.vodDao().countSnapshot(accountId) +
             db.seriesDao().countSnapshot(accountId) + db.liveDao().countSnapshot(accountId)
-        HomeSnapshot(if (catalogCount == 0) emptyList() else shelves,
-            HomeRules.isFirstRun(catalogCount, 0))
+        val firstPaint = CatalogFirstPaintPolicy.decide(catalogCount, listOf(
+            db.catalogSyncDao().get(accountId, TYPE_VOD)?.state,
+            db.catalogSyncDao().get(accountId, TYPE_SERIES)?.state,
+            db.catalogSyncDao().get(accountId, TYPE_LIVE)?.state
+        ))
+        HomeSnapshot(
+            shelves = if (firstPaint == CatalogFirstPaint.Content) shelves else emptyList(),
+            isFirstRun = firstPaint == CatalogFirstPaint.FirstRun,
+            isCatalogLoading = firstPaint == CatalogFirstPaint.Loading
+        )
     }
 
     private suspend fun addedCards(type: ContentType, shelfId: String): List<HomeCard> {

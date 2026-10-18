@@ -2,6 +2,8 @@ package com.dev.Tvivo.data.repository
 
 import com.dev.Tvivo.data.local.dao.SyncMetaDao
 import com.dev.Tvivo.data.local.entities.SyncMetaEntity
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 
 /**
  * The one place the TTL/transaction mechanism lives. Per-type repositories supply only
@@ -47,6 +49,7 @@ class CachedFetch(private val syncMetaDao: SyncMetaDao) {
             )
             Result.success(true)
         } catch (t: Throwable) {
+            NetworkEventRecorder.failure(NetworkEventSource.CATALOG, accountId, t, contentType)
             Result.failure(t)
         }
     }

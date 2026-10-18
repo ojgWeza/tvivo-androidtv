@@ -13,9 +13,12 @@ class ShelfHeaderVisibility internal constructor(
     val shelfHeading: BringIntoViewRequester,
     private val screenHeading: BringIntoViewRequester?
 ) {
-    suspend fun reveal() {
-        screenHeading?.bringIntoView()
+    suspend fun revealShelf() {
         shelfHeading.bringIntoView()
+    }
+
+    suspend fun revealPageHeading() {
+        screenHeading?.bringIntoView()
     }
 
     fun shelfHeadingModifier(): Modifier = Modifier.bringIntoViewRequester(shelfHeading)

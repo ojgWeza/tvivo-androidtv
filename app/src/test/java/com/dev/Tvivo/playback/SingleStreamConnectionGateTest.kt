@@ -3,9 +3,13 @@ package com.dev.Tvivo.playback
 import android.net.Uri
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
+import com.dev.Tvivo.diagnostics.NetworkEventKind
+import com.dev.Tvivo.diagnostics.NetworkEventStore
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import java.io.IOException
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -109,5 +113,22 @@ class SingleStreamConnectionGateTest {
         }.exceptionOrNull()
         assertTrue(failure is IOException)
         assertEquals(1, attempts)
+    }
+
+    @Test fun recentClose403IsRecordedAsTypedHandoffContextWithoutOpeningAStream() {
+        val account = "11223344556677889900aabbccddeeff"
+        val response = HttpDataSource.InvalidResponseCodeException(
+            403, "Forbidden", null, emptyMap(), DataSpec(Uri.parse("https://private.example.invalid/media")), byteArrayOf()
+        )
+        val thrown = runCatching {
+            openAfterRecentClose(true, { throw response }, {}, account, { false })
+        }.exceptionOrNull()
+        assertEquals(response, thrown)
+        assertTrue(NetworkEventStore.forAccount(account).any {
+            it.kind == NetworkEventKind.HANDOFF_COOLDOWN_403 && it.accountPartition == account
+        })
+        val encoded = NetworkEventStore.encode(NetworkEventStore.forAccount(account))
+        assertFalse(encoded.contains("private.example.invalid"))
+        assertFalse(encoded.contains("/media"))
     }
 }

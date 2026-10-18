@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +64,7 @@ fun DetailHero(
 ) {
     val context = LocalContext.current
     var expanded by remember(title) { mutableStateOf(false) }
+    val posterDescription = stringResource(com.dev.Tvivo.R.string.detail_poster_accessibility, title)
     val artwork: @Composable () -> Unit = {
         Box(Modifier.fillMaxWidth().aspectRatio(if (isLive) 16f / 9f else 2f / 3f)
             .clip(RoundedCornerShape(8.dp)).background(AppColors.Elevated), contentAlignment = Alignment.Center) {
@@ -71,7 +73,7 @@ fun DetailHero(
                     model = ImageRequest.Builder(context)
                         .data(imageUrl).size(440, if (isLive) 248 else 660).build(),
                     imageLoader = TvivoImageLoader.get(context),
-                    contentDescription = "$title poster",
+                    contentDescription = posterDescription,
                     contentScale = if (isLive) ContentScale.Fit else ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -109,10 +111,10 @@ fun DetailHero(
             if (!horizontal && !expanded && synopsis.length > 180) {
                 Text(synopsis.take(180).trimEnd() + "…", color = AppColors.Dim,
                     style = TvType.body, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                DetailTextButton("Read more", Modifier.padding(top = 4.dp)) { expanded = true }
+                DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_read_more), Modifier.padding(top = 4.dp)) { expanded = true }
             } else {
                 ScrollableText(synopsis, maxHeight = if (horizontal) 240.dp else 300.dp)
-                if (!horizontal && expanded) DetailTextButton("Show less") { expanded = false }
+                if (!horizontal && expanded) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_show_less)) { expanded = false }
             }
         }
         }

@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -49,6 +50,7 @@ import com.dev.Tvivo.ui.settings.AccountViewModel
 import com.dev.Tvivo.ui.series.SeriesDetailScreen
 import com.dev.Tvivo.ui.settings.SettingsScreen
 import com.dev.Tvivo.ui.settings.DiagnosticsScreen
+import com.dev.Tvivo.ui.settings.NetworkDiagnosticsScreen
 import com.dev.Tvivo.ui.settings.SubscriptionScreen
 import com.dev.Tvivo.ui.player.PlayerActivity
 import com.dev.Tvivo.data.StreamUrlBuilder
@@ -59,6 +61,8 @@ import com.dev.Tvivo.data.local.entities.RecentlyPlayedEntity
 import com.dev.Tvivo.data.local.entities.ShelfVisitEntity
 import com.dev.Tvivo.data.repository.roomKey
 import com.dev.Tvivo.diagnostics.DiagnosticLog
+import com.dev.Tvivo.diagnostics.NetworkDiagnosticsRuntime
+import com.dev.Tvivo.diagnostics.DeepStreamCheckGate
 import com.dev.Tvivo.ui.detail.ItemDetailScreen
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvivoTheme
@@ -73,6 +77,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.dev.Tvivo.ui.settings.AppLanguage.wrap(newBase))
+    }
+
     private lateinit var initialThemeMode: ThemeMode
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +104,7 @@ class MainActivity : ComponentActivity() {
             "version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} api=${Build.VERSION.SDK_INT} " +
                 "device=${Build.MANUFACTURER} ${Build.MODEL}"
         )
+        NetworkDiagnosticsRuntime.start(applicationContext)
         logWindowMetrics("Started")
         if (BuildConfig.DEBUG) CodecProbe.log()
         // Phase 5. Idempotent and cheap; scheduling here rather than in an Application
@@ -158,6 +167,10 @@ private fun playItem(
     extension: String?,
     resumeFromMs: Long
 ) {
+    if (DeepStreamCheckGate.isHeld) {
+        android.widget.Toast.makeText(context, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
     val url = if (isLive) {
         StreamUrlBuilder.live(credentials, itemId, extension ?: "ts")
     } else {
@@ -218,11 +231,16 @@ internal sealed interface Route {
 
     /** Phase 5. Read-only, and reached from Account. */
     data class Diagnostics(val credentials: Credentials) : Route
+
+    data class NetworkDiagnostics(val credentials: Credentials) : Route
 }
 
 /** Kept outside composition so all three Home transitions are unit-testable. */
 internal fun browseRoute(credentials: Credentials, type: ContentType): Route.Browse =
     Route.Browse(credentials, type)
+
+internal fun shouldReturnToSearchAfterSeeAll(wasOpenedFromSearch: Boolean, currentTabIsSearch: Boolean) =
+    wasOpenedFromSearch && !currentTabIsSearch
 
 private fun Route.diagnosticName(): String = when (this) {
     is Route.Loading -> "Loading"
@@ -235,6 +253,7 @@ private fun Route.diagnosticName(): String = when (this) {
     is Route.Settings -> "Settings"
     is Route.Subscription -> "Subscription"
     is Route.Diagnostics -> "Diagnostics"
+    is Route.NetworkDiagnostics -> "Network diagnostics"
 }
 
 @Composable
@@ -246,12 +265,20 @@ private fun TvivoApp() {
         mutableStateOf<Route>(Route.Loading(0.15f, "Starting…"))
     }
     var savedTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
+    var searchSeeAllReturn by rememberSaveable { mutableStateOf(false) }
     var detailOriginTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
     var browseCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingHomeFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSearchFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCatalogFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var focusSettingsNetworkDiagnostics by rememberSaveable { mutableStateOf(false) }
     val tabStates = rememberSaveableStateHolder()
+    var shellSortChoice by rememberSaveable { mutableStateOf(com.dev.Tvivo.home.CatalogSort.MostVisited) }
+    var shellSortRevision by remember { mutableIntStateOf(0) }
+    var shellRefreshRevision by remember { mutableIntStateOf(0) }
+    val shellScope = rememberCoroutineScope()
+    val playerPreferences = remember(context) { PlayerPreferencesStore(context.applicationContext) }
+    val themeMode by playerPreferences.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.Dark)
 
     LaunchedEffect(route) {
         DiagnosticLog.info("Navigation", "destination composed", "route=${route.diagnosticName()}")
@@ -320,10 +347,17 @@ private fun TvivoApp() {
             route is Route.Settings ||
             route is Route.Subscription ||
             route is Route.Diagnostics ||
+            route is Route.NetworkDiagnostics ||
             (route is Route.Login && switchingAccount != null)
     ) {
         when (val current = route) {
             is Route.Main -> {
+                if (shouldReturnToSearchAfterSeeAll(searchSeeAllReturn, current.tab == ShellTab.Search)) {
+                    searchSeeAllReturn = false
+                    savedTab = ShellTab.Search
+                    route = Route.Main(current.credentials, ShellTab.Search)
+                    return@BackHandler
+                }
                 if (current.tab == ShellTab.MyTvivo) {
                     homeExitRequest++
                     return@BackHandler
@@ -346,6 +380,7 @@ private fun TvivoApp() {
             // from — skipping to Home would lose the user's place in the action list.
             is Route.Subscription -> route = Route.Main(current.credentials, ShellTab.Settings)
             is Route.Diagnostics -> route = Route.Main(current.credentials, ShellTab.Settings)
+            is Route.NetworkDiagnostics -> route = Route.Main(current.credentials, ShellTab.Settings)
             is Route.Login -> switchingAccount?.let {
                 switchingAccount = null
                 savedTab = ShellTab.MyTvivo
@@ -383,6 +418,7 @@ private fun TvivoApp() {
         is Route.Main -> {
             val accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) }
             fun select(tab: ShellTab) {
+                searchSeeAllReturn = false
                 savedTab = tab
                 browseCategoryId = null
                 route = Route.Main(current.credentials, tab)
@@ -396,7 +432,25 @@ private fun TvivoApp() {
                     Route.SeriesDetail(current.credentials, card.item.id)
                 } else Route.ItemDetail(current.credentials, card.type, card.item.id)
             }
-            AppShell(selected = current.tab, onSelect = ::select) {
+            AppShell(
+                selected = current.tab,
+                onSelect = ::select,
+                sortEnabled = current.tab == ShellTab.Movies || current.tab == ShellTab.Series || current.tab == ShellTab.Live,
+                openedCategory = browseCategoryId != null,
+                refreshEnabled = current.tab != ShellTab.Search && current.tab != ShellTab.Settings,
+                sortChoice = shellSortChoice,
+                onSortSelected = { shellSortChoice = it; shellSortRevision++ },
+                onRefresh = {
+                    if (current.tab == ShellTab.MyTvivo) account.refreshEverything()
+                    else shellRefreshRevision++
+                },
+                onTheme = {
+                    shellScope.launch {
+                        playerPreferences.setThemeMode(
+                            if (themeMode == ThemeMode.Dark) ThemeMode.Light else ThemeMode.Dark)
+                    }
+                }
+            ) {
                 tabStates.SaveableStateProvider("$accountId:${current.tab.name}") {
                     when (current.tab) {
                         ShellTab.MyTvivo -> HomeScreen(
@@ -473,6 +527,7 @@ private fun TvivoApp() {
                                     ContentType.SERIES -> ShellTab.Series
                                     ContentType.LIVE -> ShellTab.Live
                                 })
+                                searchSeeAllReturn = true
                             })
                         ShellTab.Settings -> SettingsScreen(
                             viewModel = account,
@@ -489,7 +544,13 @@ private fun TvivoApp() {
                                 route = Route.Login
                             },
                             onShowSubscription = { route = Route.Subscription(current.credentials) },
-                            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) }
+                            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) },
+                            focusNetworkDiagnostics = focusSettingsNetworkDiagnostics,
+                            onNetworkDiagnosticsFocusConsumed = { focusSettingsNetworkDiagnostics = false },
+                            onShowNetworkDiagnostics = {
+                                focusSettingsNetworkDiagnostics = true
+                                route = Route.NetworkDiagnostics(current.credentials)
+                            }
                         )
                         else -> {
                             val type = when (current.tab) {
@@ -501,6 +562,10 @@ private fun TvivoApp() {
                                 contentType = type,
                                 accountId = accountId,
                                 initialCategoryId = browseCategoryId,
+                                shellSortChoice = shellSortChoice,
+                                shellSortRevision = shellSortRevision,
+                                shellRefreshRevision = shellRefreshRevision,
+                                onShellSortStateChanged = { shellSortChoice = it },
                                 pendingFocusCardKey = pendingCatalogFocusKey,
                                 onPendingFocusConsumed = { pendingCatalogFocusKey = null },
                                 onReturnToLanding = { browseCategoryId = null },
@@ -555,12 +620,20 @@ private fun TvivoApp() {
                 route = Route.Login
             },
             onShowSubscription = { route = Route.Subscription(current.credentials) },
-            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) }
+            onShowDiagnostics = { route = Route.Diagnostics(current.credentials) },
+            focusNetworkDiagnostics = focusSettingsNetworkDiagnostics,
+            onNetworkDiagnosticsFocusConsumed = { focusSettingsNetworkDiagnostics = false },
+            onShowNetworkDiagnostics = {
+                focusSettingsNetworkDiagnostics = true
+                route = Route.NetworkDiagnostics(current.credentials)
+            }
         )
 
         is Route.Subscription -> SubscriptionScreen(viewModel = account)
 
         is Route.Diagnostics -> DiagnosticsScreen()
+
+        is Route.NetworkDiagnostics -> NetworkDiagnosticsScreen(AccountIdentity.of(current.credentials), current.credentials)
 
         is Route.Browse -> {
             val isLive = current.type == ContentType.LIVE
@@ -638,6 +711,10 @@ private fun TvivoApp() {
             SeriesDetailScreen(
                 seriesId = current.seriesId,
                 onPlayEpisode = { episode, resumeFromMs, episodes ->
+                    if (DeepStreamCheckGate.isHeld) {
+                        android.widget.Toast.makeText(context, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
+                        return@SeriesDetailScreen
+                    }
                     // Episodes live on their own path segment and carry their own id —
                     // a string, straight from the panel, never round-tripped through Int.
                     val url = StreamUrlBuilder.episode(

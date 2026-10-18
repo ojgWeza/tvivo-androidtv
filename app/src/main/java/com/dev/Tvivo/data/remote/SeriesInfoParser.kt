@@ -1,6 +1,5 @@
 package com.dev.Tvivo.data.remote
 
-import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -53,6 +52,8 @@ object SeriesInfoParser {
             ?.takeIf { it.isJsonObject }
             ?.asJsonObject
             ?: return emptyList()
+        val showName = root.asJsonObject.get("info")?.takeIf { it.isJsonObject }
+            ?.asJsonObject?.string("name")
 
         val rows = ArrayList<EpisodeEntity>()
         for ((seasonKey, value) in episodes.entrySet()) {
@@ -64,6 +65,7 @@ object SeriesInfoParser {
             array.forEachIndexed { index, element ->
                 val obj = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEachIndexed
                 val episodeId = obj.string("id") ?: return@forEachIndexed
+                val episodeNumber = obj.string("episode_num")?.toIntOrNull() ?: (index + 1)
                 rows.add(
                     EpisodeEntity(
                         accountId = accountId,
@@ -73,11 +75,8 @@ object SeriesInfoParser {
                         // Position in the season is the fallback: an episode with no
                         // number must still sort somewhere stable rather than collapsing
                         // onto every other unnumbered episode at 0.
-                        episodeNum = obj.string("episode_num")?.toIntOrNull() ?: (index + 1),
-                        title = obj.string("title")
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { NameNormalizer.of(it).display }
-                            ?: defaultTitle(seasonFromKey, index),
+                        episodeNum = episodeNumber,
+                        title = EpisodeTitlePolicy.displayTitle(obj.string("title"), episodeNumber, showName),
                         containerExtension = obj.string("container_extension")
                             ?.takeIf { it.isNotBlank() },
                         durationSecs = durationOf(obj),
@@ -123,9 +122,6 @@ object SeriesInfoParser {
             number to name
         }.toMap()
     }
-
-    private fun defaultTitle(season: Int?, index: Int): String =
-        "S%02dE%02d".format(season ?: 0, index + 1)
 
     /** The per-episode `info` block is transcoding metadata; only the runtime is useful. */
     private fun JsonObject.info(): JsonObject? =

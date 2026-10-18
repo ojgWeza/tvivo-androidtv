@@ -14,7 +14,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.res.stringResource
 import androidx.tv.material3.Text
+import com.dev.Tvivo.R
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
@@ -49,15 +51,15 @@ fun ItemContextMenu(
                 overflow = TextOverflow.Ellipsis
             )
 
-            MenuAction(label = "Play", onClick = onPlay)
+            MenuAction(label = stringResource(R.string.menu_play), onClick = onPlay)
             MenuAction(
-                label = if (isFavourite) "Remove from favourites" else "Add to favourites",
+                label = stringResource(if (isFavourite) R.string.menu_remove_favourite else R.string.menu_add_favourite),
                 onClick = onToggleFavourite
             )
             if (hasResumePoint) {
-                MenuAction(label = "Remove from continue watching", onClick = onClearResume)
+                MenuAction(label = stringResource(R.string.menu_clear_resume), onClick = onClearResume)
             }
-            MenuAction(label = "Close", onClick = onDismiss)
+            MenuAction(label = stringResource(R.string.menu_close), onClick = onDismiss)
         }
     }
 }

@@ -13,12 +13,16 @@ import android.graphics.Canvas
 import android.os.Bundle
 import android.os.Build
 import android.os.SystemClock
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
@@ -40,6 +44,11 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
+import com.dev.Tvivo.diagnostics.NetworkEventKind
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
+import com.dev.Tvivo.diagnostics.NetworkPlaybackState
+import com.dev.Tvivo.diagnostics.DeepStreamCheckGate
 import com.dev.Tvivo.playback.PlaybackEndPolicy
 import com.dev.Tvivo.playback.PlaybackRetryPolicy
 import com.dev.Tvivo.playback.PlaybackAttemptResult
@@ -81,9 +90,12 @@ class PlaybackService : MediaSessionService() {
     private var timerForegroundStarted = false
     private var timerReceiverRegistered = false
     private lateinit var stopButton: CommandButton
+    private lateinit var playPauseButton: CommandButton
     private var recoveryJob: Job? = null
     private var retryCount = 1
     private var playbackState = "idle"
+    private var failureKind: PlaybackFailureKind? = null
+    private var retryAtElapsedMs = -1L
     private var nextPromptVisible = false
     private var nextPromptCancelled = false
     private var nextPromptTitle: String? = null
@@ -119,7 +131,7 @@ class PlaybackService : MediaSessionService() {
         player = ExoPlayer.Builder(this)
             .setRenderersFactory(DefaultRenderersFactory(this).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER))
             .setMediaSourceFactory(DefaultMediaSourceFactory(
-                SingleStreamDataSourceFactory(DefaultDataSource.Factory(this)), extractors))
+                SingleStreamDataSourceFactory(DefaultDataSource.Factory(this), accountPartition = { handoff.current?.accountId }), extractors))
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
@@ -143,21 +155,37 @@ class PlaybackService : MediaSessionService() {
                 val position = PlaybackSessionPolicy.positionToSave(
                     player.currentPosition, lastGoodPositionMs, failed && !ended)
                 val duration = player.duration.takeIf { it > 0 } ?: 0L
-                PlaybackStateRepository(AppDatabase.get(this@PlaybackService), item.accountId)
-                    .savePosition(item.contentType, item.itemId, position, duration, ended,
-                        allowCompletion && !failed)
+                val canComplete = allowCompletion && !failed
+                Log.i("PlaybackResume", "save begin type=${item.contentType} current=${player.currentPosition} " +
+                    "sample=$lastGoodPositionMs chosen=$position duration=$duration ended=$ended " +
+                    "completion=$canComplete timer=${sleepTimer.state}")
+                try {
+                    PlaybackStateRepository(AppDatabase.get(this@PlaybackService), item.accountId)
+                        .savePosition(item.contentType, item.itemId, position, duration, ended, canComplete)
+                    Log.i("PlaybackResume", "save complete type=${item.contentType} position=$position")
+                } catch (failure: Exception) {
+                    Log.w("PlaybackResume", "save failed type=${item.contentType} cause=${failure.javaClass.simpleName}")
+                    throw failure
+                }
             }
 
             override fun close() {
+                if (NetworkPlaybackState.active) DeepStreamCheckGate.recordStreamStopped()
+                NetworkPlaybackState.active = false
                 player.playWhenReady = false
                 player.stop()
                 player.clearMediaItems()
             }
 
             override fun open(item: PlaybackHandoff.Item, generation: Long) {
+                Log.i("PlaybackResume", "open type=${item.contentType} resume=${item.resumeFromMs} " +
+                    "live=${item.isLive} timer=${sleepTimer.state}")
+                NetworkPlaybackState.active = true
                 val sameItemRecovery = recoveryOpen
                 if (!recoveryOpen) retryCount = 1
-                playbackState = "playing"
+                playbackState = if (sameItemRecovery) "reconnecting" else "playing"
+                retryAtElapsedMs = -1L
+                if (!sameItemRecovery) failureKind = null
                 lastGoodPositionMs = if (item.isLive) 0L else item.resumeFromMs.coerceAtLeast(0L)
                 lastSamplePositionMs = lastGoodPositionMs
                 lastSampleAtMs = android.os.SystemClock.elapsedRealtime()
@@ -195,12 +223,20 @@ class PlaybackService : MediaSessionService() {
                 openTimeoutJob = scope.launch {
                     delay(PlaybackRetryPolicy.attemptTimeoutMs(item.isLive))
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
+                    NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
+                        NetworkEventKind.TIMEOUT, "stream open")
                     val attempt = retryCount
+                    failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.Timeout,
+                        offline = isOffline())
                     if (PlaybackRetryPolicy.shouldRetry(PlaybackAttemptResult.Timeout, attempt,
                             PlaybackRetryPolicy.DEFAULT_ATTEMPTS, 0L)) {
+                        NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
+                            NetworkEventKind.RETRY, "stream open timeout")
                         retryCount++
                         playbackState = "reconnecting"
-                        delay(PlaybackRetryPolicy.delayMs(attempt))
+                        val waitMs = PlaybackRetryPolicy.delayMs(attempt)
+                        retryAtElapsedMs = SystemClock.elapsedRealtime() + waitMs
+                        delay(waitMs)
                         if (handoff.isCurrent(generation) && timerAllowsTransition()) reopen(item, if (item.isLive) 0L else lastGoodPositionMs)
                     } else markFinalFailure()
                 }
@@ -208,11 +244,21 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(object : Player.Listener {
             override fun onTracksChanged(tracks: Tracks) {
+                NetworkPlaybackState.selectedTrackBitrateMbps = tracks.groups.asSequence()
+                    .flatMap { group -> (0 until group.length).asSequence().filter(group::isTrackSelected).map { group.getTrackFormat(it).bitrate } }
+                    .filter { it > 0 }.maxOrNull()?.div(1_000_000.0)
                 manualAudioChoice?.let { applyManualTrackChoice(C.TRACK_TYPE_AUDIO, it, tracks) }
                 manualSubtitleChoice?.let { applyManualTrackChoice(C.TRACK_TYPE_TEXT, it, tracks) }
+                updateTimerNotificationActions()
             }
+            override fun onIsPlayingChanged(isPlaying: Boolean) = updateTimerNotificationActions()
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateTimerNotificationActions()
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY && handoff.current?.isLive == true) openTimeoutJob?.cancel()
+                if (state == Player.STATE_READY && playbackState == "reconnecting" && retryAtElapsedMs < 0) {
+                    playbackState = "playing"
+                    failureKind = null
+                }
                 if (state != Player.STATE_ENDED) return
                 val generation = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return
                 if (handoff.isCurrent(generation)) scope.launch {
@@ -220,7 +266,10 @@ class PlaybackService : MediaSessionService() {
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
                     if (PlaybackEndPolicy.isGenuineEnd(player.currentPosition, player.duration.takeIf { it > 0 }, true)) {
                         advanceAfterEnd()
-                    } else markFinalFailure()
+                    } else {
+                        failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnknownFailure, earlyEnd = true)
+                        markFinalFailure()
+                    }
                 }
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -233,12 +282,19 @@ class PlaybackService : MediaSessionService() {
                     val responseCode = generateSequence(error.cause) { it.cause }
                         .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
                         .firstOrNull()?.responseCode
+                    if (responseCode != null) NetworkEventRecorder.http(NetworkEventSource.PLAYBACK,
+                        item.accountId, responseCode, "stream source")
+                    else NetworkEventRecorder.failure(NetworkEventSource.PLAYBACK, item.accountId, error, "stream source")
                     val failure = when {
                         responseCode != null -> PlaybackRetryPolicy.httpSourceFailure(responseCode)
+                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+                            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+                            PlaybackAttemptResult.UnsupportedMedia
                         error is ExoPlaybackException && error.type == ExoPlaybackException.TYPE_SOURCE ->
                             PlaybackAttemptResult.NetworkFailure
                         else -> PlaybackAttemptResult.DecodeFailure
                     }
+                    failureKind = PlaybackFailurePolicy.classify(failure, responseCode, offline = isOffline())
                     if ((hasPlaybackProgress && !PlaybackRetryPolicy.mayReopenAfterProgress(failure)) ||
                         stallPolicy.recoveryAttempted) {
                         markFinalFailure()
@@ -247,22 +303,34 @@ class PlaybackService : MediaSessionService() {
                     val attempt = retryCount
                     if (PlaybackRetryPolicy.shouldRetry(failure, attempt,
                             PlaybackRetryPolicy.DEFAULT_ATTEMPTS, 0L)) {
+                        NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
+                            NetworkEventKind.RETRY, "source error")
                         retryCount++
                         playbackState = "reconnecting"
-                        delay(PlaybackRetryPolicy.delayMs(attempt))
+                        val waitMs = PlaybackRetryPolicy.delayMs(attempt)
+                        retryAtElapsedMs = SystemClock.elapsedRealtime() + waitMs
+                        delay(waitMs)
                         if (handoff.isCurrent(generation) && timerAllowsTransition()) reopen(item, if (item.isLive) 0L else lastGoodPositionMs)
                     } else markFinalFailure()
                 }
             }
-            override fun onRenderedFirstFrame() { openTimeoutJob?.cancel() }
+            override fun onRenderedFirstFrame() {
+                openTimeoutJob?.cancel()
+                if (playbackState == "reconnecting" && retryAtElapsedMs < 0) {
+                    playbackState = "playing"
+                    failureKind = null
+                }
+            }
         })
         stopButton = CommandButton.Builder().setIconResId(android.R.drawable.ic_menu_close_clear_cancel)
             .setDisplayName(getString(com.dev.Tvivo.R.string.playback_stop))
             .setSessionCommand(PlaybackCommands.command(PlaybackCommands.STOP))
             .build()
+        playPauseButton = CommandButton.Builder().setIconResId(android.R.drawable.ic_media_play)
+            .setDisplayName("Play or pause").setPlayerCommand(Player.COMMAND_PLAY_PAUSE).build()
         session = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivityPendingIntent())
-            .setCustomLayout(com.google.common.collect.ImmutableList.of(stopButton))
+            .setCustomLayout(notificationLayout())
             .setCallback(object : MediaSession.Callback {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
                 if (!PlaybackSessionPolicy.mayControlSession(controller.uid, applicationInfo.uid, controller.isTrusted))
@@ -271,6 +339,10 @@ class PlaybackService : MediaSessionService() {
                 // trusted system controllers get the default commands plus STOP.
                 val builder = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                     .add(PlaybackCommands.command(PlaybackCommands.STOP))
+                    .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_PREVIOUS))
+                    .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_NEXT))
+                    .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_REWIND))
+                    .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_FORWARD))
                 if (PlaybackSessionPolicy.mayRunPrivilegedCommands(controller.uid, applicationInfo.uid)) {
                     listOf(
                         PlaybackCommands.PLAY, PlaybackCommands.STATUS, PlaybackCommands.SELECT_TRACK,
@@ -281,7 +353,13 @@ class PlaybackService : MediaSessionService() {
                     ).forEach { builder.add(PlaybackCommands.command(it)) }
                 }
                 val commands: SessionCommands = builder.build()
-                return MediaSession.ConnectionResult.accept(commands, MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
+                // These generic transport actions create a second Previous/Next row in
+                // system media notifications alongside our queue-aware episode buttons.
+                val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    .remove(Player.COMMAND_SEEK_TO_NEXT)
+                    .build()
+                return MediaSession.ConnectionResult.accept(commands, playerCommands)
             }
 
             override fun onCustomCommand(
@@ -310,6 +388,33 @@ class PlaybackService : MediaSessionService() {
                     return result
                 }
                 when (customCommand.customAction) {
+                    PlaybackCommands.NOTIFICATION_PREVIOUS -> {
+                        scope.launch {
+                            if (timerAllowsTransition()) handoff.current?.let { current ->
+                                queueItem(current, current.playlistIndex - 1)?.let { playQueueItem(current, it) }
+                            }
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    PlaybackCommands.NOTIFICATION_NEXT -> {
+                        scope.launch {
+                            if (!timerAllowsTransition()) return@launch
+                            val current = handoff.current
+                            if (current != null) {
+                                val mode = if (current.contentType == "series") savedPlaybackModes.episodeMode else savedPlaybackModes.movieMode
+                                selectedNext(current, mode)?.let { playQueueItem(current, it) }
+                            }
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    PlaybackCommands.NOTIFICATION_REWIND -> {
+                        if (player.isCurrentMediaItemSeekable) player.seekBack()
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    PlaybackCommands.NOTIFICATION_FORWARD -> {
+                        if (player.isCurrentMediaItemSeekable) player.seekForward()
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
                     PlaybackCommands.SELECT_TRACK -> {
                         val type = args.getInt(PlaybackCommands.TRACK_TYPE, -1)
                         val choice = args.getInt(PlaybackCommands.TRACK_CHOICE, -1)
@@ -322,6 +427,8 @@ class PlaybackService : MediaSessionService() {
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
                     PlaybackCommands.PLAY -> {
+                        if (DeepStreamCheckGate.isHeld)
+                            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_INFO_SKIPPED))
                         if (stopRequested || stopCommandQueued)
                             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_INFO_SKIPPED))
                         val item = PlaybackCommands.item(args)
@@ -418,6 +525,8 @@ class PlaybackService : MediaSessionService() {
                                 }
                                 retryCount = 1
                                 playbackState = "reconnecting"
+                                retryAtElapsedMs = -1L
+                                recoveryOpen = true
                                 handoff.reopenCurrent(if (handoff.current?.isLive == true) 0L else lastGoodPositionMs)
                                 result.set(SessionResult(SessionResult.RESULT_SUCCESS))
                             } catch (_: Exception) {
@@ -535,10 +644,19 @@ class PlaybackService : MediaSessionService() {
                     when (stallPolicy.observe(generation, player.playbackState == Player.STATE_READY,
                         eligible && player.playWhenReady, position, now)) {
                         StallDecision.Recover -> {
+                            NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
+                                NetworkEventKind.STALL, "playback position stopped advancing")
+                            NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
+                                NetworkEventKind.RETRY, "stall recovery")
                             playbackState = "reconnecting"
+                            failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.Timeout, stalled = true)
+                            retryAtElapsedMs = -1L
                             reopen(item, if (item.isLive) 0L else lastGoodPositionMs, isStallRecovery = true)
                         }
-                        StallDecision.GiveUp -> markFinalFailure()
+                        StallDecision.GiveUp -> {
+                            failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.Timeout, stalled = true)
+                            markFinalFailure()
+                        }
                         StallDecision.None -> Unit
                     }
                 }
@@ -567,6 +685,9 @@ class PlaybackService : MediaSessionService() {
         if (stopRequested) return
         val acknowledgement = stopAck ?: SettableFuture.create<SessionResult>().also { stopAck = it }
         stopRequested = true
+        val timerArmed = sleepTimer.state != SleepTimerState.Off
+        Log.i("PlaybackResume", "stop begin ended=$ended timed=$timed timer=${sleepTimer.state} " +
+            "active=${handoff.current != null}")
         openTimeoutJob?.cancel()
         openTimeoutJob = null
         timerJob?.cancel()
@@ -582,9 +703,12 @@ class PlaybackService : MediaSessionService() {
         }
         var saved = false
         try {
-            handoff.stop(ended, allowCompletion = !timed && playbackState != "retry")
+            handoff.stop(ended, allowCompletion = PlaybackSessionPolicy.allowCompletionOnStop(
+                ended, timed, timerArmed, playbackState == "retry"))
             saved = true
+            Log.i("PlaybackResume", "stop complete saved=true")
         } finally {
+            if (!saved) Log.w("PlaybackResume", "stop complete saved=false")
             acknowledgement.set(SessionResult(if (saved) SessionResult.RESULT_SUCCESS
                 else SessionResult.RESULT_ERROR_UNKNOWN))
             try {
@@ -647,12 +771,13 @@ class PlaybackService : MediaSessionService() {
         if (!timerAllowsTransition()) return
         val item = handoff.current ?: return
         if (!PlaybackEndPolicy.isGenuineEnd(player.currentPosition, player.duration.takeIf { it > 0 }, true)) {
+            failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnknownFailure, earlyEnd = true)
             markFinalFailure()
             return
         }
         val timerDecision = sleepTimer.genuineNaturalEnd(
             item.itemId ?: item.requestId, true, handoff.generation, handoff.generation)
-        applyTimerDecision(timerDecision)
+        applyTimerDecision(timerDecision, naturalEnd = true)
         if (timerDecision.stopPlayback || !timerAllowsTransition()) return
         val kind = if (item.contentType == com.dev.Tvivo.data.local.entities.TYPE_VOD) StreamKind.Movie else StreamKind.Episode
         val prefs = savedPlaybackModes
@@ -674,6 +799,16 @@ class PlaybackService : MediaSessionService() {
         return item.playlist.firstOrNull { it.id == selectedNextId }
     }
 
+    private fun queueItem(item: PlaybackHandoff.Item, index: Int): PlaybackHandoff.QueueItem? =
+        item.playlist.getOrNull(index)
+
+    private suspend fun playQueueItem(current: PlaybackHandoff.Item, target: PlaybackHandoff.QueueItem) {
+        if (!timerAllowsTransition() || stopRequested || stopCommandQueued) return
+        handoff.play(current.copy(requestId = java.util.UUID.randomUUID().toString(), url = target.url,
+            title = target.title, itemId = target.id, resumeFromMs = 0L,
+            playlistIndex = current.playlist.indexOf(target)))
+    }
+
     private fun statusBundle() = timerStatusBundle().apply {
         val item = handoff.current
         putString(PlaybackCommands.REQUEST_ID, item?.requestId ?: SleepTimerEndedSnapshot.requestId)
@@ -682,6 +817,16 @@ class PlaybackService : MediaSessionService() {
         putInt("queue_index", item?.playlistIndex ?: -1)
         putLong(PlaybackCommands.GENERATION, handoff.generation)
         putString(PlaybackCommands.STATE, playbackState)
+        putString(PlaybackCommands.FAILURE_KIND, failureKind?.name)
+        if (playbackState == "reconnecting") {
+            val remainingMs = if (retryAtElapsedMs < 0) -1L
+                else (retryAtElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            val progress = PlaybackFailurePolicy.retryProgress(retryCount,
+                PlaybackRetryPolicy.DEFAULT_ATTEMPTS, remainingMs)
+            putInt(PlaybackCommands.RETRY_ATTEMPT, progress.attempt)
+            putInt(PlaybackCommands.RETRY_MAX, progress.maxAttempts)
+            putInt(PlaybackCommands.RETRY_NEXT_SECONDS, progress.nextInSeconds ?: -1)
+        }
         putBoolean(PlaybackCommands.NEXT_PROMPT, nextPromptVisible)
         putString(PlaybackCommands.NEXT_TITLE, nextPromptTitle)
     }
@@ -717,7 +862,7 @@ class PlaybackService : MediaSessionService() {
         return PlaybackSleepTimerGate.permitsTransition(decision, timerStopping)
     }
 
-    private fun applyTimerDecision(decision: SleepTimerDecision) {
+    private fun applyTimerDecision(decision: SleepTimerDecision, naturalEnd: Boolean = false) {
         val wasWarning = notificationWarningVisible
         if (decision.noticeReason != SleepTimerNoticeReason.None)
             timerNoticeReason = decision.noticeReason
@@ -730,10 +875,10 @@ class PlaybackService : MediaSessionService() {
         if (decision.showWarning || decision.state == SleepTimerState.Armed && wasWarning)
             showTimerForeground()
         if (decision.state == SleepTimerState.Off) returnToMediaNotification()
-        if (decision.stopPlayback) triggerTimedStop()
+        if (decision.stopPlayback) triggerTimedStop(ended = naturalEnd)
     }
 
-    private fun triggerTimedStop() {
+    private fun triggerTimedStop(ended: Boolean = false) {
         if (timerStopping) return
         timerStopping = true
         val item = handoff.current
@@ -747,13 +892,15 @@ class PlaybackService : MediaSessionService() {
         openTimeoutJob?.cancel()
         recoveryJob?.cancel()
         checkpointJob?.cancel()
-        scope.launch { stopSession(timed = true) }
+        scope.launch { stopSession(ended = ended, timed = true) }
     }
 
     private fun markFinalFailure() {
         if (!timerAllowsTransition()) return
         if (playbackState == "retry") return
+        if (failureKind == null) failureKind = PlaybackFailureKind.Unknown
         playbackState = "retry"
+        retryAtElapsedMs = -1L
         openTimeoutJob?.cancel()
         recoveryJob?.cancel()
         scope.launch { handoff.checkpoint(allowCompletion = false) }
@@ -764,19 +911,46 @@ class PlaybackService : MediaSessionService() {
         if (!::session.isInitialized) return
         val warning = PlaybackCommands.TIMER_EXTEND_15 in
             PlaybackSleepTimerGate.notificationActions(sleepTimer.state)
-        if (warning == notificationWarningVisible) return
         notificationWarningVisible = warning
-        val buttons = if (warning) listOf(
-            CommandButton.Builder().setIconResId(android.R.drawable.ic_menu_add)
-                .setDisplayName("Add 15 minutes")
-                .setSessionCommand(PlaybackCommands.command(PlaybackCommands.TIMER_EXTEND_15)).build(),
-            CommandButton.Builder().setIconResId(android.R.drawable.ic_menu_close_clear_cancel)
-                .setDisplayName("Turn off timer")
-                .setSessionCommand(PlaybackCommands.command(PlaybackCommands.TIMER_CANCEL)).build(),
-            stopButton,
-        ) else listOf(stopButton)
-        session.setCustomLayout(buttons)
+        session.setCustomLayout(notificationLayout())
     }
+
+    private fun isOffline(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return true
+        return manager.getNetworkCapabilities(network)
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) != true
+    }
+
+    private fun notificationLayout(): List<CommandButton> {
+        if (!::stopButton.isInitialized || !::playPauseButton.isInitialized) return emptyList()
+        val current = handoff.current
+        val buttons = mutableListOf<CommandButton>()
+        if (current != null && current.playlistIndex > 0)
+            buttons += notificationButton(android.R.drawable.ic_media_previous, "Previous episode", PlaybackCommands.NOTIFICATION_PREVIOUS)
+        buttons += CommandButton.Builder()
+            .setIconResId(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play)
+            .setDisplayName(if (player.isPlaying) "Pause" else "Play")
+            .setPlayerCommand(Player.COMMAND_PLAY_PAUSE).build()
+        val mode = current?.let { if (it.contentType == "series") savedPlaybackModes.episodeMode else savedPlaybackModes.movieMode }
+            ?: PlaybackMode.Off
+        if (current != null && selectedNext(current, mode) != null)
+            buttons += notificationButton(android.R.drawable.ic_media_next, "Next episode", PlaybackCommands.NOTIFICATION_NEXT)
+        if (current?.isLive != true && player.isCurrentMediaItemSeekable) {
+            buttons += notificationButton(android.R.drawable.ic_media_rew, "Rewind 10 seconds", PlaybackCommands.NOTIFICATION_REWIND)
+            buttons += notificationButton(android.R.drawable.ic_media_ff, "Forward 10 seconds", PlaybackCommands.NOTIFICATION_FORWARD)
+        }
+        buttons += stopButton
+        if (notificationWarningVisible) {
+            buttons += notificationButton(android.R.drawable.ic_menu_add, "Add 15 minutes", PlaybackCommands.TIMER_EXTEND_15)
+            buttons += notificationButton(android.R.drawable.ic_menu_close_clear_cancel, "Turn off timer", PlaybackCommands.TIMER_CANCEL)
+        }
+        return buttons
+    }
+
+    private fun notificationButton(icon: Int, label: String, command: String) =
+        CommandButton.Builder().setIconResId(icon).setDisplayName(label)
+            .setSessionCommand(PlaybackCommands.command(command)).build()
 
     private fun timerAction(action: String, requestCode: Int) = PendingIntent.getBroadcast(
         this, requestCode, Intent(action).setPackage(packageName),
@@ -840,6 +1014,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        NetworkPlaybackState.active = false
         if (timerReceiverRegistered) unregisterReceiver(timerActionReceiver)
         timerJob?.cancel()
         recoveryJob?.cancel()

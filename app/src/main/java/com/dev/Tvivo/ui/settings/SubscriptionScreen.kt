@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,7 +52,7 @@ fun SubscriptionScreen(viewModel: AccountViewModel = viewModel()) {
                 vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
             )
     ) {
-        Text(text = "Subscription", color = AppColors.Ink, style = TvType.display)
+        Text(text = stringResource(com.dev.Tvivo.R.string.subscription_title), color = AppColors.Ink, style = TvType.display)
         Spacer(Modifier.height(24.dp))
 
         Column(
@@ -61,20 +62,22 @@ fun SubscriptionScreen(viewModel: AccountViewModel = viewModel()) {
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            FactRow("Signed in as", state.username)
-            FactRow("Server", state.server)
-            FactRow("Status", state.status?.let { if (state.isTrial) "$it (trial)" else it })
+            FactRow(stringResource(com.dev.Tvivo.R.string.subscription_signed_in_as), state.username)
+            FactRow(stringResource(com.dev.Tvivo.R.string.subscription_server), state.server)
+            FactRow(stringResource(com.dev.Tvivo.R.string.subscription_status), state.status?.let {
+                if (state.isTrial) stringResource(com.dev.Tvivo.R.string.subscription_trial_status, it) else it
+            })
             FactRow(
-                label = "Expiry",
+                label = stringResource(com.dev.Tvivo.R.string.subscription_expiry),
                 value = state.expiry,
                 // The one thing worth colouring: an expiry inside a week is the
                 // difference between "working" and "about to stop".
                 highlight = state.expiringSoon
             )
-            FactRow("Connections", state.connections)
+            FactRow(stringResource(com.dev.Tvivo.R.string.subscription_connections), state.connections)
 
             if (state.isLoading) {
-                Text(text = "Checking with the panel…", color = AppColors.Dim, style = TvType.label)
+                Text(text = stringResource(com.dev.Tvivo.R.string.subscription_checking), color = AppColors.Dim, style = TvType.label)
             }
             state.error?.let {
                 // Offline is not signed out. The facts above are the last known ones and

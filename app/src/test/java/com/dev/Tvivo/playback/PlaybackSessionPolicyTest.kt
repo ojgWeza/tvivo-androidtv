@@ -39,6 +39,21 @@ class PlaybackSessionPolicyTest {
         assertEquals(80_000L, PlaybackSessionPolicy.positionToSave(80_000L, 199_000L, failed = false))
     }
 
+    @Test fun normalStopUsesLastSampleIfThePlayerReportsZeroDuringTeardown() {
+        assertEquals(61_000L, PlaybackSessionPolicy.positionToSave(0L, 61_000L, failed = false))
+        assertEquals(0L, PlaybackSessionPolicy.positionToSave(0L, 0L, failed = false))
+        // A real backward seek remains authoritative while the player has a position.
+        assertEquals(40_000L, PlaybackSessionPolicy.positionToSave(40_000L, 61_000L, failed = false))
+    }
+
+    @Test fun onlyGenuineEndCompletesAnItemWhileTheTimerIsActive() {
+        assertFalse(PlaybackSessionPolicy.allowCompletionOnStop(false, true, true, false))
+        assertFalse(PlaybackSessionPolicy.allowCompletionOnStop(false, false, true, false))
+        assertTrue(PlaybackSessionPolicy.allowCompletionOnStop(true, true, true, false))
+        assertTrue(PlaybackSessionPolicy.allowCompletionOnStop(false, false, false, false))
+        assertFalse(PlaybackSessionPolicy.allowCompletionOnStop(false, false, false, true))
+    }
+
     private class FakeAudioTarget : PlaybackSessionPolicy.AudioTarget {
         var focusEnabled = false
         var noisyPauseEnabled = false

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,12 +33,14 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.dev.Tvivo.R
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -86,6 +89,7 @@ fun BrowseScreen(
     initialCategoryId: String? = null,
     initialItemFilter: String? = null,
     landingMode: Boolean = false,
+    showSort: Boolean = landingMode,
     sort: CatalogSort = CatalogSort.MostVisited,
     onSortChanged: (CatalogSort) -> Unit = {},
     categorySort: CatalogSort? = null,
@@ -130,23 +134,28 @@ fun BrowseScreen(
     val scope = rememberCoroutineScope()
     val compactPhone = !LocalIsTelevision.current &&
         LocalWindowSizeClass.current == WindowSizeClass.Compact
+    val categoryPickerMode = CategoryPickerMode.forEnvironment(
+        LocalIsTelevision.current, LocalWindowSizeClass.current
+    )
+    var pickerModeSettled by remember(categoryPickerMode) { mutableStateOf(false) }
+    LaunchedEffect(categoryPickerMode) {
+        pickerModeSettled = false
+        androidx.compose.runtime.withFrameNanos {}
+        androidx.compose.runtime.withFrameNanos {}
+        pickerModeSettled = true
+    }
     val railAsPanel = compactPhone || landingMode
     var categoryPanelOpen by rememberSaveable { mutableStateOf(false) }
     val categoriesFocusRequester = remember { FocusRequester() }
     val gridFocusRequester = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
+    // Retain picker position when adaptive mode moves the rail between the page and drawer.
+    val categoryListState = rememberLazyListState()
     val itemFilterFocusRequester = remember { FocusRequester() }
     val sortFocusRequester = remember { FocusRequester() }
 
     BackHandler(enabled = landingMode && !state.isItemFilterOpen && !categoryPanelOpen) {
         onBackToLanding()
-    }
-    BackHandler(enabled = railAsPanel && categoryPanelOpen && !state.isItemFilterOpen) {
-        categoryPanelOpen = false
-        scope.launch {
-            androidx.compose.runtime.withFrameNanos {}
-            runCatching { categoriesFocusRequester.requestFocus() }
-        }
     }
     BackHandler(enabled = state.isItemFilterOpen) {
         // Back with text clears it and leaves the field open; empty Back closes it.
@@ -154,7 +163,17 @@ fun BrowseScreen(
             viewModel.onItemFilterChanged("")
         else viewModel.setItemFilterOpen(false)
     }
-    LaunchedEffect(categoryPanelOpen) {
+    // Register after the screen's other handlers so an open picker owns Back even
+    // when the item-filter state is also open. The picker is an in-screen modal; its
+    // dismissal must never reach the shell's top-level navigation handler.
+    BackHandler(enabled = railAsPanel && categoryPanelOpen) {
+        categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Back)
+        scope.launch {
+            androidx.compose.runtime.withFrameNanos {}
+            runCatching { categoriesFocusRequester.requestFocus() }
+        }
+    }
+    LaunchedEffect(categoryPanelOpen, categoryPickerMode) {
         if (categoryPanelOpen) {
             androidx.compose.runtime.withFrameNanos {}
             androidx.compose.runtime.withFrameNanos {}
@@ -229,18 +248,19 @@ fun BrowseScreen(
             onHorizontalDrag = { _, amount ->
                 if (edgeDrag && !categoryPanelOpen) {
                     dragDistance += amount
-                    if (dragDistance > 56.dp.toPx()) categoryPanelOpen = true
+                    if (dragDistance > 56.dp.toPx()) categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Open)
                 }
             }
         )
     } else Modifier
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
     Row(modifier = Modifier.fillMaxSize().background(AppColors.Bg)
         .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
         .then(swipeModifier)) {
-        if (!railAsPanel || categoryPanelOpen) CategoryRail(
+        if (!railAsPanel || (categoryPanelOpen && categoryPickerMode == CategoryPickerMode.FullScreen)) CategoryRail(
             // The *filtered* list. Counts stay keyed by id, so they follow whichever
             // categories survive the filter without any extra bookkeeping.
-            categories = state.virtualCategories + CatalogLandingPolicy.sorted(
+            categories = categoryPickerModel(state.virtualCategories, CatalogLandingPolicy.sorted(
                 state.visibleCategories.map { category ->
                     val metric = categoryMetrics[category.categoryId]
                     CatalogCategoryOrder(category.categoryId, category.name, category.ordering,
@@ -249,14 +269,16 @@ fun BrowseScreen(
                         normalizedName = NameNormalizer.of(category.name).normalized)
                 }, effectiveCategorySort
             ).map { order -> state.visibleCategories.first { it.categoryId == order.id } },
+                CategoryPickerEntryRoute.SeeAll),
             counts = state.counts,
             selectedCategoryId = state.selectedCategoryId,
             filter = state.categoryFilter,
             onFilterChanged = viewModel::onCategoryFilterChanged,
             onSelect = {
+                if (!categoryPickerCanSelect(categoryPanelOpen, pickerModeSettled)) return@CategoryRail
                 viewModel.selectCategory(it.categoryId)
                 if (railAsPanel) {
-                    categoryPanelOpen = false
+                    categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
                     if (items.itemCount > 0) scope.launch {
                         repeat(5) {
                             androidx.compose.runtime.withFrameNanos {}
@@ -268,24 +290,20 @@ fun BrowseScreen(
             },
             gridFocusRequester = gridFocusRequester,
             railFocusRequester = railFocusRequester,
+            listState = categoryListState,
             gridAvailable = items.itemCount > 0 && (!compactPhone || !categoryPanelOpen),
             categorySort = effectiveCategorySort,
-            onCategorySortChanged = updateCategorySort
-        )
-
-        if (landingMode) CategoryDrawerTab(
-            focusRequester = categoriesFocusRequester,
-            contentFocusRequester = gridFocusRequester,
-            contentAvailable = items.itemCount > 0 && (!compactPhone || !categoryPanelOpen),
-            onOpen = { categoryPanelOpen = true }
+            onCategorySortChanged = updateCategorySort,
+            fullScreen = railAsPanel && categoryPanelOpen && categoryPickerMode == CategoryPickerMode.FullScreen,
+            confineFocus = railAsPanel && categoryPanelOpen
         )
 
         // The rail has a fixed 280 dp width. `fillMaxSize()` here measured the content
         // against the whole Row and let its final grid column extend behind the screen
         // edge on a handset. Weight measures the remaining width after the rail instead.
-        if (!compactPhone || !categoryPanelOpen) Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+        if (!railAsPanel || !categoryPanelOpen || categoryPickerMode == CategoryPickerMode.Overlay) Column(modifier = Modifier.weight(1f).fillMaxSize()) {
             if (landingMode) {
-                Text("← All categories", color = AppColors.AccentText, style = TvType.label,
+                Text(stringResource(R.string.browse_all_categories), color = AppColors.AccentText, style = TvType.label,
                     modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame()
                         .onPreviewKeyEvent { event ->
                             val native = event.nativeKeyEvent
@@ -332,13 +350,15 @@ fun BrowseScreen(
                 gridFocusRequester = gridFocusRequester,
                 itemFilterFocusRequester = itemFilterFocusRequester,
                 railFocusRequester = railFocusRequester,
-                onToggleCategories = null,
+                onToggleCategories = if (railAsPanel && landingMode) ({
+                    categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Open)
+                }) else null,
                 categoriesFocusRequester = categoriesFocusRequester,
                 showFilter = true,
                 sort = sort,
                 onSortChanged = onSortChanged,
                 sortFocusRequester = sortFocusRequester,
-                showSort = landingMode,
+                showSort = showSort && !LocalIsTelevision.current,
                 railAvailable = !railAsPanel || categoryPanelOpen
             )
 
@@ -431,6 +451,49 @@ fun BrowseScreen(
             onDismiss = { resumePromptItem = null }
         )
     }
+    CategoryPickerOverlay(
+        visible = railAsPanel && categoryPanelOpen && categoryPickerMode == CategoryPickerMode.Overlay,
+        onDismiss = {
+            categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Back)
+            scope.launch {
+                androidx.compose.runtime.withFrameNanos {}
+                runCatching { categoriesFocusRequester.requestFocus() }
+            }
+        }
+    ) { drawerModifier ->
+        CategoryRail(
+            categories = categoryPickerModel(state.virtualCategories, CatalogLandingPolicy.sorted(
+                state.visibleCategories.map { category ->
+                    val metric = categoryMetrics[category.categoryId]
+                    CatalogCategoryOrder(category.categoryId, category.name, category.ordering,
+                        metric?.visits ?: 0L, metric?.lastVisitedAt ?: 0L,
+                        metric?.latestAdded ?: 0L,
+                        normalizedName = NameNormalizer.of(category.name).normalized)
+                }, effectiveCategorySort
+            ).map { order -> state.visibleCategories.first { it.categoryId == order.id } },
+                CategoryPickerEntryRoute.SeeAll),
+            counts = state.counts, selectedCategoryId = state.selectedCategoryId,
+            filter = state.categoryFilter, onFilterChanged = viewModel::onCategoryFilterChanged,
+            onSelect = {
+                if (!categoryPickerCanSelect(categoryPanelOpen, pickerModeSettled)) return@CategoryRail
+                viewModel.selectCategory(it.categoryId)
+                categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
+                if (items.itemCount > 0) scope.launch {
+                    repeat(5) {
+                        androidx.compose.runtime.withFrameNanos {}
+                        if (runCatching { gridFocusRequester.requestFocus() }.isSuccess)
+                            return@launch
+                    }
+                }
+            },
+            gridFocusRequester = gridFocusRequester, railFocusRequester = railFocusRequester,
+            listState = categoryListState,
+            gridAvailable = false, categorySort = effectiveCategorySort,
+            onCategorySortChanged = updateCategorySort,
+            overlayDrawer = true, confineFocus = true, modifier = drawerModifier
+        )
+    }
+    }
 }
 
 @Composable
@@ -462,22 +525,17 @@ private fun Header(
     showSort: Boolean,
     railAvailable: Boolean
 ) {
+    val openCategoriesDescription = stringResource(R.string.categories_open_accessibility)
     val refreshFocusRequester = remember { FocusRequester() }
     val horizontalMargin = when {
-        LocalIsTelevision.current -> 48.dp
+        LocalIsTelevision.current -> 32.dp
         LocalWindowSizeClass.current == WindowSizeClass.Compact -> 16.dp
         else -> 24.dp
     }
     val statusMessage = browseStatusMessage(error, syncState, hasCachedItems)
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (onToggleCategories != null && !isItemFilterOpen) {
-            Text(title, color = AppColors.Ink, style = TvType.headline,
-                maxLines = 2, modifier = Modifier.fillMaxWidth()
-                    .padding(start = horizontalMargin, end = horizontalMargin,
-                        top = if (LocalIsTelevision.current) 27.dp else 12.dp))
-        }
         if (onToggleCategories != null && filteredCount != null && totalCount != null) {
-            Text("$filteredCount of $totalCount", color = AppColors.Dim, style = TvType.label,
+            Text(stringResource(R.string.browse_filtered_count, filteredCount, totalCount), color = AppColors.Dim, style = TvType.label,
                 modifier = Modifier.padding(start = horizontalMargin, end = horizontalMargin))
         }
         Row(
@@ -494,7 +552,7 @@ private fun Header(
             // part that is actually changing under them.
             Column(modifier = Modifier.weight(1f)) {
                 // The header shows the category name immediately, before any row arrives.
-                if (!isItemFilterOpen && onToggleCategories == null) {
+                if (!isItemFilterOpen) {
                     Text(
                         text = title,
                         color = AppColors.Ink,
@@ -535,15 +593,17 @@ private fun Header(
                     } else false
                 }
             ) {
-                if (showSort) CatalogSortMenu(
+                if (showSort && !LocalIsTelevision.current) CatalogSortMenu(
                     CatalogLandingPolicy.openedListSort(sort), onSortChanged,
                     sortFocusRequester, Modifier.padding(end = 10.dp)
                 )
                 if (onToggleCategories != null) {
-                    Text("Categories", color = AppColors.Ink, style = TvType.label,
+                    Text(stringResource(R.string.categories_button), color = AppColors.Ink, style = TvType.label,
                         modifier = Modifier.heightIn(min = 48.dp).focusRequester(categoriesFocusRequester)
+                            .semantics { contentDescription = openCategoriesDescription }
+                            .testTag("category-picker-button")
                             .tvFocusFrame().tvClickable(onClick = onToggleCategories)
-                            .padding(end = 12.dp, top = 10.dp, bottom = 10.dp))
+                            .padding(horizontal = 12.dp))
                 }
                 // Visible progress that dismisses at 100%. The rail counts filling in
                 // category by category are the secondary signal.
@@ -589,13 +649,13 @@ private fun Header(
                 } else if (showFilter) {
                     HeaderIconButton(
                         icon = Icons.Default.Search,
-                        contentDescription = "Filter items",
+                        contentDescription = stringResource(R.string.browse_filter_items),
                         onClick = { onItemFilterOpenChanged(true) },
                         modifier = Modifier.padding(end = 12.dp).testTag("browse-filter")
                     )
                 }
 
-                HeaderIconButton(
+                if (!LocalIsTelevision.current) HeaderIconButton(
                     icon = Icons.Default.Refresh,
                     contentDescription = refreshLabel,
                     enabled = !isRefreshing,
@@ -666,6 +726,7 @@ internal fun ItemFilterField(
     val focus = itemFilterFocusRequester
     val clearFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val clearLabel = stringResource(R.string.browse_clear)
     LaunchedEffect(Unit) {
         repeat(5) {
             androidx.compose.runtime.withFrameNanos {}
@@ -677,7 +738,7 @@ internal fun ItemFilterField(
         androidx.compose.material3.OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            label = { Text("Filter", color = AppColors.Dim, style = TvType.caption) },
+            label = { Text(stringResource(R.string.browse_filter_hint), color = AppColors.Dim, style = TvType.caption) },
             singleLine = true,
             textStyle = TvType.body,
             colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
@@ -722,10 +783,10 @@ internal fun ItemFilterField(
         if (value.isNotEmpty()) {
             IconPill(
                 icon = Icons.Default.Close,
-                label = "Clear",
+                label = stringResource(R.string.browse_clear),
                 onClick = { onValueChange(""); runCatching { focus.requestFocus() } },
                 modifier = Modifier.testTag("item-filter-clear")
-                    .semantics { contentDescription = "Clear" }
+                    .semantics { contentDescription = clearLabel }
                     .focusRequester(clearFocusRequester)
                     .focusProperties { left = focus; right = refreshFocusRequester }
                     .padding(end = 12.dp)

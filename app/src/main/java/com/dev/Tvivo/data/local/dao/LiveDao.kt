@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface LiveDao {
 
+    @Query("SELECT * FROM live_streams WHERE accountId = :accountId ORDER BY streamId LIMIT 1")
+    suspend fun deepCheckCandidate(accountId: String): LiveStreamEntity?
+
     @Query(
         """
         SELECT * FROM live_streams

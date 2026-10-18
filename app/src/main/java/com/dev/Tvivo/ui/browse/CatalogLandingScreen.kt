@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
@@ -32,6 +32,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
 import android.view.KeyEvent
@@ -46,6 +49,7 @@ import androidx.tv.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.R
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.repository.HomeCard
@@ -73,7 +77,10 @@ import com.dev.Tvivo.ui.components.landingContentPadding
 import com.dev.Tvivo.ui.components.LandingLoadingSkeleton
 import com.dev.Tvivo.ui.components.ShelfFocusRegistry
 import com.dev.Tvivo.ui.components.navigateBetweenShelves
+import com.dev.Tvivo.ui.components.navigateShelfPage
 import com.dev.Tvivo.ui.shell.LocalShellFocus
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
+import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
 import com.dev.Tvivo.ui.home.ContentType
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
@@ -88,6 +95,10 @@ fun CatalogLandingScreen(
     contentType: ContentType,
     accountId: String,
     initialCategoryId: String? = null,
+    shellSortChoice: CatalogSort = CatalogSort.MostVisited,
+    shellSortRevision: Int = 0,
+    shellRefreshRevision: Int = 0,
+    onShellSortStateChanged: (CatalogSort) -> Unit = {},
     pendingFocusCardKey: String? = null,
     onPendingFocusConsumed: () -> Unit = {},
     onReturnToLanding: () -> Unit = {},
@@ -96,6 +107,8 @@ fun CatalogLandingScreen(
     onOpenDetailFromGrid: (BrowseItem) -> Unit = { item -> onOpenDetail(item, "") },
     onPlayFromGrid: (BrowseItem, Long) -> Unit = { item, position -> onPlay(item, position, "") }
 ) {
+    val openCategoriesDescription = stringResource(R.string.categories_open_accessibility)
+    val contentTypeLabel = stringResource(contentType.labelResource)
     val application = LocalContext.current.applicationContext as android.app.Application
     val viewModel: BrowseViewModel = viewModel(
         key = "browse:$accountId:${contentType.name}",
@@ -129,8 +142,22 @@ fun CatalogLandingScreen(
     val railFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     val categoriesFocus = remember { FocusRequester() }
+    val pickerMode = CategoryPickerMode.forEnvironment(
+        LocalIsTelevision.current, LocalWindowSizeClass.current
+    )
+    var pickerModeSettled by remember(pickerMode) { mutableStateOf(false) }
+    LaunchedEffect(pickerMode) {
+        pickerModeSettled = false
+        androidx.compose.runtime.withFrameNanos {}
+        androidx.compose.runtime.withFrameNanos {}
+        pickerModeSettled = true
+    }
+    val television = LocalIsTelevision.current
     val landingRefreshFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
+    // The picker swaps between a full-screen page and an overlay at the window-size
+    // breakpoint. Keep its scroll state above those mutually exclusive branches.
+    val categoryListState = rememberLazyListState()
     val shelfFocusRegistry = remember { ShelfFocusRegistry() }
     val screenHeadingRequester = remember { BringIntoViewRequester() }
     val shellFocus = LocalShellFocus.current
@@ -139,13 +166,25 @@ fun CatalogLandingScreen(
     LaunchedEffect(initialCategoryId) {
         if (initialCategoryId != null) openCategoryId = initialCategoryId
     }
+    LaunchedEffect(shellSortRevision) {
+        if (shellSortRevision > 0) viewModel.setSort(shellSortChoice)
+    }
+    LaunchedEffect(sort, openCategoryId) {
+        onShellSortStateChanged(
+            if (openCategoryId != null && sort == CatalogSort.MostVisited)
+                CatalogSort.AlphabeticalAsc else sort
+        )
+    }
+    LaunchedEffect(shellRefreshRevision) {
+        if (shellRefreshRevision > 0) viewModel.refreshType()
+    }
 
     LaunchedEffect(accountId, contentType, state.categories.size, state.catalogSyncState, landingReload) {
         pinned = repository.landingPinned(contentType)
         metrics = repository.landingMetrics(contentType)
         pinnedLoaded = true
     }
-    LaunchedEffect(panelOpen) {
+    LaunchedEffect(panelOpen, pickerMode) {
         if (panelOpen) {
             androidx.compose.runtime.withFrameNanos {}
             androidx.compose.runtime.withFrameNanos {}
@@ -161,7 +200,7 @@ fun CatalogLandingScreen(
         }
     }
     BackHandler(enabled = openCategoryId == null && panelOpen) {
-        panelOpen = false
+        panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Back)
         scope.launch {
             androidx.compose.runtime.withFrameNanos {}
             runCatching { categoriesFocus.requestFocus() }
@@ -172,7 +211,7 @@ fun CatalogLandingScreen(
         panelSelectedId = categoryId
         openItemFilter = filter.takeIf { it.isNotBlank() }
         openCategoryId = categoryId
-        panelOpen = false
+        panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
     }
 
     if (openCategoryId != null) {
@@ -182,6 +221,7 @@ fun CatalogLandingScreen(
             initialCategoryId = openCategoryId,
             initialItemFilter = openItemFilter,
             landingMode = true, sort = openedSort, onSortChanged = viewModel::setSort,
+            showSort = !television,
             categorySort = categorySort, onCategorySortChanged = viewModel::setCategorySort,
             categoryMetrics = metrics,
             onBackToLanding = {
@@ -216,26 +256,34 @@ fun CatalogLandingScreen(
         (query.isBlank() || all.name.contains(query.trim(), ignoreCase = true) ||
             matchingCounts.isNotEmpty())
     val pinnedVisible = pinned
-    val pinnedRows = if (pinnedLoaded) pinnedVisible else if (hasCachedCatalog) emptyList()
+    val pinnedRows = if (pinnedLoaded) pinnedVisible.filter { it.cards.isNotEmpty() } else if (hasCachedCatalog) emptyList()
         else landingSpec.pinned.map { spec ->
         HomeShelf(spec.id, spec.title, contentType, emptyList(), core = true,
             emptyHint = spec.emptyHintKey, destination = spec.destination,
             emptyRule = spec.emptyRule)
     }
+    val pinnedLazyKeys = CatalogLazyKeys.pinnedRows(pinnedRows.map { it.id })
+    val visibleLazyKeys = CatalogLazyKeys.categoryRows(visible.map { it.id })
     val rowIds = pinnedRows.map { it.id } +
         listOfNotNull(all?.categoryId?.takeIf { showAll }) + visible.map { it.id }
-    val nonEmptyRowIds = pinnedRows.filter { it.cards.isNotEmpty() }.map { it.id } +
-        listOfNotNull(all?.categoryId?.takeIf {
+    val allRowKey = all?.categoryId?.takeIf { showAll }?.let(CatalogLazyKeys::allFolder)
+    val rowKeys = pinnedLazyKeys + listOfNotNull(allRowKey) + visibleLazyKeys
+    val nonEmptyRowKeys = pinnedLazyKeys.zip(pinnedRows).filter { (_, shelf) ->
+        shelf.cards.isNotEmpty()
+    }.map { it.first } +
+        listOfNotNull(allRowKey?.takeIf {
             showAll && (state.counts[VirtualFolder.ALL.id] ?: 0) > 0
-        }) + visible.filter { (state.counts[it.id] ?: 0) > 0 }.map { it.id }
-    val rowIndexes = rowIds.mapIndexed { index, id -> id to index + 1 }.toMap()
-    val firstShelfId = nonEmptyRowIds.firstOrNull()
-    val requesters = remember(rowIds, nonEmptyRowIds, shellFocus) {
-        rowIds.map { id ->
-            id to if (id == firstShelfId && shellFocus != null) shellFocus.firstContent else FocusRequester()
+        }) + visibleLazyKeys.zip(visible).filter { (_, category) ->
+            (state.counts[category.id] ?: 0) > 0
+        }.map { it.first }
+    val rowIndexes = rowKeys.mapIndexed { index, key -> key to index + 1 }.toMap()
+    val firstShelfKey = nonEmptyRowKeys.firstOrNull()
+    val requesters = remember(rowKeys, nonEmptyRowKeys, shellFocus) {
+        rowKeys.map { key ->
+            key to if (key == firstShelfKey && shellFocus != null) shellFocus.firstContent else FocusRequester()
         }.toMap()
     }
-    val seeAllRequesters = remember(rowIds) { rowIds.associateWith { FocusRequester() } }
+    val seeAllRequesters = remember(rowKeys) { rowKeys.associateWith { FocusRequester() } }
     val pendingRestoreShelfId = pendingFocusCardKey?.substringBefore('|')
     val cardRestoreKey = pendingFocusCardKey?.substringAfter('|')
         ?.takeUnless { lastFocusWasSeeAll }
@@ -252,7 +300,10 @@ fun CatalogLandingScreen(
     LaunchedEffect(restoreSeeAll, rowIds) {
         if (!restoreSeeAll) return@LaunchedEffect
         val index = rowIds.indexOf(lastFocusedShelfId)
-        val requester = seeAllRequesters[lastFocusedShelfId] ?: return@LaunchedEffect
+        val rowIndex = rowIds.indexOf(lastFocusedShelfId)
+        if (rowIndex < 0) return@LaunchedEffect
+        val rowKey = rowKeys[rowIndex]
+        val requester = seeAllRequesters[rowKey] ?: return@LaunchedEffect
         if (index < 0) return@LaunchedEffect
         listState.scrollToItem(index + 1)
         repeat(60) {
@@ -262,37 +313,36 @@ fun CatalogLandingScreen(
                 return@LaunchedEffect
             }
         }
-        requesters[lastFocusedShelfId]?.let { row ->
+        requesters[rowKey]?.let { row ->
             if (runCatching { row.requestFocus() }.isSuccess) restoreSeeAll = false
         }
     }
 
-    Row(Modifier.fillMaxSize().background(AppColors.Bg)) {
-        if (panelOpen) {
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(AppColors.Bg)) {
+      Row(Modifier.fillMaxSize()) {
+        if (panelOpen && pickerMode == CategoryPickerMode.FullScreen) {
             CategoryRail(
-                categories = (state.virtualCategories + ordered.map { order ->
+                categories = categoryPickerModel(state.virtualCategories, ordered.map { order ->
                     state.categories.first { it.categoryId == order.id }
-                }).filter {
+                }, CategoryPickerEntryRoute.Landing).filter {
                     panelFilter.isBlank() || it.name.contains(panelFilter.trim(), ignoreCase = true)
                 },
                 counts = state.counts, selectedCategoryId = panelSelectedId,
                 filter = panelFilter, onFilterChanged = { panelFilter = it },
-                onSelect = { open(it.categoryId) },
+                onSelect = { if (categoryPickerCanSelect(panelOpen, pickerModeSettled)) open(it.categoryId) },
                 gridFocusRequester = contentFocus, railFocusRequester = railFocus,
+                listState = categoryListState,
                 gridAvailable = true, categorySort = categorySort,
-                onCategorySortChanged = viewModel::setCategorySort
+                onCategorySortChanged = viewModel::setCategorySort,
+                fullScreen = true,
+                confineFocus = true
             )
-        }
-        CategoryDrawerTab(
-            focusRequester = categoriesFocus,
-            contentFocusRequester = contentFocus,
-            onOpen = { panelOpen = true }
-        )
+        } else {
         var edgeDrag by remember { mutableStateOf(false) }
         var dragDistance by remember { mutableStateOf(0f) }
         LandingScaffold(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxSize()
+            modifier = Modifier.fillMaxSize()
                 .focusRequester(contentFocus).focusGroup()
                 .pointerInput(panelOpen) {
                     detectHorizontalDragGestures(
@@ -300,14 +350,14 @@ fun CatalogLandingScreen(
                         onHorizontalDrag = { _, amount ->
                             if (edgeDrag && !panelOpen) {
                                 dragDistance += amount
-                                if (dragDistance > 56.dp.toPx()) panelOpen = true
+                                if (dragDistance > 56.dp.toPx()) panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Open)
                             }
                         }
                     )
                 },
             contentPadding = landingContentPadding()
         ) {
-            item(key = "landing-header") {
+            item(key = CatalogLazyKeys.landingHeader()) {
                 androidx.compose.foundation.layout.Row(
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
@@ -321,9 +371,9 @@ fun CatalogLandingScreen(
                         }
                 ) {
                     Column {
-                        Text(contentType.label, color = AppColors.Ink, style = TvType.headline)
+                        Text(contentTypeLabel, color = AppColors.Ink, style = TvType.headline)
                         if (state.catalogSyncState == "indexing" || state.isRefreshing) {
-                            Text("Refreshing ${contentType.label} library…", color = AppColors.Dim,
+                            Text(stringResource(R.string.browse_refreshing_library, contentTypeLabel), color = AppColors.Dim,
                                 style = TvType.label)
                         }
                         state.refreshConfirmation?.takeIf { showRefreshFeedback }?.let {
@@ -332,35 +382,47 @@ fun CatalogLandingScreen(
                                 RetryAction(viewModel::refreshType)
                         }
                         if (state.error != null && state.refreshConfirmation == null) {
-                            if (showRefreshFeedback) Text("${contentType.label} library refresh failed",
+                            if (showRefreshFeedback) Text(stringResource(R.string.browse_refresh_failed, contentTypeLabel),
                                 color = AppColors.Dim, style = TvType.label)
                             RetryAction(viewModel::refreshType)
                         }
                     }
                     Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        HeaderIconButton(Icons.Default.Refresh, "Refresh ${contentType.label} library",
+                        Text(stringResource(R.string.categories_button), color = AppColors.Ink, style = TvType.label,
+                            modifier = Modifier.heightIn(min = 48.dp).focusRequester(categoriesFocus)
+                                .semantics { contentDescription = openCategoriesDescription }
+                                .testTag("category-picker-button")
+                                .tvFocusFrame().tvClickable {
+                                    panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Open)
+                                }.padding(horizontal = 10.dp))
+                        if (!television) HeaderIconButton(Icons.Default.Refresh, stringResource(R.string.common_refresh),
                             onClick = viewModel::refreshType,
                             enabled = !state.isRefreshing && state.catalogSyncState != "indexing",
                             modifier = Modifier.focusRequester(landingRefreshFocus).testTag("landing-refresh"))
                     }
                 }
             }
-            items(pinnedRows, key = { it.id }) { shelf ->
-                val index = rowIds.indexOf(shelf.id)
-                ShelfRow(shelf, requesters.getValue(shelf.id),
-                    aboveRequester = null,
+            itemsIndexed(pinnedRows, key = { index, _ -> pinnedLazyKeys[index] }) { rowIndex, shelf ->
+                val rowKey = pinnedLazyKeys[rowIndex]
+                ShelfRow(shelf, requesters.getValue(rowKey),
+                    aboveRequester = shellFocus?.topBar.takeIf { rowKey == firstShelfKey },
                     restoreKey = cardRestoreKey.takeIf { shelf.id == pendingRestoreShelfId }
                         ?.let { ShelfRestoreKey.of(shelf.id, it) },
                     onRestoreConsumed = onPendingFocusConsumed,
-                screenHeadingRequester = screenHeadingRequester.takeIf { shelf.id == firstShelfId },
+                screenHeadingRequester = screenHeadingRequester.takeIf { rowKey == firstShelfKey },
                     focusRegistry = shelfFocusRegistry,
                     onVerticalNavigate = { direction ->
                         navigateBetweenShelves(scope, listState, shelfFocusRegistry,
-                            nonEmptyRowIds, rowIndexes, shelf.id, direction,
-                            landingRefreshFocus)
+                            nonEmptyRowKeys, rowIndexes, rowKey, direction,
+                            landingRefreshFocus,
+                            requestHeader = television && direction == ShelfVerticalDirection.Down)
                     },
-                    seeAllRequester = seeAllRequesters[shelf.id],
+                    onPageNavigate = { direction ->
+                        navigateShelfPage(scope, listState, shelfFocusRegistry,
+                            nonEmptyRowKeys, rowIndexes, direction)
+                    },
+                    seeAllRequester = seeAllRequesters[rowKey],
                     loadState = if (pinnedLoaded || hasCachedCatalog) ShelfLoadState.Loaded else ShelfLoadState.Loading,
                     onSeeAll = {
                         lastFocusedShelfId = shelf.id
@@ -383,13 +445,13 @@ fun CatalogLandingScreen(
                     onLeadingLeft = { runCatching { categoriesFocus.requestFocus() } })
             }
             if (all != null && showAll) {
-                item(key = "__all") {
+                item(key = CatalogLazyKeys.allFolder(all.categoryId)) {
                     LandingCategoryRow(repository, contentType, all, query, sort,
                         all.name.contains(query.trim(), ignoreCase = true),
                         state.counts[all.categoryId] ?: 0,
                         hasCachedCatalog,
-                        requesters.getValue(all.categoryId),
-                        null,
+                        requesters.getValue(allRowKey!!),
+                        shellFocus?.topBar.takeIf { allRowKey == firstShelfKey },
                         onSeeAll = {
                             lastFocusedShelfId = all.categoryId
                             lastFocusWasSeeAll = true
@@ -412,29 +474,30 @@ fun CatalogLandingScreen(
                             ?.let { ShelfRestoreKey.of(all.categoryId, it) },
                         onRestoreConsumed = onPendingFocusConsumed,
                         screenHeadingRequester = screenHeadingRequester.takeIf {
-                            all.categoryId == firstShelfId
+                            allRowKey == firstShelfKey
                         },
                         focusRegistry = shelfFocusRegistry,
                         onVerticalNavigate = { direction ->
                             navigateBetweenShelves(scope, listState, shelfFocusRegistry,
-                                nonEmptyRowIds, rowIndexes, all.categoryId, direction,
-                                landingRefreshFocus)
+                                nonEmptyRowKeys, rowIndexes, allRowKey!!, direction,
+                                landingRefreshFocus,
+                                requestHeader = television && direction == ShelfVerticalDirection.Down)
                         },
-                        seeAllRequester = seeAllRequesters[all.categoryId],
+                        seeAllRequester = seeAllRequesters[allRowKey],
                         onLeadingLeft = { runCatching { categoriesFocus.requestFocus() } })
                 }
             }
-            items(visible, key = { it.id }) { order ->
+            itemsIndexed(visible, key = { index, _ -> visibleLazyKeys[index] }) { rowIndex, order ->
                 val category = state.categories.first { it.categoryId == order.id }
-                val index = rowIds.indexOf(order.id)
+                val rowKey = visibleLazyKeys[rowIndex]
                 val mode = CatalogLandingPolicy.searchMode(order.title, query,
                     matchingCounts[order.id] ?: 0)
                 LandingCategoryRow(repository, contentType, category, query, sort,
                 mode == CatalogSearchMode.FullFolder,
                 state.counts[order.id] ?: 0,
                 hasCachedCatalog,
-                requesters.getValue(order.id),
-                    shellFocus?.topBar.takeIf { order.id == firstShelfId },
+                requesters.getValue(rowKey),
+                    shellFocus?.topBar.takeIf { rowKey == firstShelfKey },
                     onSeeAll = {
                         lastFocusedShelfId = order.id
                         lastFocusWasSeeAll = true
@@ -454,17 +517,44 @@ fun CatalogLandingScreen(
                     restoreKey = cardRestoreKey.takeIf { order.id == pendingRestoreShelfId }
                         ?.let { ShelfRestoreKey.of(order.id, it) },
                     onRestoreConsumed = onPendingFocusConsumed,
-                    screenHeadingRequester = screenHeadingRequester.takeIf { order.id == firstShelfId },
+                    screenHeadingRequester = screenHeadingRequester.takeIf { rowKey == firstShelfKey },
                     focusRegistry = shelfFocusRegistry,
                     onVerticalNavigate = { direction ->
                         navigateBetweenShelves(scope, listState, shelfFocusRegistry,
-                            nonEmptyRowIds, rowIndexes, order.id, direction,
-                            landingRefreshFocus)
+                            nonEmptyRowKeys, rowIndexes, rowKey, direction,
+                            landingRefreshFocus,
+                            requestHeader = television && direction == ShelfVerticalDirection.Down)
                     },
-                    seeAllRequester = seeAllRequesters[order.id],
+                    seeAllRequester = seeAllRequesters[rowKey],
                     onLeadingLeft = { runCatching { categoriesFocus.requestFocus() } })
             }
         }
+        }
+      }
+      CategoryPickerOverlay(
+          visible = panelOpen && pickerMode == CategoryPickerMode.Overlay,
+          onDismiss = {
+              panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Back)
+              scope.launch {
+                  androidx.compose.runtime.withFrameNanos {}
+                  runCatching { categoriesFocus.requestFocus() }
+              }
+          }
+      ) { drawerModifier ->
+          CategoryRail(
+              categories = categoryPickerModel(state.virtualCategories, ordered.map { order ->
+                  state.categories.first { it.categoryId == order.id }
+              }, CategoryPickerEntryRoute.Landing).filter { panelFilter.isBlank() || it.name.contains(panelFilter.trim(), ignoreCase = true) },
+              counts = state.counts, selectedCategoryId = panelSelectedId,
+              filter = panelFilter, onFilterChanged = { panelFilter = it },
+              onSelect = { if (categoryPickerCanSelect(panelOpen, pickerModeSettled)) open(it.categoryId) },
+              gridFocusRequester = contentFocus, railFocusRequester = railFocus,
+              listState = categoryListState,
+              gridAvailable = false, categorySort = categorySort,
+              onCategorySortChanged = viewModel::setCategorySort,
+              overlayDrawer = true, confineFocus = true, modifier = drawerModifier
+          )
+      }
     }
     contextMenuCard?.let { card ->
         val isFavourite by (viewModel.isFavourite(card.item.id) ?: flowOf(false))
@@ -503,7 +593,7 @@ fun CatalogLandingScreen(
 
 @Composable
 private fun RetryAction(onClick: () -> Unit) {
-    Text("Retry", color = AppColors.AccentText, style = TvType.label,
+    Text(stringResource(R.string.browse_retry), color = AppColors.AccentText, style = TvType.label,
         modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame().tvClickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 12.dp))
 }

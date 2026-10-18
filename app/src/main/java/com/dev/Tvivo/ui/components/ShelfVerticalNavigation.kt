@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 /** Rows register only while composed; a request is retried after scrolling composes its target. */
 class ShelfFocusRegistry {
     private val actions = mutableMapOf<String, suspend () -> Boolean>()
+    private val headerActions = mutableMapOf<String, suspend () -> Boolean>()
 
     fun register(shelfId: String, action: suspend () -> Boolean) {
         actions[shelfId] = action
@@ -19,10 +20,18 @@ class ShelfFocusRegistry {
 
     fun unregister(shelfId: String) {
         actions.remove(shelfId)
+        headerActions.remove(shelfId)
+    }
+
+    fun registerHeader(shelfId: String, action: suspend () -> Boolean) {
+        headerActions[shelfId] = action
     }
 
     suspend fun request(shelfId: String): Boolean =
         runCatching { actions[shelfId]?.invoke() ?: false }.getOrDefault(false)
+
+    suspend fun requestHeader(shelfId: String): Boolean =
+        runCatching { headerActions[shelfId]?.invoke() ?: false }.getOrDefault(false)
 }
 
 /** Shared Up/Down policy and scroll/compose/focus sequence for Home and type landings. */
@@ -34,7 +43,8 @@ fun navigateBetweenShelves(
     rowIndexes: Map<String, Int>,
     currentShelfId: String,
     direction: ShelfVerticalDirection,
-    headerActionRequester: FocusRequester? = null
+    headerActionRequester: FocusRequester? = null,
+    requestHeader: Boolean = false
 ): Boolean {
     val targetId = ShelfNavigationPolicy.adjacentNonEmptyShelf(shelfIds, currentShelfId, direction)
     if (targetId == null) {
@@ -62,7 +72,8 @@ fun navigateBetweenShelves(
             }.isFailure) return@launch
         repeat(5) {
             withFrameNanos {}
-            if (registry.request(targetId)) return@launch
+            if ((requestHeader && registry.requestHeader(targetId)) || registry.request(targetId))
+                return@launch
         }
     }
     return true

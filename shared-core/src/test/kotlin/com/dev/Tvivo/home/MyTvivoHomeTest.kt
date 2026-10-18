@@ -6,6 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MyTvivoHomeTest {
+    @Test fun emptyCatalogRemainsLoadingUntilSyncIsResolved() {
+        assertEquals(CatalogFirstPaint.Loading, CatalogFirstPaintPolicy.decide(0, emptyList()))
+        assertEquals(CatalogFirstPaint.Loading,
+            CatalogFirstPaintPolicy.decide(0, listOf("complete", "indexing")))
+        assertEquals(CatalogFirstPaint.FirstRun,
+            CatalogFirstPaintPolicy.decide(0, listOf("complete", "failed", "stale")))
+        assertEquals(CatalogFirstPaint.Content,
+            CatalogFirstPaintPolicy.decide(1, listOf("indexing")))
+    }
     private data class Recent(val id: String, val at: Long)
 
     @Test fun mergedCoreShelvesUseRecencyAcrossTypesAndStayBounded() {
@@ -40,7 +49,7 @@ class MyTvivoHomeTest {
         assertEquals(listOf(EmptyShelfRule.HideWhenEmpty, EmptyShelfRule.HideWhenEmpty,
             EmptyShelfRule.HideWhenEmpty, EmptyShelfRule.HideWhenEmpty,
             EmptyShelfRule.HideWhenEmpty), spec.pinned.map { it.emptyRule })
-        assertEquals(EmptyShelfRule.ShowHintWhenEmpty,
+        assertEquals(EmptyShelfRule.HideWhenEmpty,
             LandingSpec.forType(ShelfContentType.Live).pinned.first().emptyRule)
         assertEquals(ShelfDecision.Hidden, LandingShelfPolicy.decide(
             isFirstRun = true, isCore = true, loadState = ShelfLoadState.Loaded,

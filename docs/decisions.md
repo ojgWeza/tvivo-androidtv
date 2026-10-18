@@ -1,5 +1,69 @@
 # Decisions
 
+## Android playback failure information (2026-10-19)
+
+**Root cause:** The playback service already classified failures for retry control,
+but the session status exposed only `playing`/`reconnecting`/`retry`; the overlay
+had no safe reason or countdown to show. A 403 can suggest a connection limit but
+does not prove which device or account condition caused it.
+
+**Decision:** Keep the existing bounded retry and stream handoff. Map failure
+signals to provider-neutral reasons in a pure shared-core policy, send only enum
+names and countdown numbers to the Android overlay, and keep 403 copy conditional.
+Every terminal retry state needs a cause and a next step; recovery shows the next
+attempt and delay. English/Arabic resources own the user-facing wording.
+
+**Verification:** Shared-core JUnit covers HTTP, local and stream causes plus
+countdown rounding. The Gradle unit suites and debug assembly passed; phone/TV
+appearance and D-pad focus still need an approved device run.
+
+## Android A4 fixes and TV trial slices 4–6 (2026-10-18)
+
+**Root cause and fix:** The See all picker duplicated its synthetic folders because
+`BrowseUiState.visibleCategories` already contained `virtualCategories`, then the
+picker prepended that list again. Picker construction now goes through one model
+function which puts virtual rows first and removes duplicate ids and duplicate titles;
+occurrence-safe lazy keys remain as an independent Compose identity safeguard. Picker
+visibility, filter, selection and lazy scroll state use saveable state across rotation.
+
+**First paint and input:** My Tvivo keeps up to four process-local account snapshots
+for fast route returns and applies a Room result only when it differs. With no catalog
+rows, active or unresolved sync remains in loading; confirmed empty sync shows the
+first-run actions. TV first-run actions use text targets instead of route-art tiles.
+TV grids map page/channel and Move Home/End keys to currently loaded items and ramp
+held D-pad movement after 600 ms and 1.5 s; media transport keys remain reserved.
+
+**Localization and episode actions:** Core navigation, shelf names, virtual folders,
+settings, detail/player controls and picker labels now use English/Arabic resources.
+Provider titles, plots and category names remain source data. Episode labels preserve
+real titles, use `Episode N` only for generic/blank values, and show an ordinal only
+for `SxxExx`. Long press on touch and the TV Menu key still open Clear resume when an
+episode has a resume point; Mark watched remains absent.
+
+**Verification boundary:** Pure tests cover picker duplicates for all entry routes,
+first-paint classification, episode title cases, and TV key mapping/acceleration. The
+requested build and unit suite are recorded in `.codex-android-a4-tv456-report.md`;
+phone and TV screenshots, rotation, touch long press and physical-remote key delivery
+still require device checks.
+
+## Android TV trial slices 1–3 (2026-10-18)
+
+**Decision:** Namespace Compose lazy keys by row role and scope, and derive TV
+landing density from the available window dimensions and font scale. Keep the
+phone/tablet layouts on their own adaptive branches. TV player Back exits on its
+first delivered press while STOP continues asynchronously; shelf navigation
+uses explicit header and row focus targets, and empty personal shelves are
+hidden.
+
+**Why:** A panel category can legally use a virtual-folder ID such as `__all`,
+so raw IDs cannot safely identify both a category and the synthetic folder row.
+TV sizes also vary by resolution, density, window size, and font scale; a fixed
+diagonal-specific layout wastes space or clips content elsewhere.
+
+**Verification:** `CatalogLazyKeysTest` covers virtual, pinned, and panel IDs;
+`TelevisionDensityPolicyTest` covers 960×540 through 3840×2160 dp and 1.3× font
+scale. Phone and TV AVD checks remain required for focus and visual behavior.
+
 Short log of choices made during discovery, with rationale, so Claude Code
 doesn't re-litigate them without new information.
 
@@ -1766,3 +1830,120 @@ bar treatment, and focus links to rendered nodes only.
 **Owner decisions (2026-10-16/17):** Playback remains service-owned with release-before-next; PiP auto-entry is playing-only and paused video does not stay in PiP; background timer warning actions are quiet; Dark/Light is free. The end-of-item D-pad menu order was adjusted, pending device verification.
 
 **Evidence boundary:** The slice plan records the architecture and sequence: [`docs/android-player-slice-plan-2026-10-16.md`](android-player-slice-plan-2026-10-16.md). JVM tests pass, but real-device behavior and the listed follow-ups remain unverified.
+
+## Android network diagnostics slices 1–3 (2026-10-17)
+
+**Implementation:** Added a pure shared-core diagnosis engine with explicit thresholds, priorities, skipped/unknown states, and qualified 403/429, DNS, IPv6, clock, HTTP-sample, throughput, and repeated-drop findings. Added a passive Settings page and best-effort Android network snapshot without location permission or active traffic. A typed app-private event ring records sanitized default-network changes and playback/catalog failures, partitions account events locally, and exports through `DiagnosticLog` with export-time scrubbing of persisted entries and the appendix. No Room schema or new permission was added.
+
+**Evidence boundary:** Android validation flags are not treated as proof of router reachability or panel access. The Wi-Fi radio/firmware finding requires independent comparison evidence; passive events alone do not supply that evidence. Active checks, device behavior, and the TV/phone/tablet UI remain for later slices and owner-approved device verification.
+
+## Android network diagnostics slices 4–5 (2026-10-17)
+
+**Implementation:** Added a cancellable, per-test quick check. It compares system DNS and public DNS-over-HTTPS timings, checks an HTTP 204 endpoint and redirects, tests the gateway with an explicitly reported TCP probe, calls only the configured panel control API, measures a Date-header offset, tries bounded TLS handshakes against resolved IPv4 and IPv6 addresses, samples four bounded HTTP requests, and optionally downloads at most 3 MiB for up to 8 seconds. Playback skips panel/clock/family/sample/quality checks. Metered quality checks need confirmation. Two public service families are replaceable through one config object and disclosed in the UI. The test export appendix contains result categories, status and elapsed time only; request URLs and credentials are excluded.
+
+**Decision boundary:** Request failures are reported as HTTP request-sample failures, not packet loss. IPv6 without an address is shown as unavailable; it is not represented as a proven failed connection. The passive sample-rate fields and neutral throughput cannot guarantee provider-stream quality. Build/JVM checks passed; real endpoint behavior, socket-cancellation on device, and UI/focus behavior remain pending device acceptance.
+
+## Android catalog search and category picker (2026-10-17)
+
+**Decision:** Search results use an adaptive two/four/six-column grid with full-width content-type headings and bounded local previews; Android TV uses five columns, TV gutters and spacing. Category selection uses `CategoryPickerMode.forEnvironment`: Compact and Medium non-TV windows open the full-screen filtered picker, while TV at every width and every Expanded window use a start-aligned overlay drawer over the unchanged content. The compact Categories header action remains available across form factors. Back closes the picker and restores focus to that action; D-pad selection applies the category and opens its view.
+
+**Reason:** The previous horizontal shelf rows exposed one result per content type at a time. Phones benefit from a full-screen picker, while a TV or Expanded layout can preserve the browsable context behind a 34%-width drawer. A TV-specific five-column Search grid matches Browse's 150 dp minimum cell sizing at the approved 960 dp viewport; six columns made the cards too narrow. The existing Room preview limits remain in place.
+
+**Evidence boundary:** Pure JVM tests cover picker-mode decisions and Search column selection. Build/JVM validation and the generated Android codemap are recorded in `.codex-android-ux-cats-tv-report.md`. D-pad traversal, RTL mirroring, font scale 1.3, light/dark rendering, and phone/tablet/TV visual fit still need device review.
+
+## Android Search scrolling, card bounds, and locale coverage (2026-10-17)
+
+**Root cause and fix:** The results `LazyVerticalGrid` followed fixed-height controls in a `Column` with `fillMaxSize()`. It therefore requested the whole parent height instead of the remaining viewport, clipping later section content and preventing touch scrolling from reaching Live TV. Search now gives the grid the remaining height with `weight(1f)`, reserves bottom content space, applies IME padding, and hides the keyboard when a results scroll begins while the search field owns focus. Lazy grid focus traversal retains D-pad scrolling on TV.
+
+**Layout and data:** Phone Search uses two columns, tablet widths use four or six, and TV uses five. Each card keeps its poster/channel aspect ratio and is bounded by both its grid column and a 220 dp maximum. Search section headings and chips, category picker action/accessibility text, and Network Diagnostics probe labels use English and Arabic resources. The mock provider supplies 24 movies, 16 series, and 16 live channels with searchable shared-letter names; the original stream ids and media paths remain valid, while extra VOD/live items reuse the existing mock media and series reuse the existing episode ids.
+
+**Evidence boundary:** JVM coverage checks grid column and card-width decisions; mock-provider selftest checks catalog sizes and stable media mappings. Build/JVM checks and the generated Android codemap are recorded in `.codex-android-search-fix-report.md`. Device review of keyboard dismissal, scrolling, card fit, and D-pad behavior remains pending.
+
+## Network diagnostics deep stream check (2026-10-17)
+
+**Decision:** Keep the safe Quick check separate from an explicitly confirmed Deep
+stream check. The deep check acquires a process-wide playback gate, asks the existing
+MediaSession to stop and waits for its acknowledgement, honors the remaining
+60-second recent-stop window, then measures one account-owned cached VOD item (or a
+live item if no VOD is cached) with a bounded HTTP read. Cancellation, timeout, or
+screen backgrounding disconnects the request in `finally` and releases the gate.
+The gate is also checked by the playback service and app entry points.
+
+**Why:** A real stream consumes the account's provider connection and interrupts
+watching. It therefore needs a separate, plain-language warning, safe default focus,
+progress, and a hard release guarantee. The existing Media3 range-close retry is a
+one-second race guard, not the provider's roughly 60-second cooldown; the deep check
+tracks its own process-local recent-stop time. Throughput and stalls are reported;
+VOD average bitrate is estimated from response content length and cached duration,
+and remains unknown for live items or missing metadata.
+
+**Privacy and test boundary:** Never log or export the stream URL, host, title, or
+credentials. Automated tests inject stop/read fakes and do not contact a provider.
+HTTP 403/429/5xx remain status observations and do not prove the cause.
+
+## Android owner trial #2 playback and episode labels (2026-10-17)
+
+**Implementation:** PiP uses a live aspect ratio and source rectangle, with rewind,
+play/pause, and queue-aware next/forward actions. Notification custom actions expose
+queue-aware previous/next, 10-second seek, and Stop; queue changes use the existing
+serialized handoff and timer gate. The full-screen control layer is transparent in
+the center with soft top/bottom gradients. Episode display labels preserve the
+provider's title, remove only matching show-name/quality prefixes, and use `Episode
+N` only for blank or generic titles; an ordinal is displayed only for `SxxExx`
+titles.
+
+**Evidence boundary:** Pure JVM title-policy tests are added. Device verification
+is still required for PiP actions, the notification layout, and overlay appearance.
+
+## Android A2 Search return, picker Back priority, and channel fallback (2026-10-18)
+
+**Decision:** Search “See all” records Search as its Back destination while the selected catalog tab is active. The tab state holder retains Search query, filter, and scroll state. In an opened category, the picker Back handler is registered after the item-filter handler and owns Back whenever the full-screen picker is visible; focus restoration remains guarded and frame-delayed. Channel fallback artwork draws the channel glyph only, because the channel card already renders one title below its 16:9 tile. Activating a Search card hides the IME and opens the selected item in the same click.
+
+**Evidence boundary:** A2 screenshots show one preview per group despite a DAO preview limit of 60 and show the live fallback title both inside and below the tile. A Room regression test now verifies the DAO returns all 24/16/16 matching rows for the fixture names and query “e”; repository code applies no smaller limit. The one-card result in the supplied installed-app screenshots therefore remains a UI/runtime-state issue that needs a fresh mock-catalog device reproduction. JVM tests cover picker visibility transitions and the Search “See all” Back decision. No emulator interaction is included in this code validation.
+# Android D2 adaptive picker, PiP transport, and TV parity (2026-10-18)
+
+**Adaptive picker:** Phone and tablet keep the window-size-based full-screen/overlay
+presentation; TV keeps its overlay presentation at every width. Picker open state and
+filter remain in the screen state, and its category `LazyListState` now belongs above
+the mutually exclusive presentation branches so a breakpoint change preserves scroll.
+Changing presentation remounts the focused rail, so category selection is disabled for
+the two frames used to settle the replacement and focus is requested again. This is a
+composition transition in the existing Activity, not an Activity recreation.
+
+**PiP and notifications:** The player Activity registers every action used by the PiP
+buttons (play/pause, rewind, forward, next, close). The action-to-command mapping is a
+pure function covered by JVM tests. The notification connection removes generic
+seek-to-previous/next player commands, leaving queue-aware episode buttons as the only
+Previous/Next controls; its custom layout orders Previous, Play/Pause, Next, Rewind,
+Forward, Stop so the compact first three are coherent and all requested expanded
+actions are supplied.
+
+**Language and TV shell:** Settings cycles System default, English, and Arabic. Android
+13+ uses the per-app `LocaleManager`; earlier Android versions persist the selection and
+wrap Activity resources. The TV shell has labeled Search, Sort, Refresh, Theme, and
+Settings actions; catalog sort and refresh route to the active catalog, while the
+phone/tablet shell is unchanged. Page/Channel Up/Down on a focused TV shelf moves by
+approximately one visible shelf viewport and restores focus to a real card.
+
+**Refresh behavior and evidence:** My Tvivo already keeps a last-good in-memory snapshot
+and skips assignment when the freshly loaded snapshot is equal; its keyed shelf/card
+items retain identity when data changes. Catalog snapshot lists also use structural
+equality. Full WinUI-style per-shelf content reconciliation, focused-card reorder
+deferral, and structural-change counters remain open because the current landing
+repository does not expose a single committed diff model. JVM/build evidence and the
+remaining device checks are in `.codex-android-d2-fixes-report.md`.
+
+## Android resume after interruption (2026-10-19)
+
+The Continue Watching card opens a movie detail page. Its Play action used to appear
+while the saved position was still loading, so a quick tap could send a zero resume
+position even though the card came from a saved row. Load that row before marking the
+detail ready, and expose Play only after the catalog and resume reads finish. A service
+save also uses its last sampled position when ExoPlayer reports zero at teardown.
+
+An armed sleep timer means a manual or duration-based stop is not proof that the item
+was watched. A verified natural end of the targeted item is proof, including when an
+End of item timer stops playback. Keep those completion decisions separate. Log only
+content type, numeric positions, timer state and save/stop outcomes when investigating
+resume; never log a title, account, or stream URL. Device evidence is still required
+to identify which path caused an individual reported restart.

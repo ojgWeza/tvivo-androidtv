@@ -47,13 +47,21 @@ if command -v reg.exe >/dev/null 2>&1; then
   echo "==> keyboard shortcuts routed to emulator controls"
 fi
 
+# EMU_HEADLESS=1 boots with no window and no audio (drive it with adb only), so it
+# cannot steal focus or input from other work on this machine.
+HEADLESS_ARGS=()
+if [ "${EMU_HEADLESS:-0}" = 1 ]; then
+  HEADLESS_ARGS=(-no-window -no-audio)
+  echo "==> headless (no window, no audio)"
+fi
 echo "==> booting $AVD"
 "$SDK_UNIX/emulator/emulator.exe" \
   -avd "$AVD" \
   -no-snapshot-load \
   -no-boot-anim \
   -memory "${EMU_MEMORY:-1536}" \
-  -gpu swiftshader_indirect &
+  -gpu swiftshader_indirect \
+  "${HEADLESS_ARGS[@]}" &
 
 echo "==> waiting for boot to complete (cold boot takes a few minutes)"
 "$SDK_UNIX/platform-tools/adb.exe" wait-for-device

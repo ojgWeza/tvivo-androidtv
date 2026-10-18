@@ -60,7 +60,7 @@ fun ArtworkFallback(title: String, channel: Boolean, modifier: Modifier = Modifi
                 }
             }
         }
-        Text(title.ifBlank { "Untitled" }, color = AppColors.MediaText, style = TvType.label,
+        if (!channel) Text(title.ifBlank { "Untitled" }, color = AppColors.MediaText, style = TvType.label,
             maxLines = 2, minLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(Color.Transparent, mediaBase.copy(alpha = 0.98f))))

@@ -16,6 +16,8 @@ import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.data.remote.SeriesInfoParser
 import com.dev.Tvivo.data.remote.SeriesListParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -108,6 +110,7 @@ class SeriesRepository(
                     val response =
                         api.getSeriesCategories(credentials.username, credentials.password)
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "series categories")
                         throw AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     }
                     CategoryListParser.parse(
@@ -134,6 +137,7 @@ class SeriesRepository(
                         categoryId
                     )
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "series list")
                         throw AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     }
                     val rows = ArrayList<SeriesEntity>()
@@ -167,6 +171,7 @@ class SeriesRepository(
                         seriesId
                     )
                     if (!response.isSuccessful) {
+                        NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "series info")
                         throw AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     }
                     val json = response.body()?.string().orEmpty()

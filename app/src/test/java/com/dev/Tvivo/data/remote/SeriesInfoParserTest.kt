@@ -14,6 +14,20 @@ import org.junit.Test
  */
 class SeriesInfoParserTest {
 
+    @Test
+    fun episode_titles_keep_provider_names_and_only_mark_episode_style_titles() {
+        assertEquals("S01E02", EpisodeTitlePolicy.displayTitle("A Show - S01E02", 2, "A Show"))
+        assertTrue(EpisodeTitlePolicy.showOrdinal("S01E02"))
+        assertEquals("Blue Bird", EpisodeTitlePolicy.displayTitle("A Show - Blue Bird", 2, "A Show"))
+        assertEquals("Blue Bird", EpisodeTitlePolicy.displayTitle("Blue Bird", 2))
+        assertTrue(!EpisodeTitlePolicy.showOrdinal("Blue Bird"))
+        assertEquals("أغنية المساء", EpisodeTitlePolicy.displayTitle("أغنية المساء", 3))
+        assertTrue(!EpisodeTitlePolicy.showOrdinal("أغنية المساء"))
+        assertEquals("Episode 4", EpisodeTitlePolicy.displayTitle("", 4))
+        assertEquals("Episode 5", EpisodeTitlePolicy.displayTitle("Episode 99", 5))
+        assertTrue(!EpisodeTitlePolicy.showOrdinal("Episode 5"))
+    }
+
     private val realShaped = """
         {
           "seasons": [
@@ -159,7 +173,7 @@ class SeriesInfoParserTest {
     fun `a titleless episode still gets something readable`() {
         val json = """{"episodes":{"3":[{"id":"1","episode_num":4}]}}"""
 
-        assertEquals("S03E01", SeriesInfoParser.parse(json, ACCOUNT, SERIES_ID).single().title)
+        assertEquals("Episode 4", SeriesInfoParser.parse(json, ACCOUNT, SERIES_ID).single().title)
     }
 
     @Test
