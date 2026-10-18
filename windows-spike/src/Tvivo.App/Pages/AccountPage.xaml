@@ -65,6 +65,103 @@
                         <Button Style="{StaticResource AppQuietButtonStyle}" FontSize="16"
                                 HorizontalAlignment="Left" Content="Reset to default"
                                 Click="ResetForYouLayout_Click" />
+                        <Border BorderBrush="{ThemeResource AppMutedTextBrush}" BorderThickness="0,1,0,0"
+                                Margin="0,8,0,0" Padding="0,12,0,0">
+                            <StackPanel Spacing="10">
+                                <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="20"
+                                           FontWeight="SemiBold" Text="Spotlight" />
+                                <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16"
+                                           TextWrapping="Wrap"
+                                           Text="My Tvivo mixes Movies and Series using these settings evenly." />
+
+                                <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="18"
+                                           FontWeight="SemiBold" Text="Movies" />
+                                <ComboBox x:Name="SpotlightMoviesModeSelector" FontSize="16" MinHeight="44"
+                                          SelectionChanged="SpotlightMoviesModeSelector_SelectionChanged"
+                                          AutomationProperties.Name="Movies Spotlight source">
+                                    <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
+                                    <ComboBoxItem Content="Specific folders" Tag="SpecificFolders" />
+                                    <ComboBoxItem Content="Folders I haven't explored" Tag="UnexploredFolders" />
+                                </ComboBox>
+                                <StackPanel x:Name="SpotlightMoviesFoldersPanel" Spacing="8" Visibility="Collapsed">
+                                    <TextBox x:Name="SpotlightMoviesSearchBox" FontSize="16" MinHeight="44"
+                                             PlaceholderText="Search movie folders"
+                                             AutomationProperties.Name="Search movie folders"
+                                             TextChanged="SpotlightMoviesSearchBox_TextChanged" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="SpotlightMoviesSelectAllButton" Content="Select all"
+                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
+                                                AutomationProperties.Name="Select all movie folders"
+                                                Click="SpotlightMoviesSelectAllButton_Click" />
+                                        <Button x:Name="SpotlightMoviesClearButton" Content="Clear"
+                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
+                                                AutomationProperties.Name="Clear selected movie folders"
+                                                Click="SpotlightMoviesClearButton_Click" />
+                                        <TextBlock x:Name="SpotlightMoviesSelectedCountText" FontSize="16"
+                                                   VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel x:Name="SpotlightMoviesFolderList" Spacing="4" />
+                                    </ScrollViewer>
+                                    <TextBlock x:Name="SpotlightMoviesEmptyText" Foreground="{ThemeResource AppMutedTextBrush}"
+                                               FontSize="16" TextWrapping="Wrap" Visibility="Collapsed"
+                                               Text="No movie folders match this search." />
+                                </StackPanel>
+                                <TextBlock x:Name="SpotlightMoviesPreviewText" Foreground="{ThemeResource AppMutedTextBrush}"
+                                           FontSize="16" TextWrapping="Wrap" />
+
+                                <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="18"
+                                           FontWeight="SemiBold" Text="Series" />
+                                <ComboBox x:Name="SpotlightSeriesModeSelector" FontSize="16" MinHeight="44"
+                                          SelectionChanged="SpotlightSeriesModeSelector_SelectionChanged"
+                                          AutomationProperties.Name="Series Spotlight source">
+                                    <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
+                                    <ComboBoxItem Content="Specific folders" Tag="SpecificFolders" />
+                                    <ComboBoxItem Content="Folders I haven't explored" Tag="UnexploredFolders" />
+                                </ComboBox>
+                                <StackPanel x:Name="SpotlightSeriesFoldersPanel" Spacing="8" Visibility="Collapsed">
+                                    <TextBox x:Name="SpotlightSeriesSearchBox" FontSize="16" MinHeight="44"
+                                             PlaceholderText="Search series folders"
+                                             AutomationProperties.Name="Search series folders"
+                                             TextChanged="SpotlightSeriesSearchBox_TextChanged" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="SpotlightSeriesSelectAllButton" Content="Select all"
+                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
+                                                AutomationProperties.Name="Select all series folders"
+                                                Click="SpotlightSeriesSelectAllButton_Click" />
+                                        <Button x:Name="SpotlightSeriesClearButton" Content="Clear"
+                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
+                                                AutomationProperties.Name="Clear selected series folders"
+                                                Click="SpotlightSeriesClearButton_Click" />
+                                        <TextBlock x:Name="SpotlightSeriesSelectedCountText" FontSize="16"
+                                                   VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel x:Name="SpotlightSeriesFolderList" Spacing="4" />
+                                    </ScrollViewer>
+                                    <TextBlock x:Name="SpotlightSeriesEmptyText" Foreground="{ThemeResource AppMutedTextBrush}"
+                                               FontSize="16" TextWrapping="Wrap" Visibility="Collapsed"
+                                               Text="No series folders match this search." />
+                                </StackPanel>
+                                <TextBlock x:Name="SpotlightSeriesPreviewText" Foreground="{ThemeResource AppMutedTextBrush}"
+                                           FontSize="16" TextWrapping="Wrap" />
+
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                                    <Button x:Name="SpotlightSaveButton" Content="Save" MinWidth="100" MinHeight="48"
+                                            FontSize="16" Style="{StaticResource AppQuietButtonStyle}"
+                                            AutomationProperties.Name="Save Spotlight settings"
+                                            Click="SpotlightSaveButton_Click" />
+                                    <Button x:Name="SpotlightCancelButton" Content="Cancel" MinWidth="100" MinHeight="48"
+                                            FontSize="16" Style="{StaticResource AppQuietButtonStyle}"
+                                            AutomationProperties.Name="Cancel Spotlight settings changes"
+                                            Click="SpotlightCancelButton_Click" />
+                                    <TextBlock x:Name="SpotlightSettingsStatusText" FontSize="16"
+                                               VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </Border>
             </StackPanel>

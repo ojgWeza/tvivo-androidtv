@@ -16,6 +16,23 @@ public sealed record SpotlightSettings(SpotlightContentSettings Movies, Spotligh
         new(SpotlightSourceMode.RecentlyAdded), new(SpotlightSourceMode.RecentlyAdded));
 }
 
+public sealed record SpotlightFolderOption(string Id, string Name, int ItemCount);
+
+public static class SpotlightFolderList
+{
+    public static IReadOnlyList<SpotlightFolderOption> Filter(IEnumerable<SpotlightFolderOption> folders, string? query) =>
+        string.IsNullOrWhiteSpace(query)
+            ? folders.ToArray()
+            : folders.Where(folder => folder.Name.Contains(query.Trim(), StringComparison.CurrentCultureIgnoreCase)).ToArray();
+
+    public static IReadOnlyList<string> FindMissing(IEnumerable<string>? selectedIds, IEnumerable<SpotlightFolderOption> folders)
+    {
+        var available = folders.Select(folder => folder.Id).ToHashSet(StringComparer.Ordinal);
+        return (selectedIds ?? Array.Empty<string>()).Where(id => !available.Contains(id))
+            .Distinct(StringComparer.Ordinal).ToArray();
+    }
+}
+
 public sealed record SpotlightCandidate(CatalogItemType Type, string ItemId, string CategoryId,
     string NormalizedTitle, string? Year, DateTimeOffset? AddedAt)
 {

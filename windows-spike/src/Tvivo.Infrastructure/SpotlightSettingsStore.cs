@@ -114,6 +114,13 @@ public sealed class SpotlightDailySelectionStore
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 
+    /// <summary>Removes cached daily selections when an account changes its Spotlight preferences.</summary>
+    public void Invalidate(string accountKey)
+    {
+        var path = PathFor(accountKey);
+        if (File.Exists(path)) File.Delete(path);
+    }
+
     private IReadOnlyList<SpotlightDailySelection> Load(string key)
     {
         var path = PathFor(key);
