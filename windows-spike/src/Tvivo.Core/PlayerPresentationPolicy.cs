@@ -222,3 +222,17 @@ public static class CompactOverlayPolicy
         bool idleElapsed) =>
         !idleElapsed || !isPlaying || isBuffering || pointerOverControls || isDragging || isResizing;
 }
+
+public static class CompactPointerHidePolicy
+{
+    public static bool ShouldHide(
+        bool idleElapsed,
+        bool isPlaying,
+        bool isBuffering,
+        bool pointerOverChrome,
+        bool gestureActive,
+        bool flyoutOpen,
+        bool windowActive) =>
+        idleElapsed && isPlaying && !isBuffering && !pointerOverChrome &&
+        !gestureActive && !flyoutOpen && windowActive;
+}

@@ -66,6 +66,7 @@ public sealed partial class MainWindow : Window
     private bool _compactGeometryNeedsDefaultAnchor;
     private bool _compactGeometryGestureActive;
     private bool _compactGeometryResize;
+    private bool _compactWindowDragActive;
     private CompactResizeEdges _compactResizeEdges;
     private uint _compactGeometryPointerId;
     private Windows.Foundation.Point _compactPointerStart;
@@ -157,6 +158,7 @@ public sealed partial class MainWindow : Window
     private int _cinemaTransitionGeneration;
     private bool _cinemaCursorHidden;
     private readonly Dictionary<Button, object?> _cinemaToolTips = new();
+    private readonly Dictionary<Button, object?> _compactToolTips = new();
     private readonly CinemaCursorController _cinemaCursorController;
     // Cinema mode shows the transport as an overlay that fades out while playing and the mouse is idle.
     private bool _cinemaControlsVisible = true;
@@ -272,7 +274,7 @@ public sealed partial class MainWindow : Window
         CompactVolumeSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(VolumeSlider_PointerPressed), true);
         _cinemaCursorController = new CinemaCursorController(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
-            reason => ShowCinemaControls(reason, resetIdleDeadline: true));
+            CursorWake);
         var playbackOptions = ReadPlaybackOptions();
         _episodePlaybackMode = playbackOptions.EpisodeMode;
         _moviePlaybackMode = playbackOptions.MovieMode;
@@ -281,6 +283,7 @@ public sealed partial class MainWindow : Window
         SyncPlaybackModeToggles(_episodePlaybackMode);
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
+        SleepTimerFlyout.Opened += SleepTimerFlyout_Opened;
         CompactAudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         CompactAudioSubtitlesFlyout.Closed += CompactAudioSubtitlesFlyout_Closed;
         SetMutePresentation();
@@ -631,6 +634,7 @@ public sealed partial class MainWindow : Window
     private void AudioSubtitlesFlyout_Opened(object? sender, object args)
     {
         if (_isCinemaMode) ShowCinemaControls();
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-open");
         if (_trackSelectingEngine is { } engine)
             _trackSnapshot = engine.GetTracks();
         RefreshAudioSubtitlesButton();
@@ -654,6 +658,7 @@ public sealed partial class MainWindow : Window
             focusTarget.Focus(FocusState.Programmatic);
         }
         if (_isCinemaMode) ScheduleCinemaIdleCheck();
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-closed");
     }
 
     private void RefreshAudioSubtitlesButton()
@@ -1450,6 +1455,7 @@ public sealed partial class MainWindow : Window
 
     private void CompactChrome_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
+        ShowCompactControls("click");
         var source = args.OriginalSource as DependencyObject;
         if (FindCompactResizeZone(source) is { } resizeZone)
         {
@@ -1460,7 +1466,12 @@ public sealed partial class MainWindow : Window
                  !IsVisualDescendantOf(source, CompactCloseButton) &&
                  !IsVisualDescendantOf(source, CompactMinimizeButton))
         {
-            if (args.GetCurrentPoint(CompactChrome).Properties.IsLeftButtonPressed) _windowState.BeginWindowDrag();
+            if (args.GetCurrentPoint(CompactChrome).Properties.IsLeftButtonPressed)
+            {
+                _compactWindowDragActive = true;
+                ShowCompactControls("window-drag");
+                _windowState.BeginWindowDrag();
+            }
         }
         else if (IsVisualDescendantOf(source, CompactTitleText))
         {
@@ -1490,13 +1501,18 @@ public sealed partial class MainWindow : Window
 
     private void CompactChrome_PointerReleased(object sender, PointerRoutedEventArgs args) => CompactGeometry_PointerReleased(sender, args);
 
-    private void CompactChrome_PointerCaptureLost(object sender, PointerRoutedEventArgs args) => CompactGeometry_PointerCaptureLost(sender, args);
+    private void CompactChrome_PointerCaptureLost(object sender, PointerRoutedEventArgs args)
+    {
+        _compactWindowDragActive = false;
+        CompactGeometry_PointerCaptureLost(sender, args);
+    }
 
     private void CompactVideoClickTarget_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
         if (_playerPresentation != PlayerPresentation.Compact || sender is not UIElement target ||
             !args.GetCurrentPoint(target).Properties.IsLeftButtonPressed) return;
         _compactVideoPointerStart = args.GetCurrentPoint(target).Position;
+        ShowCompactControls("click");
         _compactVideoPointerId = args.Pointer.PointerId;
         _compactVideoPointerDragged = false;
         _compactVideoPointerActive = target.CapturePointer(args.Pointer);
@@ -1569,6 +1585,7 @@ public sealed partial class MainWindow : Window
 
     private void CompactGeometry_PointerReleased(object sender, PointerRoutedEventArgs args)
     {
+        _compactWindowDragActive = false;
         if (!_compactGeometryGestureActive || args.Pointer.PointerId != _compactGeometryPointerId) return;
         _compactGeometryGestureActive = false;
         if (!_compactGeometryDirty)
@@ -2052,6 +2069,8 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"event=player.final-failure reveal={PlayerResetPolicy.ShouldRevealAfterFinalFailure().ToString().ToLowerInvariant()}");
         if (_isCinemaMode)
             ShowCinemaControls("playback-failure");
+        if (_playerPresentation == PlayerPresentation.Compact)
+            SetCompactControlsVisible(true, showReason: "playback-failure");
     }
 
     private void PlaybackFailureRetry_Click(object sender, RoutedEventArgs args)
@@ -4045,6 +4064,13 @@ public sealed partial class MainWindow : Window
     {
         _sleepTimerCustomEntryOpen = false;
         _sleepTimerChangeEntryOpen = false;
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-closed");
+    }
+
+    private void SleepTimerFlyout_Opened(object sender, object args)
+    {
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-open");
+        else if (_isCinemaMode) ShowCinemaControls("flyout-open", resetIdleDeadline: true);
     }
 
     private void CompactSleepTimerButton_Click(object sender, RoutedEventArgs args)
@@ -4102,6 +4128,8 @@ public sealed partial class MainWindow : Window
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         _nextEpisodeAutoPlaySuppressed = true;
         _nextEpisodeAdvanceStarted = true;
+        if (_playerPresentation == PlayerPresentation.Compact)
+            SetCompactControlsVisible(true, showReason: "sleep-timer-ended");
         ClearPreparedNextItem();
         NextEpisodePrompt.Visibility = Visibility.Collapsed;
         StopHeldSeek(commit: false, released: false);
@@ -4689,12 +4717,15 @@ public sealed partial class MainWindow : Window
             _cinemaWindowActive = false;
             StopHeldSeek(commit: true, released: false);
             if (_isCinemaMode) StopCinemaCursorIdleTimer(showCursor: true);
+            if (_playerPresentation == PlayerPresentation.Compact) SetCompactControlsVisible(true);
         }
         else
         {
             _cinemaWindowActive = true;
             if (_isCinemaMode && _currentPage == ShellPage.Player && (_engine.IsPlaying || _engine.IsBuffering))
                 ShowCinemaControls(resetIdleDeadline: true);
+            else if (_playerPresentation == PlayerPresentation.Compact)
+                ShowCompactControls("window-activated");
         }
     }
 
@@ -4879,6 +4910,7 @@ public sealed partial class MainWindow : Window
     {
         _volumeFlyoutOpenedAtTick = Environment.TickCount64;
         if (_isCinemaMode) ShowCinemaControls();
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-open");
     }
 
     // The first click of a double-click opens the flyout and its light-dismiss layer swallows the second
@@ -4889,6 +4921,7 @@ public sealed partial class MainWindow : Window
         if (Environment.TickCount64 - _volumeFlyoutOpenedAtTick <= GetDoubleClickTime() && CursorIsOverVolumeButton())
             ToggleMute();
         if (_isCinemaMode) ScheduleCinemaIdleCheck();
+        if (_playerPresentation == PlayerPresentation.Compact) ShowCompactControls("flyout-closed");
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -5305,6 +5338,7 @@ public sealed partial class MainWindow : Window
         {
             _cinemaCursorIdleTimer.Stop();
             SetCompactControlsVisible(true);
+            SetCompactCursorVisible(true, "presentation-change");
             PlayerPage.Width = double.NaN;
             PlayerPage.Height = double.NaN;
             PlayerPage.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -5336,7 +5370,7 @@ public sealed partial class MainWindow : Window
     {
         if (_playerPresentation == PlayerPresentation.Compact)
         {
-            ShowCompactControls();
+            if (!_cinemaCursorHidden) ShowCompactControls("pointer-move");
             return;
         }
         // Deliberately leave the event unhandled so a normal click reaches the playback surface.
@@ -5541,12 +5575,24 @@ public sealed partial class MainWindow : Window
         _cinemaCursorIdleTimer.Stop();
         if (_playerPresentation == PlayerPresentation.Compact)
         {
+            var idleElapsed = DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt >= CinemaIdlePolicy.HideDelay;
+            var compactFlyoutOpen = IsTrackFlyoutOpen || VolumeFlyout.IsOpen || SleepTimerFlyout.IsOpen ||
+                CompactSleepTimerPanel.Visibility == Visibility.Visible;
+            var pointerOverChrome = _compactPointerOverControls;
+            var compactPlaybackActive = _engine.IsPlaying && _playbackIntent == PlaybackUserIntent.Playing &&
+                !_engine.IsEnded && !_terminalPlaybackFailure &&
+                !_playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
+            var hidePointer = CompactPointerHidePolicy.ShouldHide(
+                idleElapsed, compactPlaybackActive, _engine.IsBuffering,
+                pointerOverChrome, _compactGeometryGestureActive || _compactVideoPointerActive || _compactWindowDragActive,
+                compactFlyoutOpen || HasCompactKeyboardNavigationFocus(), _cinemaWindowActive);
             var keepVisible = CompactOverlayPolicy.ShouldShow(
-                _engine.IsPlaying, _engine.IsBuffering, _compactPointerOverControls,
+                compactPlaybackActive, _engine.IsBuffering, pointerOverChrome,
                 _compactGeometryGestureActive && !_compactGeometryResize,
                 _compactGeometryGestureActive && _compactGeometryResize,
-                idleElapsed: true) || HasCompactKeyboardNavigationFocus() || IsTrackFlyoutOpen || VolumeFlyout.IsOpen;
-            SetCompactControlsVisible(keepVisible);
+                idleElapsed) || !_cinemaWindowActive || HasCompactKeyboardNavigationFocus() || compactFlyoutOpen ||
+                _compactVideoPointerActive || _compactWindowDragActive;
+            SetCompactControlsVisible(keepVisible, hidePointer);
             return;
         }
         if (!_isCinemaMode || _currentPage != ShellPage.Player) return;
@@ -5567,7 +5613,10 @@ public sealed partial class MainWindow : Window
             return;
         }
         var idleFor = DateTimeOffset.UtcNow - _cinemaLastMouseActivityAt;
-        var flyoutOpen = IsTrackFlyoutOpen || VolumeFlyout.IsOpen;
+        var flyoutOpen = IsTrackFlyoutOpen || VolumeFlyout.IsOpen || SleepTimerFlyout.IsOpen ||
+            SleepTimerWarningPanel.Visibility == Visibility.Visible ||
+            SleepTimerEndedOverlay.Visibility == Visibility.Visible ||
+            NextEpisodePrompt.Visibility == Visibility.Visible;
         if (!CinemaIdlePolicy.ShouldHideControls(
                 idleFor, isPlaying: true, flyoutOpen: flyoutOpen, dragging: _isDraggingProgress,
                 keyboardInteractionActive: HasCinemaKeyboardInteractionFocus()))
@@ -5615,6 +5664,9 @@ public sealed partial class MainWindow : Window
     {
         if (FocusManager.GetFocusedElement(WindowRoot.XamlRoot) is not Control { FocusState: FocusState.Keyboard } focused)
             return false;
+        // This newly added transport button may remain keyboard-focused after its one-shot action.
+        // The flyout itself is handled separately, so the stale button focus must not pin cinema chrome.
+        if (ReferenceEquals(focused, SleepTimerButton)) return false;
         DependencyObject? current = focused;
         while (current is not null)
         {
@@ -5627,19 +5679,31 @@ public sealed partial class MainWindow : Window
     private void CompactChrome_PointerMoved(object sender, PointerRoutedEventArgs args)
     {
         CompactGeometry_PointerMoved(sender, args);
-        ShowCompactControls();
+        if (!_cinemaCursorHidden) ShowCompactControls("pointer-move");
     }
 
     private void CompactControls_PointerEntered(object sender, PointerRoutedEventArgs args)
     {
         _compactPointerOverControls = true;
-        ShowCompactControls();
+        ShowCompactControls("pointer-entered-controls");
     }
 
     private void CompactControls_PointerExited(object sender, PointerRoutedEventArgs args)
     {
         _compactPointerOverControls = false;
-        ShowCompactControls();
+        ShowCompactControls("pointer-left-controls");
+    }
+
+    private void CompactResizeZone_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        _compactPointerOverControls = true;
+        ShowCompactControls("pointer-entered-resize-zone");
+    }
+
+    private void CompactResizeZone_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _compactPointerOverControls = false;
+        ShowCompactControls("pointer-left-resize-zone");
     }
 
     private void CompactChrome_GotFocus(object sender, RoutedEventArgs args) => ShowCompactControls();
@@ -5649,15 +5713,67 @@ public sealed partial class MainWindow : Window
     private void ShowCompactControls()
     {
         if (_playerPresentation != PlayerPresentation.Compact) return;
-        SetCompactControlsVisible(true);
+        ShowCompactControls("interaction");
+    }
+
+    private void ShowCompactControls(string reason)
+    {
+        if (_playerPresentation != PlayerPresentation.Compact) return;
+        _cinemaLastMouseActivityAt = DateTimeOffset.UtcNow;
+        SetCompactControlsVisible(true, showReason: reason);
         _cinemaCursorIdleTimer.Stop();
         if (_engine.IsPlaying && !_engine.IsBuffering) _cinemaCursorIdleTimer.Start();
     }
 
-    private void SetCompactControlsVisible(bool visible)
+    private void SetCompactControlsVisible(bool visible, bool hidePointer = false, string? showReason = null)
     {
         CompactControlsChrome.Opacity = visible ? 1 : 0;
         CompactControlsChrome.IsHitTestVisible = visible;
+        if (visible) SetCompactCursorVisible(true, showReason ?? "state-change");
+        else if (hidePointer) SetCompactCursorVisible(false, "idle");
+    }
+
+    private void SetCompactCursorVisible(bool visible, string reason)
+    {
+        if (_playerPresentation != PlayerPresentation.Compact && !visible) return;
+        if (_cinemaCursorHidden == !visible) return;
+        _cinemaCursorHidden = !visible;
+        _cinemaCursorController.SetHidden(_cinemaCursorHidden, "compact");
+        if (_cinemaCursorHidden)
+        {
+            foreach (var button in CompactTooltipButtons())
+            {
+                var toolTip = ToolTipService.GetToolTip(button);
+                if (toolTip is ToolTip openToolTip) openToolTip.IsOpen = false;
+                _compactToolTips[button] = toolTip;
+                ToolTipService.SetToolTip(button, null);
+            }
+            _cinemaPointerPollTimer.Start();
+            LaunchDiagnostics.Write($"event=compact.cursor-hide reason={reason}");
+        }
+        else
+        {
+            _cinemaPointerPollTimer.Stop();
+            foreach (var (button, toolTip) in _compactToolTips)
+                ToolTipService.SetToolTip(button, toolTip);
+            _compactToolTips.Clear();
+            LaunchDiagnostics.Write($"event=compact.cursor-show reason={reason}");
+        }
+    }
+
+    private IEnumerable<Button> CompactTooltipButtons() => new[]
+    {
+        CompactCloseButton, CompactMinimizeButton, CompactExpandButton, CompactSleepTimerButton,
+        CompactPreviousButton, CompactRewindButton, CompactPauseButton,
+        CompactForwardButton, CompactNextButton, CompactAudioSubtitlesButton, CompactMuteButton,
+    };
+
+    private void CursorWake(string reason)
+    {
+        if (_playerPresentation == PlayerPresentation.Compact)
+            ShowCompactControls(reason);
+        else
+            ShowCinemaControls(reason, resetIdleDeadline: true);
     }
 
     // Only focus reached with the keyboard keeps the overlay up; focus left behind by a mouse click or by
@@ -5704,7 +5820,7 @@ public sealed partial class MainWindow : Window
         _cinemaCursorController.SetHidden(_cinemaCursorHidden);
         if (_cinemaCursorHidden)
         {
-            foreach (var button in new[] { ForwardButton, RewindButton, PreviousEpisodeButton, NextEpisodeButton })
+            foreach (var button in new[] { ForwardButton, RewindButton, PreviousEpisodeButton, NextEpisodeButton, SleepTimerButton })
             {
                 var toolTip = ToolTipService.GetToolTip(button);
                 if (toolTip is ToolTip openToolTip) openToolTip.IsOpen = false;
@@ -5829,6 +5945,7 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosing = true;
+        if (_playerPresentation == PlayerPresentation.Compact) SetCompactCursorVisible(true, "window-close");
         CancelRecentlyLeftCooldown();
         CancelSleepTimer("window-close");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);

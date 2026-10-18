@@ -3,7 +3,7 @@ using Tvivo.Core;
 
 namespace Tvivo.App;
 
-/// <summary>Hides the idle cinema pointer with a tiny, owned hit-target window.</summary>
+/// <summary>Hides the idle cinema or compact pointer with one tiny, owned hit-target window.</summary>
 internal sealed class CinemaCursorController : IDisposable
 {
     private const uint WmSetCursor = 0x0020;
@@ -36,9 +36,12 @@ internal sealed class CinemaCursorController : IDisposable
 
     private readonly nint _rootHwnd;
     private readonly Action<string> _showControls;
-    private bool _hidden;
+    private volatile bool _hidden;
     private bool _loggedPopupProbe;
     private bool _disposed;
+    private string _presentation = "cinema";
+    private Timer? _postHideProbeTimer;
+    private long _hideGeneration;
     private long _popupCreatedAtTick;
     private NativePoint _hideBaseline;
     private nint _popupHwnd;
@@ -49,12 +52,13 @@ internal sealed class CinemaCursorController : IDisposable
         _showControls = showControls;
     }
 
-    internal void SetHidden(bool hidden)
+    internal void SetHidden(bool hidden, string presentation = "cinema")
     {
         if (_disposed) return;
         _hidden = hidden;
+        _presentation = presentation;
         _loggedPopupProbe = false;
-        LaunchDiagnostics.Write($"event=cinema.cursor-set hidden={hidden}");
+        LaunchDiagnostics.Write($"event={presentation}.cursor-set hidden={hidden}");
 
         if (!hidden)
         {
@@ -66,6 +70,7 @@ internal sealed class CinemaCursorController : IDisposable
         DestroyPopup();
         if (GetCursorPos(out _hideBaseline))
             CreatePopupAt(_hideBaseline);
+        SchedulePostHideProbe(presentation);
     }
 
     internal bool TryWakeFromPoll(int thresholdPixels = 2)
@@ -143,6 +148,35 @@ internal sealed class CinemaCursorController : IDisposable
         WritePopupDiagnostics();
     }
 
+    private void SchedulePostHideProbe(string presentation)
+    {
+        var generation = Interlocked.Increment(ref _hideGeneration);
+        _postHideProbeTimer?.Dispose();
+        _postHideProbeTimer = new Timer(_ =>
+        {
+            if (Volatile.Read(ref _hideGeneration) == generation)
+                WritePostHideProbe(presentation);
+        }, null, 800, Timeout.Infinite);
+    }
+
+    private void WritePostHideProbe(string presentation)
+    {
+        var cursorInfo = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        var gotCursorInfo = GetCursorInfo(ref cursorInfo);
+        var cursorVisible = gotCursorInfo && (cursorInfo.Flags & 0x00000001) != 0;
+        var className = "unknown";
+        if (GetCursorPos(out var point))
+        {
+            var hwnd = WindowFromPoint(point);
+            var buffer = new System.Text.StringBuilder(256);
+            if (hwnd != 0 && GetClassName(hwnd, buffer, buffer.Capacity) > 0)
+                className = buffer.ToString();
+        }
+        LaunchDiagnostics.Write(
+            $"event={presentation}.cursor-probe cursorVisible={cursorVisible.ToString().ToLowerInvariant()} " +
+            $"class={className} getCursorInfo={(gotCursorInfo ? "true" : "false")} flags=0x{cursorInfo.Flags:X}");
+    }
+
     private static bool RegisterPopupWindowClass()
     {
         if (_windowClassRegistered) return true;
@@ -184,7 +218,7 @@ internal sealed class CinemaCursorController : IDisposable
         PopupOwners.Remove(hwnd);
         if (IsWindow(hwnd)) DestroyWindow(hwnd);
         if (reason is not null)
-            LaunchDiagnostics.Write($"event=cinema.cursor-popup-destroyed reason={reason}");
+            LaunchDiagnostics.Write($"event={_presentation}.cursor-popup-destroyed reason={reason}");
     }
 
     private void RestoreCursorAtPointer()
@@ -203,10 +237,10 @@ internal sealed class CinemaCursorController : IDisposable
         GetCursorInfo(ref cursorInfo);
         var popupThread = GetWindowThreadProcessId(_popupHwnd, out _);
         LaunchDiagnostics.Write(
-            $"event=cinema.cursor-popup hwnd=0x{_popupHwnd:X} windowFromPoint=0x{windowAtCursor:X} " +
+            $"event={_presentation}.cursor-popup hwnd=0x{_popupHwnd:X} windowFromPoint=0x{windowAtCursor:X} " +
             $"isPopup={(windowAtCursor == _popupHwnd ? "true" : "false")} uiThread={GetCurrentThreadId()} " +
             $"popupThread={popupThread} getCursor=0x{GetCursor():X} cursorInfoFlags=0x{cursorInfo.Flags:X} " +
-            $"cursorInfoHandle=0x{cursorInfo.Cursor:X}");
+            $"cursorInfoHandle=0x{cursorInfo.Cursor:X} cursorVisible={((cursorInfo.Flags & 0x00000001) != 0).ToString().ToLowerInvariant()}");
     }
 
     private static nint PopupWndProc(nint hwnd, uint message, nint wParam, nint lParam)
@@ -261,6 +295,9 @@ internal sealed class CinemaCursorController : IDisposable
     {
         if (_disposed) return;
         _hidden = false;
+        Interlocked.Increment(ref _hideGeneration);
+        _postHideProbeTimer?.Dispose();
+        _postHideProbeTimer = null;
         DestroyPopup();
         _disposed = true;
     }
@@ -365,6 +402,9 @@ internal sealed class CinemaCursorController : IDisposable
 
     [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId", SetLastError = true)]
     private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetClassName(nint hwnd, System.Text.StringBuilder className, int maxCount);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

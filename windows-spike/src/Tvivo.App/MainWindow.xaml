@@ -512,27 +512,35 @@
                         </Border>
                         <local:CompactResizeZone x:Name="CompactResizeEdgeLeft" HorizontalAlignment="Left" VerticalAlignment="Stretch" Width="7"
                                                  Edges="Left" CursorShape="SizeWestEast" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeLeft" />
                         <local:CompactResizeZone x:Name="CompactResizeEdgeTop" HorizontalAlignment="Stretch" VerticalAlignment="Top" Height="7"
                                                  Edges="Top" CursorShape="SizeNorthSouth" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeTop" />
                         <local:CompactResizeZone x:Name="CompactResizeEdgeRight" HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="7"
                                                  Edges="Right" CursorShape="SizeWestEast" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeRight" />
                         <local:CompactResizeZone x:Name="CompactResizeEdgeBottom" HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Height="7"
                                                  Edges="Bottom" CursorShape="SizeNorthSouth" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeEdgeBottom" />
                         <local:CompactResizeZone x:Name="CompactResizeCornerTopLeft" HorizontalAlignment="Left" VerticalAlignment="Top" Width="7" Height="7"
                                                  Edges="Left, Top" CursorShape="SizeNorthwestSoutheast" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerTopLeft" />
                         <local:CompactResizeZone x:Name="CompactResizeCornerTopRight" HorizontalAlignment="Right" VerticalAlignment="Top" Width="7" Height="7"
                                                  Edges="Right, Top" CursorShape="SizeNortheastSouthwest" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerTopRight" />
                         <local:CompactResizeZone x:Name="CompactResizeCornerBottomLeft" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="7" Height="7"
                                                  Edges="Left, Bottom" CursorShape="SizeNortheastSouthwest" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerBottomLeft" />
                         <local:CompactResizeZone x:Name="CompactResizeCornerBottomRight" HorizontalAlignment="Right" VerticalAlignment="Bottom" Width="7" Height="7"
                                                  Edges="Right, Bottom" CursorShape="SizeNorthwestSoutheast" Background="Transparent"
+                                                 PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
                                                  AutomationProperties.Name="Resize mini player" AutomationProperties.AutomationId="CompactResizeCornerBottomRight" />
                     </Grid>
 
