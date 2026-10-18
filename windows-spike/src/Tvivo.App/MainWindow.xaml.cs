@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -335,6 +336,7 @@ public sealed partial class MainWindow : Window
         _cinemaPointerPollTimer.Tick += CinemaPointerPollTimer_Tick;
         PlayerPage.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(PlayerPage_PointerMoved), true);
         _catalogLandingPage.ChannelSelected += CatalogLandingPage_ChannelSelected;
+        _catalogLandingPage.NavigateToSpotlightSettingsRequested += CatalogLandingPage_NavigateToSpotlightSettingsRequested;
         _catalogLandingPage.RefreshStateChanged += CatalogLandingPage_RefreshStateChanged;
         _catalogLandingPage.VisibleCatalogDataChanged += (_, _) => _homePage.MarkDataChanged();
         _homePage.ChannelSelected += CatalogLandingPage_ChannelSelected;
@@ -994,6 +996,21 @@ public sealed partial class MainWindow : Window
 
         _accountPage.ShowAccount(account, _catalogLandingPage.LastRefreshAt);
         ShowPage(ShellPage.Account);
+    }
+
+    private void CatalogLandingPage_NavigateToSpotlightSettingsRequested(object? sender, EventArgs args)
+    {
+        AccountNavigation_Click(this, new RoutedEventArgs());
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_accountPage.FindName("ForYouTabButton") is Button tab)
+                new ButtonAutomationPeer(tab).Invoke();
+            if (_accountPage.FindName("SpotlightMoviesModeSelector") is ComboBox spotlight)
+            {
+                spotlight.StartBringIntoView();
+                spotlight.Focus(FocusState.Programmatic);
+            }
+        });
     }
 
     private async void AccountPage_RefreshCatalogRequested(object? sender, EventArgs args)

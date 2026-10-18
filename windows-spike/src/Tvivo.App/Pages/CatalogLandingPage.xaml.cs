@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -77,6 +78,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private SpotlightStripState _spotlightState = SpotlightStripState.Create(0);
     private CancellationTokenSource? _spotlightDwellCts;
     private CancellationTokenSource? _spotlightMetadataCts;
+    private CatalogCard? _spotlightMetadataCard;
+    private string? _spotlightFocusedId;
+    private bool _spotlightArtworkLayoutPending;
+    private int _spotlightWindowFirst = -1;
+    private int _spotlightWindowLast = -1;
+    private readonly Dictionary<Button, Storyboard> _spotlightWidthAnimations = new();
     private readonly Windows.UI.ViewManagement.UISettings _uiSettings = new();
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
@@ -278,7 +285,7 @@ public sealed partial class CatalogLandingPage : UserControl
         OpenShelfGrid.Unloaded += OpenShelfGrid_Unloaded;
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         SpotlightStripItems.ItemsSource = _spotlightCards;
-        _uiSettings.ColorValuesChanged += UiSettings_ColorValuesChanged;
+        SpotlightStripItems.LayoutUpdated += SpotlightStripItems_LayoutUpdated;
         _epgTimer.Tick += EpgTimer_Tick;
         _perfSummaryTimer.Tick += PerfSummaryTimer_Tick;
         _lastPerfGc0Count = GC.CollectionCount(0);
@@ -335,7 +342,13 @@ public sealed partial class CatalogLandingPage : UserControl
         if (active) ScheduleShelfViewportUpdate("activate");
         else _shelfViewportPollTimer?.Stop();
         if (!active) CancelSpotlightAsyncWork();
-        else UpdateSpotlightArtworkWindow();
+        else
+        {
+            RequestSpotlightArtworkLayout();
+            if (_spotlightFocusedId is { } focusedId)
+                DispatcherQueue.TryEnqueue(() => _spotlightCards.FirstOrDefault(card => card.Id == focusedId)
+                    ?.SpotlightButton?.Focus(FocusState.Programmatic));
+        }
         UpdateEpgLifecycle();
     }
 
@@ -366,7 +379,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _browsePositions.Clear();
         SetSearchTextWithoutReload(string.Empty);
         CancelSpotlightAsyncWork();
-        _spotlightCards.Clear();
+        ClearSpotlightCards();
         _scheduledRetries.Clear();
         _activityDataDirty = false;
         _favoriteDataDirty = false;
@@ -394,7 +407,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         CancelSavedStartupAuthentication();
         CancelSpotlightAsyncWork();
-        _uiSettings.ColorValuesChanged -= UiSettings_ColorValuesChanged;
+        SpotlightStripItems.LayoutUpdated -= SpotlightStripItems_LayoutUpdated;
         _epgTimer.Stop();
         _epgTimer.Tick -= EpgTimer_Tick;
         _perfSummaryTimer.Stop();
@@ -924,7 +937,7 @@ public sealed partial class CatalogLandingPage : UserControl
             _modeStates.Clear();
             _browsePositions.Clear();
             CancelSpotlightAsyncWork();
-            _spotlightCards.Clear();
+            ClearSpotlightCards();
             _selectedGroupId = null;
             _openShelfId = null;
             _openShelfType = null;
@@ -2656,59 +2669,85 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
+        _spotlightDwellCts?.Cancel();
+        _spotlightDwellCts = null;
+        _spotlightWindowFirst = _spotlightWindowLast = -1;
         var oldId = _spotlightCard?.Id;
-        _spotlightCards.Clear();
+        var focusedId = _spotlightCards.FirstOrDefault(card =>
+            card.SpotlightButton?.FocusState is FocusState.Keyboard or FocusState.Programmatic)?.Id;
         var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(12).ToArray();
-        foreach (var card in cards) _spotlightCards.Add(card);
+        for (var i = 0; i < cards.Length; i++)
+        {
+            var existingIndex = -1;
+            for (var j = i; j < _spotlightCards.Count; j++)
+                if (_spotlightCards[j].Id == cards[i].Id) { existingIndex = j; break; }
+            if (existingIndex >= 0)
+            {
+                var existing = _spotlightCards[existingIndex];
+                if (existing.UpdateSpotlightData(cards[i]) && existing.SpotlightButton is { } button &&
+                    FindDescendant<Image>(button) is { } image) StopArtwork(image);
+                if (existingIndex > i) _spotlightCards.Move(existingIndex, i);
+            }
+            else _spotlightCards.Insert(i, cards[i]);
+        }
+        while (_spotlightCards.Count > cards.Length)
+        {
+            _spotlightCards[^1].SpotlightButton = null;
+            _spotlightCards.RemoveAt(_spotlightCards.Count - 1);
+        }
         _spotlightState = SpotlightStripState.Create(cards.Length);
         if (oldId is not null)
         {
-            var preserved = Array.FindIndex(cards, card => card.Id == oldId);
+            var preserved = _spotlightCards.ToList().FindIndex(card => card.Id == oldId);
             if (preserved >= 0) _spotlightState = _spotlightState.Open(preserved);
         }
-        _spotlightCard = _spotlightState.OpenIndex >= 0 ? cards[_spotlightState.OpenIndex] : null;
+        _spotlightCard = _spotlightState.OpenIndex >= 0 ? _spotlightCards[_spotlightState.OpenIndex] : null;
         SpotlightPanel.Visibility = _openShelfId is null && _renderedSnapshot?.IsFlatSearch != true &&
             _activeMode != CatalogMode.LiveTv ? Visibility.Visible : Visibility.Collapsed;
         SpotlightEmptySettingsButton.Visibility = cards.Length == 0 && SpotlightPanel.Visibility == Visibility.Visible
             ? Visibility.Visible : Visibility.Collapsed;
         SpotlightPositionText.Text = cards.Length == 0 ? "Nothing to show yet" : $"Item {_spotlightState.OpenIndex + 1} of {cards.Length}";
         UpdateSpotlightCardStates();
-        if (_spotlightCard is not null) ScheduleSpotlightMetadata(_spotlightCard);
-        UpdateSpotlightArtworkWindow();
+        RequestSpotlightArtworkLayout();
+        if (focusedId is not null)
+        {
+            var focusCard = _spotlightCards.FirstOrDefault(card => card.Id == focusedId);
+            if (focusCard is not null)
+                DispatcherQueue.TryEnqueue(() => focusCard.SpotlightButton?.Focus(FocusState.Programmatic));
+        }
+    }
+
+    private void ClearSpotlightCards()
+    {
+        foreach (var card in _spotlightCards) card.SpotlightButton = null;
+        foreach (var animation in _spotlightWidthAnimations.Values) animation.Stop();
+        _spotlightWidthAnimations.Clear();
+        _spotlightCards.Clear();
+        _spotlightCard = null;
+        _spotlightFocusedId = null;
+        _spotlightWindowFirst = _spotlightWindowLast = -1;
     }
 
     private void UpdateSpotlightCardStates(int previousOpenIndex = -1, int newOpenIndex = -1)
     {
-        var viewport = Math.Max(776, SpotlightStripViewer.ActualWidth);
+        var viewport = SpotlightStripViewer.ActualWidth > 0 ? SpotlightStripViewer.ActualWidth : 776;
         for (var i = 0; i < _spotlightCards.Count; i++)
         {
             var card = _spotlightCards[i];
+            var targetWidth = i == _spotlightState.OpenIndex ? SpotlightStripState.OpenWidth(viewport) : 64;
+            var animateOpening = i == newOpenIndex && _uiSettings.AnimationsEnabled &&
+                card.SpotlightButton is { ActualWidth: > 0 } openingButton &&
+                Math.Abs(openingButton.ActualWidth - targetWidth) > 0.5;
             card.SetSpotlightState(i, _spotlightCards.Count, i == _spotlightState.OpenIndex,
-                i == _spotlightState.OpenIndex ? SpotlightStripState.OpenWidth(viewport) : 64,
-                i == _spotlightState.OpenIndex);
+                targetWidth, i == _spotlightState.OpenIndex, !animateOpening);
             if (card.SpotlightButton is { } button)
             {
+                if (_spotlightWidthAnimations.Remove(button, out var running)) running.Stop();
                 var text = FindDescendant<StackPanel>(button);
                 if (text is not null)
                 {
-                    if (card.SpotlightExpanded && _uiSettings.AnimationsEnabled && i == newOpenIndex)
-                    {
-                        text.Opacity = 0;
-                        var reveal = new DoubleAnimation
-                        {
-                            From = 0,
-                            To = 1,
-                            Duration = TimeSpan.FromMilliseconds(120),
-                            EnableDependentAnimation = false,
-                        };
-                        Storyboard.SetTarget(reveal, text);
-                        Storyboard.SetTargetProperty(reveal, "Opacity");
-                        var revealStoryboard = new Storyboard();
-                        revealStoryboard.Children.Add(reveal);
-                        revealStoryboard.Begin();
-                    }
-                    else if (!card.SpotlightExpanded) text.Opacity = 0;
-                    else text.Opacity = 1;
+                    if (i == newOpenIndex && _uiSettings.AnimationsEnabled) text.Opacity = 0;
+                    else text.Opacity = card.SpotlightExpanded ? 1 : 0;
                 }
                 if (_uiSettings.AnimationsEnabled && (i == previousOpenIndex || i == newOpenIndex) &&
                     button.ActualWidth > 0 && Math.Abs(button.ActualWidth - card.SpotlightWidth) > 0.5)
@@ -2725,9 +2764,36 @@ public sealed partial class CatalogLandingPage : UserControl
                     Storyboard.SetTargetProperty(animation, "Width");
                     var storyboard = new Storyboard();
                     storyboard.Children.Add(animation);
+                    var cardIndex = i;
+                    var finalWidth = card.SpotlightWidth;
+                    _spotlightWidthAnimations[button] = storyboard;
+                    storyboard.Completed += (_, _) =>
+                    {
+                        if (!_spotlightWidthAnimations.TryGetValue(button, out var current) || !ReferenceEquals(current, storyboard)) return;
+                        _spotlightWidthAnimations.Remove(button);
+                        storyboard.Stop();
+                        if (ReferenceEquals(card.SpotlightButton, button)) button.Width = finalWidth;
+                        RequestSpotlightArtworkLayout();
+                        if (cardIndex == newOpenIndex && text is not null && ReferenceEquals(card.SpotlightButton, button))
+                        {
+                            card.RevealSpotlightText();
+                            var reveal = new DoubleAnimation { From = 0, To = 1,
+                                Duration = TimeSpan.FromMilliseconds(120), EnableDependentAnimation = false };
+                            Storyboard.SetTarget(reveal, text);
+                            Storyboard.SetTargetProperty(reveal, "Opacity");
+                            var revealStoryboard = new Storyboard();
+                            revealStoryboard.Children.Add(reveal);
+                            revealStoryboard.Completed += (_, _) => { revealStoryboard.Stop(); text.Opacity = 1; };
+                            revealStoryboard.Begin();
+                        }
+                    };
                     storyboard.Begin();
                 }
-                else button.Width = card.SpotlightWidth;
+                else
+                {
+                    button.Width = card.SpotlightWidth;
+                    if (text is not null) text.Opacity = card.SpotlightExpanded ? 1 : 0;
+                }
             }
         }
         if (_spotlightState.OpenIndex >= 0)
@@ -2742,19 +2808,21 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightCard = _spotlightCards[index];
         UpdateSpotlightCardStates(previousOpenIndex, index);
         EnsureSpotlightVisible(index);
-        ScheduleSpotlightMetadata(_spotlightCard);
         UpdateSpotlightArtworkWindow();
         LaunchDiagnostics.Write($"event=spotlight.open index={index + 1} via={via}");
-        if (announce)
+        if (announce && via == "keyboard")
         {
-            SpotlightPositionText.Text = SpotlightStripState.Announcement(_spotlightCard.Title, index, _spotlightCards.Count);
+            var peer = FrameworkElementAutomationPeer.FromElement(SpotlightPositionText)
+                ?? FrameworkElementAutomationPeer.CreatePeerForElement(SpotlightPositionText);
+            peer?.RaiseNotificationEvent(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent,
+                SpotlightStripState.Announcement(_spotlightCard.Title, index, _spotlightCards.Count), "SpotlightOpened");
         }
     }
 
     private void SpotlightItem_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { DataContext: CatalogCard card }) return;
-        if (card.SpotlightIndex != _spotlightState.OpenIndex)
+        if (!_spotlightState.TouchTapActivates(card.SpotlightIndex))
         {
             OpenSpotlight(card.SpotlightIndex, "click");
             return;
@@ -2769,8 +2837,13 @@ public sealed partial class CatalogLandingPage : UserControl
         var cancellation = _spotlightDwellCts = new CancellationTokenSource();
         try
         {
-            await Task.Delay(350, cancellation.Token);
-            DispatcherQueue.TryEnqueue(() => OpenSpotlight(card.SpotlightIndex, "hover"));
+            await Task.Delay(SpotlightStripState.DwellDuration, cancellation.Token);
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!cancellation.IsCancellationRequested && _isActive &&
+                    SpotlightStripState.ShouldOpenAfterDwell(_spotlightState.OpenIndex, card.SpotlightIndex,
+                        SpotlightStripState.DwellDuration)) OpenSpotlight(card.SpotlightIndex, "hover");
+            });
         }
         catch (OperationCanceledException) { }
     }
@@ -2784,6 +2857,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightItem_GotFocus(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { DataContext: CatalogCard card } button) return;
+        _spotlightFocusedId = card.Id;
         var keyboard = button.FocusState == FocusState.Keyboard;
         if (keyboard && card.SpotlightIndex != _spotlightState.OpenIndex)
             OpenSpotlight(card.SpotlightIndex, "keyboard", keyboard);
@@ -2800,8 +2874,8 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Button { DataContext: CatalogCard card }) return;
         var next = args.Key switch
         {
-            Windows.System.VirtualKey.Left => Math.Max(0, card.SpotlightIndex - 1),
-            Windows.System.VirtualKey.Right => Math.Min(_spotlightCards.Count - 1, card.SpotlightIndex + 1),
+            Windows.System.VirtualKey.Left => _spotlightState.Open(card.SpotlightIndex).Move(-1).OpenIndex,
+            Windows.System.VirtualKey.Right => _spotlightState.Open(card.SpotlightIndex).Move(1).OpenIndex,
             _ => card.SpotlightIndex,
         };
         if (next == card.SpotlightIndex) return;
@@ -2812,63 +2886,107 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightItem_Loaded(object sender, RoutedEventArgs args)
     {
-        if (sender is Button { DataContext: CatalogCard card }) card.SpotlightButton = (Button)sender;
+        if (sender is Button { DataContext: CatalogCard card } button)
+        {
+            card.SpotlightButton = button;
+            button.Width = Math.Clamp(card.SpotlightWidth, 64, 672);
+            RequestSpotlightArtworkLayout();
+        }
+    }
+
+    private void SpotlightItem_Unloaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { DataContext: CatalogCard card } button && ReferenceEquals(card.SpotlightButton, button))
+            card.SpotlightButton = null;
+        if (sender is Button oldButton && _spotlightWidthAnimations.Remove(oldButton, out var animation)) animation.Stop();
+    }
+
+    private void RequestSpotlightArtworkLayout() => _spotlightArtworkLayoutPending = true;
+
+    private void SpotlightStripItems_LayoutUpdated(object? sender, object args)
+    {
+        if (!_spotlightArtworkLayoutPending || SpotlightStripViewer.ViewportWidth <= 0 ||
+            _spotlightCards.Any(card => card.SpotlightButton is not { ActualWidth: > 0 })) return;
+        _spotlightArtworkLayoutPending = false;
         UpdateSpotlightArtworkWindow();
     }
 
     private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args) => UpdateSpotlightArtworkWindow();
 
-    private void SpotlightStripViewer_SizeChanged(object sender, SizeChangedEventArgs args) => UpdateSpotlightCardStates();
+    private void SpotlightStripViewer_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        UpdateSpotlightCardStates();
+        RequestSpotlightArtworkLayout();
+    }
 
     private void EnsureSpotlightVisible(int index)
     {
         if (index < 0 || index >= _spotlightCards.Count) return;
         var button = _spotlightCards[index].SpotlightButton;
         if (button is null) return;
-        var transform = button.TransformToVisual(SpotlightStripViewer);
-        var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-        var target = SpotlightStripState.ScrollIntoViewTarget(point.X + SpotlightStripViewer.HorizontalOffset,
-            button.ActualWidth, SpotlightStripViewer.HorizontalOffset, SpotlightStripViewer.ViewportWidth);
-        SpotlightStripViewer.ChangeView(target, null, null, true);
+        try
+        {
+            var transform = button.TransformToVisual(SpotlightStripViewer);
+            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+            var target = SpotlightStripState.ScrollIntoViewTarget(point.X + SpotlightStripViewer.HorizontalOffset,
+                button.ActualWidth, SpotlightStripViewer.HorizontalOffset, SpotlightStripViewer.ViewportWidth);
+            SpotlightStripViewer.ChangeView(target, null, null, true);
+        }
+        catch (InvalidOperationException) { RequestSpotlightArtworkLayout(); }
+        catch (ArgumentException) { RequestSpotlightArtworkLayout(); }
     }
 
     private void UpdateSpotlightArtworkWindow()
     {
-        if (SpotlightPanel.Visibility != Visibility.Visible) return;
+        if (SpotlightPanel.Visibility != Visibility.Visible || _spotlightArtworkLayoutPending) return;
         var viewport = Math.Max(0, SpotlightStripViewer.ViewportWidth);
         var visibleIndices = new List<int>();
         foreach (var card in _spotlightCards)
         {
-            if (card.SpotlightButton is not { } button) continue;
+            if (card.SpotlightButton is not { IsLoaded: true, ActualWidth: > 0 } button) continue;
             try
             {
                 var point = button.TransformToVisual(SpotlightStripViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
                 if (point.X + button.ActualWidth > 0 && point.X < viewport) visibleIndices.Add(card.SpotlightIndex);
             }
             catch (InvalidOperationException) { }
+            catch (ArgumentException) { }
         }
-        var first = visibleIndices.Count == 0 ? _spotlightState.OpenIndex : visibleIndices.Min();
-        var last = visibleIndices.Count == 0 ? first : visibleIndices.Max();
-        var windowFirst = Math.Max(0, first - 1);
-        var windowLast = Math.Min(_spotlightCards.Count - 1, last + 1);
+        if (visibleIndices.Count == 0)
+        {
+            _spotlightMetadataCts?.Cancel();
+            if (_spotlightCards.Count > 0) RequestSpotlightArtworkLayout();
+            return;
+        }
+        var first = visibleIndices.Min();
+        var last = visibleIndices.Max();
+        _spotlightWindowFirst = Math.Max(0, first - 1);
+        _spotlightWindowLast = Math.Min(_spotlightCards.Count - 1, last + 1);
         foreach (var card in _spotlightCards)
         {
-            if (card.SpotlightButton is null) continue;
-            var inWindow = card.SpotlightIndex >= windowFirst && card.SpotlightIndex <= windowLast;
-            if (FindDescendant<Image>(card.SpotlightButton) is { } image)
-                if (inWindow && image.Source is null) StartArtwork(image, card.ArtworkUrl);
+            if (card.SpotlightButton is not { IsLoaded: true } button) continue;
+            var inWindow = ShouldLoadSpotlightArtwork(card);
+            if (FindDescendant<Image>(button) is { } image)
+                if (inWindow && image.Source is null && !_artworkLoads.ContainsKey(image))
+                {
+                    ApplyArtworkClip(image);
+                    StartArtwork(image, card.ArtworkUrl);
+                }
                 else if (!inWindow) StopArtwork(image);
         }
         if (_spotlightCard is { } openCard && !visibleIndices.Contains(openCard.SpotlightIndex))
             _spotlightMetadataCts?.Cancel();
-        else if (_spotlightCard is { } visibleOpen && visibleOpen.SpotlightSummary == "Summary unavailable")
+        else if (_spotlightCard is { } visibleOpen && !visibleOpen.SpotlightSummaryResolved)
             ScheduleSpotlightMetadata(visibleOpen);
     }
 
     private async void ScheduleSpotlightMetadata(CatalogCard card)
     {
+        if (card.SpotlightSummaryResolved ||
+            ReferenceEquals(_spotlightMetadataCard, card) && _spotlightMetadataCts is { IsCancellationRequested: false }) return;
         _spotlightMetadataCts?.Cancel();
         var cancellation = _spotlightMetadataCts = new CancellationTokenSource();
+        _spotlightMetadataCard = card;
         var token = cancellation.Token;
         try
         {
@@ -2882,11 +3000,20 @@ public sealed partial class CatalogLandingPage : UserControl
             {
                 if (token.IsCancellationRequested || !ReferenceEquals(_spotlightCard, card)) return;
                 card.ApplyMetadata(metadata);
+                card.ResolveSpotlightSummary();
                 card.NotifyMetadataChanged();
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch { }
+        finally
+        {
+            if (ReferenceEquals(_spotlightMetadataCts, cancellation))
+            {
+                _spotlightMetadataCts = null;
+                _spotlightMetadataCard = null;
+            }
+        }
     }
 
     private void SpotlightEmptySettingsButton_Click(object sender, RoutedEventArgs args) =>
@@ -2898,19 +3025,16 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightDwellCts = null;
         _spotlightMetadataCts?.Cancel();
         _spotlightMetadataCts = null;
+        _spotlightMetadataCard = null;
+        _spotlightArtworkLayoutPending = false;
         foreach (var card in _spotlightCards)
             if (card.SpotlightButton is not null)
                 if (FindDescendant<Image>(card.SpotlightButton) is { } image) StopArtwork(image);
     }
 
-    private void UiSettings_ColorValuesChanged(Windows.UI.ViewManagement.UISettings sender, object args) =>
-        DispatcherQueue.TryEnqueue(() => UpdateSpotlightCardStates());
-
     private bool ShouldLoadSpotlightArtwork(CatalogCard card)
     {
-        var visible = Math.Max(1, (int)Math.Floor((Math.Max(0, SpotlightStripViewer.ViewportWidth - 480) + 8) / 72));
-        return card.SpotlightIndex >= Math.Max(0, _spotlightState.OpenIndex - 1) &&
-            card.SpotlightIndex <= _spotlightState.OpenIndex + visible + 1;
+        return card.SpotlightIndex >= _spotlightWindowFirst && card.SpotlightIndex <= _spotlightWindowLast;
     }
 
     private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
@@ -3262,7 +3386,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private void ArtworkImage_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
     {
         using var perfScope = PerfScope.Begin("ArtworkDataContextChanged");
-        if (sender is Image image && image.IsLoaded)
+        if (sender is Image image && image.IsLoaded &&
+            (image.DataContext is not CatalogCard card || !_spotlightCards.Contains(card) || ShouldLoadSpotlightArtwork(card)))
             StartArtwork(image, (image.DataContext as CatalogCard)?.ArtworkUrl);
     }
 
@@ -3368,6 +3493,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private async void StartArtwork(Image image, string? url)
     {
         var isSpotlightCard = image.DataContext is CatalogCard stripCard && _spotlightCards.Contains(stripCard);
+        if (image.DataContext is CatalogCard spotlightCard && isSpotlightCard &&
+            !ShouldLoadSpotlightArtwork(spotlightCard)) return;
         if (isSpotlightCard && PerfToggles.IsDisabled("spotlightart"))
         {
             image.Source = null;
@@ -3416,6 +3543,12 @@ public sealed partial class CatalogLandingPage : UserControl
         var stage = "disk-or-http";
         try
         {
+            if (isSpotlightCard)
+            {
+                load.Stage = "spotlight-permit-wait";
+                await _spotlightArtworkSlots.WaitAsync(load.Cancellation.Token);
+                load.SpotlightSlotAcquired = true;
+            }
             load.Stage = stage;
             var bytes = await ArtworkBytes.GetAsync(uri, load.Cancellation.Token);
             if (bytes is null)
@@ -3425,11 +3558,6 @@ public sealed partial class CatalogLandingPage : UserControl
 
             stage = "decode-permit-wait";
             load.Stage = stage;
-            if (isSpotlightCard)
-            {
-                await _spotlightArtworkSlots.WaitAsync(load.Cancellation.Token);
-                load.SpotlightSlotAcquired = true;
-            }
             await _artworkSlots.WaitAsync(load.Cancellation.Token);
             load.SlotAcquired = true;
             stage = "decode";
@@ -5207,9 +5335,9 @@ public sealed partial class CatalogLandingPage : UserControl
         private readonly bool _epgEnabled = epgEnabled;
 
         public string Id { get; } = id;
-        public string Title { get; } = title;
+        public string Title { get; private set; } = title;
         public string Subtitle { get; } = subtitle;
-        public string? ArtworkUrl { get; } = artworkUrl;
+        public string? ArtworkUrl { get; private set; } = artworkUrl;
         public double Width { get; } = width;
         public double Height { get; } = height;
         public int SpotlightIndex { get; private set; } = -1;
@@ -5217,17 +5345,45 @@ public sealed partial class CatalogLandingPage : UserControl
         public double SpotlightPosterWidth => SpotlightExpanded ? (SpotlightWidth >= 600 ? 190 : 164) : 64;
         public double SpotlightPosterHeight => SpotlightExpanded ? (SpotlightWidth >= 600 ? 285 : 246) : 304;
         public Stretch SpotlightImageStretch => SpotlightExpanded ? Stretch.Uniform : Stretch.UniformToFill;
-        public Visibility SpotlightTextVisibility => SpotlightExpanded ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility SpotlightTextVisibility => SpotlightExpanded && SpotlightTextRevealed ? Visibility.Visible : Visibility.Collapsed;
+        private bool SpotlightTextRevealed { get; set; } = true;
         public Visibility SpotlightFocusVisibility { get; private set; } = Visibility.Collapsed;
         public bool SpotlightIsTabStop => SpotlightExpanded;
-        public Thickness SpotlightPadding => SpotlightExpanded ? new Thickness(12) : new Thickness(0);
+        public Thickness SpotlightPadding => SpotlightExpanded ? new Thickness(16) : new Thickness(0);
         public bool SpotlightExpanded { get; private set; }
         public string SpotlightDetails => DetailsLine;
-        public string SpotlightSummary => string.IsNullOrWhiteSpace(HoverPlot) ? "Summary unavailable" : HoverPlot!;
+        public bool SpotlightSummaryResolved { get; private set; } =
+            !string.IsNullOrWhiteSpace(channel?.Metadata.GetValueOrDefault("plot"));
+        public string SpotlightSummary => !string.IsNullOrWhiteSpace(HoverPlot) ? HoverPlot! :
+            SpotlightSummaryResolved ? "Summary unavailable" : string.Empty;
         public string SpotlightAutomationName => SpotlightStripState.AutomationName(Title,
             Type == CatalogItemType.Movie, SpotlightIndex, Math.Max(1, SpotlightItemCount), SpotlightExpanded);
         private int SpotlightItemCount { get; set; } = 1;
         public Button? SpotlightButton { get; set; }
+
+        public bool UpdateSpotlightData(CatalogCard incoming)
+        {
+            var artworkChanged = ArtworkUrl != incoming.ArtworkUrl;
+            if (Title != incoming.Title)
+            {
+                Title = incoming.Title;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Title)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightAutomationName)));
+            }
+            ArtworkUrl = incoming.ArtworkUrl;
+            if (incoming.Channel is { } newChannel)
+            {
+                var previousPlot = HoverPlot;
+                Channel = newChannel;
+                if (_hoverMetadata is null || !string.IsNullOrWhiteSpace(newChannel.Metadata.GetValueOrDefault("plot")))
+                    SpotlightSummaryResolved = !string.IsNullOrWhiteSpace(HoverPlot);
+                if (previousPlot != HoverPlot)
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightSummary)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightDetails)));
+            }
+            ApplyWatchProgress(incoming._watchProgress);
+            return artworkChanged;
+        }
         public Channel? Channel { get; private set; } = channel;
         public string? QualityBadge { get; } = qualityBadge;
         public CatalogItemType Type { get; } = type;
@@ -5315,11 +5471,13 @@ public sealed partial class CatalogLandingPage : UserControl
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightDetails)));
         }
 
-        public void SetSpotlightState(int index, int itemCount, bool expanded, double width, bool isFocusedTabStop)
+        public void SetSpotlightState(int index, int itemCount, bool expanded, double width, bool isFocusedTabStop,
+            bool revealText)
         {
             SpotlightIndex = index;
             SpotlightItemCount = Math.Max(1, itemCount);
             SpotlightExpanded = expanded;
+            SpotlightTextRevealed = revealText;
             SpotlightWidth = width;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightIndex)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightExpanded)));
@@ -5337,6 +5495,18 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             SpotlightFocusVisibility = focused ? Visibility.Visible : Visibility.Collapsed;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightFocusVisibility)));
+        }
+
+        public void ResolveSpotlightSummary()
+        {
+            SpotlightSummaryResolved = true;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightSummary)));
+        }
+
+        public void RevealSpotlightText()
+        {
+            SpotlightTextRevealed = true;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightTextVisibility)));
         }
 
         public void ApplyWatchProgress(PlaybackProgress? progress)

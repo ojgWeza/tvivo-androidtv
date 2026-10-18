@@ -442,13 +442,13 @@
                                                 <DataTemplate>
                                                     <Button Height="320" Padding="{Binding SpotlightPadding}"
                                                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                                                            Background="{ThemeResource AppSurfaceColor}" BorderThickness="0"
+                                                            Background="{ThemeResource AppPanelSurfaceBrush}" BorderThickness="0"
                                                             Click="SpotlightItem_Click" PointerEntered="SpotlightItem_PointerEntered"
                                                             PointerExited="SpotlightItem_PointerExited" GotFocus="SpotlightItem_GotFocus"
                                                             LostFocus="SpotlightItem_LostFocus"
                                                             KeyDown="SpotlightItem_KeyDown" IsTabStop="{Binding SpotlightIsTabStop}"
                                                             AutomationProperties.Name="{Binding SpotlightAutomationName}"
-                                                            Loaded="SpotlightItem_Loaded">
+                                                            Loaded="SpotlightItem_Loaded" Unloaded="SpotlightItem_Unloaded">
                                                         <Grid ColumnSpacing="20">
                                                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                                             <Border Width="{Binding SpotlightPosterWidth}" Height="{Binding SpotlightPosterHeight}"

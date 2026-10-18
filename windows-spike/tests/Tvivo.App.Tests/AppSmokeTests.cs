@@ -315,7 +315,7 @@ public sealed class AppSmokeTests
         var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = new List<(string AccountId, CatalogItemType Type)>();
         var sync = new object();
-        var tasks = new CatalogRefreshTasks(async (requested, type) =>
+        var tasks = new CatalogRefreshTasks(async (requested, type, _) =>
         {
             lock (sync) calls.Add((requested.AccountId, type));
             await gate.Task;

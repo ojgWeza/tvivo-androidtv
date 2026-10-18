@@ -25,6 +25,7 @@ public sealed class SpotlightStripStateTests
 
     [Theory]
     [InlineData(776, 480)]
+    [InlineData(700, 420)]
     [InlineData(1200, 504)]
     [InlineData(1600, 672)]
     public void OpenWidthUsesResponsiveClamp(double viewport, double expected) =>
