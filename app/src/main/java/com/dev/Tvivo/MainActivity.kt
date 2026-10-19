@@ -9,7 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +44,7 @@ import com.dev.Tvivo.home.ShellNavigation
 import com.dev.Tvivo.home.ShellTab
 import com.dev.Tvivo.home.ShelfRestoreKey
 import com.dev.Tvivo.ui.shell.AppShell
+import com.dev.Tvivo.ui.shell.ScreenTopBar
 import com.dev.Tvivo.ui.shell.SearchScreen
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.browse.VirtualFolder
@@ -165,7 +167,8 @@ private fun playItem(
     itemId: Int,
     title: String,
     extension: String?,
-    resumeFromMs: Long
+    resumeFromMs: Long,
+    knownDurationMs: Long = 0L
 ) {
     if (DeepStreamCheckGate.isHeld) {
         android.widget.Toast.makeText(context, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
@@ -185,6 +188,7 @@ private fun playItem(
             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, if (isLive) TYPE_LIVE else TYPE_VOD)
             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+            .putExtra(PlayerActivity.EXTRA_KNOWN_DURATION_MS, knownDurationMs.coerceAtLeast(0L))
             .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
     )
     (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
@@ -481,7 +485,7 @@ private fun TvivoApp() {
                                     route = Route.SeriesDetail(current.credentials, card.item.id)
                                 } else playItem(context, current.credentials, accountId,
                                     card.type == ContentType.LIVE, card.item.id, card.item.title,
-                                    card.item.extension, resumeMs)
+                                    card.item.extension, resumeMs, card.item.knownDurationMs)
                             },
                             onSeeAll = { shelf ->
                                 if (shelf.id == "__my_suggestions") {
@@ -592,7 +596,7 @@ private fun TvivoApp() {
                                         route = Route.SeriesDetail(current.credentials, item.id)
                                     } else playItem(context, current.credentials, accountId,
                                         type == ContentType.LIVE, item.id, item.title,
-                                        item.extension, resumeFromMs)
+                                        item.extension, resumeFromMs, item.knownDurationMs)
                                 },
                                 onPlayFromGrid = { item, resumeFromMs ->
                                     pendingCatalogFocusKey = null
@@ -601,7 +605,7 @@ private fun TvivoApp() {
                                         route = Route.SeriesDetail(current.credentials, item.id)
                                     } else playItem(context, current.credentials, accountId,
                                         type == ContentType.LIVE, item.id, item.title,
-                                        item.extension, resumeFromMs)
+                                        item.extension, resumeFromMs, item.knownDurationMs)
                                 }
                             )
                         }
@@ -629,11 +633,29 @@ private fun TvivoApp() {
             }
         )
 
-        is Route.Subscription -> SubscriptionScreen(viewModel = account)
+        is Route.Subscription -> {
+            if (LocalIsTelevision.current) SubscriptionScreen(viewModel = account)
+            else Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                ScreenTopBar(stringResource(R.string.subscription_title)) { route = Route.Main(current.credentials, ShellTab.Settings) }
+                Box(Modifier.weight(1f)) { SubscriptionScreen(viewModel = account) }
+            }
+        }
 
-        is Route.Diagnostics -> DiagnosticsScreen()
+        is Route.Diagnostics -> {
+            if (LocalIsTelevision.current) DiagnosticsScreen()
+            else Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                ScreenTopBar(stringResource(R.string.settings_diagnostics)) { route = Route.Main(current.credentials, ShellTab.Settings) }
+                Box(Modifier.weight(1f)) { DiagnosticsScreen() }
+            }
+        }
 
-        is Route.NetworkDiagnostics -> NetworkDiagnosticsScreen(AccountIdentity.of(current.credentials), current.credentials)
+        is Route.NetworkDiagnostics -> {
+            if (LocalIsTelevision.current) NetworkDiagnosticsScreen(AccountIdentity.of(current.credentials), current.credentials)
+            else Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                ScreenTopBar(stringResource(R.string.network_diagnostics_title)) { route = Route.Main(current.credentials, ShellTab.Settings) }
+                Box(Modifier.weight(1f)) { NetworkDiagnosticsScreen(AccountIdentity.of(current.credentials), current.credentials) }
+            }
+        }
 
         is Route.Browse -> {
             val isLive = current.type == ContentType.LIVE
@@ -670,7 +692,8 @@ private fun TvivoApp() {
                         itemId = item.id,
                         title = item.title,
                         extension = item.extension,
-                        resumeFromMs = resumeFromMs
+                        resumeFromMs = resumeFromMs,
+                        knownDurationMs = item.knownDurationMs
                     )
                 }
             )
@@ -681,10 +704,11 @@ private fun TvivoApp() {
                 AccountIdentity.of(current.credentials)
             }
             val detailIsLive = current.type == ContentType.LIVE
-            ItemDetailScreen(
+            val page: @Composable () -> Unit = { ItemDetailScreen(
                 contentType = current.type,
                 itemId = current.itemId,
-                onPlay = { resumeFromMs, extension, title ->
+                insideShell = !LocalIsTelevision.current,
+                onPlay = { resumeFromMs, extension, title, knownDurationMs ->
                     playItem(
                         context = context,
                         credentials = current.credentials,
@@ -693,7 +717,8 @@ private fun TvivoApp() {
                         itemId = current.itemId,
                         title = title,
                         extension = extension,
-                        resumeFromMs = resumeFromMs
+                        resumeFromMs = resumeFromMs,
+                        knownDurationMs = knownDurationMs
                     )
                 },
                 // A show's Play is "show me the episodes" — `series_id` addresses no
@@ -701,15 +726,28 @@ private fun TvivoApp() {
                 onOpenEpisodes = {
                     route = Route.SeriesDetail(current.credentials, current.itemId)
                 }
-            )
+            ) }
+            if (LocalIsTelevision.current) page() else AppShell(
+                selected = detailOriginTab,
+                onSelect = { tab -> savedTab = tab; route = Route.Main(current.credentials, tab) },
+                showPhoneTopBar = false,
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ScreenTopBar(stringResource(if (detailIsLive) R.string.nav_live_tv else R.string.nav_movies)) {
+                        route = Route.Main(current.credentials, detailOriginTab)
+                    }
+                    Box(Modifier.weight(1f)) { page() }
+                }
+            }
         }
 
         is Route.SeriesDetail -> {
             val accountId = remember(current.credentials) {
                 AccountIdentity.of(current.credentials)
             }
-            SeriesDetailScreen(
+            val page: @Composable () -> Unit = { SeriesDetailScreen(
                 seriesId = current.seriesId,
+                insideShell = !LocalIsTelevision.current,
                 onPlayEpisode = { episode, resumeFromMs, episodes ->
                     if (DeepStreamCheckGate.isHeld) {
                         android.widget.Toast.makeText(context, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
@@ -735,6 +773,8 @@ private fun TvivoApp() {
                             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_SERIES)
                             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
                             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
+                            .putExtra(PlayerActivity.EXTRA_KNOWN_DURATION_MS,
+                                episode.durationSecs?.takeIf { it > 0 }?.toLong()?.times(1000L) ?: 0L)
                             .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_IDS, ArrayList(queue.map { it.episodeId }))
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_URLS, ArrayList(queue.map {
@@ -743,6 +783,10 @@ private fun TvivoApp() {
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_TITLES, ArrayList(queue.map {
                                 "S${it.seasonNumber} · E${it.episodeNum}: ${it.title}"
                             }))
+                            // SeriesInfoParser prefers `duration`: provider `duration_secs` can be unreliable.
+                            .putExtra(PlayerActivity.EXTRA_EPISODE_DURATIONS, queue.map {
+                                it.durationSecs?.takeIf { seconds -> seconds > 0 }?.toLong()?.times(1000L) ?: 0L
+                            }.toLongArray())
                             .putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, queue.indexOfFirst { it.episodeId == episode.episodeId })
                     )
                     (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
@@ -757,7 +801,19 @@ private fun TvivoApp() {
                         )
                     }
                 }
-            )
+            ) }
+            if (LocalIsTelevision.current) page() else AppShell(
+                selected = detailOriginTab,
+                onSelect = { tab -> savedTab = tab; route = Route.Main(current.credentials, tab) },
+                showPhoneTopBar = false,
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ScreenTopBar(stringResource(R.string.nav_series)) {
+                        route = Route.Main(current.credentials, detailOriginTab)
+                    }
+                    Box(Modifier.weight(1f)) { page() }
+                }
+            }
         }
     }
 }

@@ -22,11 +22,12 @@ internal class PlaybackHandoff(
         val itemId: String?,
         val isLive: Boolean,
         val resumeFromMs: Long,
+        val knownDurationMs: Long = 0L,
         val playlist: List<QueueItem> = emptyList(),
         val playlistIndex: Int = -1,
     )
 
-    data class QueueItem(val id: String, val url: String, val title: String)
+    data class QueueItem(val id: String, val url: String, val title: String, val knownDurationMs: Long = 0L)
 
     private val mutex = Mutex()
     private var issued = 0L
@@ -99,6 +100,12 @@ internal class PlaybackHandoff(
 
     suspend fun checkpoint(allowCompletion: Boolean = true) = mutex.withLock {
         active?.let { port.save(it, ended = false, allowCompletion = allowCompletion) }
+    }
+
+    /** A late catalog lookup may enrich only the item still holding this generation. */
+    suspend fun updateKnownDuration(generation: Long, durationMs: Long) = mutex.withLock {
+        if (durationMs > 0L && isCurrent(generation))
+            active = active?.copy(knownDurationMs = durationMs)
     }
 
     fun isCurrent(generation: Long): Boolean =

@@ -19,7 +19,7 @@ The generator requires `ffmpeg` with `libx264`, AAC, and `mov_text` support. It 
 2. In Tvivo, add a source with server `http://10.0.2.2`, port `8089`, username `demo`, and password `demo`.
 3. Confirm/save the source and sync the catalog. On a physical device, use the host computer's LAN IP instead of `10.0.2.2`.
 
-The API implements auth, live/VOD/series categories and lists, VOD info, series info, and `/live|movie|series/<user>/<pass>/<id>.<ext>` playback URLs. Stream endpoints support byte ranges.
+The API implements auth, live/VOD/series categories and lists, VOD info, series info, and `/live|movie|series/<user>/<pass>/<id>.<ext>` playback URLs. Normal stream endpoints support byte ranges. Movies 2025 and 2026 are fixed finite MPEG-TS fixtures served with chunked transfer, no `Content-Length`, and no range support, independent of `/__ctl` stall/EOF settings. Movie 2025 reports a two-minute runtime from `get_vod_info`; movie 2026 reports none. Both reuse the generated `live.ts` file and still obey the single-stream connection gate.
 
 ## Controls
 

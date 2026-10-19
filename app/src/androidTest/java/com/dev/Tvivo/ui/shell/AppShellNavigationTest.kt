@@ -25,7 +25,7 @@ import org.junit.Test
 class AppShellNavigationTest {
     @get:Rule val rule = createComposeRule()
 
-    @Test fun phoneBottomNavigationSelectsMoviesAndSearch() {
+    @Test fun phoneBottomNavigationSelectsMoviesAndSettingsWithSearchInTopBar() {
         var selected by mutableStateOf(ShellTab.MyTvivo)
         rule.setContent {
             TvivoTheme {
@@ -39,7 +39,10 @@ class AppShellNavigationTest {
         }
         rule.onNodeWithTag("shell-Movies").performClick()
         rule.runOnIdle { assertEquals(ShellTab.Movies, selected) }
-        rule.onNodeWithTag("shell-Search").performClick()
+        rule.onNodeWithTag("shell-Settings").performClick()
+        rule.runOnIdle { assertEquals(ShellTab.Settings, selected) }
+        rule.onNodeWithTag("shell-Search").assertDoesNotExist()
+        rule.onNodeWithTag("shell-action-Search").performClick()
         rule.runOnIdle { assertEquals(ShellTab.Search, selected) }
     }
 

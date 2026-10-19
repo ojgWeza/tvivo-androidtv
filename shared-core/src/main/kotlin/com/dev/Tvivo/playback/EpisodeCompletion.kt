@@ -1,11 +1,21 @@
 package com.dev.Tvivo.playback
 
+object PlaybackDurationPolicy {
+    /** A real player timeline supersedes catalog metadata, even when they differ substantially. */
+    fun resolve(playerMilliseconds: Long, knownDurationMs: Long): Long =
+        playerMilliseconds.takeIf { it > 0 } ?: knownDurationMs.coerceAtLeast(0L)
+}
+
 object PlaybackEndPolicy {
     const val END_TOLERANCE_MILLISECONDS = 30_000L
+    const val MINIMUM_UNKNOWN_END_MILLISECONDS = 60_000L
 
-    fun isGenuineEnd(positionMilliseconds: Long, durationMilliseconds: Long?, ended: Boolean): Boolean =
-        ended && durationMilliseconds != null && durationMilliseconds > 0 &&
-            durationMilliseconds - positionMilliseconds.coerceIn(0, durationMilliseconds) <= END_TOLERANCE_MILLISECONDS
+    fun isGenuineEnd(positionMilliseconds: Long, durationMilliseconds: Long?, ended: Boolean): Boolean {
+        if (!ended) return false
+        if (durationMilliseconds == null || durationMilliseconds <= 0)
+            return positionMilliseconds >= MINIMUM_UNKNOWN_END_MILLISECONDS
+        return durationMilliseconds - positionMilliseconds.coerceIn(0, durationMilliseconds) <= END_TOLERANCE_MILLISECONDS
+    }
 }
 
 object EpisodeCompletion {

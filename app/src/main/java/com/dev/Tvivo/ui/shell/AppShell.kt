@@ -40,6 +40,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import com.dev.Tvivo.R
 import com.dev.Tvivo.AppIdentity
 import com.dev.Tvivo.home.ShellTab
@@ -66,6 +71,7 @@ fun AppShell(
     onSortSelected: (com.dev.Tvivo.home.CatalogSort) -> Unit = {},
     onRefresh: () -> Unit = {},
     onTheme: () -> Unit = {},
+    showPhoneTopBar: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val television = LocalIsTelevision.current
@@ -107,14 +113,27 @@ fun AppShell(
         }
     } else if (compact) {
         Column(Modifier.fillMaxSize().background(AppColors.Bg).then(safeContent)) {
+            if (showPhoneTopBar) Row(Modifier.fillMaxWidth().height(56.dp).background(AppColors.Surface)
+                .padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(when (selected) {
+                    ShellTab.MyTvivo -> R.string.nav_my_tvivo
+                    ShellTab.Movies -> R.string.nav_movies
+                    ShellTab.Series -> R.string.nav_series
+                    ShellTab.Live -> R.string.nav_live_tv
+                    ShellTab.Search -> R.string.nav_search
+                    ShellTab.Settings -> R.string.nav_settings
+                }), color = AppColors.Ink, style = TvType.title, modifier = Modifier.weight(1f))
+                ShellActionButton(stringResource(R.string.nav_search), Icons.Default.Search,
+                    enabled = true, onClick = { onSelect(ShellTab.Search) })
+            }
             Box(Modifier.weight(1f)) { content() }
             Row(
                 modifier = Modifier.fillMaxWidth().height(64.dp).background(AppColors.Surface),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ShellTab.entries.filter { it != ShellTab.Settings }.forEach { tab ->
-                    TabButton(tab, selected, onSelect, compact = true)
+                listOf(ShellTab.MyTvivo, ShellTab.Movies, ShellTab.Series, ShellTab.Live, ShellTab.Settings).forEach { tab ->
+                    TabButton(tab, selected, onSelect, compact = true, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -155,11 +174,17 @@ private fun TabButton(
         .tvFocusFrame().tvClickable { onSelect(tab) }
         .then(if (compact && tab == selected) Modifier.border(2.dp, AppColors.AccentText, RoundedCornerShape(12.dp)) else Modifier)
         .padding(horizontal = if (compact) 4.dp else 16.dp, vertical = 12.dp)
-    if (compact && tab == ShellTab.Search) {
-        Row(buttonModifier, verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Icon(Icons.Default.Search, contentDescription = title, tint = ink,
-                modifier = Modifier.size(18.dp))
+    if (compact) {
+        Column(buttonModifier, horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center) {
+            when (tab) {
+                ShellTab.MyTvivo -> Icon(Icons.Default.Home, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+                ShellTab.Movies -> Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+                ShellTab.Series -> Icon(Icons.Default.Menu, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+                ShellTab.Live -> Text("▣", color = ink, style = TvType.title)
+                ShellTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+                ShellTab.Search -> Icon(Icons.Default.Search, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+            }
             Text(title, color = ink, style = TvType.label)
         }
     } else if (underlineSelected) {
@@ -176,6 +201,21 @@ private fun TabButton(
                 .background(if (tab == selected) AppColors.Accent else AppColors.Surface))
         }
     } else Text(title, color = ink, style = TvType.label, modifier = buttonModifier)
+}
+
+@Composable
+fun ScreenTopBar(title: String, onBack: () -> Unit) {
+    if (LocalIsTelevision.current) return
+    val back = stringResource(R.string.back)
+    Row(Modifier.fillMaxWidth().height(56.dp).background(AppColors.Surface)
+        .padding(start = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(48.dp).testTag("screen-back").semantics { contentDescription = back }
+            .tvFocusFrame().tvClickable(onClick = onBack), contentAlignment = Alignment.Center) {
+            Text(if (LocalLayoutDirection.current == LayoutDirection.Rtl) "→" else "←",
+                color = AppColors.Ink, style = TvType.title)
+        }
+        Text(title, color = AppColors.Ink, style = TvType.title, modifier = Modifier.padding(start = 8.dp))
+    }
 }
 
 @Composable

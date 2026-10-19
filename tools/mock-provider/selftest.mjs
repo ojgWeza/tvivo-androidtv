@@ -50,7 +50,7 @@ try {
   const movies = await (await fetch(api('get_vod_streams'))).json();
   const shows = await (await fetch(api('get_series'))).json();
   const channels = await (await fetch(api('get_live_streams'))).json();
-  assert.equal(movies.length, 24);
+  assert.equal(movies.length, 26);
   assert.equal(shows.length, 16);
   assert.equal(channels.length, 16);
   assert.equal(movies[0].stream_id, 2001);
@@ -61,11 +61,18 @@ try {
   assert.ok(channels.every((item) => item.name.toLowerCase().includes('e')));
   assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2001`)).json()).movie_data.container_extension, 'mp4');
   assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2024`)).json()).movie_data.stream_id, 2024);
+  assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2025`)).json()).info.duration, '00:02:00');
+  assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2026`)).json()).info.duration, undefined);
   assert.equal((await (await fetch(`${api('get_series_info')}&series_id=3001`)).json()).episodes['1'].length, 2);
   assert.equal((await (await fetch(`${api('get_series_info')}&series_id=3016`)).json()).episodes['1'][0].id, 'episode-A1');
   const extraMovie = await fetch(`${base}/movie/demo/demo/2024.mp4`, { headers: { range: 'bytes=20-29' } });
   assert.equal(extraMovie.status, 206);
   assert.deepEqual(Buffer.from(await extraMovie.arrayBuffer()), bytes.subarray(20, 30));
+  const lengthless = await fetch(`${base}/movie/demo/demo/2025.ts`, { headers: { range: 'bytes=20-29' } });
+  assert.equal(lengthless.status, 200);
+  assert.equal(lengthless.headers.get('content-length'), null);
+  assert.equal(lengthless.headers.get('accept-ranges'), null);
+  assert.deepEqual(Buffer.from(await lengthless.arrayBuffer()), bytes);
   const ranged = await fetch(`${base}/movie/demo/demo/2001.mp4`, { headers: { range: 'bytes=10-19' } });
   assert.equal(ranged.status, 206);
   assert.equal(ranged.headers.get('content-range'), `bytes 10-19/${bytes.length}`);
@@ -108,7 +115,7 @@ try {
   assert.equal((await fetch(api())).status, 503);
   await ctl({ killSwitch: false });
   assert.equal((await fetch(api())).status, 200);
-  console.log('PASS auth + 8 Xtream API actions; 24 movies/16 series/16 live channels and preserved media IDs; Range bytes and absolute EOF cutoff; max_connections=1 rejection and close/reopen; 429 countdown; kill-switch');
+  console.log('PASS auth + 8 Xtream API actions; 26 movies/16 series/16 live channels and preserved media IDs; Range and fixed chunked TS fixtures; max_connections=1 rejection and close/reopen; 429 countdown; kill-switch');
 } catch (error) {
   console.error(`FAIL ${error.stack || error}`);
   process.exitCode = 1;

@@ -44,6 +44,9 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
+import com.dev.Tvivo.data.repository.VodRepository
+import com.dev.Tvivo.auth.AccountIdentity
+import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.diagnostics.NetworkEventKind
 import com.dev.Tvivo.diagnostics.NetworkEventRecorder
 import com.dev.Tvivo.diagnostics.NetworkEventSource
@@ -58,6 +61,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -65,6 +69,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -154,7 +159,7 @@ class PlaybackService : MediaSessionService() {
                 val failed = playbackState == "retry" || playbackState == "reconnecting" || player.playerError != null
                 val position = PlaybackSessionPolicy.positionToSave(
                     player.currentPosition, lastGoodPositionMs, failed && !ended)
-                val duration = player.duration.takeIf { it > 0 } ?: 0L
+                val duration = effectiveDurationMs(item)
                 val canComplete = allowCompletion && !failed
                 Log.i("PlaybackResume", "save begin type=${item.contentType} current=${player.currentPosition} " +
                     "sample=$lastGoodPositionMs chosen=$position duration=$duration ended=$ended " +
@@ -181,6 +186,8 @@ class PlaybackService : MediaSessionService() {
                 Log.i("PlaybackResume", "open type=${item.contentType} resume=${item.resumeFromMs} " +
                     "live=${item.isLive} timer=${sleepTimer.state}")
                 NetworkPlaybackState.active = true
+                if (!item.isLive && item.contentType == com.dev.Tvivo.data.local.entities.TYPE_VOD &&
+                    item.knownDurationMs <= 0L) fetchMovieDuration(item, generation)
                 val sameItemRecovery = recoveryOpen
                 if (!recoveryOpen) retryCount = 1
                 playbackState = if (sameItemRecovery) "reconnecting" else "playing"
@@ -264,7 +271,8 @@ class PlaybackService : MediaSessionService() {
                 if (handoff.isCurrent(generation)) scope.launch {
                     yield()
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
-                    if (PlaybackEndPolicy.isGenuineEnd(player.currentPosition, player.duration.takeIf { it > 0 }, true)) {
+                    if (PlaybackEndPolicy.isGenuineEnd(player.currentPosition,
+                            handoff.current?.let { effectiveDurationMs(it) }, true)) {
                         advanceAfterEnd()
                     } else {
                         failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnknownFailure, earlyEnd = true)
@@ -747,6 +755,37 @@ class PlaybackService : MediaSessionService() {
         return true
     }
 
+    /** Player timeline wins whenever it becomes known, including when provider metadata is inaccurate. */
+    private fun effectiveDurationMs(item: PlaybackHandoff.Item): Long =
+        PlaybackDurationPolicy.resolve(player.duration, item.knownDurationMs)
+
+    private fun fetchMovieDuration(item: PlaybackHandoff.Item, generation: Long) {
+        val movieId = item.itemId?.toIntOrNull() ?: return
+        val accountId = item.accountId ?: return
+        scope.launch(Dispatchers.IO) {
+            val minutes = try {
+                val db = AppDatabase.get(this@PlaybackService)
+                db.vodDao().byId(accountId, movieId)?.durationMinutes?.takeIf { it > 0 } ?: run {
+                    val credentials = CredentialsStore(this@PlaybackService).load()
+                        ?.takeIf { AccountIdentity.of(it) == accountId } ?: return@launch
+                    VodRepository(db, credentials, accountId).fetchDetails(movieId).getOrNull()
+                        ?.durationMinutes?.takeIf { it > 0 }
+                }
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Exception) {
+                Log.w("PlaybackResume", "runtime lookup failed cause=${failure.javaClass.simpleName}")
+                null
+            }
+            if (minutes != null) withContext(Dispatchers.Main.immediate) {
+                if (handoff.isCurrent(generation) && handoff.current?.requestId == item.requestId) {
+                    handoff.updateKnownDuration(generation, minutes.toLong() * 60_000L)
+                    handoff.current?.let { updateNextPrompt(it) }
+                }
+            }
+        }
+    }
+
     private suspend fun updateNextPrompt(item: PlaybackHandoff.Item) {
         if (!timerAllowsTransition()) return
         val kind = when {
@@ -759,7 +798,7 @@ class PlaybackService : MediaSessionService() {
         val mode = if (kind == StreamKind.Movie) preferences.movieMode else preferences.episodeMode
         if (!PlaybackModeLogic.shouldShowNextPrompt(mode)) { nextPromptVisible = false; return }
         val next = selectedNext(item, mode)
-        val duration = player.duration.takeIf { it > 0 } ?: return
+        val duration = effectiveDurationMs(item).takeIf { it > 0 } ?: return
         val lead = NextPrompt.leadMilliseconds(kind, duration)
         val show = next != null && lead > 0 && player.currentPosition >= duration - lead
         if (!show) nextPromptCancelled = false // seek-out/re-entry re-arms prompt
@@ -770,7 +809,7 @@ class PlaybackService : MediaSessionService() {
     private suspend fun advanceAfterEnd() {
         if (!timerAllowsTransition()) return
         val item = handoff.current ?: return
-        if (!PlaybackEndPolicy.isGenuineEnd(player.currentPosition, player.duration.takeIf { it > 0 }, true)) {
+        if (!PlaybackEndPolicy.isGenuineEnd(player.currentPosition, effectiveDurationMs(item), true)) {
             failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnknownFailure, earlyEnd = true)
             markFinalFailure()
             return
@@ -785,7 +824,7 @@ class PlaybackService : MediaSessionService() {
         val next = selectedNext(item, mode)
         if (mode == PlaybackMode.Off || next == null) { stopSession(ended = true); return }
         handoff.play(item.copy(requestId = java.util.UUID.randomUUID().toString(), url = next.url,
-            title = next.title, itemId = next.id, resumeFromMs = 0L,
+            title = next.title, itemId = next.id, resumeFromMs = 0L, knownDurationMs = next.knownDurationMs,
             playlistIndex = item.playlist.indexOf(next)), previousEnded = true)
     }
 
@@ -805,7 +844,7 @@ class PlaybackService : MediaSessionService() {
     private suspend fun playQueueItem(current: PlaybackHandoff.Item, target: PlaybackHandoff.QueueItem) {
         if (!timerAllowsTransition() || stopRequested || stopCommandQueued) return
         handoff.play(current.copy(requestId = java.util.UUID.randomUUID().toString(), url = target.url,
-            title = target.title, itemId = target.id, resumeFromMs = 0L,
+            title = target.title, itemId = target.id, resumeFromMs = 0L, knownDurationMs = target.knownDurationMs,
             playlistIndex = current.playlist.indexOf(target)))
     }
 
@@ -816,6 +855,7 @@ class PlaybackService : MediaSessionService() {
         putString(PlaybackCommands.ITEM_ID, item?.itemId ?: SleepTimerEndedSnapshot.itemId)
         putInt("queue_index", item?.playlistIndex ?: -1)
         putLong(PlaybackCommands.GENERATION, handoff.generation)
+        putLong(PlaybackCommands.KNOWN_DURATION_MS, item?.let { effectiveDurationMs(it) } ?: 0L)
         putString(PlaybackCommands.STATE, playbackState)
         putString(PlaybackCommands.FAILURE_KIND, failureKind?.name)
         if (playbackState == "reconnecting") {
@@ -936,7 +976,8 @@ class PlaybackService : MediaSessionService() {
             ?: PlaybackMode.Off
         if (current != null && selectedNext(current, mode) != null)
             buttons += notificationButton(android.R.drawable.ic_media_next, "Next episode", PlaybackCommands.NOTIFICATION_NEXT)
-        if (current?.isLive != true && player.isCurrentMediaItemSeekable) {
+        if (current?.isLive != true && current != null && effectiveDurationMs(current) > 0L &&
+            player.isCurrentMediaItemSeekable) {
             buttons += notificationButton(android.R.drawable.ic_media_rew, "Rewind 10 seconds", PlaybackCommands.NOTIFICATION_REWIND)
             buttons += notificationButton(android.R.drawable.ic_media_ff, "Forward 10 seconds", PlaybackCommands.NOTIFICATION_FORWARD)
         }

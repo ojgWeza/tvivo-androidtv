@@ -44,6 +44,7 @@ import androidx.media3.ui.PlayerView
 import androidx.core.content.ContextCompat
 import com.dev.Tvivo.playback.HeldSeekAccelerator
 import com.dev.Tvivo.playback.PlaybackCommands
+import com.dev.Tvivo.playback.PlaybackDurationPolicy
 import com.dev.Tvivo.playback.PlaybackHandoff
 import com.dev.Tvivo.playback.PlaybackFailureKind
 import com.dev.Tvivo.playback.PlaybackService
@@ -52,6 +53,11 @@ import com.dev.Tvivo.playback.SleepTimerEndedSnapshot
 import com.dev.Tvivo.playback.TrackKind
 import com.dev.Tvivo.playback.TrackSelectionPolicy
 import com.dev.Tvivo.R
+import com.dev.Tvivo.auth.AccountIdentity
+import com.dev.Tvivo.auth.Credentials
+import com.dev.Tvivo.auth.CredentialsStore
+import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.ui.adaptive.AdaptiveEnvironment
 import com.dev.Tvivo.ui.ThemeMode
 import com.dev.Tvivo.playback.PlayerPreferencesStore
@@ -67,6 +73,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.Futures
 import java.util.UUID
@@ -103,6 +111,11 @@ class PlayerActivity : ComponentActivity() {
     private var itemId: String? = null
     private var contentType: String? = null
     private var isLive = false
+    private var liveChannels by mutableStateOf(emptyList<LiveChannel>())
+    private var liveCredentials: Credentials? = null
+    private var lastChannelId by mutableStateOf<String?>(null)
+    private var channelsOpen by mutableStateOf(false)
+    private var channelSwitchPending = false
     private var visibility by mutableStateOf(OverlayVisibility())
     private var overlayState by mutableStateOf(PlayerOverlayState("Now playing", false))
     private var audioTracks = emptyList<TrackRef>()
@@ -222,6 +235,14 @@ class PlayerActivity : ComponentActivity() {
                             player?.play()
                             overlayState = overlayState.copy(hasResume = false)
                         },
+                        channels = liveChannels,
+                        currentChannelId = itemId,
+                        channelsOpen = channelsOpen,
+                        onChannelsOpenChange = { channelsOpen = it; if (it) showControls() },
+                        onChannelSelect = ::switchChannel,
+                        onAdjacentChannel = ::adjacentChannel,
+                        onLastChannel = { LiveChannelNavigation.last(liveChannels, itemId, lastChannelId)?.let { switchChannel(it.id) } },
+                        hasLastChannel = LiveChannelNavigation.last(liveChannels, itemId, lastChannelId) != null,
                         onInput = { rearmControls() },
                         onSeekKey = { direction, event -> seekOnKey(direction, event) },
                         onRetry = { player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.RETRY), Bundle.EMPTY); showControls() },
@@ -244,6 +265,7 @@ class PlayerActivity : ComponentActivity() {
         composeView = compose
         root.addView(compose)
         setContentView(root)
+        if (isLive) loadLiveChannels()
         ContextCompat.registerReceiver(this, pipActionReceiver, IntentFilter().apply {
             addAction(PipPlaybackAction.PLAY_PAUSE)
             addAction(PipPlaybackAction.CLOSE)
@@ -363,29 +385,33 @@ class PlayerActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun sendPlayRequest() {
+    private fun sendPlayRequest(): ListenableFuture<SessionResult>? {
         val item = PlaybackHandoff.Item(
-            intent.getStringExtra(EXTRA_REQUEST_ID) ?: return,
-            intent.getStringExtra(EXTRA_URL) ?: return,
+            intent.getStringExtra(EXTRA_REQUEST_ID) ?: return null,
+            intent.getStringExtra(EXTRA_URL) ?: return null,
             intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Now playing" },
             intent.getStringExtra(EXTRA_ACCOUNT_ID), intent.getStringExtra(EXTRA_CONTENT_TYPE),
             intent.getStringExtra(EXTRA_ITEM_ID), intent.getBooleanExtra(EXTRA_IS_LIVE, false),
             intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L),
+            intent.getLongExtra(EXTRA_KNOWN_DURATION_MS, 0L),
             playlist = run {
                 val ids = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS).orEmpty()
                 val urls = intent.getStringArrayListExtra(EXTRA_EPISODE_URLS).orEmpty()
                 val titles = intent.getStringArrayListExtra(EXTRA_EPISODE_TITLES).orEmpty()
+                val durations = intent.getLongArrayExtra(EXTRA_EPISODE_DURATIONS)
                 ids.mapIndexedNotNull { index, id ->
-                    if (index in urls.indices && index in titles.indices) PlaybackHandoff.QueueItem(id, urls[index], titles[index]) else null
+                    if (index in urls.indices && index in titles.indices)
+                        PlaybackHandoff.QueueItem(id, urls[index], titles[index], durations?.getOrNull(index) ?: 0L)
+                    else null
                 }
             },
             playlistIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, -1),
         )
-        val controller = player ?: return
+        val controller = player ?: return null
         if (DeepStreamCheckGate.isHeld) {
             android.widget.Toast.makeText(this, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
-            finish()
-            return
+            if (!channelSwitchPending) finish()
+            return null
         }
         Log.i("PlaybackResume", "activity play type=${item.contentType} resume=${item.resumeFromMs} " +
             "live=${item.isLive}")
@@ -396,6 +422,83 @@ class PlayerActivity : ComponentActivity() {
                 runCatching { result.get().resultCode }.getOrNull() == SessionResult.RESULT_SUCCESS) {
                 queuedReplay = null
                 replayStarting = false
+                updateControls()
+            }
+        }, ContextCompat.getMainExecutor(this))
+        return result
+    }
+
+    private fun loadLiveChannels() {
+        val accountId = intent.getStringExtra(EXTRA_ACCOUNT_ID) ?: return
+        val currentId = intent.getStringExtra(EXTRA_ITEM_ID)?.toIntOrNull() ?: return
+        lifecycleScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                val credentials = CredentialsStore(applicationContext).load()
+                if (credentials == null || AccountIdentity.of(credentials) != accountId) return@withContext null
+                val dao = AppDatabase.get(applicationContext).liveDao()
+                val current = dao.byId(accountId, currentId) ?: return@withContext null
+                val rows = current.categoryId?.let { dao.allInCategory(accountId, it) } ?: listOf(current)
+                credentials to rows.map { LiveChannel(it.streamId.toString(), it.nameDisplay, it.ext) }
+            }
+            if (!isLive || intent.getStringExtra(EXTRA_ACCOUNT_ID) != accountId ||
+                intent.getStringExtra(EXTRA_ITEM_ID)?.toIntOrNull() != currentId) return@launch
+            liveCredentials = loaded?.first
+            liveChannels = loaded?.second.orEmpty()
+        }
+    }
+
+    private fun adjacentChannel(direction: Int) {
+        LiveChannelNavigation.adjacent(liveChannels, itemId, direction)?.let { switchChannel(it.id) }
+    }
+
+    private fun switchChannel(id: String) {
+        if (!isLive || stopPending || channelSwitchPending) return
+        if (DeepStreamCheckGate.isHeld || DeepStreamCheckGate.cooldownRemainingMs() > 0L) {
+            android.widget.Toast.makeText(this, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val target = liveChannels.firstOrNull { it.id == id } ?: return
+        val credentials = liveCredentials ?: return
+        val streamId = id.toIntOrNull() ?: return
+        if (id == itemId) return
+        val previousId = itemId
+        val previousUrl = intent.getStringExtra(EXTRA_URL)
+        val previousTitle = intent.getStringExtra(EXTRA_TITLE)
+        val previousRequest = intent.getStringExtra(EXTRA_REQUEST_ID)
+        val requestId = UUID.randomUUID().toString()
+        channelSwitchPending = true
+        statusRequest++
+        intent.putExtra(EXTRA_URL, StreamUrlBuilder.live(credentials, streamId, target.extension ?: "ts"))
+            .putExtra(EXTRA_TITLE, target.title)
+            .putExtra(EXTRA_ITEM_ID, id)
+            .putExtra(EXTRA_REQUEST_ID, requestId)
+            .putExtra(EXTRA_RESUME_FROM_MS, 0L)
+        val result = sendPlayRequest()
+        if (result == null) {
+            channelSwitchPending = false
+            intent.putExtra(EXTRA_URL, previousUrl).putExtra(EXTRA_TITLE, previousTitle)
+                .putExtra(EXTRA_ITEM_ID, previousId).putExtra(EXTRA_REQUEST_ID, previousRequest)
+            return
+        }
+        result.addListener({
+            channelSwitchPending = false
+            if (intent.getStringExtra(EXTRA_REQUEST_ID) != requestId) return@addListener
+            val resultCode = runCatching { result.get().resultCode }.getOrNull()
+            if (resultCode == SessionResult.RESULT_SUCCESS) {
+                lastChannelId = previousId
+                itemId = id
+                overlayState = overlayState.copy(title = target.title, positionMs = 0L)
+                updateControls()
+                showControls()
+            } else {
+                intent.putExtra(EXTRA_URL, previousUrl).putExtra(EXTRA_TITLE, previousTitle)
+                    .putExtra(EXTRA_ITEM_ID, previousId)
+                    .putExtra(EXTRA_REQUEST_ID, if (resultCode == SessionResult.RESULT_INFO_SKIPPED)
+                        previousRequest else UUID.randomUUID().toString())
+                android.widget.Toast.makeText(this, R.string.player_channel_switch_failed, android.widget.Toast.LENGTH_SHORT).show()
+                // If opening the target closed the old stream, restore it through the same handoff.
+                if (resultCode != SessionResult.RESULT_INFO_SKIPPED && !stopPending && !DeepStreamCheckGate.isHeld)
+                    sendPlayRequest()
                 updateControls()
             }
         }, ContextCompat.getMainExecutor(this))
@@ -424,12 +527,10 @@ class PlayerActivity : ComponentActivity() {
                 PipPlaybackAction.Command.PlayPause -> if (isInPictureInPictureMode) player?.let {
                     if (it.isPlaying) it.pause() else it.play()
                 }
-                PipPlaybackAction.Command.Rewind -> if (isInPictureInPictureMode) player?.let {
-                    it.seekTo((it.currentPosition - SEEK_INCREMENT_MS).coerceAtLeast(0L))
-                }
-                PipPlaybackAction.Command.Forward -> if (isInPictureInPictureMode) player?.let { p ->
-                    p.seekTo((p.currentPosition + SEEK_INCREMENT_MS).coerceAtMost(p.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
-                }
+                PipPlaybackAction.Command.Rewind -> if (isInPictureInPictureMode && overlayState.seekable)
+                    seekBy(-SEEK_INCREMENT_MS)
+                PipPlaybackAction.Command.Forward -> if (isInPictureInPictureMode && overlayState.seekable)
+                    seekBy(SEEK_INCREMENT_MS)
                 PipPlaybackAction.Command.Next -> if (isInPictureInPictureMode) playNextEpisode()
                 PipPlaybackAction.Command.Close -> if (pipWindowOpen &&
                     PipPolicy.exit(true, player?.playWhenReady == true, explicitClose = true) ==
@@ -480,7 +581,9 @@ class PlayerActivity : ComponentActivity() {
         val sourceRect = Rect().takeIf { playerView?.getGlobalVisibleRect(it) == true }
         return PictureInPictureParams.Builder()
             .setAspectRatio(videoAspectRatio)
-            .setActions(listOf(seek, toggle, nextOrForward).take(getMaxNumPictureInPictureActions()))
+            .setActions((if (overlayState.seekable) listOf(seek, toggle, nextOrForward)
+                else if (hasNext) listOf(toggle, nextOrForward) else listOf(toggle))
+                .take(getMaxNumPictureInPictureActions()))
             .apply { sourceRect?.let(::setSourceRectHint) }
             .apply {
                 if (Build.VERSION.SDK_INT >= 31) setAutoEnterEnabled(entry == PipPolicy.Entry.AutoEnter)
@@ -609,12 +712,14 @@ class PlayerActivity : ComponentActivity() {
 
     private fun updateControls() {
         val exo = player ?: return
+        val duration = PlaybackDurationPolicy.resolve(exo.duration,
+            intent.getLongExtra(EXTRA_KNOWN_DURATION_MS, 0L))
         overlayState = overlayState.copy(
             title = exo.currentMediaItem?.mediaMetadata?.title?.toString().orEmpty().ifBlank { overlayState.title },
             isPlaying = exo.isPlaying,
             seekable = !isLive && exo.isCurrentMediaItemSeekable,
             positionMs = exo.currentPosition.coerceAtLeast(0L),
-            durationMs = exo.duration.takeIf { it > 0 } ?: 0L,
+            durationMs = duration,
             hasNext = nextIndex() != null,
         )
         val controller = player
@@ -622,10 +727,14 @@ class PlayerActivity : ComponentActivity() {
             val request = ++statusRequest
             val status = controller.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STATUS), Bundle.EMPTY)
             status.addListener({
-                if (request != statusRequest || stopPending || replayStarting || player !== controller) return@addListener
+                if (request != statusRequest || stopPending || replayStarting || channelSwitchPending || player !== controller) return@addListener
                 val extras = runCatching { status.get().extras }.getOrNull() ?: return@addListener
                 val activeId = extras.getString(PlaybackCommands.REQUEST_ID)
                 val activeTitle = extras.getString(PlaybackCommands.TITLE)
+                val knownDuration = extras.getLong(PlaybackCommands.KNOWN_DURATION_MS, 0L)
+                intent.putExtra(EXTRA_KNOWN_DURATION_MS, knownDuration)
+                overlayState = overlayState.copy(durationMs = knownDuration,
+                    seekable = !isLive && controller.isCurrentMediaItemSeekable)
                 if (activeId != null) intent.putExtra(EXTRA_REQUEST_ID, activeId)
                 if (activeTitle != null) {
                     intent.putExtra(EXTRA_TITLE, activeTitle)
@@ -720,14 +829,18 @@ class PlayerActivity : ComponentActivity() {
             .putExtra(EXTRA_RESUME_FROM_MS, replay.positionMs)
             .putExtra(EXTRA_REQUEST_ID, replay.requestId)
         val queueIndex = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.indexOf(replay.item.itemId) ?: -1
-        if (queueIndex >= 0) intent.putExtra(EXTRA_EPISODE_INDEX, queueIndex)
+        if (queueIndex >= 0) {
+            intent.putExtra(EXTRA_EPISODE_INDEX, queueIndex)
+            intent.putExtra(EXTRA_KNOWN_DURATION_MS,
+                intent.getLongArrayExtra(EXTRA_EPISODE_DURATIONS)?.getOrNull(queueIndex) ?: 0L)
+        }
         itemId = replay.item.itemId
         pendingStart = true
         replayStarting = true
         overlayState = overlayState.copy(
             title = replay.item.title, isPlaying = false, seekable = false,
             sleepTimer = SleepTimerUiState(), playbackState = "playing", positionMs = 0L,
-            durationMs = 0L, hasResume = false,
+            durationMs = intent.getLongExtra(EXTRA_KNOWN_DURATION_MS, 0L), hasResume = false,
         )
         timerUiPinned = false
         if (player != null) {
@@ -795,6 +908,12 @@ class PlayerActivity : ComponentActivity() {
             }
             return true
         }
+        if (isLive && event.keyCode in listOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
+                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN)) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                adjacentChannel(if (event.keyCode == KeyEvent.KEYCODE_CHANNEL_UP || event.keyCode == KeyEvent.KEYCODE_PAGE_UP) 1 else -1)
+            return true
+        }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_CENTER) {
             lastDpadAtMs = android.os.SystemClock.elapsedRealtime()
             if (visibility.visible) rearmControls()
@@ -811,7 +930,7 @@ class PlayerActivity : ComponentActivity() {
     private fun seekTo(positionMs: Long) {
         val exo = player ?: return
         if (isLive || !exo.isCurrentMediaItemSeekable) return
-        exo.seekTo(positionMs.coerceIn(0L, exo.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+        exo.seekTo(PlayerOverlayLogic.seekTarget(positionMs, overlayState.durationMs))
         updateControls()
         rearmControls()
     }
@@ -847,6 +966,12 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         if (event != null && !visibility.visible) {
+            if (isLive) when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { if (event.repeatCount == 0) adjacentChannel(1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.repeatCount == 0) adjacentChannel(-1); return true }
+                KeyEvent.KEYCODE_DPAD_LEFT -> { channelsOpen = true; showControls(); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { showControls(); return true }
+            }
             when (keyCode) {
                 // Down (or Up) on a playing stream brings the controls up, like OK.
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
@@ -878,6 +1003,8 @@ class PlayerActivity : ComponentActivity() {
         intent.putExtra(EXTRA_URL, urls[next])
             .putExtra(EXTRA_TITLE, titles[next])
             .putExtra(EXTRA_ITEM_ID, ids[next])
+            .putExtra(EXTRA_KNOWN_DURATION_MS,
+                intent.getLongArrayExtra(EXTRA_EPISODE_DURATIONS)?.getOrNull(next) ?: 0L)
             .putExtra(EXTRA_EPISODE_INDEX, next)
             .putExtra(EXTRA_RESUME_FROM_MS, 0L)
             .putExtra(EXTRA_REQUEST_ID, UUID.randomUUID().toString())
@@ -962,6 +1089,11 @@ class PlayerActivity : ComponentActivity() {
         if (newIntent.getStringExtra(EXTRA_REQUEST_ID) == null)
             newIntent.putExtra(EXTRA_REQUEST_ID, UUID.randomUUID().toString())
         isLive = newIntent.getBooleanExtra(EXTRA_IS_LIVE, false)
+        liveChannels = emptyList()
+        liveCredentials = null
+        lastChannelId = null
+        channelsOpen = false
+        channelSwitchPending = false
         itemId = newIntent.getStringExtra(EXTRA_ITEM_ID)
         contentType = newIntent.getStringExtra(EXTRA_CONTENT_TYPE)
         overlayState = PlayerOverlayState(newIntent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Now playing" }, isLive)
@@ -970,6 +1102,7 @@ class PlayerActivity : ComponentActivity() {
         if (player != null) {
             sendPlayRequest()
         } else if (controllerFuture == null) connectController()
+        if (isLive) loadLiveChannels()
         showControls()
         updatePipParams()
     }
@@ -981,6 +1114,8 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_ITEM_ID = "item_id"
         const val EXTRA_CONTENT_TYPE = "content_type"
         const val EXTRA_RESUME_FROM_MS = "resume_from_ms"
+        const val EXTRA_KNOWN_DURATION_MS = "known_duration_ms"
+        const val EXTRA_EPISODE_DURATIONS = "episode_durations"
         const val EXTRA_TITLE = "title"
         const val EXTRA_EPISODE_IDS = "episode_ids"
         const val EXTRA_EPISODE_URLS = "episode_urls"

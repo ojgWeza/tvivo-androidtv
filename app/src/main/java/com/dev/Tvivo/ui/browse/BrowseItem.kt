@@ -35,7 +35,9 @@ data class BrowseItem(
      * information. Live carries none: a channel is not a title.
      */
     val rating: Double? = null,
-    val added: Long? = null
+    val added: Long? = null,
+    /** Catalog runtime, when detail metadata has already been cached. */
+    val knownDurationMs: Long = 0L
 )
 
 /**
@@ -68,7 +70,8 @@ fun VodStreamEntity.toBrowseItem() = BrowseItem(
     extension = containerExtension,
     quality = NameNormalizer.qualityOf(name),
     added = added,
-    rating = rating
+    rating = rating,
+    knownDurationMs = durationMinutes?.takeIf { it > 0 }?.toLong()?.times(60_000L) ?: 0L
 )
 
 fun LiveStreamEntity.toBrowseItem() = BrowseItem(

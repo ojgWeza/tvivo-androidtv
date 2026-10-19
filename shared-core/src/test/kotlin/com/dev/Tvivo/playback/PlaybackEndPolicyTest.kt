@@ -2,16 +2,30 @@ package com.dev.Tvivo.playback
 
 import org.junit.Test
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 
 class PlaybackEndPolicyTest {
-    @Test fun requires_ended_known_positive_duration_and_within_exact_tolerance() {
+    @Test fun catalog_duration_fills_unset_timeline_but_player_wins_large_disagreement() {
+        assertEquals(120_000L, PlaybackDurationPolicy.resolve(-9223372036854775807L, 120_000L))
+        assertEquals(0L, PlaybackDurationPolicy.resolve(-1L, 0L))
+        assertEquals(180_000L, PlaybackDurationPolicy.resolve(180_000L, 120_000L))
+        assertEquals(120_000L, PlaybackDurationPolicy.resolve(120_000L, 180_000L))
+    }
+
+    @Test fun known_duration_requires_ended_and_position_within_exact_tolerance() {
         assertTrue(PlaybackEndPolicy.isGenuineEnd(70_000, 100_000, true))
         assertTrue(PlaybackEndPolicy.isGenuineEnd(70_001, 100_000, true))
         assertFalse(PlaybackEndPolicy.isGenuineEnd(69_999, 100_000, true))
-        assertFalse(PlaybackEndPolicy.isGenuineEnd(99_000, null, true))
-        assertFalse(PlaybackEndPolicy.isGenuineEnd(99_000, 0, true))
         assertFalse(PlaybackEndPolicy.isGenuineEnd(99_000, 100_000, false))
+    }
+
+    @Test fun unknown_duration_requires_ended_and_at_least_one_minute() {
+        for (duration in listOf(null, 0L, -1L)) {
+            assertFalse(PlaybackEndPolicy.isGenuineEnd(59_999, duration, true))
+            assertTrue(PlaybackEndPolicy.isGenuineEnd(60_000, duration, true))
+            assertFalse(PlaybackEndPolicy.isGenuineEnd(120_000, duration, false))
+        }
     }
 
     @Test fun clamps_position_to_duration() {

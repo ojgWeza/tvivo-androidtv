@@ -60,6 +60,19 @@ class PlaybackHandoffTest {
         assertEquals(1, port.peakConnections)
     }
 
+    @Test fun lateMovieRuntimeEnrichesOnlyCurrentGenerationAndSurvivesReconnect() = runTest {
+        val handoff = PlaybackHandoff(FakePort())
+        handoff.play(item("first"))
+        val first = handoff.generation
+        handoff.updateKnownDuration(first, 120_000L)
+        assertEquals(120_000L, handoff.current!!.knownDurationMs)
+        handoff.reopenCurrent()
+        assertEquals(120_000L, handoff.current!!.knownDurationMs)
+        handoff.play(item("second"))
+        handoff.updateKnownDuration(first, 300_000L)
+        assertEquals(0L, handoff.current!!.knownDurationMs)
+    }
+
     @Test fun verifiedEndHandoffSavesFinishedItemAsEndedBeforeOpeningNext() = runTest {
         val port = FakePort()
         val handoff = PlaybackHandoff(port)

@@ -42,7 +42,10 @@ const vodStreams = Array.from({ length: 24 }, (_, index) => ({
   stream_icon: '',
   container_extension: 'mp4',
   added: String(1700000001 + index),
-}));
+})).concat([
+  { num: 25, name: 'No Length Film (runtime known)', stream_id: 2025, category_id: '201', stream_icon: '', container_extension: 'ts', added: '1700000025' },
+  { num: 26, name: 'No Length Film (runtime unknown)', stream_id: 2026, category_id: '201', stream_icon: '', container_extension: 'ts', added: '1700000026' },
+]);
 const series = Array.from({ length: 16 }, (_, index) => ({
   num: index + 1,
   name: `Synthetic Series ${String(index + 1).padStart(2, '0')}`,
@@ -74,7 +77,9 @@ function apiResponse(url) {
     case 'get_vod_info': {
       const streamId = Number(url.searchParams.get('vod_id'));
       return vodStreams.some((item) => item.stream_id === streamId)
-        ? { info: { plot: 'Generated test video; no third-party content.' }, movie_data: { stream_id: streamId, container_extension: 'mp4' } }
+        ? { info: { plot: 'Generated test video; no third-party content.',
+          ...(streamId === 2025 ? { duration: '00:02:00' } : {}) },
+          movie_data: { stream_id: streamId, container_extension: streamId >= 2025 ? 'ts' : 'mp4' } }
         : {};
     }
     case 'get_series_categories': return seriesCategories;
@@ -85,7 +90,8 @@ function apiResponse(url) {
 }
 
 async function streamFile(req, res, url, kind, id, ext) {
-  const file = kind === 'live' ? 'live.ts' : kind === 'movie' ? 'movie.mp4' : `${id}.mp4`;
+  const lengthlessMovie = kind === 'movie' && (id === '2025' || id === '2026');
+  const file = kind === 'live' || lengthlessMovie ? 'live.ts' : kind === 'movie' ? 'movie.mp4' : `${id}.mp4`;
   const fullPath = path.join(mediaDir, file);
   let stat;
   try { stat = await fs.promises.stat(fullPath); } catch { return json(res, 404, { error: `Missing generated media: ${file}` }); }
@@ -96,7 +102,8 @@ async function streamFile(req, res, url, kind, id, ext) {
   res.once('close', idempotentRelease);
   res.once('finish', idempotentRelease);
 
-  const range = req.headers.range;
+  // Fixed fixtures use finite TS with chunked transfer and no ranges, without /__ctl setup.
+  const range = lengthlessMovie ? null : req.headers.range;
   let start = 0; let end = stat.size - 1; let status = 200;
   if (range) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -106,19 +113,19 @@ async function streamFile(req, res, url, kind, id, ext) {
     if (start >= stat.size || end < start) { res.writeHead(416, { 'content-range': `bytes */${stat.size}` }).end(); return; }
     status = 206;
   }
-  const eofPercent = Math.max(0, Math.min(100, withQuery(url, 'eofPercent', state.eofPercent)));
+  const eofPercent = lengthlessMovie ? 100 : Math.max(0, Math.min(100, withQuery(url, 'eofPercent', state.eofPercent)));
   const selectedLength = end - start + 1;
   // EOF is a point in the whole file. Range retries must not move the cutoff forward.
   const eofByte = Math.floor(stat.size * eofPercent / 100);
   const byteLimit = Math.max(0, Math.min(selectedLength, eofByte - start));
   const loopLive = kind === 'live' && !range && eofPercent === 100;
-  const stallAt = withQuery(url, 'stallAfterBytes', state.stallAfterBytes);
-  const stallMs = Math.max(0, withQuery(url, 'stallSeconds', state.stallSeconds) * 1000);
+  const stallAt = lengthlessMovie ? -1 : withQuery(url, 'stallAfterBytes', state.stallAfterBytes);
+  const stallMs = lengthlessMovie ? 0 : Math.max(0, withQuery(url, 'stallSeconds', state.stallSeconds) * 1000);
   const mime = ext === 'ts' ? 'video/mp2t' : 'video/mp4';
   res.writeHead(status, {
     'content-type': mime,
-    'accept-ranges': 'bytes',
-    ...(loopLive ? {} : { 'content-length': selectedLength }),
+    ...(lengthlessMovie ? {} : { 'accept-ranges': 'bytes' }),
+    ...(loopLive || lengthlessMovie ? {} : { 'content-length': selectedLength }),
     ...(status === 206 ? { 'content-range': `bytes ${start}-${end}/${stat.size}` } : {}),
     'cache-control': 'no-store',
   });
@@ -181,7 +188,7 @@ const server = http.createServer(async (req, res) => {
     if (user !== username || pass !== password) return json(res, 401, { error: 'Invalid credentials' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'GET or HEAD required' });
     if (kind === 'live' && (!liveStreams.some((item) => String(item.stream_id) === id) || ext !== 'ts')) return json(res, 404, { error: 'Unknown live stream' });
-    if (kind === 'movie' && (!vodStreams.some((item) => String(item.stream_id) === id) || ext !== 'mp4')) return json(res, 404, { error: 'Unknown movie' });
+    if (kind === 'movie' && !vodStreams.some((item) => String(item.stream_id) === id && item.container_extension === ext)) return json(res, 404, { error: 'Unknown movie' });
     if (kind === 'series' && (!['episode-A1', 'episode-B1'].includes(id) || ext !== 'mp4')) return json(res, 404, { error: 'Unknown episode' });
     return streamFile(req, res, url, kind, id, ext);
   }

@@ -168,6 +168,15 @@
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
     <string name="player_seek">Seek playback</string>
+    <string name="player_seek_unavailable">Seeking unavailable</string>
+    <string name="player_length_unknown">%1$s · length unknown</string>
+    <string name="player_jump_to_time">Jump to time</string>
+    <string name="player_minutes">Minutes</string>
+    <string name="player_seconds">Seconds</string>
+    <string name="player_channels">Channels</string>
+    <string name="player_channels_empty">No channels are saved for this category.</string>
+    <string name="player_channel_switch_failed">Could not switch channels. Returning to the previous channel.</string>
+    <string name="player_last_channel">Last channel</string>
     <string name="player_seek_position">%1$s of %2$s</string>
     <string name="player_audio_selected">Audio: %1$s</string>
     <string name="player_subtitles_selected">Subtitles: %1$s</string>

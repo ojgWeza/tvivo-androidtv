@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -32,6 +34,13 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.Button
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,6 +82,7 @@ import com.dev.Tvivo.playback.HeldSeekAccelerator
 import com.dev.Tvivo.playback.PlaybackFailureKind
 import com.dev.Tvivo.ui.adaptive.adaptiveSpacing
 import com.dev.Tvivo.ui.adaptive.adaptiveType
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.common.tvClickable
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.AppColors
@@ -82,7 +92,7 @@ import kotlinx.coroutines.coroutineScope
 
 data class TrackChoice(val label: String, val selected: Boolean)
 
-enum class PlayerPopup { Audio, Subtitles, Timer, Warning }
+enum class PlayerPopup { Audio, Subtitles, Timer, Warning, Channels }
 
 data class PlayerOverlayState(
     val title: String,
@@ -121,6 +131,14 @@ fun PlayerOverlay(
     onSubtitle: (Int) -> Unit,
     onNext: () -> Unit,
     onStartOver: () -> Unit,
+    channels: List<LiveChannel> = emptyList(),
+    currentChannelId: String? = null,
+    channelsOpen: Boolean = false,
+    onChannelsOpenChange: (Boolean) -> Unit = {},
+    onChannelSelect: (String) -> Unit = {},
+    onAdjacentChannel: (Int) -> Unit = {},
+    onLastChannel: () -> Unit = {},
+    hasLastChannel: Boolean = false,
     onInput: () -> Unit = {},
     onSeekKey: (Int, KeyEvent) -> Unit = { _, _ -> },
     onRetry: () -> Unit = {},
@@ -133,7 +151,10 @@ fun PlayerOverlay(
 ) {
     val spacing = adaptiveSpacing()
     val type = adaptiveType()
-    val controls = PlayerOverlayLogic.controls(state.isLive, state.seekable, state.audio.size, state.subtitles.size, state.hasNext, state.hasResume)
+    val controls = PlayerOverlayLogic.controls(state.isLive, state.seekable,
+        state.audio.size, state.subtitles.size, state.hasNext, state.hasResume, state.durationMs)
+    val television = LocalIsTelevision.current
+    var jumpOpen by remember { mutableStateOf(false) }
     val backFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
@@ -173,6 +194,8 @@ fun PlayerOverlay(
             onTimerMenuPinned(false)
         }
     }
+    LaunchedEffect(channelsOpen) { onMenuOpenChanged(PlayerPopup.Channels, channelsOpen) }
+    LaunchedEffect(dismissMenus) { if (dismissMenus > 0) { onChannelsOpenChange(false); jumpOpen = false } }
 
     BoxWithConstraints(
         Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.pointerInput(visible) {
@@ -180,9 +203,18 @@ fun PlayerOverlay(
                 onTap = { onToggleOverlay() },
                 onDoubleTap = { offset ->
                     val delta = PlayerOverlayLogic.doubleTapSeek(offset.x, size.width.toFloat())
-                    if (delta != 0L && controls.scrubber) onSeek(delta) else onInput()
+                    if (delta != 0L && controls.relativeSeek) onSeek(delta) else onInput()
                 }
             )
+        }.pointerInput(state.isLive, television) {
+            if (state.isLive && !television) {
+                var drag = 0f
+                detectVerticalDragGestures(onVerticalDrag = { _, amount -> drag += amount },
+                    onDragEnd = {
+                        if (kotlin.math.abs(drag) > 80f) onAdjacentChannel(if (drag < 0f) 1 else -1)
+                        drag = 0f
+                    })
+            }
         }
     ) {
         if (state.sleepTimer.isActive && !visible) {
@@ -248,7 +280,7 @@ fun PlayerOverlay(
                         val key = native.keyCode
                         if (native.action == KeyEvent.ACTION_DOWN &&
                             (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN)) {
-                            val hasOtherBottomControl = controls.scrubber || controls.audio || controls.subtitles || controls.next
+                            val hasOtherBottomControl = controls.scrubber || controls.jumpToTime || controls.audio || controls.subtitles || controls.next || state.isLive
                             val next = PlayerOverlayLogic.nextFocusRow(focusRow,
                                 key == KeyEvent.KEYCODE_DPAD_DOWN, hasOtherBottomControl)
                             if (next != focusRow) {
@@ -331,7 +363,7 @@ fun PlayerOverlay(
                             }
                         }
                     }
-                    if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.scrubber) OverlayButton(
+                    if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.relativeSeek) OverlayButton(
                         IconKind.Rewind, stringResource(R.string.player_rewind), Modifier.testTag("player_rewind"),
                         onClick = { onSeek(-10_000L) },
                         onKey = { onSeekKey(-1, it) },
@@ -343,7 +375,7 @@ fun PlayerOverlay(
                         Modifier.size(72.dp).focusRequester(playFocus).onFocusChanged { if (it.isFocused) focusRow = 1 }.testTag("player_play_pause"),
                         onPlayPause
                     )
-                    if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.scrubber) OverlayButton(
+                    if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.relativeSeek) OverlayButton(
                         IconKind.Forward, stringResource(R.string.player_forward), Modifier.testTag("player_forward"),
                         onClick = { onSeek(10_000L) },
                         onKey = { onSeekKey(1, it) },
@@ -359,7 +391,7 @@ fun PlayerOverlay(
                     if (controls.scrubber) {
                         var dragValue by remember { mutableFloatStateOf(-1f) }
                         val sliderInteractionSource = remember { MutableInteractionSource() }
-                        val duration = state.durationMs.coerceAtLeast(1L)
+                        val duration = state.durationMs
                         val seekLabel = stringResource(R.string.player_seek)
                         Slider(
                             value = if (dragValue >= 0f) dragValue else (state.positionMs.toFloat() / duration).coerceIn(0f, 1f),
@@ -387,7 +419,11 @@ fun PlayerOverlay(
                             }
                         )
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (!state.isLive && state.durationMs <= 0L) Box(Modifier.fillMaxWidth().height(4.dp)
+                        .background(AppColors.MediaMuted))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (controls.scrubber) {
                             Text(
                                 "${formatPlayerTime(state.positionMs)} / ${formatPlayerTime(state.durationMs)}",
@@ -396,23 +432,45 @@ fun PlayerOverlay(
                                 modifier = Modifier.semantics { contentDescription = spokenSeekLabel }
                             )
                         } else if (state.isLive) Text(stringResource(R.string.player_live), color = AppColors.MediaText, style = type.label)
-                        else Text("${formatPlayerTime(state.positionMs)} / --:--", color = AppColors.MediaText, style = type.caption)
-                        Spacer(Modifier.weight(1f))
-                        if (controls.startOver) OverlayButton(IconKind.Rewind, stringResource(R.string.player_start_over), Modifier.testTag("player_start_over"), onStartOver)
+                        else Text(
+                            if (!state.isLive && state.durationMs <= 0L)
+                                stringResource(R.string.player_length_unknown, formatPlayerTime(state.positionMs)) +
+                                    (if (state.seekable) "" else " · ${stringResource(R.string.player_seek_unavailable)}")
+                            else "${formatPlayerTime(state.positionMs)} / ${state.durationMs.takeIf { it > 0L }?.let(::formatPlayerTime) ?: "--:--"} · ${stringResource(R.string.player_seek_unavailable)}",
+                            color = AppColors.MediaText, style = type.caption)
+                        if (controls.startOver) OverlayButton(IconKind.Rewind, stringResource(R.string.player_start_over),
+                            (if (controls.jumpToTime) Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
+                                .testTag("player_start_over"), onStartOver)
+                        if (controls.jumpToTime) TextButton(onClick = { jumpOpen = true },
+                            modifier = Modifier.height(48.dp).tvFocusFrame().testTag("player_jump_to_time")) {
+                            Text(stringResource(R.string.player_jump_to_time), color = AppColors.MediaText)
+                        }
+                        if (state.isLive && channels.isNotEmpty()) {
+                            TextButton(onClick = { onChannelsOpenChange(true) }, modifier = Modifier.height(48.dp)
+                                .focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 }
+                                .tvFocusFrame().testTag("player_channels")) {
+                                Text(stringResource(R.string.player_channels), color = AppColors.MediaText)
+                            }
+                            if (hasLastChannel) TextButton(onClick = onLastChannel,
+                                modifier = Modifier.height(48.dp).tvFocusFrame().testTag("player_last_channel")) {
+                                Text(stringResource(R.string.player_last_channel), color = AppColors.MediaText)
+                            }
+                        }
                         if (controls.audio) TrackMenu(
                             stringResource(R.string.player_audio), IconKind.Audio, state.audio, onAudio,
-                            (if (!controls.scrubber) Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
+                            (if (!controls.scrubber && !controls.startOver && (!state.isLive || channels.isEmpty()))
+                                Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
                                 .testTag("player_audio"), PlayerPopup.Audio, dismissMenus, onMenuOpenChanged
                         )
                         if (controls.subtitles) TrackMenu(
                             stringResource(R.string.player_subtitles), IconKind.Subtitles, state.subtitles, onSubtitle,
-                            (if (!controls.scrubber && !controls.audio)
+                            (if (!controls.scrubber && !controls.startOver && !controls.audio && (!state.isLive || channels.isEmpty()))
                                 Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
                                 .testTag("player_subtitles"), PlayerPopup.Subtitles, dismissMenus, onMenuOpenChanged
                         )
                         if (controls.next) OverlayButton(
                             IconKind.Next, stringResource(R.string.player_next),
-                            (if (!controls.scrubber && !controls.audio && !controls.subtitles)
+                            (if (!controls.scrubber && !controls.startOver && !controls.audio && !controls.subtitles)
                                 Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
                                 .testTag("player_next"), onNext
                         )
@@ -423,6 +481,45 @@ fun PlayerOverlay(
                         )
                     }
                 }
+            }
+        }
+        if (jumpOpen) JumpToTimeDialog(state.positionMs, television,
+            onDismiss = { jumpOpen = false }, onJump = { jumpOpen = false; onScrub(it) })
+        if (channelsOpen && state.isLive) {
+            val firstChannelFocus = remember { FocusRequester() }
+            val currentIndex = channels.indexOfFirst { it.id == currentChannelId }.coerceAtLeast(0)
+            val channelListState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex)
+            val focusId = channels.getOrNull(currentIndex)?.id
+            LaunchedEffect(channelsOpen, channels.size) {
+                if (channels.isNotEmpty()) {
+                    androidx.compose.runtime.withFrameNanos { }
+                    runCatching { firstChannelFocus.requestFocus() }
+                }
+            }
+            val list: @Composable () -> Unit = {
+                if (channels.isEmpty()) Text(stringResource(R.string.player_channels_empty),
+                    color = AppColors.Ink, style = type.body, modifier = Modifier.padding(16.dp))
+                else LazyColumn(Modifier.heightIn(max = if (television) 380.dp else 540.dp), state = channelListState) {
+                    items(channels, key = { it.id }) { channel ->
+                        TextButton(onClick = { onChannelsOpenChange(false); onChannelSelect(channel.id) },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .then(if (channel.id == focusId) Modifier.focusRequester(firstChannelFocus) else Modifier)
+                                .tvFocusFrame()) {
+                            Text(if (channel.id == currentChannelId) "✓ ${channel.title}" else channel.title,
+                                color = AppColors.Ink, style = type.label)
+                        }
+                    }
+                }
+            }
+            if (television) Dialog(onDismissRequest = { onChannelsOpenChange(false) }) {
+                Column(Modifier.width(480.dp).background(AppColors.Elevated, RoundedCornerShape(16.dp)).padding(16.dp)) {
+                    Text(stringResource(R.string.player_channels), color = AppColors.Ink, style = type.title)
+                    list()
+                }
+            } else ModalBottomSheet(onDismissRequest = { onChannelsOpenChange(false) }) {
+                Text(stringResource(R.string.player_channels), color = AppColors.Ink, style = type.title,
+                    modifier = Modifier.padding(16.dp))
+                list()
             }
         }
         if (state.sleepTimer.isWarning && !state.sleepTimer.isEnded && !warningDismissed) {
@@ -461,6 +558,49 @@ fun PlayerOverlay(
                     modifier = Modifier.background(AppColors.MediaBase.copy(alpha = 0.82f), RoundedCornerShape(12.dp))
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun JumpToTimeDialog(positionMs: Long, television: Boolean, onDismiss: () -> Unit, onJump: (Long) -> Unit) {
+    var minutes by remember { mutableStateOf((positionMs / 60_000L).toString()) }
+    var seconds by remember { mutableStateOf(((positionMs / 1_000L) % 60L).toString()) }
+    val target = PlayerOverlayLogic.jumpMinutes(minutes.toLongOrNull() ?: -1L, seconds.toLongOrNull() ?: -1L)
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().background(AppColors.Elevated, RoundedCornerShape(16.dp)).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(stringResource(R.string.player_jump_to_time), color = AppColors.Ink, style = adaptiveType().title)
+            Spacer(Modifier.height(16.dp))
+            if (television) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { minutes = ((minutes.toLongOrNull() ?: 0L) - 10L).coerceAtLeast(0L).toString() },
+                        modifier = Modifier.height(48.dp).focusRequester(firstFocus).tvFocusFrame()) { Text("−10") }
+                    TextButton(onClick = { minutes = ((minutes.toLongOrNull() ?: 0L) - 1L).coerceAtLeast(0L).toString() },
+                        modifier = Modifier.height(48.dp).tvFocusFrame()) { Text("−1") }
+                    Text("${minutes}:${seconds.padStart(2, '0')}", color = AppColors.Ink, style = adaptiveType().title)
+                    TextButton(onClick = { minutes = ((minutes.toLongOrNull() ?: 0L) + 1L).toString() },
+                        modifier = Modifier.height(48.dp).tvFocusFrame()) { Text("+1") }
+                    TextButton(onClick = { minutes = ((minutes.toLongOrNull() ?: 0L) + 10L).toString() },
+                        modifier = Modifier.height(48.dp).tvFocusFrame()) { Text("+10") }
+                }
+            } else Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(value = minutes, onValueChange = { minutes = it.filter { digit -> digit.isDigit() }.take(9) },
+                    label = { Text(stringResource(R.string.player_minutes)) }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f).focusRequester(firstFocus))
+                Text(":", color = AppColors.Ink, style = adaptiveType().title)
+                OutlinedTextField(value = seconds, onValueChange = { seconds = it.filter { digit -> digit.isDigit() }.take(2) },
+                    label = { Text(stringResource(R.string.player_seconds)) }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { target?.let(onJump) }, enabled = target != null,
+                modifier = Modifier.height(48.dp).tvFocusFrame()) {
+                Text(stringResource(R.string.player_jump_to_time))
             }
         }
     }

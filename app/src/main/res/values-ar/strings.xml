@@ -18,6 +18,15 @@
     <string name="player_play">تشغيل</string>
     <string name="player_pause">إيقاف مؤقت</string>
     <string name="player_seek">تقديم أو إرجاع التشغيل</string>
+    <string name="player_seek_unavailable">التقديم والإرجاع غير متاحين</string>
+    <string name="player_length_unknown">%1$s · المدة غير معروفة</string>
+    <string name="player_jump_to_time">الانتقال إلى وقت</string>
+    <string name="player_minutes">الدقائق</string>
+    <string name="player_seconds">الثواني</string>
+    <string name="player_channels">القنوات</string>
+    <string name="player_channels_empty">لا توجد قنوات محفوظة لهذه الفئة.</string>
+    <string name="player_channel_switch_failed">تعذّر تغيير القناة. جارٍ الرجوع إلى القناة السابقة.</string>
+    <string name="player_last_channel">القناة السابقة</string>
     <string name="player_start_over">البدء من جديد</string>
     <string name="player_audio">المسارات الصوتية</string>
     <string name="player_subtitles">مسارات الترجمة</string>

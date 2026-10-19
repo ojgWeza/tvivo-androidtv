@@ -1935,6 +1935,13 @@ remaining device checks are in `.codex-android-d2-fixes-report.md`.
 
 ## Android resume after interruption (2026-10-19)
 
+Movie completion needs a duration even when a progressive TS/MKV/MP4 stream has no
+index and ExoPlayer reports `TIME_UNSET`. Carry catalog runtime through playback,
+fetch missing movie info lazily, and prefer the player duration as soon as it appears.
+The prevention rule is to use the same resolved duration for UI, persistence, prompt,
+and end decisions. With neither duration available, only a real `STATE_ENDED` at or
+after 60 seconds completes the item; a short EOF remains a retryable failure.
+
 The Continue Watching card opens a movie detail page. Its Play action used to appear
 while the saved position was still loading, so a quick tap could send a zero resume
 position even though the card came from a saved row. Load that row before marking the

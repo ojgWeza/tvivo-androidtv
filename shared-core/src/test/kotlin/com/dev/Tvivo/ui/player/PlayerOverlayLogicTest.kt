@@ -16,6 +16,29 @@ class PlayerOverlayLogicTest {
         assertEquals(OverlayControls(false, false, false, false, false), PlayerOverlayLogic.controls(true, false, 1, 1, true, true))
         assertEquals(OverlayControls(true, true, true, true, true), PlayerOverlayLogic.controls(false, true, 2, 3, true, true))
         assertEquals(OverlayControls(false, false, false, false, false), PlayerOverlayLogic.controls(false, false, 1, 0, false, false))
+        assertEquals(OverlayControls(false, false, false, false, true, relativeSeek = true, jumpToTime = true),
+            PlayerOverlayLogic.controls(false, true, 1, 0, false, true, durationMs = 0L))
+        assertEquals(false, PlayerOverlayLogic.controls(true, true, 0, 0, false, true, durationMs = 0L).relativeSeek)
+    }
+
+    @Test fun unknownDurationSeekDoesNotInventAnEnd() {
+        assertEquals(0L, PlayerOverlayLogic.seekTarget(-10_000L, 0L))
+        assertEquals(75_000L, PlayerOverlayLogic.seekTarget(75_000L, 0L))
+        assertEquals(60_000L, PlayerOverlayLogic.seekTarget(75_000L, 60_000L))
+        assertEquals(83_000L, PlayerOverlayLogic.jumpMinutes(1, 23))
+        assertEquals(null, PlayerOverlayLogic.jumpMinutes(1, 60))
+        assertEquals(null, PlayerOverlayLogic.jumpMinutes(Long.MAX_VALUE, 0))
+    }
+
+    @Test fun liveChannelNavigationWrapsAndTracksPrevious() {
+        val channels = listOf(LiveChannel("1", "One", "ts"), LiveChannel("2", "Two", "ts"),
+            LiveChannel("3", "Three", "ts"))
+        assertEquals("2", LiveChannelNavigation.adjacent(channels, "1", 1)?.id)
+        assertEquals("1", LiveChannelNavigation.adjacent(channels, "3", 1)?.id)
+        assertEquals("3", LiveChannelNavigation.adjacent(channels, "1", -1)?.id)
+        assertEquals("1", LiveChannelNavigation.last(channels, "2", "1")?.id)
+        assertEquals(null, LiveChannelNavigation.last(channels, "2", "2"))
+        assertEquals(null, LiveChannelNavigation.adjacent(channels, "missing", 1))
     }
 
     @Test fun seekFeedbackAndPictureThirds() {

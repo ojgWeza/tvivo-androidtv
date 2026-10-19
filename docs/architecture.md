@@ -617,6 +617,16 @@ Watchdogs:
 ```
 
 Progressive live streams cannot seek at all — **hide the scrub bar for live**.
+For movies and episodes, the handoff carries `knownDurationMs` from catalog detail
+metadata. ExoPlayer's positive timeline duration takes precedence, even when it differs
+from the provider runtime by over 20%. A missing movie runtime is looked up from the
+cached VOD row, then fetched through `get_vod_info` in the background. Duration is
+used for the total-time label, seek mapping when the media item is actually seekable,
+resume saves, next-item prompts, and completion. If neither source has a duration,
+show `--:--` and a seeking-unavailable label, with no scrubber. A true `STATE_ENDED`
+after at least 60 seconds counts as completion when duration remains unknown;
+known-duration ends retain the 30-second tolerance. The series parser favors
+`duration` because provider `duration_secs` has been unreliable.
 
 The player control overlay leaves the center transparent and uses soft black
 gradients only behind the top and bottom controls. PiP actions are rebuilt with

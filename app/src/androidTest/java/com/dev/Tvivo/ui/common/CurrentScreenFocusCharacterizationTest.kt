@@ -32,7 +32,7 @@ class CurrentScreenFocusCharacterizationTest {
                 ItemDetailScreen(
                     contentType = ContentType.MOVIES,
                     itemId = 2001,
-                    onPlay = { _, _, _ -> },
+                    onPlay = { _, _, _, _ -> },
                     onOpenEpisodes = {},
                     stateOverride = ItemDetailUiState(
                         title = "Fixture Film", extension = "mp4", isLoading = false

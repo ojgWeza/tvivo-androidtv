@@ -20,7 +20,7 @@ class MovieDetailFocusTest {
         rule.setContent {
             AdaptiveEnvironment(televisionOverride = true, widthOverrideDp = 960) {
                 TvivoTheme {
-                    ItemDetailScreen(ContentType.MOVIES, 1, onPlay = { ms, _, _ -> launched = ms },
+                    ItemDetailScreen(ContentType.MOVIES, 1, onPlay = { ms, _, _, _ -> launched = ms },
                         onOpenEpisodes = {}, stateOverride = ItemDetailUiState(title = "Film",
                             resumeFromMs = 120_000, isLoading = false))
                 }

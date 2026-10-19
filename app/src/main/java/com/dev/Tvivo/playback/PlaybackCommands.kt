@@ -40,6 +40,7 @@ internal object PlaybackCommands {
     const val ITEM_ID = "item_id"
     const val IS_LIVE = "is_live"
     const val RESUME_MS = "resume_ms"
+    const val KNOWN_DURATION_MS = "known_duration_ms"
     const val GENERATION = "generation"
     const val STATE = "playback_state"
     const val FAILURE_KIND = "failure_kind"
@@ -60,10 +61,12 @@ internal object PlaybackCommands {
             requestId, url, bundle.getString(TITLE).orEmpty().ifBlank { "Now playing" },
             bundle.getString(ACCOUNT_ID), bundle.getString(CONTENT_TYPE), bundle.getString(ITEM_ID),
             bundle.getBoolean(IS_LIVE), bundle.getLong(RESUME_MS),
+            bundle.getLong(KNOWN_DURATION_MS).coerceAtLeast(0L),
             bundle.getStringArrayList("queue_ids").orEmpty().mapIndexedNotNull { index, id ->
                 val urls = bundle.getStringArrayList("queue_urls").orEmpty()
                 val titles = bundle.getStringArrayList("queue_titles").orEmpty()
-                if (index in urls.indices && index in titles.indices) PlaybackHandoff.QueueItem(id, urls[index], titles[index]) else null
+                val durations = bundle.getLongArray("queue_durations")
+                if (index in urls.indices && index in titles.indices) PlaybackHandoff.QueueItem(id, urls[index], titles[index], durations?.getOrNull(index)?.coerceAtLeast(0L) ?: 0L) else null
             }, bundle.getInt("queue_index", -1),
         )
     }
@@ -77,9 +80,11 @@ internal object PlaybackCommands {
         putString(ITEM_ID, item.itemId)
         putBoolean(IS_LIVE, item.isLive)
         putLong(RESUME_MS, item.resumeFromMs)
+        putLong(KNOWN_DURATION_MS, item.knownDurationMs)
         putStringArrayList("queue_ids", ArrayList(item.playlist.map { it.id }))
         putStringArrayList("queue_urls", ArrayList(item.playlist.map { it.url }))
         putStringArrayList("queue_titles", ArrayList(item.playlist.map { it.title }))
+        putLongArray("queue_durations", item.playlist.map { it.knownDurationMs }.toLongArray())
         putInt("queue_index", item.playlistIndex)
     }
 }

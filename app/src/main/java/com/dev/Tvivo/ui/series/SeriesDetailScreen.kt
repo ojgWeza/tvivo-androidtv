@@ -57,7 +57,8 @@ import kotlinx.coroutines.launch
 
 /** One page from a series card to an episode. Back is owned by MainActivity. */
 @Composable
-fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit) {
+fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit,
+    insideShell: Boolean = false) {
     val context = LocalContext.current
     val application = context.applicationContext as android.app.Application
     val vm: SeriesDetailViewModel = viewModel(key = "series:$seriesId", factory = viewModelFactory {
@@ -142,7 +143,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
             header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg))
     } else {
         Row(Modifier.fillMaxSize().background(AppColors.Bg)
-            .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+            .then(if (LocalIsTelevision.current || insideShell) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
             .padding(32.dp)) {
             Column(Modifier.width(350.dp).verticalScroll(rememberScrollState())) { hero() }
             Spacer(Modifier.width(32.dp))

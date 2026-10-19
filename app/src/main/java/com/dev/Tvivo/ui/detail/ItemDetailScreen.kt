@@ -52,8 +52,9 @@ import kotlinx.coroutines.launch
 fun ItemDetailScreen(
     contentType: ContentType,
     itemId: Int,
-    onPlay: (resumeFromMs: Long, extension: String?, title: String) -> Unit,
+    onPlay: (resumeFromMs: Long, extension: String?, title: String, knownDurationMs: Long) -> Unit,
     onOpenEpisodes: () -> Unit,
+    insideShell: Boolean = false,
     stateOverride: ItemDetailUiState? = null,
     onToggleFavouriteOverride: () -> Unit = {},
     onClearResumeOverride: () -> Unit = {}
@@ -94,7 +95,7 @@ fun ItemDetailScreen(
     }
 
     Column(Modifier.fillMaxSize().background(AppColors.Bg)
-        .then(if (LocalIsTelevision.current) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+        .then(if (LocalIsTelevision.current || insideShell) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
         .verticalScroll(rememberScrollState())
         .padding(if (compact) 16.dp else 48.dp)) {
         if (state.isLoading) Text(stringResource(com.dev.Tvivo.R.string.detail_loading), color = AppColors.Dim, style = TvType.label)
@@ -127,12 +128,14 @@ fun ItemDetailScreen(
                 if (!state.isLoading) DetailTextButton(primaryLabel, Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
                     if (isSeries) onOpenEpisodes() else onPlay(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
-                        state.extension, state.title)
+                        state.extension, state.title,
+                        state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
                 }
                 if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
                     scope.launch {
                         if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
-                        onPlay(0L, state.extension, state.title)
+                        onPlay(0L, state.extension, state.title,
+                            state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
                     }
                 }
                 DetailTextButton(if (state.isFavourite) "Remove from favourites" else "Add to favourites",

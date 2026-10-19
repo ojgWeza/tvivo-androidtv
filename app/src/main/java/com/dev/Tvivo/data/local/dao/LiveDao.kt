@@ -137,6 +137,10 @@ interface LiveDao {
         ORDER BY nameNormalized, streamId LIMIT 20""")
     suspend fun categoryPreview(accountId: String, categoryId: String): List<LiveStreamEntity>
 
+    @Query("""SELECT * FROM live_streams WHERE accountId = :accountId AND categoryId = :categoryId
+        ORDER BY nameNormalized, streamId""")
+    suspend fun allInCategory(accountId: String, categoryId: String): List<LiveStreamEntity>
+
     @Query("SELECT COUNT(*) FROM live_streams WHERE accountId = :accountId AND categoryId = :categoryId")
     suspend fun categoryCount(accountId: String, categoryId: String): Int
 
