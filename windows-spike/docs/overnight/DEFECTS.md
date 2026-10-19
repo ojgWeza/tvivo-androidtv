@@ -9,3 +9,21 @@
 
 Watch items (not defects): LC-02 close after a LibVLC open took CT 2778 ms (dispose stage 1609 ms) against a 3 s
 limit - re-check in PC-02/PC-03 after Sol's S1 close-budget slice lands.
+
+## Run 03 status updates (368a25d, 2026-10-19 21:20-21:40)
+
+| ID | New status | Evidence |
+|---|---|---|
+| DF-01 | **Fixed, verified live** (368a25d) | 10/10 starts `auth.saved outcome=success idMatch=True`; session fa80957c `catalog.cache.refresh.complete outcome=success durationMs=16312` after a cached start; 0 `not-authenticated` / `refresh failed` / `hover.metadata failed` in 12 sessions. |
+| DF-02 | Open (F2 diagnostics in build, not exercised) | LC-05 BLOCKED (focus); 0 selections all run. |
+| DF-03 | Needs confirmation (unchanged) | No UIA traffic this run; 0 stalls > 1000 ms after `authDone` in 10 starts - weak evidence for the harness-load theory (D-i). Confirm in a foreground run. |
+| DF-04 | **Fixed, verified live** (368a25d) | First Spotlight lookup 34 ms after `authDone`, `hover.metadata fetched plot=present`. |
+
+Run 03 watch items (not defects):
+- W-02: SC_CLOSE at Available 1320 MB: CT 3310 ms while `window.close-complete totalMs=336` - the extra time is
+  after teardown (process exit under paging). Re-check CT under normal memory in PC-02/PC-03.
+- W-03: every start has one 1.0-1.8 s stall 0.1-0.3 s after `cachedRender`, before `authDone`
+  (ShelfContainerLoaded / ContainerContentChanging / ArtworkDataContextChanged). Inside the startup window (D-a),
+  but it is the first moment the catalog looks usable. Measure input latency there in a foreground run; if a key
+  press in that window waits > 1 s, raise as P2 perf.
+- W-04: LC-01 idle CPU 1.5-2.8 % (run 02: 0-1.2 %). Under the 3 % limit; re-check in SP-05/SK-01.

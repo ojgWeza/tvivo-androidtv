@@ -137,3 +137,22 @@ Per D-e the floors stand. Batch 2+ also needs a foreground-capable launch: the r
 foreground session (or the owner leaves Tvivo foreground), otherwise every playback row is BLOCKED.
 Because Sol's static-audit slice (S1 close teardown) is in the tree uncommitted, Batch 1 close rows must be
 re-run on that build anyway; run 02 results stand for c6936d0 only.
+
+## D-l  Batch 1 (no playback) may start at >= 2.0 GB Available (run 03)
+
+Tvivo without playback uses 270-350 MB WS. Batch 1 may start at >= 2.0 GB; the per-launch 1.5 GB floor (rule 5)
+is unchanged and was enforced twice in run 03 (21:25 close, 21:32 cycle stop). Batches with playback keep 2.5 GB.
+
+## D-m  Test builds come from a clean committed worktree; Batches 2-5 wait for foreground + memory (run 03)
+
+- While Sol edits `src\` in the main tree, the runner tests a detached worktree of the committed HEAD
+  (`D:\Scratch\overnight-wt`), so results name an exact commit. Results of run 03 stand for 368a25d.
+- F1 (DF-01, DF-04) is verified fixed; S1/S2 close teardown verified on 11 closes. These need no further fix.
+- Batches 2-5 not started: 0 of 12 launches got the foreground (Chrome held it) and the Android emulator took
+  Available to 408 MB. Every Batch 2-5 row needs UI input; none has an OS-message variant except PC-06/PC-10's
+  close half, which needs a playing window first. Floors and the focus rule stand (no focus tricks).
+- Proposal for the orchestrator/owner (NOT in force; the runner was told to drive UI only when foreground):
+  allow UIA *pattern* calls (Invoke/Toggle/Value/SelectionItem on Tvivo's own elements, no SendKeys, no pointer)
+  without foreground. They inject no input into the foreground app and steal no focus. That would unblock
+  LC-02/LC-05 (search via ValuePattern)/LC-08 and most Batch 2-3 rows; keyboard-only rows (Alt+F4, F11, Esc,
+  Ctrl+Shift+T, Tab) would stay BLOCKED. Alternative: the owner leaves Tvivo foreground at the start of a run.

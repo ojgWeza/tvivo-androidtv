@@ -164,3 +164,8 @@ Implementation note: queued Spotlight focus restoration could take focus from a 
 - Regression risk: medium (activation paths). Do not change the two-tap touch rule or keyboard Enter behaviour.
 - Live verify: LC-05 x5 with the pointer resting over the Spotlight strip; NV-03, NV-04, NV-05 (typing never starts or
   controls playback).
+
+## Run 03 (Opus, 2026-10-19 21:40)
+- F1: verified live on 368a25d (run-03.md); no further work. S1/S2: verified on 11 closes; no further work.
+- F2: still needed as a live check only; no new brief. No new fix briefs from run 03 (0 FAIL rows).
+

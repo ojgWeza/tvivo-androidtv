@@ -1,16 +1,18 @@
 # Overnight loop state
 
-- Iteration: 1 (run 02 done, 2026-10-19 14:51-15:13)
-- Done: RULES/MATRIX/DECISIONS D-a..D-k. Static audit triage D-f; Sol has implemented S1-S7 in the tree
-  (uncommitted at 15:13, Core tests running). Run 01: Batch 1 BLOCKED (memory). Run 02 (build c6936d0 exe 03:26):
-  Batch 1 PASS 5 / FAIL 1 / BLOCKED 5 - see run-02.md.
-- Open defects: DF-01 P1 (refresh + metadata "not authenticated" after cached start), DF-02 P1 (unrequested playback
-  while typing in search, not reproduced), DF-03 P2 (post-startup stalls, needs confirmation), DF-04 P2 (Spotlight
-  lookup before auth). Briefs F1, F2 in FIX-BRIEFS.md.
-- Blockers: memory (Available 954 MB at 15:13; Android emulator ~4.1 GB is back) and foreground (Tvivo foreground in
-  1 of 6 launches; D-g). Tvivo closed at 15:11:54; 0 processes.
+- Iteration: 2 (run 03 done, 2026-10-19 21:20-21:40, build 368a25d from a clean worktree)
+- Done: RULES/MATRIX/DECISIONS D-a..D-m. Static audit S1-S7 (e5eb0e3) and F1 (368a25d) committed by Sol.
+  Run 01: Batch 1 BLOCKED (memory). Run 02 (c6936d0): PASS 5 / FAIL 1 / BLOCKED 5. Run 03 (368a25d): Batch 1
+  PASS 4 / PARTIAL 2 / FAIL 0 / BLOCKED 5; F1 verified (DF-01, DF-04 fixed); S1/S2 close teardown verified on
+  11 closes (totalMs 35-336, 0 backstop, 0 exceptions) - see run-03.md.
+- Open defects: DF-02 P1 (unrequested playback while typing in search; F2 diagnostics in build, not exercised),
+  DF-03 P2 (post-startup stalls, needs confirmation). Watch W-02..W-04 in DEFECTS.md.
+- Blockers: foreground (0 of 12 launches foreground in run 03; Chrome holds it) and memory (Android emulator back at
+  21:30:32, Available 408-575 MB at 21:34). Tvivo closed at 21:32:40; 0 processes. Scratch worktree removed.
 - Next:
-  1. Sol: commit the static-audit slice (build + all tests), then F1, then F2 (diagnostics first).
-  2. Runner, when Available >= 2.5 GB and from a foreground-capable session: re-run Batch 1 on the new build
-     (LC-02/03/05/08/10/11 first), then Batch 2 (PC-01..10), then Batch 3 (RO-01..11).
-- Row status: LC-01/02/04/07/09 PASS (c6936d0); LC-05 FAIL (DF-02); LC-03/06/08/10/11 BLOCKED; all other rows NOT-RUN.
+  1. Orchestrator: decide D-m proposal (UIA pattern calls without foreground) or arrange a foreground session;
+     memory >= 2.5 GB needed for playback batches.
+  2. Runner: build a fresh detached worktree of the newest commit (F2 fix if landed), then LC-02/03/05/08/10 and
+     LC-11 cycle 10 + log rotation, then Batch 2 (PC-01..10), Batch 3 (RO-01..11), Batches 4-5.
+- Row status: LC-01/04(SC_CLOSE)/07/09 PASS (368a25d); LC-06, LC-11 PARTIAL; LC-02/03/05/08/10 BLOCKED (focus);
+  all Batch 2+ rows NOT-RUN.
