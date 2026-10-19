@@ -68,6 +68,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool _suppressSearchChanged;
     private bool _isReadyForInteraction;
     private bool _isActive;
+    private bool _diagnosticsWindowActive = true;
     private bool _firstCatalogLoadCompleted;
     private bool _cachedStartupCatalogActive;
     private bool _showModeLoadingFrame;
@@ -88,6 +89,11 @@ public sealed partial class CatalogLandingPage : UserControl
     private string _lastSpotlightKey = "none";
     private string _lastSpotlightDevice = "unknown";
     private long _lastSpotlightInputAt;
+    private GridView? _lastShelfInputGrid;
+    private CatalogCard? _lastShelfInputCard;
+    private string _lastShelfInput = "unknown";
+    private string _lastShelfKey = "none";
+    private long _lastShelfInputAt;
     private string? _spotlightFocusedId;
     private bool _spotlightArtworkLayoutPending;
     private int _spotlightWindowFirst = -1;
@@ -213,6 +219,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly SemaphoreSlim _epgStartGate = new(1, 1);
     private readonly HashSet<string> _epgMapLoadedAccounts = new(StringComparer.Ordinal);
     private CatalogSnapshot? _renderedSnapshot;
+    private CatalogSnapshot? _lastAppliedSourceSnapshot;
+    private IReadOnlyList<CatalogShelf>? _pendingInitialShelfCards;
+    private DispatcherQueueTimer? _initialShelfCardsTimer;
+    private int _nextInitialShelfCardIndex;
     private string? _renderedOpenShelfId;
     private GridView? _pressedShelfGrid;
     private GridView? _draggedShelfGrid;
@@ -307,11 +317,9 @@ public sealed partial class CatalogLandingPage : UserControl
         using (var process = System.Diagnostics.Process.GetCurrentProcess())
             _lastProcessCpuSeconds = process.TotalProcessorTime.TotalSeconds;
         _dispatchProbeTimer = new System.Threading.Timer(DispatchProbeTimer_Tick, null,
-            TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
+            Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         Unloaded += CatalogLandingPage_Unloaded;
-        if (!PerfToggles.IsDisabled("perftimers"))
-            _perfSummaryTimer.Start();
         UpdateModeChrome();
         _lastPerfSurfaceSnapshot = CreatePerfSurfaceSnapshot(0);
     }
@@ -347,6 +355,9 @@ public sealed partial class CatalogLandingPage : UserControl
     public void SetActive(bool active)
     {
         _isActive = active;
+        if (active && _pendingInitialShelfCards is not null) _initialShelfCardsTimer?.Start();
+        else if (!active) _initialShelfCardsTimer?.Stop();
+        UpdatePerfTimerLifecycle();
         if (!active) CancelHoverRequest();
         if (active) ScheduleShelfViewportUpdate("activate");
         else _shelfViewportPollTimer?.Stop();
@@ -369,8 +380,32 @@ public sealed partial class CatalogLandingPage : UserControl
             _ = RetrySavedAuthenticationAsync(account);
     }
 
+    public void SetDiagnosticsWindowActive(bool active)
+    {
+        if (_isShuttingDown) return;
+        _diagnosticsWindowActive = active;
+        UpdatePerfTimerLifecycle();
+    }
+
+    private void UpdatePerfTimerLifecycle()
+    {
+        if (_isActive && _diagnosticsWindowActive && !PerfToggles.IsDisabled("perftimers"))
+        {
+            _perfSummaryTimer.Start();
+            Interlocked.Exchange(ref _dispatchProbeLastTickAt, 0);
+            _dispatchProbeTimer.Change(TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
+        }
+        else
+        {
+            _perfSummaryTimer.Stop();
+            _dispatchProbeTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
+    }
+
     public void InvalidateCatalogSnapshots()
     {
+        CancelInitialShelfCards();
+        _lastAppliedSourceSnapshot = null;
         _snapshotCache.Clear();
         _snapshotCacheOrder.Clear();
         _snapshotCacheBytes = 0;
@@ -439,6 +474,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _epgTimer.Tick -= EpgTimer_Tick;
         _perfSummaryTimer.Stop();
         _perfSummaryTimer.Tick -= PerfSummaryTimer_Tick;
+        _initialShelfCardsTimer?.Stop();
         _dispatchProbeTimer.Dispose();
         _epgCoordinator.EpgUpdated -= EpgCoordinator_EpgUpdated;
         CancelArtworkLoads();
@@ -446,6 +482,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void DispatchProbeTimer_Tick(object? state)
     {
+        if (!Volatile.Read(ref _isActive) || !Volatile.Read(ref _diagnosticsWindowActive)) return;
         using var perfScope = PerfScope.Begin("DispatchProbeTimer");
         var tickAt = System.Diagnostics.Stopwatch.GetTimestamp();
         var previousTickAt = Interlocked.Exchange(ref _dispatchProbeLastTickAt, tickAt);
@@ -470,6 +507,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var enqueueStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         var enqueued = DispatcherQueue.TryEnqueue(() =>
         {
+            if (!_isActive || !_diagnosticsWindowActive) { Interlocked.Exchange(ref _dispatchProbeOutstanding, 0); return; }
             using var perfScope = PerfScope.Begin("DispatchProbeCallback");
             var callbackStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             var probePostedAt = Interlocked.Read(ref _dispatchProbePostedAt);
@@ -1191,7 +1229,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
             if (HasCatalogData(cached))
             {
-                await ApplySnapshotAsync(cached, () => IsCurrentLoad(generation));
+                if (!ReferenceEquals(cached, _lastAppliedSourceSnapshot))
+                    await ApplySnapshotAsync(cached, () => IsCurrentLoad(generation));
                 _activityDataDirty = false;
                 _favoriteDataDirty = false;
                 _firstCatalogLoadCompleted = true;
@@ -2665,9 +2704,10 @@ public sealed partial class CatalogLandingPage : UserControl
                 _renderedOpenShelfId = _openShelfId;
             }
             _renderedShelfSort = _categorySort;
-            _renderedSnapshot = _openShelfId is null && !snapshot.IsFlatSearch
+            _renderedSnapshot = _openShelfId is null && !snapshot.IsFlatSearch && _pendingInitialShelfCards is null
                 ? snapshot with { Shelves = ProjectRenderedShelves() }
                 : snapshot;
+            _lastAppliedSourceSnapshot = snapshot;
             // The shelf list is one shared scroller: a tab never visited before must open at its top,
             // not at the offset the previous tab was left at.
             if (modeChanged && !_browsePositions.ContainsKey((snapshot.Mode, _openShelfId ?? string.Empty)))
@@ -2682,7 +2722,8 @@ public sealed partial class CatalogLandingPage : UserControl
             var preserveScrollOffset = !shouldRender || (contentChanged && sameOrderedShelfIds);
             using (PerfScope.Begin("ApplySnapshotRestore"))
                 RestoreBrowseStateIfMatching(snapshot.Mode, preserveScrollOffset);
-            if (_openShelfId is null && !snapshot.IsFlatSearch && snapshot.Mode != CatalogMode.MyTvivo)
+            if (_openShelfId is null && !snapshot.IsFlatSearch && snapshot.Mode != CatalogMode.MyTvivo &&
+                _pendingInitialShelfCards is null)
                 ScheduleShelfViewportUpdate("apply");
             if (ContentState.Opacity >= 1)
                 ContentState.IsHitTestVisible = true;
@@ -2958,8 +2999,9 @@ public sealed partial class CatalogLandingPage : UserControl
             var recentInput = ReferenceEquals(_lastSpotlightInputButton, button) &&
                 Environment.TickCount64 - _lastSpotlightInputAt < 2_000;
             RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray(),
-                "spotlight-click", recentInput ? _lastSpotlightInput : "unknown",
-                recentInput ? _lastSpotlightKey : "none", recentInput ? _lastSpotlightDevice : "unknown");
+                 "spotlight-click", recentInput ? _lastSpotlightInput : "unknown",
+                 recentInput ? _lastSpotlightKey : "none", recentInput ? _lastSpotlightDevice : "unknown",
+                 recentInput, recentInput ? Environment.TickCount64 - _lastSpotlightInputAt : long.MaxValue);
         }
     }
 
@@ -4145,6 +4187,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void UpdateShelfPreviewWindow(string reason, long generation)
     {
+        if (_pendingInitialShelfCards is not null) return;
         if (_isShuttingDown || generation != Volatile.Read(ref _shelfPreviewLoadGeneration) ||
             _renderedSnapshot is not { IsFlatSearch: false } snapshot || snapshot.Mode == CatalogMode.MyTvivo ||
             _openShelfId is not null || !_isActive || _account is not { } account ||
@@ -4391,6 +4434,19 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!ReferenceEquals(ShelvesItems.ItemsSource, _renderedShelves))
                 ShelvesItems.ItemsSource = _renderedShelves;
             var incoming = DeduplicateShelves(shelves);
+            CancelInitialShelfCards();
+            if (_renderedShelves.Count == 0 && _openShelfId is null && incoming.Count > 1)
+            {
+                _pendingInitialShelfCards = incoming;
+                _nextInitialShelfCardIndex = 1;
+                incoming = incoming.Select((shelf, index) => index == 0 || shelf.Cards.Count == 0
+                    ? shelf : shelf with { Cards = Array.Empty<CatalogCard>() }).ToArray();
+                _initialShelfCardsTimer ??= ShelvesItems.DispatcherQueue.CreateTimer();
+                _initialShelfCardsTimer.Interval = TimeSpan.FromMilliseconds(75);
+                _initialShelfCardsTimer.IsRepeating = true;
+                _initialShelfCardsTimer.Tick -= InitialShelfCardsTimer_Tick;
+                _initialShelfCardsTimer.Tick += InitialShelfCardsTimer_Tick;
+            }
             var current = _renderedShelves.Select(row => row.ToCatalogShelf()).ToArray();
             var reconciliation = ShelfReconciler.Reconcile(current, incoming,
                 shelf => shelf.Id,
@@ -4453,6 +4509,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
             if (_renderedSnapshot is { } snapshot && _openShelfId is null && !snapshot.IsFlatSearch)
                 _renderedSnapshot = snapshot with { Shelves = ProjectRenderedShelves() };
+            if (_isActive && _pendingInitialShelfCards is not null)
+                _initialShelfCardsTimer?.Start();
         }
         finally
         {
@@ -4465,8 +4523,16 @@ public sealed partial class CatalogLandingPage : UserControl
     private IReadOnlyList<CatalogShelf> ProjectRenderedShelves() =>
         _renderedShelves.Select(row => row.ToCatalogShelf()).ToArray();
 
+    private void CancelInitialShelfCards()
+    {
+        _initialShelfCardsTimer?.Stop();
+        _pendingInitialShelfCards = null;
+    }
+
     private void ClearRenderedShelves()
     {
+        CancelInitialShelfCards();
+        _lastAppliedSourceSnapshot = null;
         _deferredShelfStructure = null;
         _shelfDeferredCommitTimer?.Stop();
         if (_renderedShelves.Count > 0)
@@ -4533,14 +4599,17 @@ public sealed partial class CatalogLandingPage : UserControl
             return;
         }
 
-        if (args.ClickedItem is CatalogCard { Channel: { } channel })
+        if (args.ClickedItem is CatalogCard { Channel: { } channel } card)
         {
             var related = sender is GridView relatedGrid
                 ? relatedGrid.Items.OfType<CatalogCard>().Where(card => card.Channel is not null).Select(card => card.Channel!).ToArray()
                     ?? Array.Empty<Channel>()
                 : Array.Empty<Channel>();
-            var input = sender is GridView { FocusState: FocusState.Keyboard } ? "keyboard" : "unknown";
-            RaiseChannelSelected(channel, related, string.IsNullOrWhiteSpace(SearchBox.Text) ? "shelf-itemclick" : "search-result", input);
+            var sameItem = sender is GridView grid && ReferenceEquals(grid, _lastShelfInputGrid) &&
+                ReferenceEquals(card, _lastShelfInputCard);
+            var age = sameItem ? Environment.TickCount64 - _lastShelfInputAt : long.MaxValue;
+            RaiseChannelSelected(channel, related, string.IsNullOrWhiteSpace(SearchBox.Text) ? "shelf-itemclick" : "search-result",
+                sameItem ? _lastShelfInput : "unknown", sameItem ? _lastShelfKey : "none", "unknown", sameItem, age);
         }
     }
 
@@ -4552,6 +4621,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         gridView.ContainerContentChanging += CatalogCardContainerContentChanging;
         gridView.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(ShelfGrid_PointerPressed), true);
+        gridView.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(ShelfGrid_ActivationKeyDown), true);
         gridView.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(ShelfGrid_PointerMoved), true);
         gridView.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(ShelfGrid_PointerReleased), true);
         gridView.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(ShelfGrid_PointerCanceled), true);
@@ -4567,6 +4637,7 @@ public sealed partial class CatalogLandingPage : UserControl
         ForgetCatalogCardContainers(gridView);
 
         gridView.RemoveHandler(UIElement.PointerPressedEvent, new PointerEventHandler(ShelfGrid_PointerPressed));
+        gridView.RemoveHandler(UIElement.KeyDownEvent, new KeyEventHandler(ShelfGrid_ActivationKeyDown));
         gridView.RemoveHandler(UIElement.PointerMovedEvent, new PointerEventHandler(ShelfGrid_PointerMoved));
         gridView.RemoveHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(ShelfGrid_PointerReleased));
         gridView.RemoveHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(ShelfGrid_PointerCanceled));
@@ -4593,7 +4664,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private void OpenShelfGrid_Unloaded(object sender, RoutedEventArgs args) =>
-        ForgetCatalogCardContainers(OpenShelfGrid);
+        ShelfGrid_Unloaded(sender, args);
 
     private void ForgetCatalogCardContainers(GridView gridView)
     {
@@ -4612,6 +4683,8 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not GridView gridView || !args.GetCurrentPoint(gridView).Properties.IsLeftButtonPressed)
             return;
 
+        RecordShelfInput(gridView, args.OriginalSource as DependencyObject, "pointer", "none");
+
         var scrollViewer = FindShelfScrollViewer(gridView);
         if (scrollViewer is null)
             return;
@@ -4623,6 +4696,44 @@ public sealed partial class CatalogLandingPage : UserControl
         _shelfPressX = args.GetCurrentPoint(gridView).Position.X;
         _shelfPressOffset = scrollViewer.HorizontalOffset;
         _shelfDragStarted = false;
+    }
+
+    private void InitialShelfCardsTimer_Tick(DispatcherQueueTimer sender, object args)
+    {
+        if (!_isActive || _pendingInitialShelfCards is not { } shelves) { sender.Stop(); return; }
+        while (_nextInitialShelfCardIndex < shelves.Count)
+        {
+            var index = _nextInitialShelfCardIndex++;
+            if (shelves[index].Cards.Count == 0) continue;
+            _renderedShelves[index].Update(shelves[index]);
+            break;
+        }
+        if (_nextInitialShelfCardIndex < shelves.Count) return;
+        sender.Stop();
+        _pendingInitialShelfCards = null;
+        if (_renderedSnapshot is { } snapshot && _openShelfId is null && !snapshot.IsFlatSearch)
+            _renderedSnapshot = snapshot with { Shelves = ProjectRenderedShelves() };
+        if (_renderedSnapshot is { Mode: not CatalogMode.MyTvivo })
+            ScheduleShelfViewportUpdate("initial-cards-complete");
+    }
+
+    private void ShelfGrid_ActivationKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (sender is GridView gridView && args.Key is Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space)
+            RecordShelfInput(gridView, args.OriginalSource as DependencyObject, "keyboard", args.Key.ToString());
+    }
+
+    private void RecordShelfInput(GridView gridView, DependencyObject? source, string input, string key)
+    {
+        CatalogCard? card = null;
+        for (var element = source; element is not null && !ReferenceEquals(element, gridView); element = VisualTreeHelper.GetParent(element))
+            if (element is FrameworkElement { DataContext: CatalogCard candidate }) { card = candidate; break; }
+        card ??= input == "keyboard" ? gridView.SelectedItem as CatalogCard : null;
+        _lastShelfInputGrid = gridView;
+        _lastShelfInputCard = card;
+        _lastShelfInput = input;
+        _lastShelfKey = key;
+        _lastShelfInputAt = Environment.TickCount64;
     }
 
     private void ShelfGrid_PointerMoved(object sender, PointerRoutedEventArgs args)
@@ -5221,10 +5332,12 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private void RaiseChannelSelected(Channel channel, IReadOnlyList<Channel>? related = null,
-        string via = "unknown", string input = "unknown", string key = "none", string device = "unknown")
+        string via = "unknown", string input = "unknown", string key = "none", string device = "unknown",
+        bool sameActivatedItem = false, long activationAgeMs = long.MaxValue)
     {
         CaptureBrowseState();
-        ChannelSelected?.Invoke(this, new ChannelSelectedEventArgs(channel, related ?? Array.Empty<Channel>(), via, input, key, device));
+        ChannelSelected?.Invoke(this, new ChannelSelectedEventArgs(channel, related ?? Array.Empty<Channel>(), via, input, key, device,
+            sameActivatedItem, activationAgeMs));
     }
 
     private void ShowError(string message)
@@ -5731,7 +5844,8 @@ public sealed partial class CatalogLandingPage : UserControl
 }
 
 public sealed class ChannelSelectedEventArgs(Channel channel, IReadOnlyList<Channel> relatedChannels,
-    string via = "home", string input = "unknown", string key = "none", string device = "unknown") : EventArgs
+    string via = "home", string input = "unknown", string key = "none", string device = "unknown",
+    bool sameActivatedItem = false, long activationAgeMs = long.MaxValue) : EventArgs
 {
     public Channel Channel { get; } = channel;
     public StreamSource Source => Channel.Source;
@@ -5740,6 +5854,8 @@ public sealed class ChannelSelectedEventArgs(Channel channel, IReadOnlyList<Chan
     public string Input { get; } = input;
     public string Key { get; } = key;
     public string Device { get; } = device;
+    public bool SameActivatedItem { get; } = sameActivatedItem;
+    public long ActivationAgeMs { get; } = activationAgeMs;
 }
 
 public static class ArtworkReusePolicy

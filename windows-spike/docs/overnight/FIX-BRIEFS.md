@@ -12,7 +12,7 @@ Implementation status: S1-S7 done in the Windows worktree. S1 preserves the clos
 
 Source: STATIC-AUDIT.md, verified line by line; decisions in DECISIONS.md D-f. One edit pass, one build, then
 `dotnet test` on all test projects. Commit as ONE slice ("Static audit batch: close teardown, stale async UI,
-artwork permits, Spotlight settings revision"). Do not touch SA-07/09/10/11/12/13 (deferred or discarded).
+artwork permits, Spotlight settings revision"). SA-09/10/11 were deferred for that slice and are addressed in the DF-03 slice below.
 No new log line may contain a URL, host, title or credential.
 
 ### S1 - P1 - Close teardown: UI apartment + one budget (SA-01 + SA-02) - FIX WITH CARE (D-f1)
@@ -168,4 +168,11 @@ Implementation note: queued Spotlight focus restoration could take focus from a 
 ## Run 03 (Opus, 2026-10-19 21:40)
 - F1: verified live on 368a25d (run-03.md); no further work. S1/S2: verified on 11 closes; no further work.
 - F2: still needed as a live check only; no new brief. No new fix briefs from run 03 (0 FAIL rows).
+
+## DF-02 / DF-03 follow-up (Windows worktree, 2026-10-19)
+
+- DF-03: `BuildShelves` and Spotlight selection already run on workers. The log shows `snapshotBuild` about 2–3 s on a worker, then a repeatable 1.4–1.8 s dispatch delay after `cachedRender`; first shelf realization and artwork are the likely UI costs. The cached snapshot is no longer applied twice across cached load and saved authentication. The first shelf keeps its cards while later shelf cards are applied one row per 75 ms dispatcher turn; category preview loading waits for that pass. Snapshot data and ordering remain available throughout. The <500 ms target needs a foreground run on the large catalog (LC-01, NV-06, SP-07).
+- DF-02: `SearchActivationPolicy` rejects catalog selections while search is active unless a recent pointer press or Enter happened on the same result. The guard runs before any player or series state change and logs `selection.ignored` without item text. The cause of the run-02 unintended start remains unproven. Live checks: LC-05 x5 and NV-03..05, including keyboard, mouse, touch, and pointer resting on Spotlight.
+- SA-09/10: resume writes are serialized on a worker, periodic superseded writes are skipped, and close awaits the final write within the existing close budget. Episode navigation reuses and updates in-memory progress; the initial series progress/read selection runs on a worker. Live checks: PC-02, SE-01/02/07/08, RO-07, SK-04, EN-01.
+- SA-11: the 500 ms playback timer starts with the player; the 250 ms dispatch probe and 2 s perf summary run only while the catalog is active and perf timers are enabled. Spotlight dwell and cooldown timers already stop when their work ends. Live checks: LC-01, SP-05, SK-01/03.
 

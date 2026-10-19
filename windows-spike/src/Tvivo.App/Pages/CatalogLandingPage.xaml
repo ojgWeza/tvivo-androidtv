@@ -568,6 +568,7 @@
                               Margin="-8,0,-20,0"
                               ItemClick="ShelfCards_ItemClick"
                               KeyDown="OpenShelfGrid_KeyDown"
+                              Loaded="ShelfGrid_Loaded"
                               ScrollViewer.VerticalScrollBarVisibility="Hidden"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <GridView.ItemContainerTransitions>

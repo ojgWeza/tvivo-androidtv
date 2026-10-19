@@ -110,6 +110,9 @@ public sealed partial class MainWindow : Window
     private double? _playerListPointerPressOffset;
     private IReadOnlyList<SeriesSeason> _playerSeriesSeasons = Array.Empty<SeriesSeason>();
     private IReadOnlyDictionary<string, PlaybackProgress> _seriesEpisodeProgress = new Dictionary<string, PlaybackProgress>(StringComparer.Ordinal);
+    private readonly object _progressWriteLock = new();
+    private Task _progressWriteTail = Task.CompletedTask;
+    private long _progressWriteGeneration;
     private string? _currentSeriesId;
     private string? _currentSeriesTitle;
     private ProviderAccount? _currentSeriesAccount;
@@ -343,8 +346,6 @@ public sealed partial class MainWindow : Window
         _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
         _playbackUiTimer.Tick += PlaybackUiTimer_Tick;
-        if (!PerfToggles.IsDisabled("playbacktimer"))
-            _playbackUiTimer.Start();
         _heldSeekTimer.Tick += HeldSeekTimer_Tick;
         Activated += MainWindow_Activated;
         _cinemaCursorIdleTimer.Tick += CinemaCursorIdleTimer_Tick;
@@ -1745,6 +1746,14 @@ public sealed partial class MainWindow : Window
         var selectedChannel = args.Channel;
         var focusBefore = FocusDescriptor(FocusManager.GetFocusedElement(WindowRoot.XamlRoot));
         LaunchDiagnostics.Write($"event=selection.source via={args.Via} input={args.Input} key={args.Key} device={args.Device} focusBefore={focusBefore}");
+        var searchActive = args.Via == "search-result" || !string.IsNullOrWhiteSpace(TopSearchBox.Text) ||
+            ReferenceEquals(FocusManager.GetFocusedElement(WindowRoot.XamlRoot), TopSearchBox);
+        if (ReferenceEquals(sender, _catalogLandingPage) &&
+            !SearchActivationPolicy.Allows(searchActive, args.Input, args.Key, args.SameActivatedItem, args.ActivationAgeMs))
+        {
+            LaunchDiagnostics.Write($"event=selection.ignored reason=search-no-explicit-activation via={args.Via}");
+            return;
+        }
         if (selectedChannel.Source.Kind == StreamKind.Series &&
             _seriesOpeningId == selectedChannel.Id &&
             _seriesOpenCancellation is { IsCancellationRequested: false })
@@ -1968,8 +1977,11 @@ public sealed partial class MainWindow : Window
 
             try
             {
-                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, series.Id);
-                var selected = _catalogRepository.SelectResumeEpisode(account, details);
+                var (progress, selected) = await Task.Run(() =>
+                    (_catalogRepository.GetEpisodeProgressForSeries(account, series.Id),
+                     _catalogRepository.SelectResumeEpisode(account, details)));
+                if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration)) return;
+                _seriesEpisodeProgress = progress;
                 if (selected is null)
                 {
                     ShowSeriesOpenMessage("Provider returned no episodes. Saved catalog is still available. Why: series-info; code EmptyValid; trace none", isFailure: true);
@@ -2220,15 +2232,14 @@ public sealed partial class MainWindow : Window
             _currentSeriesAccount = _catalogLandingPage.Account;
             if (_currentSeriesId is not null && _currentSeriesAccount is not null)
             {
-                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
                 RefreshSeasonProgressCount();
                 _seriesEpisodeProgress.TryGetValue(episode.Id, out var episodeProgress);
                 _resumePositionOnStart = episodeProgress?.State == PlaybackProgressState.InProgress ? episodeProgress.ResumeMs : null;
                 if (episodeProgress?.State != PlaybackProgressState.Finished)
                 {
-                    _catalogRepository.SaveProgress(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
-                        _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false);
-                    _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(_currentSeriesAccount, _currentSeriesId);
+                    QueueProgressSave(_currentSeriesAccount, "episode", episode.Id, _currentSeriesId,
+                        _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, finished: false, force: true);
+                    SetEpisodeProgressInMemory(episode.Id, _resumePositionOnStart ?? 0, episodeProgress?.DurationMs, false);
                     RefreshSeasonProgressCount();
                 }
             }
@@ -2771,9 +2782,9 @@ public sealed partial class MainWindow : Window
             return;
 
         if (channel.Source.Kind == StreamKind.Movie)
-            _catalogRepository.SaveProgress(account, "movie", channel.Id, null, positionMilliseconds, null, finished: false);
+            QueueProgressSave(account, "movie", channel.Id, null, positionMilliseconds, null, finished: false, force: true);
         else if (channel.Source.Kind == StreamKind.Episode && _currentSeriesId is { } seriesId)
-            _catalogRepository.SaveProgress(account, "episode", channel.Id, seriesId, positionMilliseconds, null, finished: false);
+            QueueProgressSave(account, "episode", channel.Id, seriesId, positionMilliseconds, null, finished: false, force: true);
         LaunchDiagnostics.Write($"event=resume.save kind={channel.Source.Kind} positionMs={positionMilliseconds} reason=cooldown-wait");
     }
 
@@ -4672,7 +4683,7 @@ public sealed partial class MainWindow : Window
         {
             var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
             var movieFinished = !forceInProgress && !failed && MovieCompletion.IsFinished(position, duration, ended);
-            _catalogRepository.SaveProgress(account, "movie", id, null, position, duration, movieFinished);
+            QueueProgressSave(account, "movie", id, null, position, duration, movieFinished, force);
             _movieCompletionRecorded = movieFinished;
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == id) is { } playingMovieRow)
                 playingMovieRow.SetProgress(new PlaybackProgress(id,
@@ -4684,15 +4695,15 @@ public sealed partial class MainWindow : Window
             var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
             var finished = !forceInProgress && !failed && EpisodeCompletion.IsFinished(position, duration, ended);
             var completionChanged = finished != _seriesCompletionRecorded;
-            _catalogRepository.SaveProgress(account, "episode", channel.Id, _currentSeriesId, position, duration, finished);
+            QueueProgressSave(account, "episode", channel.Id, _currentSeriesId, position, duration, finished, force);
             _seriesCompletionRecorded = finished;
+            SetEpisodeProgressInMemory(channel.Id, position, duration, finished);
             // Keep the row bar in step with what was just saved, without re-reading the database.
             if (_playerEntries.FirstOrDefault(row => row.Channel.Id == channel.Id) is { } playingRow)
                 playingRow.SetProgress(new PlaybackProgress(channel.Id,
                     finished ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress, finished ? 0 : position, duration));
             if (completionChanged)
             {
-                _seriesEpisodeProgress = _catalogRepository.GetEpisodeProgressForSeries(account, _currentSeriesId);
                 foreach (var row in _playerEntries)
                     row.SetProgress(_seriesEpisodeProgress.TryGetValue(row.Channel.Id, out var progress) ? progress : null);
                 RefreshSeasonProgressCount();
@@ -4701,6 +4712,35 @@ public sealed partial class MainWindow : Window
         else return;
         LaunchDiagnostics.Write($"event=resume.save kind={type} positionMs={position} completed={(!forceInProgress && _engine.IsEnded).ToString().ToLowerInvariant()}");
         _lastResumeSavedAt = now;
+    }
+
+    private void SetEpisodeProgressInMemory(string episodeId, long position, long? duration, bool finished)
+    {
+        var updated = _seriesEpisodeProgress.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        updated[episodeId] = new PlaybackProgress(episodeId,
+            finished ? PlaybackProgressState.Finished : PlaybackProgressState.InProgress,
+            finished ? 0 : position, duration);
+        _seriesEpisodeProgress = updated;
+    }
+
+    private void QueueProgressSave(ProviderAccount account, string kind, string itemId, string? seriesId,
+        long position, long? duration, bool finished, bool force)
+    {
+        var generation = Interlocked.Increment(ref _progressWriteGeneration);
+        lock (_progressWriteLock)
+        {
+            var previous = _progressWriteTail;
+            _progressWriteTail = Task.Run(async () =>
+            {
+                await previous.ConfigureAwait(false);
+                if (!force && generation != Volatile.Read(ref _progressWriteGeneration)) return;
+                try { _catalogRepository.SaveProgress(account, kind, itemId, seriesId, position, duration, finished); }
+                catch (Exception exception)
+                {
+                    LaunchDiagnostics.Write($"event=resume.save.failed error={exception.GetType().Name}");
+                }
+            });
+        }
     }
 
     private static long ClampPosition(long position, long? duration) =>
@@ -4805,6 +4845,7 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
+        _catalogLandingPage.SetDiagnosticsWindowActive(args.WindowActivationState != WindowActivationState.Deactivated);
         if (args.WindowActivationState != WindowActivationState.Deactivated)
             EvaluateSleepTimer();
         // Activation must NOT leave window-mini: clicking the mini window to drag or resize it
@@ -6074,6 +6115,13 @@ public sealed partial class MainWindow : Window
         LogCloseStage("visits-flush", stageStartedAt);
         stageStartedAt = Stopwatch.GetTimestamp();
         SaveResumePosition(force: true);
+        Task progressWrites;
+        lock (_progressWriteLock) progressWrites = _progressWriteTail;
+        if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } progressTimeout)
+        {
+            try { await progressWrites.WaitAsync(progressTimeout); }
+            catch (TimeoutException) { LaunchDiagnostics.Write("event=resume.save.flush outcome=timeout"); }
+        }
         LogCloseStage("resume-save", stageStartedAt);
         if (_currentSource is { } closingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
