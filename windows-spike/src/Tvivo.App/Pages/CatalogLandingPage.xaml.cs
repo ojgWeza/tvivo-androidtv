@@ -62,6 +62,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly HashSet<(string AccountId, CatalogItemType Type)> _refreshedThisStart = new();
     private readonly DateTimeOffset _sessionStartedAt = DateTimeOffset.UtcNow;
     private long _pageQueryGeneration;
+    private bool _isShuttingDown;
     private bool _suppressSearchChanged;
     private bool _isReadyForInteraction;
     private bool _isActive;
@@ -405,6 +406,15 @@ public sealed partial class CatalogLandingPage : UserControl
 
     public void Shutdown()
     {
+        if (_isShuttingDown) return;
+        _isShuttingDown = true;
+        Interlocked.Increment(ref _loadGeneration);
+        Interlocked.Increment(ref _pageQueryGeneration);
+        Interlocked.Increment(ref _shelfPreviewLoadGeneration);
+        Interlocked.Increment(ref _browseRestoreGeneration);
+        _shelfViewportTimer?.Stop();
+        _shelfViewportPollTimer?.Stop();
+        _shelfDeferredCommitTimer?.Stop();
         CancelSavedStartupAuthentication();
         CancelSpotlightAsyncWork();
         SpotlightStripItems.LayoutUpdated -= SpotlightStripItems_LayoutUpdated;
@@ -527,7 +537,7 @@ public sealed partial class CatalogLandingPage : UserControl
             $"shelfRealized={snapshot.ShelfContainersRealized} shelfRecycled={snapshot.ShelfContainersRecycled} liveShelves={snapshot.LiveShelfContainers} " +
             $"shelvesLoaded={snapshot.ShelvesLoaded} shelvesSkeleton={snapshot.ShelvesSkeleton} shelfPreviewLoadMs={ToMilliseconds(snapshot.ShelfPreviewLoadDurationTicks):0.0} " +
             $"liveCards={snapshot.LiveCatalogCards} imageLoaded={snapshot.ArtworkImagesLoaded} imageUnloaded={snapshot.ArtworkImagesUnloaded} liveImages={liveImages} " +
-            $"artworkActive={snapshot.ActiveArtworkLoads} artworkApplied={snapshot.AppliedArtworkLoads} " +
+            $"artworkActive={snapshot.ActiveArtworkLoads} artworkApplied={snapshot.AppliedArtworkLoads} artworkPermitsInUse={6 - _artworkSlots.CurrentCount} " +
             $"cacheEntries={snapshot.DecodedCacheEntries} cacheBytes={snapshot.DecodedCacheBytes} wiredShelfGrids={snapshot.WiredShelfGrids} " +
             $"refreshApplyMs={ToMilliseconds(snapshot.RefreshApplyDurationTicks):0.0} " +
             $"refreshApplyMaxMs={ToMilliseconds(snapshot.RefreshApplyMaxDurationTicks):0.0} refreshApplyCount={snapshot.RefreshApplyCount} " +
@@ -903,7 +913,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var returningFromPlayer = reason == "player-return";
         var canReuseRenderedSnapshot = returningFromPlayer && _account?.AccountId == account.AccountId &&
-            _renderedSnapshot?.Mode == _activeMode && HasCatalogData(_renderedSnapshot);
+            _renderedSnapshot?.Mode == _activeMode && IsSnapshotCurrent(_renderedSnapshot) && HasCatalogData(_renderedSnapshot);
         LaunchDiagnostics.Write($"event=catalog.load reason={reason} reused={canReuseRenderedSnapshot} mode={_activeMode}");
         if (canReuseRenderedSnapshot)
         {
@@ -1387,8 +1397,9 @@ public sealed partial class CatalogLandingPage : UserControl
             return new CatalogSnapshot(mode, groups, groupId, offset, page, shelves);
         });
 
+        var spotlightRevision = _spotlightSettingsService.Revision;
         var spotlight = await Task.Run(() => BuildSpotlightShelves(account, mode, snapshot.Shelves));
-        return snapshot with { SpotlightSource = spotlight };
+        return snapshot with { SpotlightSource = spotlight, SpotlightRevision = spotlightRevision };
     }
 
     private IReadOnlyList<CatalogShelf> BuildSpotlightShelves(
@@ -1427,7 +1438,7 @@ public sealed partial class CatalogLandingPage : UserControl
             var mode = _activeMode;
             var sort = _categorySort;
             var snapshot = await ReadCatalogSnapshotAsync(account, _selectedGroupId, SearchBox.Text, _offset, mode, sort);
-            if (pageQueryGeneration == Volatile.Read(ref _pageQueryGeneration))
+            if (pageQueryGeneration == Volatile.Read(ref _pageQueryGeneration) && IsSnapshotCurrent(snapshot))
             {
                 CacheSnapshot(account, snapshot);
                 return snapshot;
@@ -2416,7 +2427,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private static bool HasSameRenderedContent(CatalogSnapshot left, CatalogSnapshot right) =>
         ReferenceEquals(left, right) ||
-        (left.Mode == right.Mode && left.SelectedGroupId == right.SelectedGroupId && left.Offset == right.Offset &&
+        (left.SpotlightRevision == right.SpotlightRevision && left.Mode == right.Mode && left.SelectedGroupId == right.SelectedGroupId && left.Offset == right.Offset &&
         left.Page.TotalCount == right.Page.TotalCount && left.IsFlatSearch == right.IsFlatSearch &&
         left.SearchFilter == right.SearchFilter && left.Groups.SequenceEqual(right.Groups) &&
         left.Page.Items.Count == right.Page.Items.Count &&
@@ -2463,7 +2474,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         try
         {
-            if (isCurrent is not null && !isCurrent()) return;
+            if ((isCurrent is not null && !isCurrent()) || !IsSnapshotCurrent(snapshot)) return;
             if (snapshot.Mode != _activeMode || transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
                 return;
             var previousSnapshot = _renderedSnapshot;
@@ -3037,8 +3048,17 @@ public sealed partial class CatalogLandingPage : UserControl
         return card.SpotlightIndex >= _spotlightWindowFirst && card.SpotlightIndex <= _spotlightWindowLast;
     }
 
-    private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account) =>
-        _snapshotCache.TryGetValue(CurrentSnapshotKey(account), out var entry) ? entry.Snapshot : null;
+    private CatalogSnapshot? TryGetCachedSnapshot(ProviderAccount account)
+    {
+        var key = CurrentSnapshotKey(account);
+        if (!_snapshotCache.TryGetValue(key, out var entry)) return null;
+        if (IsSnapshotCurrent(entry.Snapshot)) return entry.Snapshot;
+        RemoveCachedSnapshot(key);
+        return null;
+    }
+
+    private bool IsSnapshotCurrent(CatalogSnapshot snapshot) =>
+        SpotlightSnapshotRevisionPolicy.IsCurrent(snapshot.SpotlightRevision, _spotlightSettingsService.Revision);
 
     private CatalogSnapshotKey CurrentSnapshotKey(ProviderAccount account) =>
         new(account.AccountId, _activeMode, _openShelfId ?? string.Empty, _openShelfType?.ToString() ?? string.Empty,
@@ -3046,6 +3066,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CacheSnapshot(ProviderAccount account, CatalogSnapshot snapshot)
     {
+        if (!IsSnapshotCurrent(snapshot)) return;
         var key = new CatalogSnapshotKey(account.AccountId, snapshot.Mode, _openShelfId ?? string.Empty,
             _openShelfType?.ToString() ?? string.Empty, snapshot.SelectedGroupId ?? string.Empty,
             SearchBox.Text ?? string.Empty, _categorySort, snapshot.Offset);
@@ -3194,7 +3215,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
         {
-            if (generation != Volatile.Read(ref _browseRestoreGeneration)) return;
+            if (_isShuttingDown || generation != Volatile.Read(ref _browseRestoreGeneration)) return;
             using var restoreScope = PerfScope.Begin("BrowseRestore");
             var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
             var timeout = DispatcherQueue.CreateTimer();
@@ -3204,7 +3225,7 @@ public sealed partial class CatalogLandingPage : UserControl
             {
                 retryTimer.Stop();
                 timeout.Stop();
-                if (generation != Volatile.Read(ref _browseRestoreGeneration)) return;
+                if (_isShuttingDown || generation != Volatile.Read(ref _browseRestoreGeneration)) return;
                 if (hidden)
                 {
                     ContentState.Opacity = 1;
@@ -3309,7 +3330,7 @@ public sealed partial class CatalogLandingPage : UserControl
             if (RestoreOnce()) { Finish(preserveScrollOffset ? "in-place" : "rebind"); return; }
             retryTimer.Tick += (_, _) =>
             {
-                if (generation != Volatile.Read(ref _browseRestoreGeneration)) { retryTimer.Stop(); return; }
+                if (_isShuttingDown || generation != Volatile.Read(ref _browseRestoreGeneration)) { retryTimer.Stop(); return; }
                 if (RestoreOnce() || attempts >= 7) Finish(preserveScrollOffset ? "in-place" : "rebind");
             };
             retryTimer.Start();
@@ -3738,7 +3759,6 @@ public sealed partial class CatalogLandingPage : UserControl
         if (_artworkLoads.Remove(image, out var load))
         {
             load.Cancellation.Cancel();
-            ReleaseArtworkSlot(image, load, "element-stopped");
         }
         image.Source = null;
         image.Opacity = 0;
@@ -3748,7 +3768,6 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (_artworkLoads.TryGetValue(image, out var load))
         {
-            ReleaseArtworkSlot(image, load, "explicit-slot-release");
             load.Cancellation.Cancel();
         }
     }
@@ -3974,7 +3993,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void UpdateShelfPreviewWindow(string reason, long generation)
     {
-        if (generation != Volatile.Read(ref _shelfPreviewLoadGeneration) ||
+        if (_isShuttingDown || generation != Volatile.Read(ref _shelfPreviewLoadGeneration) ||
             _renderedSnapshot is not { IsFlatSearch: false } snapshot || snapshot.Mode == CatalogMode.MyTvivo ||
             _openShelfId is not null || !_isActive || _account is not { } account ||
             !TryGetVisibleShelfRange(snapshot, out var firstVisible, out var lastVisible))
@@ -4157,7 +4176,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         try
         {
-            if (generation != Volatile.Read(ref _shelfPreviewLoadGeneration) || _account?.AccountId != account.AccountId ||
+            if (_isShuttingDown || generation != Volatile.Read(ref _shelfPreviewLoadGeneration) || _account?.AccountId != account.AccountId ||
                 _activeMode != mode || _openShelfId is not null || !_isActive ||
                 _renderedSnapshot is not { IsFlatSearch: false } current ||
                 !TryGetVisibleShelfRange(current, out var firstVisible, out var lastVisible))
@@ -4760,10 +4779,12 @@ public sealed partial class CatalogLandingPage : UserControl
             var key = new CatalogSnapshotKey(account.AccountId, mode, _openShelfId ?? string.Empty,
                 _openShelfType?.ToString() ?? string.Empty, groupId ?? string.Empty,
                 filter ?? string.Empty, sort, requestedOffset);
-            if (!_snapshotCache.TryGetValue(key, out var cached))
+            if (!_snapshotCache.TryGetValue(key, out var cached) || !IsSnapshotCurrent(cached.Snapshot))
             {
+                RemoveCachedSnapshot(key);
                 var read = await ReadCatalogSnapshotAsync(account, groupId, filter, requestedOffset, mode, sort);
                 if (!IsCurrentPageRequest(requestGeneration, account)) return;
+                if (!IsSnapshotCurrent(read)) return;
                 CacheSnapshot(account, read);
                 cached = new CachedCatalogSnapshot(read, EstimateSnapshotBytes(read));
             }
@@ -4780,7 +4801,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private bool IsCurrentPageRequest(long requestGeneration, ProviderAccount account) =>
-        requestGeneration == Volatile.Read(ref _pageQueryGeneration) &&
+        !_isShuttingDown && requestGeneration == Volatile.Read(ref _pageQueryGeneration) &&
         _account?.AccountId == account.AccountId;
 
     private void ShowCheckingAccountStatus()
@@ -4882,7 +4903,7 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private bool IsCurrentLoad(long generation) =>
-        generation == Volatile.Read(ref _loadGeneration);
+        !_isShuttingDown && generation == Volatile.Read(ref _loadGeneration);
 
     private void UpdatePaging(int total)
     {
@@ -5145,7 +5166,8 @@ public sealed partial class CatalogLandingPage : UserControl
         IReadOnlyList<CatalogShelf>? SpotlightSource = null,
         IReadOnlyList<SearchCategoryCount>? SearchCategoryCounts = null,
         bool IsFlatSearch = false,
-        string? SearchFilter = null)
+        string? SearchFilter = null,
+        long SpotlightRevision = 0)
     {
         public IReadOnlyList<CatalogShelf> SpotlightShelves => SpotlightSource ?? Shelves;
     }

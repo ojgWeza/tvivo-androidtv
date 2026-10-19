@@ -24,6 +24,8 @@ public sealed partial class AccountPage : UserControl
     private IReadOnlyList<SpotlightFolderOption> _movieFolders = Array.Empty<SpotlightFolderOption>();
     private IReadOnlyList<SpotlightFolderOption> _seriesFolders = Array.Empty<SpotlightFolderOption>();
     private bool _suppressSpotlightUi;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _movieSearchTimer;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _seriesSearchTimer;
 
     public AccountPage()
     {
@@ -107,6 +109,7 @@ public sealed partial class AccountPage : UserControl
 
     private void SetOpenTab(string? tab)
     {
+        if (tab == "ForYou") StopPendingSpotlightSearch();
         _openTab = tab;
         AccountTabPanel.Visibility = tab == "Account" ? Visibility.Visible : Visibility.Collapsed;
         PlayerTabPanel.Visibility = tab == "Player" ? Visibility.Visible : Visibility.Collapsed;
@@ -237,10 +240,38 @@ public sealed partial class AccountPage : UserControl
     }
 
     private void SpotlightMoviesSearchBox_TextChanged(object sender, TextChangedEventArgs args) =>
-        RenderSpotlightFolderList(CatalogItemType.Movie);
+        DebounceSpotlightSearch(CatalogItemType.Movie);
 
     private void SpotlightSeriesSearchBox_TextChanged(object sender, TextChangedEventArgs args) =>
-        RenderSpotlightFolderList(CatalogItemType.Series);
+        DebounceSpotlightSearch(CatalogItemType.Series);
+
+    private void DebounceSpotlightSearch(CatalogItemType type)
+    {
+        var timer = type == CatalogItemType.Movie ? _movieSearchTimer : _seriesSearchTimer;
+        if (timer is null)
+        {
+            timer = DispatcherQueue.CreateTimer();
+            timer.Interval = TimeSpan.FromMilliseconds(200);
+            timer.IsRepeating = false;
+            timer.Tick += (_, _) => RenderSpotlightFolderList(type);
+            if (type == CatalogItemType.Movie) _movieSearchTimer = timer;
+            else _seriesSearchTimer = timer;
+        }
+        timer.Stop();
+        timer.Start();
+    }
+
+    public void StopPendingSpotlightSearch()
+    {
+        _movieSearchTimer?.Stop();
+        _seriesSearchTimer?.Stop();
+    }
+
+    private void StopPendingSpotlightSearch(CatalogItemType type)
+    {
+        if (type == CatalogItemType.Movie) _movieSearchTimer?.Stop();
+        else _seriesSearchTimer?.Stop();
+    }
 
     private void SpotlightMoviesSelectAllButton_Click(object sender, RoutedEventArgs args) =>
         SelectAllSpotlightFolders(CatalogItemType.Movie);
@@ -256,6 +287,9 @@ public sealed partial class AccountPage : UserControl
 
     private void SpotlightSaveButton_Click(object sender, RoutedEventArgs args)
     {
+        StopPendingSpotlightSearch();
+        RenderSpotlightFolderList(CatalogItemType.Movie);
+        RenderSpotlightFolderList(CatalogItemType.Series);
         if (_spotlightAccount is null) return;
         try
         {
@@ -397,6 +431,7 @@ public sealed partial class AccountPage : UserControl
 
     private void SelectAllSpotlightFolders(CatalogItemType type)
     {
+        StopPendingSpotlightSearch(type);
         var current = CurrentSpotlightContent(type);
         var ids = (current.SelectedCategoryIds ?? Array.Empty<string>()).ToList();
         var folders = type == CatalogItemType.Movie ? _movieFolders : _seriesFolders;
@@ -409,6 +444,7 @@ public sealed partial class AccountPage : UserControl
 
     private void ClearSpotlightFolders(CatalogItemType type)
     {
+        StopPendingSpotlightSearch(type);
         SetSpotlightContent(type, CurrentSpotlightContent(type) with { SelectedCategoryIds = Array.Empty<string>() });
         RenderSpotlightFolderList(type);
         RenderSpotlightPreviews();
@@ -472,6 +508,7 @@ public sealed partial class AccountPage : UserControl
 
     public void ShowAccount(ProviderAccount account, DateTimeOffset? lastRefreshAt)
     {
+        StopPendingSpotlightSearch();
         _spotlightAccount = account;
         LoadSpotlightDraft();
         SetOpenTab("Library");

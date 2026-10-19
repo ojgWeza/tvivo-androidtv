@@ -6,6 +6,8 @@ namespace Tvivo.App;
 /// <summary>App-facing access to account-scoped Spotlight preferences and local previews.</summary>
 public sealed class SpotlightSettingsService
 {
+    private long _revision;
+    public long Revision => Interlocked.Read(ref _revision);
     private readonly SpotlightSettingsStore _settingsStore;
     private readonly SpotlightDailySelectionStore _dailyStore;
     private readonly SqliteCatalogRepository _catalog;
@@ -58,6 +60,7 @@ public sealed class SpotlightSettingsService
     {
         _settingsStore.Write(opaqueAccountKey, settings);
         _dailyStore.Invalidate(opaqueAccountKey);
+        Interlocked.Increment(ref _revision);
     }
 
     public IReadOnlyList<string> PreviewTitles(ProviderAccount account, CatalogItemType type, SpotlightSettings settings)

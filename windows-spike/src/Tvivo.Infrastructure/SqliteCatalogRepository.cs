@@ -974,16 +974,30 @@ public sealed class SqliteCatalogRepository : IDisposable
         return Convert.ToInt32(command.ExecuteScalar()) != 0;
     }
 
-    public void RecordVisit(ProviderAccount account, CatalogItemType type, string id)
+    public void RecordVisit(ProviderAccount account, CatalogItemType type, string id) =>
+        RecordVisits(new[] { (account, type, id) });
+
+    public void RecordVisits(IReadOnlyList<(ProviderAccount Account, CatalogItemType Type, string Id)> visits)
     {
+        if (visits.Count == 0) return;
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "UPDATE items SET visit_count=visit_count+1,last_tuned_at=$now WHERE account_id=$a AND type=$type AND id=$id";
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        command.Parameters.AddWithValue("$a", account.AccountId);
-        command.Parameters.AddWithValue("$type", TypeName(type));
-        command.Parameters.AddWithValue("$id", id);
-        command.ExecuteNonQuery();
+        var now = command.Parameters.Add("$now", SqliteType.Integer);
+        var accountId = command.Parameters.Add("$a", SqliteType.Text);
+        var itemType = command.Parameters.Add("$type", SqliteType.Text);
+        var itemId = command.Parameters.Add("$id", SqliteType.Text);
+        now.Value = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var visit in visits)
+        {
+            accountId.Value = visit.Account.AccountId;
+            itemType.Value = TypeName(visit.Type);
+            itemId.Value = visit.Id;
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public (string? EpisodeId, bool Finished) GetSeriesPlayback(ProviderAccount account, string seriesId)

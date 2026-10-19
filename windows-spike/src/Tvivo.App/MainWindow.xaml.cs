@@ -137,6 +137,7 @@ public sealed partial class MainWindow : Window
     private bool _terminalPlaybackFailure;
     private bool _sleepTimerEnded;
     private readonly DispatcherTimer _cooldownProgressTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private long _cooldownProgressOwner = -1;
     private Stopwatch? _cooldownStopwatch;
     private string? _cooldownLastStatus;
     private Stopwatch? _retryProgressStopwatch;
@@ -1153,6 +1154,9 @@ public sealed partial class MainWindow : Window
         if (_currentPage == page)
             return;
 
+        if (_currentPage == ShellPage.Account && page != ShellPage.Account)
+            _accountPage.StopPendingSpotlightSearch();
+
         if (page == ShellPage.Home && _currentPage == ShellPage.Player)
             CancelSleepTimer("home");
 
@@ -2069,9 +2073,11 @@ public sealed partial class MainWindow : Window
         Stopwatch clock,
         StreamKind kind,
         int maxAttempts,
-        IReadOnlyList<TimeSpan> backoffDelays)
+        IReadOnlyList<TimeSpan> backoffDelays,
+        long generation)
     {
         StopRecentlyLeftCooldownProgress();
+        _cooldownProgressOwner = generation;
         _retryProgressStopwatch = clock;
         _retryProgressKind = kind;
         _retryProgressAttempt = 1;
@@ -2576,8 +2582,7 @@ public sealed partial class MainWindow : Window
     private void FlushPendingVisits()
     {
         if (_pendingVisits.Count == 0) return;
-        foreach (var visit in _pendingVisits)
-            _catalogRepository.RecordVisit(visit.Account, visit.Type, visit.Id);
+        _catalogRepository.RecordVisits(_pendingVisits);
         _pendingVisits.Clear();
         _homePage.MarkDataChanged();
         _catalogLandingPage.NotifyVisitRecorded();
@@ -2760,6 +2765,7 @@ public sealed partial class MainWindow : Window
         PlayerLoadingText.Text = PlayerTitleText.Text;
         RecentlyLeftCooldownProgress.Value = 0;
         RecentlyLeftCooldownProgress.Visibility = Visibility.Visible;
+        _cooldownProgressOwner = generation;
         SetPlaybackStatus(RecentlyLeftCooldownPolicy.StatusAt(TimeSpan.Zero));
         _cooldownLastStatus = RecentlyLeftCooldownPolicy.StatusAt(TimeSpan.Zero);
         _cooldownStopwatch = clock;
@@ -2844,7 +2850,7 @@ public sealed partial class MainWindow : Window
         {
             var elapsed = Math.Min(clock.Elapsed.TotalSeconds, RecentlyLeftCooldownPolicy.MaximumDuration.TotalSeconds);
             LaunchDiagnostics.Write($"event=playback.cooldown.end result={result} elapsedSeconds={elapsed:0.0}");
-            StopRecentlyLeftCooldownProgress();
+            StopRecentlyLeftCooldownProgressIfOwner(generation);
             if (ReferenceEquals(_cooldownCancellation, cooldownCts))
                 _cooldownCancellation = null;
             cooldownCts.Dispose();
@@ -2877,6 +2883,7 @@ public sealed partial class MainWindow : Window
     private void StopRecentlyLeftCooldownProgress()
     {
         _cooldownProgressTimer.Stop();
+        _cooldownProgressOwner = -1;
         _cooldownStopwatch = null;
         _cooldownLastStatus = null;
         _retryProgressStopwatch = null;
@@ -2887,6 +2894,12 @@ public sealed partial class MainWindow : Window
         _retryProgressLastStatus = null;
         RecentlyLeftCooldownProgress.Visibility = Visibility.Collapsed;
         RecentlyLeftCooldownProgress.Value = 0;
+    }
+
+    private void StopRecentlyLeftCooldownProgressIfOwner(long generation)
+    {
+        if (PlaybackSessionOwnership.CanStopProgress(_cooldownProgressOwner, generation))
+            StopRecentlyLeftCooldownProgress();
     }
 
     private void CancelRecentlyLeftCooldown()
@@ -3060,7 +3073,7 @@ public sealed partial class MainWindow : Window
                 ? Enumerable.Range(1, Math.Max(0, PlaybackRetryPolicy.ClampAttempts(_playbackAttempts) - 1))
                     .Select(PlaybackRetryPolicy.InterruptionDelay).ToArray()
                 : PlaybackRetryPolicy.BackoffDelays(_playbackAttempts);
-            StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs);
+            StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs, generation);
             while (true)
             {
                 if (isRecovery && !_interruptionBudget.TryConsume(_playbackAttempts))
@@ -3146,7 +3159,7 @@ public sealed partial class MainWindow : Window
                     {
                         if (!IsCurrentPlaybackStart(generation, sessionCts))
                             return;
-                        StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs);
+                        StartPlaybackRetryProgress(retryClock, source.Kind, _playbackAttempts, retryBackoffs, generation);
                         continue;
                     }
                     if (!IsCurrentPlaybackStart(generation, sessionCts) || _sleepTimerEnded || _isClosing)
@@ -3199,7 +3212,7 @@ public sealed partial class MainWindow : Window
                 sessionCts.Dispose();
         }
 
-        StopRecentlyLeftCooldownProgress();
+        StopRecentlyLeftCooldownProgressIfOwner(generation);
         if (!IsCurrentPlaybackStart(generation, sessionCts))
         {
             LaunchDiagnostics.Write($"event=playback.stop engine={engineName} kind={source.Kind} reason=user-cancelled");
@@ -4191,7 +4204,7 @@ public sealed partial class MainWindow : Window
             : Math.Max(_lastGoodPlaybackPositionMilliseconds, _engine.Timeline.PositionMilliseconds);
         SaveResumePosition(force: true, positionOverride: position, forceInProgress: forceInProgress);
 
-        Interlocked.Increment(ref _playbackSessionGeneration);
+        var endedGeneration = Interlocked.Increment(ref _playbackSessionGeneration);
         Volatile.Write(ref _activePlaybackSessionGeneration, -1);
         var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
         sessionCts?.Cancel();
@@ -4218,9 +4231,15 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            SetPlaybackSurfaceVisibility(false);
-            PlayerVideoCurtain.Visibility = Visibility.Visible;
-            _playbackUiTimer.Stop();
+            if (PlaybackSessionOwnership.CanCompleteSleepTimerStop(
+                endedGeneration, Volatile.Read(ref _playbackSessionGeneration), _sleepTimerEnded))
+            {
+                SetPlaybackSurfaceVisibility(false);
+                PlayerVideoCurtain.Visibility = Visibility.Visible;
+                _playbackUiTimer.Stop();
+            }
+            else
+                LaunchDiagnostics.Write("event=sleep-timer.stop-superseded");
             RaiseSleepTimerStateChanged();
         }
     }
@@ -6005,6 +6024,12 @@ public sealed partial class MainWindow : Window
     private async void OnClosed(object sender, WindowEventArgs args)
     {
         if (!_closeRequestLogged) LogCloseRequested(_pendingNativeCloseVia ?? "unknown");
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(WindowCloseRequestPolicy.TeardownBudget + WindowCloseRequestPolicy.BackstopGrace);
+            LaunchDiagnostics.Write("event=window.close-backstop");
+            Environment.Exit(0);
+        });
         _isClosing = true;
         if (_playerPresentation == PlayerPresentation.Compact) SetCompactCursorVisible(true, "window-close");
         CancelRecentlyLeftCooldown();
@@ -6058,7 +6083,10 @@ public sealed partial class MainWindow : Window
         stageStartedAt = Stopwatch.GetTimestamp();
         try
         {
-            await StopBothPlaybackEnginesAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } timeout)
+                await StopBothPlaybackEnginesAsync().WaitAsync(timeout);
+            else
+                LaunchDiagnostics.Write("event=window.close-stage stage=engines-stop skipped=budget");
         }
         catch (TimeoutException)
         {
@@ -6073,7 +6101,10 @@ public sealed partial class MainWindow : Window
         stageStartedAt = Stopwatch.GetTimestamp();
         try
         {
-            await _vlcEngine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } timeout)
+                await _vlcEngine.DisposeAsync().AsTask().WaitAsync(timeout);
+            else
+                LaunchDiagnostics.Write("event=window.close-stage stage=vlc-dispose skipped=budget");
         }
         catch (TimeoutException)
         {
@@ -6086,7 +6117,10 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            await _nativeEngine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } timeout)
+                await _nativeEngine.DisposeAsync().AsTask().WaitAsync(timeout);
+            else
+                LaunchDiagnostics.Write("event=window.close-stage stage=native-dispose skipped=budget");
         }
         catch (TimeoutException)
         {

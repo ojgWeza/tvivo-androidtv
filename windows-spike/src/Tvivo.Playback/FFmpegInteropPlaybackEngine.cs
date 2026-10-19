@@ -322,8 +322,17 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
-        await _nativeReleaseTask.ConfigureAwait(true);
-        DisposeCore();
+        await _gate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (_disposed) return;
+            await _nativeReleaseTask.ConfigureAwait(true);
+            DisposeCore();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private void DisposeCore()
@@ -335,7 +344,6 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
         _player.Dispose();
         LifecycleEvent?.Invoke("event=playback.engine.dispose engine=Native callbacks=detached player=released");
         _disposed = true;
-        _gate.Dispose();
     }
 
     private void OnMediaOpened(MediaPlayer sender, object args)

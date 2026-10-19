@@ -2,6 +2,8 @@
 
 Starting any new playback clears the previous picture immediately; a failure never re-shows the old picture; reconnecting the same media may keep its frame.
 
+An expired sleep-timer stop may hide the playback surface and stop UI updates only while its playback generation still owns the session. A cooldown or retry completion may clear the progress bar only while it owns that bar.
+
 The black curtain shows static, non-interactive popcorn loading art until the current generation reaches its first frame; it is hidden for compact player areas under 300 px and on final failure.
 
 The selected video host must be visible and loaded at a non-zero size under the opaque curtain before an engine opens; collapsing it breaks LibVLC swap-chain initialization. Each attempt stops both engines, exposes the selected host beneath the curtain, forces layout, then waits up to 3 seconds for `Visible`, `IsLoaded`, and positive actual width/height. This host wait has its own budget and is not an engine/network timeout. Failure logs `playback.host-not-ready` with generation, host visibility/load/size, player page visibility and curtain state, then passes `HostNotReady` through the same retry decision.
