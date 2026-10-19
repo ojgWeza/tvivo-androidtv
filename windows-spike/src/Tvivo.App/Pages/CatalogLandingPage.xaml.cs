@@ -45,6 +45,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private readonly CatalogRefreshTasks _refreshTasks;
     private readonly ICredentialStore _credentialStore = App.Services.GetRequiredService<ICredentialStore>();
     private CancellationTokenSource? _savedStartupAuthCts;
+    private readonly ProviderAuthenticationGate _savedAuthGate = new();
+    private TaskCompletionSource<bool>? _savedAuthCompletion;
     private readonly EpgCoordinator _epgCoordinator = App.Services.GetRequiredService<EpgCoordinator>();
     internal bool EpgEnabled => _epgCoordinator.Feature.Enabled;
     private ProviderAccount? _account;
@@ -80,6 +82,12 @@ public sealed partial class CatalogLandingPage : UserControl
     private CancellationTokenSource? _spotlightDwellCts;
     private CancellationTokenSource? _spotlightMetadataCts;
     private CatalogCard? _spotlightMetadataCard;
+    private readonly HashSet<Button> _wiredSpotlightInputButtons = new();
+    private Button? _lastSpotlightInputButton;
+    private string _lastSpotlightInput = "unknown";
+    private string _lastSpotlightKey = "none";
+    private string _lastSpotlightDevice = "unknown";
+    private long _lastSpotlightInputAt;
     private string? _spotlightFocusedId;
     private bool _spotlightArtworkLayoutPending;
     private int _spotlightWindowFirst = -1;
@@ -347,10 +355,18 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             RequestSpotlightArtworkLayout();
             if (_spotlightFocusedId is { } focusedId)
-                DispatcherQueue.TryEnqueue(() => _spotlightCards.FirstOrDefault(card => card.Id == focusedId)
-                    ?.SpotlightButton?.Focus(FocusState.Programmatic));
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox) return;
+                    _spotlightCards.FirstOrDefault(card => card.Id == focusedId)
+                        ?.SpotlightButton?.Focus(FocusState.Programmatic);
+                });
         }
         UpdateEpgLifecycle();
+        if (active && _account is { } account && _connection is null && _savedStartupAuthCts is null &&
+            _savedAuthCompletion?.Task.IsCompleted == true &&
+            _refreshRetry.CanAttempt(account.AccountId, TypesForMode(_activeMode).First(), DateTimeOffset.UtcNow))
+            _ = RetrySavedAuthenticationAsync(account);
     }
 
     public void InvalidateCatalogSnapshots()
@@ -370,6 +386,7 @@ public sealed partial class CatalogLandingPage : UserControl
         Interlocked.Increment(ref _pageQueryGeneration);
         _account = null;
         _connection = null;
+        _savedAuthCompletion = null;
         _cachedStartupCatalogActive = false;
         _selectedGroupId = null;
         _openShelfId = null;
@@ -973,6 +990,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _renderedSnapshot = null;
         CancelArtworkLoads();
         _connection = null;
+        _savedAuthCompletion = null;
         _cachedStartupCatalogActive = false;
         _selectedGroupId = null;
         _openShelfId = null;
@@ -1006,6 +1024,7 @@ public sealed partial class CatalogLandingPage : UserControl
                     ShowCheckingAccountStatus();
                     var authCts = new CancellationTokenSource();
                     _savedStartupAuthCts = authCts;
+                    _savedAuthCompletion = _savedAuthGate.Begin();
                     _ = AuthenticateSavedAccountAndRefreshAsync(connection, cachedAccount, authCts);
                     return;
                 }
@@ -1023,6 +1042,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private async Task AuthenticateSavedAccountNetworkFirstAsync(ProviderConnection connection, long generation)
     {
         ShowCheckingAccountStatus();
+        var savedId = connection.AccountId ?? AccountIdentity.For(connection.Endpoint, connection.Username);
+        LaunchDiagnostics.Write("event=auth.start path=network-first");
         AuthenticationResult result;
         try
         {
@@ -1030,12 +1051,14 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         catch
         {
+            LaunchDiagnostics.Write("event=auth.fail reason=exception code=unexpected_error path=network-first");
             if (IsCurrentLoad(generation)) StartupPhaseCompleted?.Invoke("authDone");
             throw;
         }
         if (!IsCurrentLoad(generation)) return;
         if (!result.Success || result.Account is null)
         {
+            LogSavedAuthentication(result, savedId, "network-first");
             StartupPhaseCompleted?.Invoke("authDone");
             ShowError(GenericLoadError);
             return;
@@ -1043,6 +1066,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         _account = result.Account;
         _connection = connection with { AccountId = result.Account.AccountId };
+        LogSavedAuthentication(result, savedId, "network-first");
         StartupPhaseCompleted?.Invoke("authDone");
         await LoadCatalogAsync(result.Account, generation);
     }
@@ -1050,8 +1074,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private async Task AuthenticateSavedAccountAndRefreshAsync(
         ProviderConnection connection, ProviderAccount cachedAccount, CancellationTokenSource authCts)
     {
+        var authCompletion = _savedAuthCompletion;
         try
         {
+            LaunchDiagnostics.Write("event=auth.start path=cached");
             AuthenticationResult result;
             try
             {
@@ -1065,14 +1091,21 @@ public sealed partial class CatalogLandingPage : UserControl
             if (!IsCurrentSavedAuthentication(authCts, cachedAccount) || authCts.IsCancellationRequested) return;
             if (!result.Success || result.Account is null)
             {
+                LogSavedAuthentication(result, cachedAccount.AccountId, "cached");
+                authCompletion?.TrySetResult(false);
                 StartupPhaseCompleted?.Invoke("authDone");
                 ShowCachedUpdateFailure(result);
+                ScheduleAuthenticationRetry(cachedAccount);
                 return;
             }
 
             var authenticatedAccount = result.Account with { AccountId = cachedAccount.AccountId };
             _account = authenticatedAccount;
             _connection = connection with { AccountId = authenticatedAccount.AccountId };
+            LogSavedAuthentication(result, cachedAccount.AccountId, "cached");
+            authCompletion?.TrySetResult(true);
+            UpdateSpotlightArtworkWindow();
+            if (_hoveredCardElement is { } hovered) BeginCardSummary(hovered, _summaryTriggeredByFocus);
             StartupPhaseCompleted?.Invoke("authDone");
             await LoadCatalogAsync(authenticatedAccount, Volatile.Read(ref _loadGeneration));
         }
@@ -1080,12 +1113,15 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             if (IsCurrentSavedAuthentication(authCts, cachedAccount) && !authCts.IsCancellationRequested)
             {
+                LaunchDiagnostics.Write($"event=auth.fail reason=exception code={exception.GetType().Name} path=cached");
                 StartupPhaseCompleted?.Invoke("authDone");
                 ShowCachedUpdateFailure(exception);
+                ScheduleAuthenticationRetry(cachedAccount);
             }
         }
         finally
         {
+            authCompletion?.TrySetResult(false);
             if (ReferenceEquals(_savedStartupAuthCts, authCts)) _savedStartupAuthCts = null;
             authCts.Dispose();
         }
@@ -1095,6 +1131,30 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         var cancellation = Interlocked.Exchange(ref _savedStartupAuthCts, null);
         cancellation?.Cancel();
+        _savedAuthGate.Cancel();
+    }
+
+    private static void LogSavedAuthentication(AuthenticationResult result, string? expectedId, string path)
+    {
+        var match = result.Account is not null && expectedId is not null && result.Account.AccountId == expectedId;
+        var reason = result.Success ? "none" : result.FailureReason?.ToString() ?? "unknown";
+        LaunchDiagnostics.Write($"event=auth.{(result.Success ? "ok" : "fail")} reason={reason} code={result.DiagnosticCode ?? "none"} path={path}");
+        LaunchDiagnostics.Write($"event=auth.saved outcome={(result.Success ? "success" : "failure")} reason={reason} code={result.DiagnosticCode ?? "none"} idMatch={match}");
+    }
+
+    private void ScheduleAuthenticationRetry(ProviderAccount account)
+    {
+        if (_refreshPolicyStore.Read() == CatalogRefreshPolicy.OnDemandOnly) return;
+        var type = TypesForMode(_activeMode).First();
+        var retryAt = _refreshRetry.RecordFailure(account.AccountId, type, DateTimeOffset.UtcNow);
+        ScheduleRefreshRetry(account, type, retryAt);
+    }
+
+    private async Task<bool> WaitForSavedAuthenticationAsync(CancellationToken token)
+    {
+        if (_savedAuthCompletion is { Task.IsCompleted: false })
+            LaunchDiagnostics.Write("event=refresh.skipped-waiting-for-auth");
+        return await _savedAuthGate.WaitAsync(token);
     }
 
     private bool IsCurrentSavedAuthentication(CancellationTokenSource authCts, ProviderAccount account) =>
@@ -1166,6 +1226,22 @@ public sealed partial class CatalogLandingPage : UserControl
                 DismissFirstLoadTakeover();
                 if (!HasCatalogData(cached)) SetState(empty: true);
                 return;
+            }
+
+            if (_provider is IProviderSessionStatus session && !session.HasSession(account.AccountId))
+            {
+                LaunchDiagnostics.Write("event=refresh.skipped-waiting-for-auth");
+                if (_connection is not { } savedConnection) return;
+                LaunchDiagnostics.Write("event=auth.start path=refresh");
+                var auth = await _provider.AuthenticateAsync(savedConnection);
+                if (!IsCurrentLoad(generation)) return;
+                LogSavedAuthentication(auth, account.AccountId, "refresh");
+                if (!auth.Success || !session.HasSession(account.AccountId))
+                {
+                    ShowCachedUpdateFailure(auth);
+                    ScheduleAuthenticationRetry(account);
+                    return;
+                }
             }
 
             if (HasCatalogData(cached)) CaptureBrowseState();
@@ -1508,8 +1584,11 @@ public sealed partial class CatalogLandingPage : UserControl
             removed = true;
             if (!_isActive || _account?.AccountId != account.AccountId ||
                 _refreshPolicyStore.Read() == CatalogRefreshPolicy.OnDemandOnly) return;
-            if (!TypesForMode(_activeMode).Contains(type)) return;
-            await LoadAsync(account, reason: "auto-retry");
+            if (!TypesForMode(_activeMode).Contains(type) && _connection is not null) return;
+            if (_connection is null || _provider is IProviderSessionStatus session && !session.HasSession(account.AccountId))
+                await RetrySavedAuthenticationAsync(account);
+            else
+                await LoadAsync(account, reason: "auto-retry");
         }
         catch (Exception exception)
         {
@@ -2027,7 +2106,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private void BeginCardSummary(FrameworkElement? cardElement, bool triggeredByFocus)
     {
         if (cardElement is not { DataContext: CatalogCard { Channel: { } channel } card } ||
-            !_isActive || _connection is null || _account is not { } account || account.AccountId != channel.ProviderAccountId)
+            !_isActive || (_connection is null && _savedStartupAuthCts is null) ||
+            _account is not { } account || account.AccountId != channel.ProviderAccountId)
             return;
 
         if (card.Type == CatalogItemType.Live)
@@ -2062,6 +2142,7 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             try
             {
+                if (!await WaitForSavedAuthenticationAsync(cancellationToken)) return;
                 var metadata = await _hoverMetadataLookup.GetAsync(account, card.Type, channel.Id, cancellationToken);
                 await UpdateHoverResultOnUiAsync(card, account, channel.Id, lease, metadata);
             }
@@ -2684,8 +2765,9 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightDwellCts = null;
         _spotlightWindowFirst = _spotlightWindowLast = -1;
         var oldId = _spotlightCard?.Id;
+        var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
         var focusedId = _spotlightCards.FirstOrDefault(card =>
-            card.SpotlightButton?.FocusState is FocusState.Keyboard or FocusState.Programmatic)?.Id;
+            ReferenceEquals(card.SpotlightButton, focusedElement))?.Id;
         var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(12).ToArray();
         for (var i = 0; i < cards.Length; i++)
         {
@@ -2724,7 +2806,11 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             var focusCard = _spotlightCards.FirstOrDefault(card => card.Id == focusedId);
             if (focusCard is not null)
-                DispatcherQueue.TryEnqueue(() => focusCard.SpotlightButton?.Focus(FocusState.Programmatic));
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox) return;
+                    focusCard.SpotlightButton?.Focus(FocusState.Programmatic);
+                });
         }
     }
 
@@ -2832,13 +2918,20 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightItem_Click(object sender, RoutedEventArgs args)
     {
-        if (sender is not Button { DataContext: CatalogCard card }) return;
+        if (sender is not Button { DataContext: CatalogCard card } button) return;
         if (!_spotlightState.TouchTapActivates(card.SpotlightIndex))
         {
             OpenSpotlight(card.SpotlightIndex, "click");
             return;
         }
-        if (card.Channel is { } channel) RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray());
+        if (card.Channel is { } channel)
+        {
+            var recentInput = ReferenceEquals(_lastSpotlightInputButton, button) &&
+                Environment.TickCount64 - _lastSpotlightInputAt < 2_000;
+            RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray(),
+                "spotlight-click", recentInput ? _lastSpotlightInput : "unknown",
+                recentInput ? _lastSpotlightKey : "none", recentInput ? _lastSpotlightDevice : "unknown");
+        }
     }
 
     private async void SpotlightItem_PointerEntered(object sender, PointerRoutedEventArgs args)
@@ -2899,10 +2992,34 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (sender is Button { DataContext: CatalogCard card } button)
         {
+            if (_wiredSpotlightInputButtons.Add(button))
+            {
+                button.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(SpotlightInput_PointerPressed), true);
+                button.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightInput_KeyDown), true);
+            }
             card.SpotlightButton = button;
             button.Width = Math.Clamp(card.SpotlightWidth, 64, 672);
             RequestSpotlightArtworkLayout();
         }
+    }
+
+    private void SpotlightInput_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        _lastSpotlightInputButton = sender as Button;
+        _lastSpotlightInput = "pointer";
+        _lastSpotlightKey = "none";
+        _lastSpotlightDevice = args.Pointer.PointerDeviceType.ToString();
+        _lastSpotlightInputAt = Environment.TickCount64;
+    }
+
+    private void SpotlightInput_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key is not (Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space)) return;
+        _lastSpotlightInputButton = sender as Button;
+        _lastSpotlightInput = "keyboard";
+        _lastSpotlightKey = args.Key.ToString();
+        _lastSpotlightDevice = "unknown";
+        _lastSpotlightInputAt = Environment.TickCount64;
     }
 
     private void SpotlightItem_Unloaded(object sender, RoutedEventArgs args)
@@ -2910,6 +3027,11 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is Button { DataContext: CatalogCard card } button && ReferenceEquals(card.SpotlightButton, button))
             card.SpotlightButton = null;
         if (sender is Button oldButton && _spotlightWidthAnimations.Remove(oldButton, out var animation)) animation.Stop();
+        if (sender is Button unloadedButton && _wiredSpotlightInputButtons.Remove(unloadedButton))
+        {
+            unloadedButton.RemoveHandler(UIElement.PointerPressedEvent, new PointerEventHandler(SpotlightInput_PointerPressed));
+            unloadedButton.RemoveHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightInput_KeyDown));
+        }
     }
 
     private void RequestSpotlightArtworkLayout() => _spotlightArtworkLayoutPending = true;
@@ -3005,6 +3127,7 @@ public sealed partial class CatalogLandingPage : UserControl
             if (token.IsCancellationRequested || !ReferenceEquals(_spotlightCard, card) ||
                 SpotlightPanel.Visibility != Visibility.Visible || _account is not { } account || card.Channel is not { } channel ||
                 !HoverMetadataLookup.NeedsLookup(channel.Metadata.GetValueOrDefault("plot"))) return;
+            if (!await WaitForSavedAuthenticationAsync(token)) return;
             var metadata = await _hoverMetadataLookup.GetAsync(account, card.Type, channel.Id, token);
             if (metadata is null || token.IsCancellationRequested) return;
             await RunOnUiThreadAsync(() =>
@@ -4387,7 +4510,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 ? relatedGrid.Items.OfType<CatalogCard>().Where(card => card.Channel is not null).Select(card => card.Channel!).ToArray()
                     ?? Array.Empty<Channel>()
                 : Array.Empty<Channel>();
-            RaiseChannelSelected(channel, related);
+            var input = sender is GridView { FocusState: FocusState.Keyboard } ? "keyboard" : "unknown";
+            RaiseChannelSelected(channel, related, string.IsNullOrWhiteSpace(SearchBox.Text) ? "shelf-itemclick" : "search-result", input);
         }
     }
 
@@ -4715,6 +4839,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (connection is null || _account?.AccountId != account.AccountId) return;
         var cts = new CancellationTokenSource();
         _savedStartupAuthCts = cts;
+        _savedAuthCompletion = _savedAuthGate.Begin();
         _cachedStartupCatalogActive = _renderedSnapshot is not null && HasCatalogData(_renderedSnapshot);
         ShowCheckingAccountStatus();
         await AuthenticateSavedAccountAndRefreshAsync(connection, account, cts);
@@ -5074,10 +5199,11 @@ public sealed partial class CatalogLandingPage : UserControl
         else await LoadSavedAsync();
     }
 
-    private void RaiseChannelSelected(Channel channel, IReadOnlyList<Channel>? related = null)
+    private void RaiseChannelSelected(Channel channel, IReadOnlyList<Channel>? related = null,
+        string via = "unknown", string input = "unknown", string key = "none", string device = "unknown")
     {
         CaptureBrowseState();
-        ChannelSelected?.Invoke(this, new ChannelSelectedEventArgs(channel, related ?? Array.Empty<Channel>()));
+        ChannelSelected?.Invoke(this, new ChannelSelectedEventArgs(channel, related ?? Array.Empty<Channel>(), via, input, key, device));
     }
 
     private void ShowError(string message)
@@ -5583,11 +5709,16 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 }
 
-public sealed class ChannelSelectedEventArgs(Channel channel, IReadOnlyList<Channel> relatedChannels) : EventArgs
+public sealed class ChannelSelectedEventArgs(Channel channel, IReadOnlyList<Channel> relatedChannels,
+    string via = "home", string input = "unknown", string key = "none", string device = "unknown") : EventArgs
 {
     public Channel Channel { get; } = channel;
     public StreamSource Source => Channel.Source;
     public IReadOnlyList<Channel> RelatedChannels { get; } = relatedChannels;
+    public string Via { get; } = via;
+    public string Input { get; } = input;
+    public string Key { get; } = key;
+    public string Device { get; } = device;
 }
 
 public static class ArtworkReusePolicy

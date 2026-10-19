@@ -158,6 +158,11 @@ public interface ICatalogProvider
     Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default);
 }
 
+public interface IProviderSessionStatus
+{
+    bool HasSession(string accountId);
+}
+
 public interface ISeriesCatalogProvider
 {
     Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default);

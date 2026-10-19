@@ -121,6 +121,7 @@ Order: land the static audit slice first (it is already in the tree), then F1 as
 No log line may contain a URL, host, port, username, title or credential; IDs only as booleans or counts.
 
 ### F1 - P1 - Provider "not authenticated" after cached start (DF-01 + DF-04) - DIAGNOSE, THEN FIX
+Implementation note: fixed the saved-ID/provider-session key mismatch, added auth outcome and missing-session diagnostics, re-authentication on bounded refresh retry, and an auth wait gate for the first Spotlight/hover lookup. Core gate tests added. Live LC-01, LC-08, SP-01/SP-03 and NV-06 remain to verify.
 - Files: `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `AuthenticateSavedAccountAndRefreshAsync` (~1040-1090),
   `AuthenticateSavedAccountNetworkFirstAsync` (~1013), `ScheduleRefreshRetry` (~1494), the refresh loop (~1174-1200);
   `src/Tvivo.Infrastructure/XtreamInfrastructure.cs` `AuthenticateAsync` (~79-89: `accountId` and `_connections`),
@@ -147,6 +148,7 @@ No log line may contain a URL, host, port, username, title or credential; IDs on
   SP-01/SP-03 (open card gets a summary), NV-06, and `event=auth.saved` shows the outcome on every start.
 
 ### F2 - P1 - Unrequested playback while typing in search (DF-02) - DIAGNOSE FIRST, FIX ONLY WITH A FOUND CAUSE
+Implementation note: queued Spotlight focus restoration could take focus from a text box during a rerender; it now checks the current focus before restoring. The actual activation that started the stream is still unproven. Added selection input/key/device/focus and playback-trigger diagnostics for LC-05 x5 and NV-03..05.
 - Files: `src/Tvivo.App/MainWindow.xaml.cs` `CatalogLandingPage_ChannelSelected` (~1730), `TopSearchBox_*` (~1351-1391,
   ~1707); `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `SpotlightItem_Click` (~2822, `TouchTapActivates`),
   `SpotlightItem_PointerEntered` (~2833), `ShelfCards_ItemClick` (~4357), `SetSearchText` (~876).

@@ -104,6 +104,7 @@ public sealed partial class MainWindow : Window
     private PlayerPresentation _windowMiniPreviousPresentation = PlayerPresentation.Full;
     private bool _windowMiniPreviousCinema;
     private bool _suppressTopSearchChanged;
+    private long _lastSearchRerenderAt;
     private bool _playerMovieProgressReady = true;
     private long _playerMovieProgressGeneration;
     private double? _playerListPointerPressOffset;
@@ -1382,6 +1383,13 @@ public sealed partial class MainWindow : Window
 
     private void TopSearchBox_LostFocus(object sender, RoutedEventArgs args)
     {
+        if (!string.IsNullOrWhiteSpace(TopSearchBox.Text))
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                var focused = FocusManager.GetFocusedElement(WindowRoot.XamlRoot);
+                var reason = Environment.TickCount64 - _lastSearchRerenderAt < 1_000 ? "search-rerender" : "other";
+                LaunchDiagnostics.Write($"event=focus.moved from=TopSearchBox to={FocusDescriptor(focused)} reason={reason}");
+            });
         if (string.IsNullOrEmpty(TopSearchBox.Text))
             SetTopSearchExpanded(false);
     }
@@ -1712,6 +1720,7 @@ public sealed partial class MainWindow : Window
     {
         if (_suppressTopSearchChanged || !_catalogLandingPage.IsReadyForInteraction)
             return;
+        _lastSearchRerenderAt = Environment.TickCount64;
         _catalogLandingPage.SetSearchText(TopSearchBox.Text);
     }
 
@@ -1734,6 +1743,8 @@ public sealed partial class MainWindow : Window
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
         var selectedChannel = args.Channel;
+        var focusBefore = FocusDescriptor(FocusManager.GetFocusedElement(WindowRoot.XamlRoot));
+        LaunchDiagnostics.Write($"event=selection.source via={args.Via} input={args.Input} key={args.Key} device={args.Device} focusBefore={focusBefore}");
         if (selectedChannel.Source.Kind == StreamKind.Series &&
             _seriesOpeningId == selectedChannel.Id &&
             _seriesOpenCancellation is { IsCancellationRequested: false })
@@ -1838,7 +1849,16 @@ public sealed partial class MainWindow : Window
             _ = LoadPlayerCategoryTitleAsync(selectedChannel, selectionGeneration, "Live TV");
         _ = LoadPlayerMetadataAsync(selectedChannel, type);
         LaunchDiagnostics.Write($"event=content-selected outcome=started kind={selectedChannel.Source.Kind}");
+        var trigger = args.Input switch { "pointer" => "click", "keyboard" => "enter", _ => "selection" };
+        LaunchDiagnostics.Write($"event=playback.start.trigger source={trigger} page={_playerReturnPage} via={args.Via}");
         _ = StartPlaybackAsync(selectedChannel.Source, entryKind: PlayerResetEntryKind.NewItem);
+    }
+
+    private static string FocusDescriptor(object? element)
+    {
+        if (element is not FrameworkElement framework) return element?.GetType().Name ?? "none";
+        var id = AutomationProperties.GetAutomationId(framework);
+        return string.IsNullOrWhiteSpace(id) ? framework.GetType().Name : id;
     }
 
     private void ShowContentSelectionError(StreamKind kind, string outcome)

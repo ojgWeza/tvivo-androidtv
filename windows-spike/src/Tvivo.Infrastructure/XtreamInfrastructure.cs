@@ -5,15 +5,16 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
+using System.Collections.Concurrent;
 using Tvivo.Core;
 
 namespace Tvivo.Infrastructure;
 
-public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider, IMovieInfoProvider, IEpgProvider
+public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProvider, IMovieInfoProvider, IEpgProvider, IProviderSessionStatus
 {
     private readonly HttpClient _http;
     private readonly HttpClient _epgHttp;
-    private readonly Dictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
     private readonly Action<string>? _epgLog;
@@ -21,6 +22,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly SemaphoreSlim _paceGate = new(1, 1);
     private long _lastApiRequestTicks;
+    private long _lastMissingSessionLogTicks;
 
     // Providers rate-limit bursts with HTTP 429. Space API calls out and retry a throttled call a few
     // times, honouring Retry-After, before surfacing a failure.
@@ -76,7 +78,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 ? JsonValue.Int(server, "port") ?? connection.Endpoint.Port
                 : 0;
             var endpoint = connection.Endpoint with { Port = port };
-            var accountId = connection.AccountId ?? AccountIdentity.For(endpoint, connection.Username);
+            var accountId = connection.AccountId ?? AccountIdentity.For(connection.Endpoint, connection.Username);
+            var adjustedId = AccountIdentity.For(endpoint, connection.Username);
             var account = new ProviderAccount(
                 accountId,
                 endpoint,
@@ -85,7 +88,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 JsonValue.Int(user, "max_connections") ?? JsonValue.Int(server, "max_connections"),
                 JsonValue.Expiry(user, "exp_date"));
             _connections[accountId] = connection with { Endpoint = endpoint };
+            _connections[adjustedId] = connection with { Endpoint = endpoint };
             _httpsPorts[accountId] = JsonValue.Int(server, "https_port");
+            _httpsPorts[adjustedId] = JsonValue.Int(server, "https_port");
             return AuthenticationResult.Succeeded(account);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -155,10 +160,21 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public int? GetHttpsPort(ProviderAccount account) =>
         _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
 
+    public bool HasSession(string accountId) => _connections.ContainsKey(accountId);
+
+    private InvalidOperationException MissingSession(string operation)
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastMissingSessionLogTicks);
+        if (now - last >= 60_000 && Interlocked.CompareExchange(ref _lastMissingSessionLogTicks, now, last) == last)
+            _epgLog?.Invoke($"event=provider.not-authenticated op={operation} knownConnections={_connections.Count}");
+        return new InvalidOperationException("Provider session is not authenticated.");
+    }
+
     public async Task<MovieDetails> GetMovieInfoAsync(ProviderAccount account, string movieId, CancellationToken cancellationToken = default)
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
-            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+            throw MissingSession("vodInfo");
         using var response = await SendApiAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -170,7 +186,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     public async Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default)
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
-            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+            throw MissingSession("seriesInfo");
         var uri = XtreamRequest.SeriesInfoUri(connection, seriesId);
         using var response = await SendApiAsync(uri, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -259,7 +275,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         Func<JsonElement, string, T?> map, CancellationToken cancellationToken) where T : class
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
-            throw new InvalidOperationException("The provider account has not been authenticated by this catalog provider.");
+            throw MissingSession(action.Contains("categories", StringComparison.Ordinal) ? "categories" : "items");
         using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
