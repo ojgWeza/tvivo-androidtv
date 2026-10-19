@@ -18,11 +18,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.adaptive.televisionDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineBreak
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -46,6 +48,7 @@ fun ShelfCard(
     val television = LocalIsTelevision.current
     val density = if (television) televisionDensity() else null
     val context = LocalContext.current
+    val largeText = LocalConfiguration.current.fontScale >= 1.6f
     val width = if (television) density!!.posterWidth.dp else 110.dp
     val height = if (television) { if (channel) density!!.channelHeight.dp else density!!.posterHeight.dp }
         else if (channel) 62.dp else 165.dp
@@ -77,7 +80,7 @@ fun ShelfCard(
                     modifier = Modifier.fillMaxWidth().height(height)
                 )
             } else {
-                ArtworkFallback(card.item.title, channel, Modifier.fillMaxSize())
+                ArtworkFallback(card.item.title, channel, Modifier.fillMaxSize(), showTitle = false)
             }
             if (card.isNew) {
                 Badge("NEW", Modifier.align(Alignment.TopStart))
@@ -93,9 +96,10 @@ fun ShelfCard(
                 }
             }
         }
-        Text(card.item.title, color = AppColors.Ink, style = TvType.label,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = if (television) Modifier.height(density!!.titleHeight.dp).padding(top = 4.dp)
+        Text(card.item.title, color = AppColors.Ink,
+            style = TvType.label.copy(lineBreak = LineBreak.Heading),
+            maxLines = if (largeText) 2 else 1, overflow = TextOverflow.Ellipsis,
+            modifier = if (television) Modifier.height(if (largeText) 72.dp else density!!.titleHeight.dp).padding(top = 4.dp)
                 else Modifier.padding(top = 5.dp))
         card.typeBadge?.let { badge ->
             val localizedBadge = when (badge) {

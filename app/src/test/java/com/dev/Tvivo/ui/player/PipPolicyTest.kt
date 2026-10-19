@@ -30,19 +30,18 @@ class PipPolicyTest {
             PipPolicy.entry(PipPolicy.FormFactor.PhoneTablet, true, true, 34, stopping = true))
     }
 
-    @Test fun pauseDismissesOnlyPipWhileCloseStopsPlayback() {
+    @Test fun pauseKeepsPipWhileCloseStopsPlayback() {
         assertEquals(PipPolicy.Exit.KeepVideo, PipPolicy.exit(true, true, false))
         assertEquals(PipPolicy.Exit.KeepVideo, PipPolicy.exit(false, false, false))
-        assertEquals(PipPolicy.Exit.DismissPaused, PipPolicy.exit(true, false, false))
+        assertEquals(PipPolicy.Exit.KeepVideo, PipPolicy.exit(true, false, false))
         assertEquals(PipPolicy.Exit.StopPlayback, PipPolicy.exit(true, true, true))
         assertEquals(PipPolicy.Exit.StopPlayback, PipPolicy.exit(true, false, true))
     }
 
     @Test fun stoppedPipExitIsDismissalButResumedExpansionIsNot() {
-        assertEquals(true, PipPolicy.shouldStopAfterExit(true, false, false, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(false, false, false, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(true, true, false, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, true, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, false, true))
+        assertEquals(true, PipPolicy.shouldStopAfterExit(true, false, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(false, false, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(true, true, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, true))
     }
 }

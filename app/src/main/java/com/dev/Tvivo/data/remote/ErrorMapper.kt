@@ -21,6 +21,8 @@ object ErrorMapper {
         401, 403 -> AppError.AuthFailed
         404 -> AppError.StreamUnavailable
         408 -> AppError.Timeout
+        429 -> AppError.RateLimited
+        503 -> AppError.ServiceUnavailable
         // Panels commonly answer an exhausted connection slot with a 5xx or an HTML body.
         in 500..599 -> AppError.ConnectionLimitReached
         else -> AppError.Unreachable

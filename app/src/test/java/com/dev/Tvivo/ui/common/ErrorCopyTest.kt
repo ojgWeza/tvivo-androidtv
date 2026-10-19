@@ -21,6 +21,8 @@ class ErrorCopyTest {
         AppError.ConnectionLimitReached,
         AppError.StreamUnavailable,
         AppError.Timeout,
+        AppError.RateLimited,
+        AppError.ServiceUnavailable,
         AppError.Empty
     )
 
@@ -53,8 +55,9 @@ class ErrorCopyTest {
     }
 
     @Test
-    fun `login leaves every other error untouched`() {
-        for (error in allErrors.filter { it != AppError.Unreachable }) {
+    fun `login leaves short errors untouched`() {
+        for (error in allErrors.filter { it !in setOf(AppError.Unreachable,
+                AppError.RateLimited, AppError.ServiceUnavailable) }) {
             assertEquals(ErrorCopy.of(error), ErrorCopy.forLogin(error))
         }
     }

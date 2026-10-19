@@ -36,6 +36,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -92,10 +93,16 @@ fun ShelfRow(
     val headerVisibility = rememberShelfHeaderVisibility(screenHeadingRequester)
     val scope = rememberCoroutineScope()
     val television = LocalIsTelevision.current
+    val largeText = LocalConfiguration.current.fontScale >= 1.6f
     val tvDensity = if (television) televisionDensity() else null
     val shelfTitle = when (shelf.destination) {
         com.dev.Tvivo.home.VirtualFolderKey.ContinueWatching -> stringResource(com.dev.Tvivo.R.string.shelf_continue_watching)
-        com.dev.Tvivo.home.VirtualFolderKey.RecentlyAdded -> stringResource(com.dev.Tvivo.R.string.shelf_recently_added)
+        com.dev.Tvivo.home.VirtualFolderKey.RecentlyAdded -> stringResource(when (shelf.id) {
+            "__my_added_movie" -> com.dev.Tvivo.R.string.shelf_recently_added_movies
+            "__my_added_series" -> com.dev.Tvivo.R.string.shelf_recently_added_series
+            "__my_added_live" -> com.dev.Tvivo.R.string.shelf_recently_added_live
+            else -> com.dev.Tvivo.R.string.shelf_recently_added
+        })
         com.dev.Tvivo.home.VirtualFolderKey.RecentlyPlayed -> stringResource(com.dev.Tvivo.R.string.shelf_last_watched)
         com.dev.Tvivo.home.VirtualFolderKey.Favorites -> stringResource(com.dev.Tvivo.R.string.shelf_favourites)
         null -> when {
@@ -205,7 +212,8 @@ fun ShelfRow(
                     Text(shelfTitle, color = AppColors.Ink, style = TvType.title,
                         modifier = Modifier.weight(1f))
                     Text("›", color = AppColors.Ink, style = TvType.title)
-                    Text(stringResource(com.dev.Tvivo.R.string.search_see_all_titles), color = AppColors.Dim, style = TvType.label)
+                    if (!largeText) Text(stringResource(com.dev.Tvivo.R.string.search_see_all_titles),
+                        color = AppColors.Dim, style = TvType.label)
                 }
             } else {
                 Text(shelfTitle, color = AppColors.Ink, style = TvType.title,
@@ -227,7 +235,8 @@ fun ShelfRow(
                         } else Modifier)
                         .padding(horizontal = 8.dp)
                 ) {
-                    Text(stringResource(com.dev.Tvivo.R.string.search_see_all_titles), color = AppColors.Dim, style = TvType.label)
+                    Text(if (largeText) "›" else stringResource(com.dev.Tvivo.R.string.search_see_all_titles),
+                        color = AppColors.Dim, style = TvType.label)
                 }
             }
         }

@@ -8,6 +8,15 @@ import org.junit.Test
 
 class SleepTimerUiPolicyTest {
     @Test
+    fun staleNotificationCannotAdoptAnotherSession() {
+        assertFalse(PlayerSessionIdentity.matches(null, "active", null, emptyList()))
+        assertFalse(PlayerSessionIdentity.matches("old", null, null, emptyList()))
+        assertFalse(PlayerSessionIdentity.matches("old", "new", "other", listOf("episode-2")))
+        assertTrue(PlayerSessionIdentity.matches("same", "same", null, emptyList()))
+        assertTrue(PlayerSessionIdentity.matches("old", "new", "episode-2", listOf("episode-2")))
+    }
+
+    @Test
     fun disconnectWithMatchingEndedSnapshotShowsEndedView() {
         val snapshot = EndedItemSnapshot("request-1", "Episode 2", "episode-2")
         val exit = PlayerSessionExitController({ snapshot }, { _ -> })

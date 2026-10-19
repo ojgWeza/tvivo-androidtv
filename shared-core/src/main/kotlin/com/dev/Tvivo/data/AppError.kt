@@ -7,5 +7,7 @@ sealed class AppError {
     data object ConnectionLimitReached : AppError()
     data object StreamUnavailable : AppError()
     data object Timeout : AppError()
+    data object RateLimited : AppError()
+    data object ServiceUnavailable : AppError()
     data object Empty : AppError()
 }

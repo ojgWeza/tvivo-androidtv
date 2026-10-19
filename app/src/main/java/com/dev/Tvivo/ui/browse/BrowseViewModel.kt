@@ -202,6 +202,12 @@ class BrowseViewModel(
             }
             val id = AccountIdentity.of(credentials)
             accountId = id
+            val restoredCategory = savedState.get<String>("browse_category_$id")
+            val restoredFilter = savedState.get<String>("browse_filter_$id").orEmpty()
+            selectedCategory.value = restoredCategory
+            debouncedItemFilter.value = restoredFilter
+            _state.update { it.copy(selectedCategoryId = restoredCategory, itemFilter = restoredFilter,
+                isItemFilterOpen = restoredFilter.isNotEmpty()) }
             selectedSort.value = savedState.get<String>(sortStateKey(id))
                 ?.let { saved -> CatalogSort.entries.firstOrNull { it.name == saved } }
                 ?: CatalogSort.AlphabeticalAsc
@@ -447,6 +453,7 @@ class BrowseViewModel(
             _state.update { it.copy(isItemFilterOpen = true) }
         } else {
             debouncedItemFilter.value = ""
+            accountId?.let { savedState["browse_filter_$it"] = "" }
             _state.update { it.copy(isItemFilterOpen = false, itemFilter = "", filteredCount = null) }
         }
     }
@@ -454,15 +461,18 @@ class BrowseViewModel(
     fun onItemFilterChanged(text: String) {
         _state.update { it.copy(itemFilter = text) }
         debouncedItemFilter.value = text
+        accountId?.let { savedState["browse_filter_$it"] = text }
     }
 
     fun selectCategory(categoryId: String, forceRecordVisit: Boolean = false) {
         val previous = selectedCategory.value
         if (previous != categoryId) pendingFocusItemId = null
         selectedCategory.value = categoryId
+        accountId?.let { savedState["browse_category_$it"] = categoryId }
         // Carrying a filter across categories would open the new one already filtered, by
         // text the user typed for a different list.
         debouncedItemFilter.value = ""
+        accountId?.let { savedState["browse_filter_$it"] = "" }
         _state.update { it.copy(itemFilter = "", filteredCount = null) }
         _state.update { it.copy(selectedCategoryId = categoryId, error = null) }
         // A virtual folder has no panel category behind it: `__continue` is not an id
@@ -518,15 +528,14 @@ class BrowseViewModel(
             result
                 ?.onSuccess {
                     _state.update {
-                        it.copy(isRefreshing = false, refreshConfirmation = "Category refreshed")
+                        it.copy(isRefreshing = false, refreshConfirmation =
+                            com.dev.Tvivo.ui.settings.AppLanguage.wrap(getApplication<Application>()).getString(com.dev.Tvivo.R.string.browse_category_refreshed))
                     }
                 }
                 ?.onFailure { t ->
-                    _state.update { it.copy(isRefreshing = false, error = t.toAppError(),
-                        refreshConfirmation = "Category refresh failed") }
+                    _state.update { it.copy(isRefreshing = false, error = t.toAppError()) }
                 }
-                ?: _state.update { it.copy(isRefreshing = false, error = AppError.Unreachable,
-                    refreshConfirmation = "Category refresh failed") }
+                ?: _state.update { it.copy(isRefreshing = false, error = AppError.Unreachable) }
         }
     }
 
@@ -541,12 +550,12 @@ class BrowseViewModel(
             }
             result?.onSuccess {
                 _state.update { it.copy(isRefreshing = false,
-                    refreshConfirmation = "${contentType.label} library refreshed") }
+                    refreshConfirmation = com.dev.Tvivo.ui.settings.AppLanguage.wrap(getApplication<Application>()).getString(
+                        com.dev.Tvivo.R.string.browse_library_refreshed,
+                        com.dev.Tvivo.ui.settings.AppLanguage.wrap(getApplication<Application>()).getString(contentType.labelResource))) }
             }?.onFailure { t ->
-                _state.update { it.copy(isRefreshing = false, error = t.toAppError(),
-                    refreshConfirmation = "${contentType.label} library refresh failed") }
-            } ?: _state.update { it.copy(isRefreshing = false, error = AppError.Unreachable,
-                refreshConfirmation = "${contentType.label} library refresh failed") }
+                _state.update { it.copy(isRefreshing = false, error = t.toAppError()) }
+            } ?: _state.update { it.copy(isRefreshing = false, error = AppError.Unreachable) }
         }
     }
 

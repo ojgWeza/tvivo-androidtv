@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dev.Tvivo.R
@@ -52,6 +53,7 @@ import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.data.AppError
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import com.dev.Tvivo.ui.common.HeaderIconButton
@@ -120,8 +122,9 @@ fun BrowseScreen(
     LaunchedEffect(initialCategoryId, state.visibleCategories) {
         if (!categoryApplied && initialCategoryId != null &&
             state.visibleCategories.any { it.categoryId == initialCategoryId }) {
-            viewModel.selectCategory(initialCategoryId, forceRecordVisit = landingMode)
-            if (!initialItemFilter.isNullOrBlank()) {
+            if (state.selectedCategoryId != initialCategoryId)
+                viewModel.selectCategory(initialCategoryId, forceRecordVisit = landingMode)
+            if (!initialItemFilter.isNullOrBlank() && state.itemFilter.isBlank()) {
                 viewModel.setItemFilterOpen(true)
                 viewModel.onItemFilterChanged(initialItemFilter)
             }
@@ -340,7 +343,8 @@ fun BrowseScreen(
                 hasCachedItems = items.itemCount > 0,
                 onRefresh = viewModel::refreshSelected,
                 refreshLabel = if (VirtualFolder.isVirtual(state.selectedCategoryId.orEmpty()))
-                    "Refresh ${contentType.label} library" else "Refresh category",
+                    stringResource(R.string.browse_refresh_library, stringResource(contentType.labelResource))
+                    else stringResource(R.string.browse_refresh_category),
                 itemFilter = state.itemFilter,
                 isItemFilterOpen = state.isItemFilterOpen,
                 filteredCount = state.filteredCount,
@@ -533,11 +537,15 @@ private fun Header(
         else -> 24.dp
     }
     val statusMessage = browseStatusMessage(error, syncState, hasCachedItems)
+    val largeText = LocalConfiguration.current.fontScale >= 1.6f
     Column(modifier = Modifier.fillMaxWidth()) {
         if (onToggleCategories != null && filteredCount != null && totalCount != null) {
             Text(stringResource(R.string.browse_filtered_count, filteredCount, totalCount), color = AppColors.Dim, style = TvType.label,
                 modifier = Modifier.padding(start = horizontalMargin, end = horizontalMargin))
         }
+        if (largeText && !isItemFilterOpen) Text(title, color = AppColors.Ink,
+            style = TvType.headline, modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = horizontalMargin))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalMargin, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -552,7 +560,7 @@ private fun Header(
             // part that is actually changing under them.
             Column(modifier = Modifier.weight(1f)) {
                 // The header shows the category name immediately, before any row arrives.
-                if (!isItemFilterOpen) {
+                if (!isItemFilterOpen && !largeText) {
                     Text(
                         text = title,
                         color = AppColors.Ink,
@@ -561,8 +569,7 @@ private fun Header(
                         // and `... HD`, which truncate to the same string and recreate
                         // the false-duplicate defect. Wrapping is the rule everywhere a
                         // category label is drawn.
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        softWrap = true
                     )
                 }
 
@@ -598,31 +605,13 @@ private fun Header(
                     sortFocusRequester, Modifier.padding(end = 10.dp)
                 )
                 if (onToggleCategories != null) {
-                    Text(stringResource(R.string.categories_button), color = AppColors.Ink, style = TvType.label,
-                        modifier = Modifier.heightIn(min = 48.dp).focusRequester(categoriesFocusRequester)
-                            .semantics { contentDescription = openCategoriesDescription }
-                            .testTag("category-picker-button")
-                            .tvFocusFrame().tvClickable(onClick = onToggleCategories)
-                            .padding(horizontal = 12.dp))
+                    HeaderIconButton(Icons.Default.Menu, openCategoriesDescription,
+                        onClick = onToggleCategories,
+                        modifier = Modifier.focusRequester(categoriesFocusRequester)
+                            .testTag("category-picker-button"))
                 }
                 // Visible progress that dismisses at 100%. The rail counts filling in
                 // category by category are the secondary signal.
-                if (syncState == "indexing") {
-                    Text(
-                        text = "Indexing $syncDone…",
-                        color = AppColors.Dim,
-                        style = TvType.label,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
-                }
-                confirmation?.let {
-                    Text(text = it, color = AppColors.Dim, style = TvType.label,
-                        modifier = Modifier.padding(end = 16.dp))
-                }
-                statusMessage?.let {
-                    Text(text = it, color = AppColors.Dim, style = TvType.label,
-                        modifier = Modifier.padding(end = 16.dp))
-                }
                 // D-8 — the same component Home uses. This was a bare text link, which
                 // made one global action look like two different things depending on
                 // which screen you met it on. Reached by pressing UP from the grid's top
@@ -665,6 +654,19 @@ private fun Header(
             }
         }
 
+        if (syncState == "indexing") Text("Indexing $syncDone…", color = AppColors.Dim,
+            style = TvType.label, modifier = Modifier.padding(horizontal = horizontalMargin))
+        confirmation?.let { Text(it, color = AppColors.Dim, style = TvType.label,
+            modifier = Modifier.padding(horizontal = horizontalMargin)) }
+        statusMessage?.let { Text(stringResource(when {
+                error == AppError.RateLimited -> R.string.browse_cached_rate_limited
+                error == AppError.ServiceUnavailable -> R.string.browse_cached_service_unavailable
+                error != null -> R.string.browse_cached_offline
+                syncState == CatalogSyncer.STATE_PARTIAL -> R.string.browse_catalog_partial
+                else -> R.string.browse_catalog_failed
+            }), color = AppColors.Dim, style = TvType.label,
+            modifier = Modifier.padding(horizontal = horizontalMargin)) }
+
         // Cache present and refreshing: a 3 px line under the header, never a blocking
         // spinner over content the user can already read.
         if (isRefreshing) {
@@ -698,6 +700,8 @@ private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
 }
 
 internal fun browseStatusMessage(error: AppError?, catalogSyncState: String?, hasCachedItems: Boolean): String? = when {
+    error == AppError.RateLimited && hasCachedItems -> "Server busy — showing cached data. Try again shortly"
+    error == AppError.ServiceUnavailable && hasCachedItems -> "Server unavailable — showing cached data"
     error != null && hasCachedItems -> "Offline — showing cached data"
     catalogSyncState == CatalogSyncer.STATE_PARTIAL -> "Catalog incomplete — showing available categories"
     catalogSyncState == CatalogSyncer.STATE_FAILED && hasCachedItems -> "Catalog update unavailable — showing cached data"

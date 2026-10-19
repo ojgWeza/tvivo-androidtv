@@ -117,9 +117,6 @@ fun SettingsScreen(
                 vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
             )
     ) {
-        Text(text = stringResource(com.dev.Tvivo.R.string.settings_account), color = AppColors.Ink, style = TvType.display)
-        Spacer(Modifier.height(24.dp))
-        Text(text = stringResource(com.dev.Tvivo.R.string.settings_player), color = AppColors.Ink, style = TvType.title)
         Text(text = stringResource(com.dev.Tvivo.R.string.appearance), color = AppColors.Ink, style = TvType.title)
         ActionRow(stringResource(com.dev.Tvivo.R.string.theme), stringResource(com.dev.Tvivo.R.string.theme_hint), value = stringResource(if (themeMode == ThemeMode.Dark) com.dev.Tvivo.R.string.theme_dark else com.dev.Tvivo.R.string.theme_light), onClick = {
             scope.launch { preferenceStore.setThemeMode(if (themeMode == ThemeMode.Dark) ThemeMode.Light else ThemeMode.Dark) }
@@ -138,6 +135,8 @@ fun SettingsScreen(
                 (appContext as? android.app.Activity)?.recreate()
             }
         )
+        Spacer(Modifier.height(24.dp))
+        Text(text = stringResource(com.dev.Tvivo.R.string.settings_player), color = AppColors.Ink, style = TvType.title)
         ActionRow(stringResource(com.dev.Tvivo.R.string.settings_episodes), stringResource(com.dev.Tvivo.R.string.settings_play_next_hint), value = stringResource(when (modes.episodeMode) { PlaybackMode.Off -> com.dev.Tvivo.R.string.playback_mode_off; PlaybackMode.Next -> com.dev.Tvivo.R.string.playback_mode_next; PlaybackMode.Shuffle -> com.dev.Tvivo.R.string.playback_mode_shuffle }), onClick = {
             val next = when (modes.episodeMode) { PlaybackMode.Off -> PlaybackMode.Next; PlaybackMode.Next -> PlaybackMode.Shuffle; PlaybackMode.Shuffle -> PlaybackMode.Off }
             scope.launch { preferenceStore.setEpisodeMode(next) }
@@ -154,6 +153,8 @@ fun SettingsScreen(
             val next = when (tracks.subtitles) { PreferredSubtitles.Off -> PreferredSubtitles.Arabic; PreferredSubtitles.Arabic -> PreferredSubtitles.English; PreferredSubtitles.English -> PreferredSubtitles.Off }
             scope.launch { preferenceStore.setSubtitles(next) }
         })
+        Spacer(Modifier.height(24.dp))
+        Text(text = stringResource(com.dev.Tvivo.R.string.settings_account), color = AppColors.Ink, style = TvType.title)
         state.username?.let {
             Spacer(Modifier.height(4.dp))
             Text(text = it, color = AppColors.Dim, style = TvType.body)

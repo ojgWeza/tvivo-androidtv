@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,8 +42,8 @@ fun ResumePrompt(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            PromptAction("Resume from ${formatPosition(positionMs)}", onResume)
-            PromptAction("Start over", onStartOver)
+            PromptAction(stringResource(com.dev.Tvivo.R.string.resume_from_position, formatPosition(positionMs)), onResume)
+            PromptAction(stringResource(com.dev.Tvivo.R.string.detail_start_over), onStartOver)
         }
     }
 }

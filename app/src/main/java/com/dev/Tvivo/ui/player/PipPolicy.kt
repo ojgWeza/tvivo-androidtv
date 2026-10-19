@@ -4,7 +4,7 @@ package com.dev.Tvivo.ui.player
 internal object PipPolicy {
     enum class FormFactor { PhoneTablet, Television, Other }
     enum class Entry { None, AutoEnter, OnUserLeaveHint }
-    enum class Exit { KeepVideo, DismissPaused, StopPlayback }
+    enum class Exit { KeepVideo, StopPlayback }
 
     fun entry(
         formFactor: FormFactor,
@@ -20,12 +20,11 @@ internal object PipPolicy {
 
     fun exit(inPip: Boolean, playWhenReady: Boolean, explicitClose: Boolean): Exit = when {
         explicitClose -> Exit.StopPlayback
-        inPip && !playWhenReady -> Exit.DismissPaused
         else -> Exit.KeepVideo
     }
 
     /** Expansion resumes the Activity; dismissal leaves it stopped after exiting PiP. */
     fun shouldStopAfterExit(exitPending: Boolean, changingConfigurations: Boolean,
-                            dismissingPausedPip: Boolean, stopPending: Boolean): Boolean =
-        exitPending && !changingConfigurations && !dismissingPausedPip && !stopPending
+                            stopPending: Boolean): Boolean =
+        exitPending && !changingConfigurations && !stopPending
 }

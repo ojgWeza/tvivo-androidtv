@@ -55,7 +55,9 @@ const series = Array.from({ length: 16 }, (_, index) => ({
   last_modified: String(1700000002 + index),
 }));
 const episode = (id, n, title) => ({ id, episode_num: String(n), title, container_extension: 'mp4', duration: '00:02:00', duration_secs: 120 });
-const seriesInfo = { seasons: [{ season_number: 1, name: 'Season 1' }], episodes: { '1': [episode('episode-A1', 1, 'Episode 1'), episode('episode-B1', 2, 'Episode 2')] } };
+const seriesInfo = (seriesId) => ({ seasons: [{ season_number: 1, name: 'Season 1' }], episodes: {
+  '1': [episode(`episode-${seriesId}-A1`, 1, 'Episode 1'), episode(`episode-${seriesId}-B1`, 2, 'Episode 2')],
+} });
 const liveStreams = Array.from({ length: 16 }, (_, index) => ({
   num: index + 1,
   name: index === 0 ? 'Generated Live Loop' : `Synthetic Live Channel ${String(index + 1).padStart(2, '0')}`,
@@ -84,14 +86,18 @@ function apiResponse(url) {
     }
     case 'get_series_categories': return seriesCategories;
     case 'get_series': return series;
-    case 'get_series_info': return series.some((item) => item.series_id === Number(url.searchParams.get('series_id'))) ? seriesInfo : {};
+    case 'get_series_info': {
+      const seriesId = Number(url.searchParams.get('series_id'));
+      return series.some((item) => item.series_id === seriesId) ? seriesInfo(seriesId) : {};
+    }
     default: return [];
   }
 }
 
 async function streamFile(req, res, url, kind, id, ext) {
   const lengthlessMovie = kind === 'movie' && (id === '2025' || id === '2026');
-  const file = kind === 'live' || lengthlessMovie ? 'live.ts' : kind === 'movie' ? 'movie.mp4' : `${id}.mp4`;
+  const file = kind === 'live' || lengthlessMovie ? 'live.ts' : kind === 'movie' ? 'movie.mp4' :
+    `episode-${id.endsWith('-A1') ? 'A1' : 'B1'}.mp4`;
   const fullPath = path.join(mediaDir, file);
   let stat;
   try { stat = await fs.promises.stat(fullPath); } catch { return json(res, 404, { error: `Missing generated media: ${file}` }); }
@@ -189,7 +195,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'GET or HEAD required' });
     if (kind === 'live' && (!liveStreams.some((item) => String(item.stream_id) === id) || ext !== 'ts')) return json(res, 404, { error: 'Unknown live stream' });
     if (kind === 'movie' && !vodStreams.some((item) => String(item.stream_id) === id && item.container_extension === ext)) return json(res, 404, { error: 'Unknown movie' });
-    if (kind === 'series' && (!['episode-A1', 'episode-B1'].includes(id) || ext !== 'mp4')) return json(res, 404, { error: 'Unknown episode' });
+    if (kind === 'series' && (ext !== 'mp4' || !series.some((item) =>
+      [`episode-${item.series_id}-A1`, `episode-${item.series_id}-B1`].includes(id))))
+      return json(res, 404, { error: 'Unknown episode' });
     return streamFile(req, res, url, kind, id, ext);
   }
   json(res, 404, { error: 'Not found' });

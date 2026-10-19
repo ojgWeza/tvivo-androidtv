@@ -1954,3 +1954,20 @@ End of item timer stops playback. Keep those completion decisions separate. Log 
 content type, numeric positions, timer state and save/stop outcomes when investigating
 resume; never log a title, account, or stream URL. Device evidence is still required
 to identify which path caused an individual reported restart.
+
+## Android QA round 1 follow-up (2026-10-19)
+
+Player Activity treats PLAY and notification reopen as different paths: PLAY resets
+the overlay and starts a new request; reopen must prove that its request still owns
+an active service item. A rejected PLAY retries a bounded fresh controller
+connection, while a dead reopen finishes. PiP Pause keeps the window and a
+foreground paused notification; PiP close sends Stop to release the stream and
+notification. Device verification remains necessary for PiP lifecycle ordering and
+live video rendering.
+
+Library shelves observe both resume and recently played Room flows. Failed refresh
+keeps the prior successful refresh timestamp and surfaces the mapped 429, 503, or
+unreachable reason; partial cache writes cannot count as a completed manual
+refresh. Large font scale allows titles to wrap, with compact phone navigation
+keeping icon semantics. Mock episode IDs include their series ID to prevent
+cross-series collisions in QA.

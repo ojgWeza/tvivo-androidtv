@@ -64,6 +64,7 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
     private val store = CredentialsStore(application)
     private val auth = AuthRepository()
     private val db = AppDatabase.get(application)
+    private val refreshTimes = application.getSharedPreferences("catalog_refresh_times", android.content.Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow(AccountUiState())
     val state: StateFlow<AccountUiState> = _state.asStateFlow()
@@ -84,6 +85,9 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                 .mapNotNull { type -> db.catalogSyncDao().get(accountId, type) }
                 .filter { it.state == "complete" }
                 .maxOfOrNull { it.updatedAt }
+            val hasStoredRefresh = refreshTimes.contains("last_$accountId")
+            val lastCompletedRefresh = refreshTimes.getLong("last_$accountId", 0L)
+                .takeIf { it > 0L }
             // Clearing `signedOut` here matters: it is what lets the screen be
             // re-entered after signing back in, instead of immediately bouncing to
             // Login off a stale flag.
@@ -93,7 +97,8 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                     signedOut = false,
                     username = credentials.username,
                     server = credentials.hostAndPort(),
-                    lastRefreshedAt = lastCatalogUpdate ?: it.lastRefreshedAt
+                    lastRefreshedAt = if (hasStoredRefresh) lastCompletedRefresh
+                        else it.lastRefreshedAt ?: lastCatalogUpdate
                 )
             }
 
@@ -141,6 +146,8 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             val accountId = AccountIdentity.of(credentials)
+            if (!refreshTimes.contains("last_$accountId"))
+                refreshTimes.edit().putLong("last_$accountId", _state.value.lastRefreshedAt ?: 0L).apply()
             val vod = VodRepository(db, credentials, accountId)
             val live = LiveRepository(db, credentials, accountId)
             val syncer = CatalogSyncer(db, credentials, accountId)
@@ -172,15 +179,26 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
                     "Manual refresh: $vodRows movies, $liveRows channels, $seriesRows shows"
                 )
             }
+            val completedAt = if (failed) null else System.currentTimeMillis().also {
+                refreshTimes.edit().putLong("last_$accountId", it).apply()
+            }
             _state.update {
+                val failure = categories.firstOrNull { result -> result.isFailure }?.exceptionOrNull()
+                    ?: listOf(vodResult, liveResult, seriesResult)
+                        .firstOrNull { result -> result.isFailure }?.exceptionOrNull()
+                val copy = AppLanguage.wrap(getApplication<Application>())
                 it.copy(
                     isRefreshing = false,
                     refreshMessage = if (failed) {
-                        "Could not reach the panel"
+                        copy.getString(when ((failure as? AppErrorException)?.error) {
+                            AppError.RateLimited -> com.dev.Tvivo.R.string.refresh_rate_limited
+                            AppError.ServiceUnavailable -> com.dev.Tvivo.R.string.refresh_service_unavailable
+                            else -> com.dev.Tvivo.R.string.refresh_unreachable
+                        })
                     } else {
-                        "Refreshed $vodRows movies, $liveRows channels and $seriesRows shows"
+                        copy.getString(com.dev.Tvivo.R.string.refresh_result, vodRows, liveRows, seriesRows)
                     },
-                    lastRefreshedAt = if (failed) it.lastRefreshedAt else System.currentTimeMillis()
+                    lastRefreshedAt = completedAt ?: it.lastRefreshedAt
                 )
             }
             load()

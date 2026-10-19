@@ -61,6 +61,7 @@ import androidx.tv.material3.Text
 import com.dev.Tvivo.AppIdentity
 import com.dev.Tvivo.R
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.repository.HomeCard
@@ -168,6 +169,9 @@ fun HomeScreen(
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             launch { playback.continueWatching(TYPE_VOD).collect { reload++ } }
             launch { playback.continueWatching(TYPE_SERIES).collect { reload++ } }
+            launch { playback.recentlyPlayed(TYPE_VOD).collect { reload++ } }
+            launch { playback.recentlyPlayed(TYPE_SERIES).collect { reload++ } }
+            launch { playback.recentlyPlayed(TYPE_LIVE).collect { reload++ } }
         }
     }
     LaunchedEffect(accountId, seed, reload, isRefreshing) {
@@ -384,7 +388,12 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val shelfTitle = when (shelf.destination) {
                     VirtualFolderKey.ContinueWatching -> stringResource(R.string.shelf_continue_watching)
-                    VirtualFolderKey.RecentlyAdded -> stringResource(R.string.shelf_recently_added)
+                    VirtualFolderKey.RecentlyAdded -> stringResource(when (shelf.id) {
+                        "__my_added_movie" -> R.string.shelf_recently_added_movies
+                        "__my_added_series" -> R.string.shelf_recently_added_series
+                        "__my_added_live" -> R.string.shelf_recently_added_live
+                        else -> R.string.shelf_recently_added
+                    })
                     VirtualFolderKey.RecentlyPlayed -> stringResource(R.string.shelf_last_watched)
                     VirtualFolderKey.Favorites -> stringResource(R.string.shelf_favourites)
                     null -> shelf.title

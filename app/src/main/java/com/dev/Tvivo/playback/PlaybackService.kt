@@ -219,6 +219,7 @@ class PlaybackService : MediaSessionService() {
                     .setMediaMetadata(
                         MediaMetadata.Builder()
                             .setTitle(PlaybackSessionPolicy.displayTitle(item.title))
+                            .setArtist("")
                             .setArtworkData(appArtwork(), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
                             .build()
                     )
@@ -258,7 +259,12 @@ class PlaybackService : MediaSessionService() {
                 manualSubtitleChoice?.let { applyManualTrackChoice(C.TRACK_TYPE_TEXT, it, tracks) }
                 updateTimerNotificationActions()
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) = updateTimerNotificationActions()
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                updateTimerNotificationActions()
+                if (sleepTimer.state == SleepTimerState.Off) {
+                    if (!player.playWhenReady) showTimerForeground() else returnToMediaNotification()
+                } else showTimerForeground()
+            }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateTimerNotificationActions()
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY && handoff.current?.isLive == true) openTimeoutJob?.cancel()
@@ -467,6 +473,7 @@ class PlaybackService : MediaSessionService() {
                                     timerNoticeReason = sleepTimer.manualItemChange().noticeReason
                                 SleepTimerEndedSnapshot.clear()
                                 handoff.play(item)
+                                session.setSessionActivity(sessionActivityPendingIntent())
                                 if (handoff.current != null) startCheckpointing()
                                 val code = if (handoff.current?.requestId == item.requestId)
                                     SessionResult.RESULT_SUCCESS else SessionResult.RESULT_INFO_SKIPPED
@@ -569,6 +576,10 @@ class PlaybackService : MediaSessionService() {
         }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_FROM_UI) {
+            scope.launch { stopSession() }
+            return START_NOT_STICKY
+        }
         if (stopRequested || intent == null && handoff.current == null) {
             stopSelf(startId)
             return START_NOT_STICKY
@@ -593,7 +604,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         if (stopRequested || sessionReleased) return
-        if (sleepTimer.state == SleepTimerState.Armed || sleepTimer.state == SleepTimerState.Warning) {
+        if (sleepTimer.state == SleepTimerState.Armed || sleepTimer.state == SleepTimerState.Warning ||
+            handoff.current != null && !player.playWhenReady) {
             showTimerForeground()
         } else {
             if (timerForegroundStarted) {
@@ -610,7 +622,8 @@ class PlaybackService : MediaSessionService() {
         Intent(this, com.dev.Tvivo.ui.player.PlayerActivity::class.java)
             .setAction(ACTION_REOPEN_SESSION)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .putExtra(com.dev.Tvivo.ui.player.PlayerActivity.EXTRA_REOPEN_SESSION, true),
+            .putExtra(com.dev.Tvivo.ui.player.PlayerActivity.EXTRA_REOPEN_SESSION, true)
+            .putExtra(com.dev.Tvivo.ui.player.PlayerActivity.EXTRA_REQUEST_ID, handoff.current?.requestId),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -850,6 +863,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun statusBundle() = timerStatusBundle().apply {
         val item = handoff.current
+        putBoolean(PlaybackCommands.HAS_ACTIVE_ITEM, item != null)
         putString(PlaybackCommands.REQUEST_ID, item?.requestId ?: SleepTimerEndedSnapshot.requestId)
         putString(PlaybackCommands.TITLE, item?.title ?: SleepTimerEndedSnapshot.title)
         putString(PlaybackCommands.ITEM_ID, item?.itemId ?: SleepTimerEndedSnapshot.itemId)
@@ -1000,20 +1014,26 @@ class PlaybackService : MediaSessionService() {
 
     private fun showTimerForeground() {
         if (!::session.isInitialized ||
-            sleepTimer.state != SleepTimerState.Armed && sleepTimer.state != SleepTimerState.Warning) return
+            sleepTimer.state != SleepTimerState.Armed && sleepTimer.state != SleepTimerState.Warning &&
+            (handoff.current == null || player.playWhenReady)) return
         if (Build.VERSION.SDK_INT >= 26) {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (manager.getNotificationChannel(TIMER_CHANNEL_ID) == null)
                 manager.createNotificationChannel(NotificationChannel(
-                    TIMER_CHANNEL_ID, "Playback timer", NotificationManager.IMPORTANCE_LOW))
+                    TIMER_CHANNEL_ID, "Playback", NotificationManager.IMPORTANCE_LOW))
         }
         val warning = sleepTimer.state == SleepTimerState.Warning
         val style = MediaStyleNotificationHelper.MediaStyle(session)
-            .setShowActionsInCompactView(*(if (warning) intArrayOf(0, 1, 2) else intArrayOf(0, 1)))
+            .setShowActionsInCompactView(*(if (sleepTimer.state == SleepTimerState.Armed || warning)
+                intArrayOf(0, 1, 2) else intArrayOf(0, 1)))
         val notification = NotificationCompat.Builder(this, TIMER_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(handoff.current?.title ?: "Now playing")
-            .setContentText(if (warning) "Sleep timer: 2 minutes left" else "Sleep timer on")
+            .setContentText(when {
+                warning -> "Sleep timer: 2 minutes left"
+                sleepTimer.state == SleepTimerState.Armed -> "Sleep timer on"
+                else -> "Playback paused"
+            })
             .setContentIntent(sessionActivityPendingIntent())
             .setStyle(style)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -1023,7 +1043,7 @@ class PlaybackService : MediaSessionService() {
             .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                 if (player.isPlaying) "Pause" else "Play", timerAction(PlaybackCommands.TIMER_PLAY_PAUSE_NOTIFICATION, 11))
             .apply {
-                if (warning) {
+                if (sleepTimer.state == SleepTimerState.Armed || warning) {
                     addAction(android.R.drawable.ic_menu_add, "Add 15 minutes",
                         timerAction(PlaybackCommands.TIMER_EXTEND_15, 12))
                     addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn off timer",
@@ -1044,6 +1064,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun returnToMediaNotification() {
         if (!timerForegroundStarted || !::session.isInitialized) return
+        if (!player.playWhenReady && handoff.current != null) { showTimerForeground(); return }
         timerForegroundStarted = false
         super.onUpdateNotification(session,
             player.playWhenReady && (player.playbackState == Player.STATE_READY ||
@@ -1070,7 +1091,8 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
-    private companion object {
+    companion object {
+        const val ACTION_STOP_FROM_UI = "com.dev.Tvivo.playback.STOP_FROM_UI"
         const val ACTION_REOPEN_SESSION = "com.dev.Tvivo.playback.REOPEN_SESSION"
         const val TIMER_CHANNEL_ID = "playback_timer"
         const val TIMER_NOTIFICATION_ID = 1001
@@ -1112,16 +1134,20 @@ internal object SleepTimerEndedSnapshot {
         private set
     var itemId: String? = null
         private set
+    var url: String? = null
+        private set
 
     fun record(item: PlaybackHandoff.Item?) {
         requestId = item?.requestId
         title = item?.title
         itemId = item?.itemId ?: item?.requestId
+        url = item?.url
     }
 
     fun clear() {
         requestId = null
         title = null
         itemId = null
+        url = null
     }
 }

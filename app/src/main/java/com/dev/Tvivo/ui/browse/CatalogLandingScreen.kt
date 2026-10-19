@@ -120,6 +120,7 @@ fun CatalogLandingScreen(
     val repository = remember(accountId) { HomeRepository(AppDatabase.get(application), accountId) }
     val landingSpec = remember(contentType) { LandingSpec.forType(contentType.toShelfContentType()) }
     var openCategoryId by rememberSaveable(accountId, contentType) { mutableStateOf(initialCategoryId) }
+    var appliedInitialCategoryId by rememberSaveable(accountId, contentType) { mutableStateOf(initialCategoryId) }
     var openItemFilter by rememberSaveable(accountId, contentType) { mutableStateOf<String?>(null) }
     val sort by viewModel.sort.collectAsStateWithLifecycle()
     val categorySort by viewModel.categorySort.collectAsStateWithLifecycle()
@@ -164,7 +165,10 @@ fun CatalogLandingScreen(
     val hasCachedCatalog = state.categories.isNotEmpty() || state.counts.values.any { it > 0 }
 
     LaunchedEffect(initialCategoryId) {
-        if (initialCategoryId != null) openCategoryId = initialCategoryId
+        if (initialCategoryId != null && initialCategoryId != appliedInitialCategoryId) {
+            openCategoryId = initialCategoryId
+            appliedInitialCategoryId = initialCategoryId
+        }
     }
     LaunchedEffect(shellSortRevision) {
         if (shellSortRevision > 0) viewModel.setSort(shellSortChoice)

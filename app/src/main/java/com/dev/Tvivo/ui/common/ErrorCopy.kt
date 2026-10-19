@@ -53,6 +53,16 @@ object ErrorCopy {
             primaryAction = "Retry"
         )
 
+        AppError.RateLimited -> ErrorPresentation(
+            message = "The server is receiving too many requests. Try again shortly.",
+            primaryAction = "Retry later"
+        )
+
+        AppError.ServiceUnavailable -> ErrorPresentation(
+            message = "The server is temporarily unavailable. Your saved catalog is still here.",
+            primaryAction = "Retry later"
+        )
+
         AppError.Empty -> ErrorPresentation(
             message = "Nothing in this category",
             primaryAction = "Refresh"
@@ -78,6 +88,8 @@ object ErrorCopy {
             primaryAction = "Retry",
             secondaryAction = "Edit server"
         )
+        AppError.RateLimited -> of(error).copy(message = "Server busy. Try again shortly.")
+        AppError.ServiceUnavailable -> of(error).copy(message = "Server unavailable. Try again later.")
         else -> of(error)
     }
 

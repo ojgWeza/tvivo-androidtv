@@ -3,6 +3,8 @@ package com.dev.Tvivo.sync
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dev.Tvivo.auth.Credentials
+import com.dev.Tvivo.auth.AppErrorException
+import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -168,6 +170,16 @@ class CatalogSyncerTest {
         assertTrue(syncer.syncVod().isFailure)
         assertEquals(CatalogSyncer.STATE_FAILED, state(TYPE_VOD))
         assertNotNull(db.vodDao().byId(account, 1))
+    }
+
+    @Test
+    fun rateLimitAndServiceShutdownKeepDistinctErrorsForRefreshCopy() = runTest {
+        server.enqueue(MockResponse().setResponseCode(429))
+        assertEquals(AppError.RateLimited,
+            (syncer.syncVod().exceptionOrNull() as AppErrorException).error)
+        server.enqueue(MockResponse().setResponseCode(503))
+        assertEquals(AppError.ServiceUnavailable,
+            (syncer.syncVod().exceptionOrNull() as AppErrorException).error)
     }
 
     @Test

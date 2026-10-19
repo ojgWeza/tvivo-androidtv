@@ -70,6 +70,12 @@ internal sealed interface PlayerSessionExitState {
 internal data class ReplayItem(val url: String, val title: String, val itemId: String?)
 internal data class ReplayRequest(val item: ReplayItem, val requestId: String, val positionMs: Long)
 
+internal object PlayerSessionIdentity {
+    fun matches(expected: String?, active: String?, activeItem: String?, queuedItemIds: List<String>): Boolean =
+        expected != null && active != null &&
+            (expected == active || activeItem != null && activeItem in queuedItemIds)
+}
+
 /** The service may already be gone when the Activity learns that playback ended. */
 internal class PlayerSessionExitController(
     private val endedSnapshot: () -> EndedItemSnapshot?,

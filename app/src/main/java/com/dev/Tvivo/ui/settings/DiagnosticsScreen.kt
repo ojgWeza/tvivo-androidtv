@@ -1,6 +1,8 @@
 package com.dev.Tvivo.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,6 +54,9 @@ fun DiagnosticsScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var catalogProfile by remember { mutableStateOf<CatalogProfiler.Snapshot?>(null) }
+    var showTechnicalDetails by remember { mutableStateOf(false) }
+    var profileRunning by remember { mutableStateOf(false) }
+    var profileFailed by remember { mutableStateOf(false) }
     val metrics by produceState<DbMetrics.Snapshot?>(initialValue = null, context) {
         value = withContext(Dispatchers.IO) {
             DbMetrics.collect(context.applicationContext, AppDatabase.get(context).openHelper.readableDatabase)
@@ -65,6 +70,7 @@ fun DiagnosticsScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.Bg)
+            .verticalScroll(rememberScrollState())
             .padding(
                 horizontal = if (LocalIsTelevision.current) 96.dp else spacing.outerGutter,
                 vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
@@ -88,7 +94,7 @@ fun DiagnosticsScreen() {
                 color = AppColors.Dim,
                 style = TvType.caption
             )
-            if (snapshot.tableBytes.isNotEmpty()) {
+            if (snapshot.tableBytes.isNotEmpty() && showTechnicalDetails) {
                 Text(
                     text = snapshot.tableBytes.entries.joinToString("  ") { (name, bytes) ->
                         "$name ${DbMetrics.formatBytes(bytes)}"
@@ -125,18 +131,32 @@ fun DiagnosticsScreen() {
             Button(onClick = DiagnosticLog::clear) {
                 Text(stringResource(com.dev.Tvivo.R.string.diagnostics_clear_log))
             }
-            Spacer(Modifier.width(12.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row {
             Button(onClick = {
                 scope.launch {
-                    catalogProfile = withContext(Dispatchers.IO) {
-                        CatalogProfiler.profile(AppDatabase.get(context).openHelper.readableDatabase)
-                    }
+                    profileRunning = true
+                    profileFailed = false
+                    catalogProfile = runCatching {
+                        withContext(Dispatchers.IO) {
+                            CatalogProfiler.profile(AppDatabase.get(context).openHelper.readableDatabase)
+                        }
+                    }.getOrElse { profileFailed = true; null }
+                    profileRunning = false
                 }
             }) {
                 Text(stringResource(com.dev.Tvivo.R.string.diagnostics_profile_catalog))
             }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = { showTechnicalDetails = !showTechnicalDetails }) {
+                Text(if (showTechnicalDetails) "Hide technical details" else "Technical details")
+            }
         }
         Spacer(Modifier.height(20.dp))
+
+        if (profileRunning) Text("Profiling saved catalog…", color = AppColors.Dim, style = TvType.body)
+        if (profileFailed) Text("Could not profile the saved catalog.", color = AppColors.Error, style = TvType.body)
 
         catalogProfile?.let { profile ->
             if (profile.samples.isEmpty()) {
@@ -145,7 +165,9 @@ fun DiagnosticsScreen() {
                 Text(stringResource(com.dev.Tvivo.R.string.diagnostics_catalog_profile), color = AppColors.Ink, style = TvType.title)
                 profile.samples.forEach { sample ->
                     Text(
-                        text = "${sample.label}: ${sample.elapsedMs} ms, ${sample.rowsRead} rows — ${sample.queryPlan}",
+                        text = "${sample.label.replace("vod_streams", "Movies").replace("live_streams", "Live TV").replace("series", "Series")}: " +
+                            "${sample.elapsedMs} ms, ${sample.rowsRead} rows" +
+                            (if (showTechnicalDetails) " — ${sample.queryPlan}" else ""),
                         color = AppColors.Dim,
                         style = TvType.caption
                     )
@@ -160,8 +182,8 @@ fun DiagnosticsScreen() {
             return@Column
         }
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(entries) { entry ->
+        Column {
+            entries.forEach { entry ->
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(
                         text = entry.time,

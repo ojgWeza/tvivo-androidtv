@@ -21,7 +21,7 @@ internal object PlaybackSleepTimerGate {
         else -1L
 
     fun notificationActions(state: SleepTimerState): List<String> =
-        if (state == SleepTimerState.Warning) listOf(
+        if (state == SleepTimerState.Armed || state == SleepTimerState.Warning) listOf(
             PlaybackCommands.TIMER_EXTEND_15,
             PlaybackCommands.TIMER_CANCEL,
             PlaybackCommands.STOP,

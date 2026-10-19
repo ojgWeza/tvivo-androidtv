@@ -117,13 +117,17 @@ fun ItemDetailScreen(
                 val movie = DetailPlaybackPolicy.movieActions(resume,
                     state.durationMs ?: state.durationMinutes?.times(60_000L))
                 val primaryLabel = when {
-                    isSeries -> "View episodes"
+                    isSeries -> stringResource(com.dev.Tvivo.R.string.detail_view_episodes)
                     movie.primary == MovieActionKind.Resume -> {
                         val remaining = movie.remainingMs
-                        if (remaining != null) "Resume · ${DetailPlaybackPolicy.remainingLabel(remaining)}"
-                        else "Resume"
+                        if (remaining != null) {
+                            val minutes = (remaining.coerceAtLeast(0L) / 60_000L).coerceAtLeast(1L)
+                            if (minutes >= 60) stringResource(com.dev.Tvivo.R.string.detail_resume_hours,
+                                minutes / 60, minutes % 60)
+                            else stringResource(com.dev.Tvivo.R.string.detail_resume_minutes, minutes)
+                        } else stringResource(com.dev.Tvivo.R.string.detail_resume)
                     }
-                    else -> "Play"
+                    else -> stringResource(com.dev.Tvivo.R.string.player_play)
                 }
                 if (!state.isLoading) DetailTextButton(primaryLabel, Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
                     if (isSeries) onOpenEpisodes() else onPlay(

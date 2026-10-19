@@ -56,7 +56,8 @@ class ErrorMapperTest {
         // max_connections is 1 on this account, and panels signal an exhausted slot
         // inconsistently — this classification is probable, never definitive.
         assertEquals(AppError.ConnectionLimitReached, ErrorMapper.fromHttpCode(500))
-        assertEquals(AppError.ConnectionLimitReached, ErrorMapper.fromHttpCode(503))
+        assertEquals(AppError.ServiceUnavailable, ErrorMapper.fromHttpCode(503))
+        assertEquals(AppError.RateLimited, ErrorMapper.fromHttpCode(429))
     }
 
     /** A wrong password comes back as HTTP 200 with `auth: 0`. */

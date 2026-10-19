@@ -91,14 +91,16 @@ class PlayerActivity : ComponentActivity() {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var stopResultFuture: ListenableFuture<*>? = null
     private var pendingStart = false
+    private var verifyingSession = false
+    private var activeSessionConfirmed = false
     private var replayStarting = false
     private var queuedReplay: ReplayRequest? = null
+    private var replayReconnectAttempts = 0
     private var stopPending = false
     private var playerView: PlayerView? = null
     private var composeView: ComposeView? = null
     private var pipWindowOpen = false
     private var pipExitPending = false
-    private var dismissingPausedPip = false
     private var pipReceiverRegistered = false
     private var videoAspectRatio = Rational(16, 9)
     private var lastPipEntry: PipPolicy.Entry? = null
@@ -168,16 +170,19 @@ class PlayerActivity : ComponentActivity() {
         initialThemeMode = runBlocking { appearance.themeMode.first() }
         appearance.syncSystemTheme(initialThemeMode)
         val systemBarColor = (if (initialThemeMode == ThemeMode.Light) LightAppColors else DefaultAppColors).bg.toArgb()
-        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(systemBarColor))
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK))
         window.statusBarColor = systemBarColor
         window.navigationBarColor = systemBarColor
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = initialThemeMode == ThemeMode.Light
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = initialThemeMode == ThemeMode.Light
         val reopensSession = intent.getBooleanExtra(EXTRA_REOPEN_SESSION, false)
-        if (!reopensSession && intent.getStringExtra(EXTRA_URL) == null) { finish(); return }
+        if (reopensSession && intent.getStringExtra(EXTRA_REQUEST_ID) == null ||
+            !reopensSession && intent.getStringExtra(EXTRA_URL) == null) { finish(); return }
         if (!reopensSession && intent.getStringExtra(EXTRA_REQUEST_ID) == null)
             intent.putExtra(EXTRA_REQUEST_ID, UUID.randomUUID().toString())
         pendingStart = savedInstanceState == null && !reopensSession
+        replayStarting = pendingStart
+        verifyingSession = !pendingStart
         isLive = intent.getBooleanExtra(EXTRA_IS_LIVE, false)
         val resumeFromMs = intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L)
         itemId = intent.getStringExtra(EXTRA_ITEM_ID)
@@ -188,6 +193,9 @@ class PlayerActivity : ComponentActivity() {
             intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Now playing" }, isLive,
             hasResume = resumeFromMs > 0
         )
+        if (pendingStart) queuedReplay = ReplayRequest(
+            ReplayItem(intent.getStringExtra(EXTRA_URL)!!, overlayState.title, itemId),
+            intent.getStringExtra(EXTRA_REQUEST_ID)!!, resumeFromMs)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -200,6 +208,7 @@ class PlayerActivity : ComponentActivity() {
         val view = PlayerView(this).apply {
             layoutParams = FrameLayout.LayoutParams(-1, -1)
             useController = false
+            setBackgroundColor(android.graphics.Color.BLACK)
         }
         playerView = view
         val root = FrameLayout(this).apply { addView(view) }
@@ -220,9 +229,15 @@ class PlayerActivity : ComponentActivity() {
                         state = overlayState,
                         visible = this@PlayerActivity.visibility.visible,
                         onToggleOverlay = { if (this@PlayerActivity.visibility.visible) hideControls() else showControls() },
-                        onBack = { stopAndFinish() },
+                        onBack = { stopAndFinish(finishImmediately = true) },
                         onPlayPause = {
-                            player?.let { if (it.isPlaying) it.pause() else it.play() }
+                            player?.let {
+                                if (it.isPlaying) it.pause()
+                                else if (isLive && (it.playbackState == Player.STATE_BUFFERING ||
+                                        overlayState.playbackState == "retry" || overlayState.playbackState == "reconnecting"))
+                                    it.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.RETRY), Bundle.EMPTY)
+                                else it.play()
+                            }
                             updateControls()
                         },
                         onSeek = { seekBy(it) },
@@ -276,19 +291,13 @@ class PlayerActivity : ComponentActivity() {
         pipReceiverRegistered = true
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (PlayerBackPolicy.action(openMenus.isNotEmpty(), isTelevisionDevice()) == PlayerBackAction.DismissMenu) {
-                    dismissMenus++
-                    openMenus = emptySet()
-                    rearmControls()
-                } else {
-                    openMenus = emptySet()
-                    stopAndFinish(finishImmediately = isTelevisionDevice())
-                }
+                openMenus = emptySet()
+                stopAndFinish(finishImmediately = true)
             }
         })
         connectController()
         updatePipParams()
-        showControls()
+        if (pendingStart) showControls()
         startPositionTicker()
     }
 
@@ -338,19 +347,19 @@ class PlayerActivity : ComponentActivity() {
         controllerFuture?.let(MediaController::releaseFuture)
         controllerFuture = null
         when (val exit = sessionExit.disconnected(intent.getStringExtra(EXTRA_REQUEST_ID))) {
-            is PlayerSessionExitState.EndedView -> showEndedView(exit.item)
+            is PlayerSessionExitState.EndedView -> if (activeSessionConfirmed) showEndedView(exit.item)
             PlayerSessionExitState.Stopped -> {
-                timerUiPinned = true
-                overlayState = overlayState.copy(
-                    isPlaying = false, seekable = false, hasNext = false, nextPrompt = false,
-                    playbackState = "stopped", sleepTimer = SleepTimerUiState(),
-                )
-                showControls()
+                if (queuedReplay == null) { finish(); return }
             }
         }
+        if (!activeSessionConfirmed && queuedReplay == null) { finish(); return }
         queuedReplay?.let { replay ->
             queuedReplay = null
-            startReplay(replay)
+            if (++replayReconnectAttempts > 3) { finish(); return }
+            lifecycleScope.launch {
+                delay(150L * replayReconnectAttempts)
+                if (!isFinishing && !isDestroyed) startReplay(replay)
+            }
         }
     }
 
@@ -370,18 +379,25 @@ class PlayerActivity : ComponentActivity() {
 
     private fun verifyExistingSession(controller: MediaController) {
         val expected = intent.getStringExtra(EXTRA_REQUEST_ID)
+        if (expected == null) { finish(); return }
+        verifyingSession = true
         val future = controller.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STATUS), Bundle.EMPTY)
         future.addListener({
-            if (player !== controller || overlayState.sleepTimer.isEnded) return@addListener
-            val extras = runCatching { future.get().extras }.getOrNull() ?: return@addListener
+            if (player !== controller || isFinishing) return@addListener
+            val extras = runCatching { future.get().extras }.getOrNull()
+            if (extras == null) { finish(); return@addListener }
             val active = extras.getString(PlaybackCommands.REQUEST_ID)
             val activeItem = extras.getString(PlaybackCommands.ITEM_ID)
             Log.i("PlaybackResume", "session verify type=$contentType active=${active != null} " +
                 "matches=${active == expected} queued=${activeItem != null && intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.contains(activeItem) == true}")
-            val queuedItem = activeItem != null && intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.contains(activeItem) == true
-            if (!stopPending && !isFinishing && expected != null && intent.getStringExtra(EXTRA_REQUEST_ID) == expected && active != expected && !queuedItem)
-                finish()
-            updateControls()
+            if (!stopPending && (!extras.getBoolean(PlaybackCommands.HAS_ACTIVE_ITEM) ||
+                !PlayerSessionIdentity.matches(expected, active, activeItem,
+                    intent.getStringArrayListExtra(EXTRA_EPISODE_IDS).orEmpty()))) {
+                finish(); return@addListener
+            }
+            verifyingSession = false
+            activeSessionConfirmed = true
+            showControls()
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -418,12 +434,14 @@ class PlayerActivity : ComponentActivity() {
         val result = controller.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.PLAY), PlaybackCommands.bundle(item))
         pendingStart = false
         if (replayStarting) result.addListener({
-            if (player === controller && intent.getStringExtra(EXTRA_REQUEST_ID) == item.requestId &&
-                runCatching { result.get().resultCode }.getOrNull() == SessionResult.RESULT_SUCCESS) {
+            if (player !== controller || intent.getStringExtra(EXTRA_REQUEST_ID) != item.requestId) return@addListener
+            if (runCatching { result.get().resultCode }.getOrNull() == SessionResult.RESULT_SUCCESS) {
                 queuedReplay = null
                 replayStarting = false
+                activeSessionConfirmed = true
+                replayReconnectAttempts = 0
                 updateControls()
-            }
+            } else handleControllerLoss(controller)
         }, ContextCompat.getMainExecutor(this))
         return result
     }
@@ -505,11 +523,21 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun stopAndFinish(finishImmediately: Boolean = false) {
-        if (stopPending) return
+        if (stopPending) { finish(); return }
         stopPending = true
         pendingStart = false
         updatePipParams()
-        if (player != null) requestStopAndFinish(finishImmediately) else finish()
+        if (player != null) requestStopAndFinish(finishImmediately) else {
+            stopServiceWithoutController()
+            finish()
+        }
+    }
+
+    private fun stopServiceWithoutController() {
+        runCatching {
+            startService(Intent(this, PlaybackService::class.java)
+                .setAction(PlaybackService.ACTION_STOP_FROM_UI))
+        }
     }
 
     private fun requestStopAndFinish(finishImmediately: Boolean = false) {
@@ -525,7 +553,11 @@ class PlayerActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT < 26 || stopPending) return
             when (PipPlaybackAction.command(intent.action)) {
                 PipPlaybackAction.Command.PlayPause -> if (isInPictureInPictureMode) player?.let {
-                    if (it.isPlaying) it.pause() else it.play()
+                    if (it.isPlaying) it.pause()
+                    else if (isLive && (it.playbackState == Player.STATE_BUFFERING ||
+                            overlayState.playbackState == "retry" || overlayState.playbackState == "reconnecting"))
+                        it.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.RETRY), Bundle.EMPTY)
+                    else it.play()
                 }
                 PipPlaybackAction.Command.Rewind -> if (isInPictureInPictureMode && overlayState.seekable)
                     seekBy(-SEEK_INCREMENT_MS)
@@ -534,7 +566,7 @@ class PlayerActivity : ComponentActivity() {
                 PipPlaybackAction.Command.Next -> if (isInPictureInPictureMode) playNextEpisode()
                 PipPlaybackAction.Command.Close -> if (pipWindowOpen &&
                     PipPolicy.exit(true, player?.playWhenReady == true, explicitClose = true) ==
-                    PipPolicy.Exit.StopPlayback) stopAndFinish()
+                    PipPolicy.Exit.StopPlayback) stopAndFinish(finishImmediately = true)
                 null -> Unit
             }
         }
@@ -626,7 +658,7 @@ class PlayerActivity : ComponentActivity() {
             if (!pipExitPending) pipWindowOpen = false
         }
         composeView?.visibility = if (inPip) View.GONE else View.VISIBLE
-        if (!inPip && !isFinishing && !stopPending && !dismissingPausedPip) {
+        if (!inPip && !isFinishing && !stopPending) {
             playerView?.player = player
             hideSystemBars()
             showControls()
@@ -641,7 +673,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (Build.VERSION.SDK_INT >= 26 && !isInPictureInPictureMode && !isFinishing &&
-            !stopPending && !dismissingPausedPip) {
+            !stopPending) {
             pipExitPending = false
             pipWindowOpen = false
             composeView?.visibility = View.VISIBLE
@@ -676,6 +708,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun showControls() {
+        if (verifyingSession) return
         visibility = visibility.onInput()
         rearmControls()
         updateControls()
@@ -712,6 +745,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun updateControls() {
         val exo = player ?: return
+        if (replayStarting) { updatePipParams(); return }
         val duration = PlaybackDurationPolicy.resolve(exo.duration,
             intent.getLongExtra(EXTRA_KNOWN_DURATION_MS, 0L))
         overlayState = overlayState.copy(
@@ -723,7 +757,7 @@ class PlayerActivity : ComponentActivity() {
             hasNext = nextIndex() != null,
         )
         val controller = player
-        if (controller != null) {
+        if (controller != null && !verifyingSession) {
             val request = ++statusRequest
             val status = controller.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STATUS), Bundle.EMPTY)
             status.addListener({
@@ -791,13 +825,6 @@ class PlayerActivity : ComponentActivity() {
             }, ContextCompat.getMainExecutor(this))
         }
         updatePipParams()
-        if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode && !stopPending &&
-            !isFinishing && exo.playbackState != Player.STATE_ENDED &&
-            PipPolicy.exit(true, exo.playWhenReady, explicitClose = false) == PipPolicy.Exit.DismissPaused
-        ) {
-            dismissingPausedPip = true
-            finish()
-        }
     }
 
     private fun dispatchTimerCommand(command: SleepTimerUiCommand) {
@@ -813,7 +840,7 @@ class PlayerActivity : ComponentActivity() {
         val queueIndex = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.indexOf(endedId) ?: -1
         val url = if (queueIndex >= 0)
             intent.getStringArrayListExtra(EXTRA_EPISODE_URLS)?.getOrNull(queueIndex)
-        else intent.getStringExtra(EXTRA_URL)
+        else intent.getStringExtra(EXTRA_URL) ?: SleepTimerEndedSnapshot.url
         val replay = ReplayItem(
             url ?: return,
             overlayState.sleepTimer.endedTitle ?: intent.getStringExtra(EXTRA_TITLE).orEmpty(),
@@ -837,6 +864,8 @@ class PlayerActivity : ComponentActivity() {
         itemId = replay.item.itemId
         pendingStart = true
         replayStarting = true
+        activeSessionConfirmed = false
+        queuedReplay = replay
         overlayState = overlayState.copy(
             title = replay.item.title, isPlaying = false, seekable = false,
             sleepTimer = SleepTimerUiState(), playbackState = "playing", positionMs = 0L,
@@ -846,10 +875,8 @@ class PlayerActivity : ComponentActivity() {
         if (player != null) {
             // An idle replacement session can accept PLAY immediately. If the old session is
             // still stopping, its disconnect will retry this request on a fresh session.
-            queuedReplay = replay
             sendPlayRequest()
         } else {
-            queuedReplay = null
             connectController()
         }
         showControls()
@@ -872,7 +899,7 @@ class PlayerActivity : ComponentActivity() {
         overlayState = overlayState.copy(
             audio = choices(audioTracks, TrackKind.Audio),
             subtitles = if (subtitleTracks.isEmpty()) emptyList() else
-                listOf(TrackChoice("Off", textDisabled || subtitleTracks.none { it.group.isTrackSelected(it.index) })) +
+                listOf(TrackChoice(getString(R.string.player_track_off), textDisabled || subtitleTracks.none { it.group.isTrackSelected(it.index) })) +
                     choices(subtitleTracks, TrackKind.Subtitle)
         )
     }
@@ -1036,12 +1063,12 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         playerView?.player = null
-        if (PipPolicy.shouldStopAfterExit(pipExitPending, isChangingConfigurations,
-                dismissingPausedPip, stopPending)) {
+        if (PipPolicy.shouldStopAfterExit(pipExitPending, isChangingConfigurations, stopPending)) {
             // PiP close exits into Stop; expansion reaches onResume and clears the pending exit.
             pipExitPending = false
             pipWindowOpen = false
             stopResultFuture = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
+            if (stopResultFuture == null) stopServiceWithoutController()
         }
         super.onStop()
     }
@@ -1050,9 +1077,12 @@ class PlayerActivity : ComponentActivity() {
         positionTicker?.cancel()
         autoHideJob?.cancel(); feedbackJob?.cancel()
         // On API 26-32 the system close affordance has no custom close callback.
-        if (pipWindowOpen && isFinishing && !dismissingPausedPip && !stopPending &&
+        if (pipWindowOpen && isFinishing && !stopPending &&
             player?.playbackState != Player.STATE_ENDED
-        ) stopResultFuture = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
+        ) {
+            stopResultFuture = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
+            if (stopResultFuture == null) stopServiceWithoutController()
+        }
         if (pipReceiverRegistered) unregisterReceiver(pipActionReceiver)
         playerView?.player = null
         playerView = null
@@ -1080,12 +1110,18 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onNewIntent(newIntent: Intent) {
         super.onNewIntent(newIntent)
+        if (newIntent.getBooleanExtra(EXTRA_REOPEN_SESSION, false) &&
+            newIntent.getStringExtra(EXTRA_REQUEST_ID) == intent.getStringExtra(EXTRA_REQUEST_ID))
+            intent.extras?.let(newIntent::putExtras)
+        setIntent(newIntent)
         if (newIntent.getBooleanExtra(EXTRA_REOPEN_SESSION, false)) {
+            if (newIntent.getStringExtra(EXTRA_REQUEST_ID) == null) { finish(); return }
+            verifyingSession = true
+            if (player == null && controllerFuture == null) { finish(); return }
             player?.let(::verifyExistingSession)
-            showControls()
             return
         }
-        setIntent(newIntent)
+        if (newIntent.getStringExtra(EXTRA_URL) == null) { finish(); return }
         if (newIntent.getStringExtra(EXTRA_REQUEST_ID) == null)
             newIntent.putExtra(EXTRA_REQUEST_ID, UUID.randomUUID().toString())
         isLive = newIntent.getBooleanExtra(EXTRA_IS_LIVE, false)
@@ -1096,9 +1132,22 @@ class PlayerActivity : ComponentActivity() {
         channelSwitchPending = false
         itemId = newIntent.getStringExtra(EXTRA_ITEM_ID)
         contentType = newIntent.getStringExtra(EXTRA_CONTENT_TYPE)
+        statusRequest++
+        verifyingSession = false
+        activeSessionConfirmed = false
+        timerUiPinned = false
+        dismissMenus++
+        openMenus = emptySet()
         overlayState = PlayerOverlayState(newIntent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Now playing" }, isLive)
         pendingStart = true
-        replayStarting = false
+        replayStarting = true
+        queuedReplay = ReplayRequest(ReplayItem(
+            newIntent.getStringExtra(EXTRA_URL)!!,
+            newIntent.getStringExtra(EXTRA_TITLE).orEmpty(),
+            newIntent.getStringExtra(EXTRA_ITEM_ID)),
+            newIntent.getStringExtra(EXTRA_REQUEST_ID)!!,
+            newIntent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L))
+        replayReconnectAttempts = 0
         if (player != null) {
             sendPlayRequest()
         } else if (controllerFuture == null) connectController()

@@ -33,6 +33,7 @@ internal object PlaybackCommands {
     const val TIMER_NOTICE_REASON = "timer_notice_reason"
     const val TIMER_ENDED_ITEM_ID = "timer_ended_item_id"
     const val REQUEST_ID = "request_id"
+    const val HAS_ACTIVE_ITEM = "has_active_item"
     const val URL = "url"
     const val TITLE = "title"
     const val ACCOUNT_ID = "account_id"

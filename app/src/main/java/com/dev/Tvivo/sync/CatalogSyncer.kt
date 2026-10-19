@@ -1,6 +1,7 @@
 package com.dev.Tvivo.sync
 
 import com.dev.Tvivo.auth.Credentials
+import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -10,6 +11,7 @@ import com.dev.Tvivo.data.remote.LiveStreamParser
 import com.dev.Tvivo.data.remote.SeriesListParser
 import com.dev.Tvivo.data.remote.VodStreamParser
 import com.dev.Tvivo.data.remote.XtreamApiClient
+import com.dev.Tvivo.data.remote.ErrorMapper
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.diagnostics.NetworkEventRecorder
 import com.dev.Tvivo.diagnostics.NetworkEventSource
@@ -135,7 +137,7 @@ class CatalogSyncer(
                 NetworkEventRecorder.http(NetworkEventSource.CATALOG, accountId, response.code(), "catalog sync")
                 setState(STATE_FAILED, done = 0, total = 0, contentType = contentType)
                 DiagnosticLog.error(AREA, "$contentType: sync failed, HTTP ${response.code()}")
-                return@withContext Result.failure(IllegalStateException("HTTP ${response.code()}"))
+                return@withContext Result.failure(AppErrorException(ErrorMapper.fromHttpCode(response.code())))
             }
 
             val body = response.body() ?: run {

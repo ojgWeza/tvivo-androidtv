@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -51,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -333,6 +336,7 @@ fun PlayerOverlay(
                 }
 
                 // Media direction is physical: rewind | play | forward stays in this visual order in RTL.
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 Row(
                     Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -382,7 +386,9 @@ fun PlayerOverlay(
                         onHeld = { onSeek(it) }
                     )
                 }
+                }
 
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                     val spokenSeekLabel = if (controls.scrubber) stringResource(
                         R.string.player_seek_position,
@@ -480,6 +486,7 @@ fun PlayerOverlay(
                                 .testTag("player_timer"), dismissMenus, onMenuOpenChanged
                         )
                     }
+                }
                 }
             }
         }

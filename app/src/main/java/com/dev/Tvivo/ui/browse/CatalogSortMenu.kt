@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.dev.Tvivo.home.CatalogSort
@@ -32,7 +33,7 @@ fun CatalogSortMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        HeaderIconButton(sortIconVector(), "Sort items", onClick = { expanded = true },
+        HeaderIconButton(sortIconVector(), stringResource(com.dev.Tvivo.R.string.sort_items_accessibility), onClick = { expanded = true },
             modifier = modifier.focusRequester(focusRequester).testTag("browse-sort"))
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
             modifier = Modifier.background(AppColors.Elevated)) {

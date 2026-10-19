@@ -7,6 +7,12 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BrowseStatusMessageTest {
+    @Test fun rateLimitAndServerShutdownHaveDistinctCachedCopy() {
+        assertEquals("Server busy — showing cached data. Try again shortly",
+            browseStatusMessage(AppError.RateLimited, null, hasCachedItems = true))
+        assertEquals("Server unavailable — showing cached data",
+            browseStatusMessage(AppError.ServiceUnavailable, null, hasCachedItems = true))
+    }
     @Test
     fun networkFailureWithCachedRowsIsExplicitlyOffline() {
         assertEquals(

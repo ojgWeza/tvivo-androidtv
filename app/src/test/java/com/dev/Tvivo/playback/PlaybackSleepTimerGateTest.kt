@@ -55,7 +55,8 @@ class PlaybackSleepTimerGateTest {
     @Test fun warningActionsAreAvailableWithoutTheActivity() {
         val timer = SleepTimerPolicy()
         timer.startCustom(0, 5)
-        assertEquals(listOf(PlaybackCommands.STOP),
+        assertEquals(listOf(PlaybackCommands.TIMER_EXTEND_15, PlaybackCommands.TIMER_CANCEL,
+            PlaybackCommands.STOP),
             PlaybackSleepTimerGate.notificationActions(timer.state))
         assertTrue(timer.tick(180_000L).showWarning)
         assertEquals(listOf(PlaybackCommands.TIMER_EXTEND_15, PlaybackCommands.TIMER_CANCEL,
@@ -65,7 +66,8 @@ class PlaybackSleepTimerGateTest {
         assertEquals(PlaybackSleepTimerGate.NotificationAction.Cancel,
             PlaybackSleepTimerGate.notificationAction(PlaybackCommands.TIMER_CANCEL))
         timer.extend(180_000L)
-        assertEquals(listOf(PlaybackCommands.STOP),
+        assertEquals(listOf(PlaybackCommands.TIMER_EXTEND_15, PlaybackCommands.TIMER_CANCEL,
+            PlaybackCommands.STOP),
             PlaybackSleepTimerGate.notificationActions(timer.state))
         timer.cancel()
         assertEquals(listOf(PlaybackCommands.STOP),

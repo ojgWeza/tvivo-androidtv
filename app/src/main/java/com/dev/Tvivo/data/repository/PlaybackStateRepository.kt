@@ -83,6 +83,9 @@ class PlaybackStateRepository(
     fun continueWatching(contentType: String): Flow<List<ResumePositionEntity>> =
         db.resumeDao().continueWatching(accountId, contentType)
 
+    fun recentlyPlayed(contentType: String) =
+        db.recentlyPlayedDao().recent(accountId, accountId, contentType, 20)
+
     suspend fun clearResume(contentType: String, itemId: String) =
         withContext(Dispatchers.IO) { db.resumeDao().remove(accountId, contentType, itemId) }
 

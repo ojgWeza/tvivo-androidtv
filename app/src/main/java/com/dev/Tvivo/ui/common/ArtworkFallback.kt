@@ -25,14 +25,15 @@ import com.dev.Tvivo.ui.theme.TvType
 
 /** Deterministic no-network artwork for missing poster and channel art. */
 @Composable
-fun ArtworkFallback(title: String, channel: Boolean, modifier: Modifier = Modifier) {
+fun ArtworkFallback(title: String, channel: Boolean, modifier: Modifier = Modifier,
+                    showTitle: Boolean = true) {
     val accents = listOf(AppColors.MediaAccent, AppColors.Good, AppColors.Favourite,
         AppColors.ArtworkBlue, AppColors.ArtworkViolet)
     val accent = remember(title, accents) {
         accents[Math.floorMod(title.hashCode(), accents.size)]
     }
-    val mediaBase = AppColors.MediaBase
-    val iconTint = AppColors.MediaText
+    val mediaBase = AppColors.Elevated
+    val iconTint = AppColors.Ink
     Box(
         modifier = modifier.fillMaxSize().background(
             Brush.linearGradient(listOf(mediaBase, mediaBase, accent.copy(alpha = 0.3f).compositeOver(mediaBase)))
@@ -60,7 +61,7 @@ fun ArtworkFallback(title: String, channel: Boolean, modifier: Modifier = Modifi
                 }
             }
         }
-        if (!channel) Text(title.ifBlank { "Untitled" }, color = AppColors.MediaText, style = TvType.label,
+        if (!channel && showTitle) Text(title.ifBlank { "Untitled" }, color = AppColors.Ink, style = TvType.label,
             maxLines = 2, minLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(Color.Transparent, mediaBase.copy(alpha = 0.98f))))

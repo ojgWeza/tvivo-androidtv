@@ -45,7 +45,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
@@ -377,6 +379,7 @@ private fun StreamCard(
 ) {
     var focused by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val largeText = LocalConfiguration.current.fontScale >= 1.6f
     val progress by produceState<Float?>(initialValue = null, item?.id) {
         value = item?.let { progressFor(it) }
     }
@@ -425,7 +428,8 @@ private fun StreamCard(
             } else if (item != null) {
                 com.dev.Tvivo.ui.common.ArtworkFallback(
                     title = item.title,
-                    channel = cardShape == CardShape.CHANNEL
+                    channel = cardShape == CardShape.CHANNEL,
+                    showTitle = false
                 )
             }
             // **Both corner badges share one row, top-start.** The provider watermark on
@@ -493,7 +497,7 @@ private fun StreamCard(
                         // than sitting on it. The scrim is now a fixed band, taller than
                         // two lines of `label`, so the gradient has room to be fully
                         // opaque behind the text and fully clear well above it.
-                        .height(SCRIM_HEIGHT)
+                        .height(if (largeText) 118.dp else SCRIM_HEIGHT)
                         .background(
                             Brush.verticalGradient(
                                 0f to Color.Transparent,
@@ -513,7 +517,7 @@ private fun StreamCard(
                         // dimming it unfocused would fight the scrim rather than the
                         // artwork, and the focus frame already says where focus is.
                         color = AppColors.MediaText,
-                        style = TvType.label,
+                        style = TvType.label.copy(lineBreak = LineBreak.Heading),
                         maxLines = 2,
                         minLines = 2,
                         softWrap = true,
@@ -536,7 +540,7 @@ private fun StreamCard(
             Text(
                 text = item?.title ?: "",
                 color = if (focused) AppColors.Ink else AppColors.Dim,
-                style = TvType.label,
+                style = TvType.label.copy(lineBreak = LineBreak.Heading),
                 maxLines = 2,
                 softWrap = true,
                 overflow = TextOverflow.Ellipsis,
@@ -545,7 +549,7 @@ private fun StreamCard(
                     // Fixed two-line box. Roboto and the Noto Naskh Arabic fallback have
                     // different metrics, so a row of one- and two-line titles would
                     // otherwise change height as the user scrolls through it.
-                    .height(TITLE_BLOCK_HEIGHT)
+                    .height(if (largeText) 84.dp else TITLE_BLOCK_HEIGHT)
                     .padding(top = 8.dp)
             )
         }

@@ -1,6 +1,8 @@
 package com.dev.Tvivo.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -141,7 +145,8 @@ fun AppShell(
         Row(Modifier.fillMaxSize().background(AppColors.Bg).then(safeContent)) {
             Column(
                 modifier = Modifier.width(176.dp).fillMaxSize()
-                    .background(AppColors.Surface).padding(start = 12.dp, end = 12.dp, top = 20.dp),
+                    .background(AppColors.Surface).verticalScroll(rememberScrollState())
+                    .padding(start = 12.dp, end = 12.dp, top = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(AppIdentity.name().uppercase(), color = AppColors.Ink, style = TvType.title)
@@ -162,7 +167,7 @@ private fun TabButton(
     modifier: Modifier = Modifier
 ) {
     val title = when (tab) {
-        ShellTab.MyTvivo -> stringResource(if (underlineSelected) R.string.nav_for_you else R.string.nav_my_tvivo)
+        ShellTab.MyTvivo -> stringResource(if (underlineSelected || compact) R.string.nav_for_you else R.string.nav_my_tvivo)
         ShellTab.Movies -> stringResource(R.string.nav_movies)
         ShellTab.Series -> stringResource(R.string.nav_series)
         ShellTab.Live -> stringResource(if (compact) R.string.nav_live else R.string.nav_live_tv)
@@ -170,9 +175,11 @@ private fun TabButton(
         ShellTab.Settings -> stringResource(R.string.nav_settings)
     }
     val ink = if (tab == selected) AppColors.AccentText else AppColors.Ink
-    val buttonModifier = modifier.testTag("shell-${tab.name}").heightIn(min = 56.dp)
+    val iconsOnly = compact && LocalConfiguration.current.fontScale >= 1.6f
+    val buttonModifier = modifier.testTag("shell-${tab.name}").semantics { contentDescription = title }
+        .heightIn(min = 56.dp)
         .tvFocusFrame().tvClickable { onSelect(tab) }
-        .then(if (compact && tab == selected) Modifier.border(2.dp, AppColors.AccentText, RoundedCornerShape(12.dp)) else Modifier)
+        .then(if (compact && tab == selected && LocalIsTelevision.current) Modifier.border(2.dp, AppColors.AccentText, RoundedCornerShape(12.dp)) else Modifier)
         .padding(horizontal = if (compact) 4.dp else 16.dp, vertical = 12.dp)
     if (compact) {
         Column(buttonModifier, horizontalAlignment = Alignment.CenterHorizontally,
@@ -185,7 +192,8 @@ private fun TabButton(
                 ShellTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Search -> Icon(Icons.Default.Search, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
             }
-            Text(title, color = ink, style = TvType.label)
+            if (!iconsOnly) Text(title, color = ink, style = TvType.label,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } else if (underlineSelected) {
         // Intrinsic width: the underline's fillMaxWidth() would otherwise take the whole
@@ -200,7 +208,8 @@ private fun TabButton(
             Box(Modifier.fillMaxWidth().height(4.dp)
                 .background(if (tab == selected) AppColors.Accent else AppColors.Surface))
         }
-    } else Text(title, color = ink, style = TvType.label, modifier = buttonModifier)
+    } else Text(title, color = ink, style = TvType.label, modifier = buttonModifier,
+        maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable

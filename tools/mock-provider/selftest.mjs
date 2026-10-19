@@ -63,8 +63,13 @@ try {
   assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2024`)).json()).movie_data.stream_id, 2024);
   assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2025`)).json()).info.duration, '00:02:00');
   assert.equal((await (await fetch(`${api('get_vod_info')}&vod_id=2026`)).json()).info.duration, undefined);
-  assert.equal((await (await fetch(`${api('get_series_info')}&series_id=3001`)).json()).episodes['1'].length, 2);
-  assert.equal((await (await fetch(`${api('get_series_info')}&series_id=3016`)).json()).episodes['1'][0].id, 'episode-A1');
+  const firstSeries = (await (await fetch(`${api('get_series_info')}&series_id=3001`)).json()).episodes['1'];
+  const lastSeries = (await (await fetch(`${api('get_series_info')}&series_id=3016`)).json()).episodes['1'];
+  assert.equal(firstSeries.length, 2);
+  assert.equal(lastSeries[0].id, 'episode-3016-A1');
+  assert.notEqual(firstSeries[0].id, lastSeries[0].id);
+  assert.equal((await fetch(`${base}/series/demo/demo/${lastSeries[0].id}.mp4`,
+    { headers: { range: 'bytes=0-1' } })).status, 206);
   const extraMovie = await fetch(`${base}/movie/demo/demo/2024.mp4`, { headers: { range: 'bytes=20-29' } });
   assert.equal(extraMovie.status, 206);
   assert.deepEqual(Buffer.from(await extraMovie.arrayBuffer()), bytes.subarray(20, 30));

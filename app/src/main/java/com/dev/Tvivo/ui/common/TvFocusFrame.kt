@@ -15,12 +15,14 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
 import com.dev.Tvivo.ui.theme.AppColors
+import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 
 /**
  * The one focus indicator for the whole app — [ContentGrid]'s static frame,
  * lifted out so buttons and Home tiles can't diverge from the grid cards again (Q-3).
  */
 fun Modifier.tvFocusFrame(shape: Shape = RectangleShape, focusColor: Color? = null): Modifier = composed {
+    if (!LocalIsTelevision.current) return@composed this
     var focused by remember { mutableStateOf(false) }
     val inner = if (focusColor == null) AppColors.FocusInner else Color.Transparent
     val outerWidth = when {
