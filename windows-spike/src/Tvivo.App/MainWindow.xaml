@@ -394,10 +394,10 @@
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
                                         ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
-                                <Button x:Name="CompactCloseButton" Grid.Column="4" Content="&#xE8BB;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactCloseButton"
-                                        ToolTipService.ToolTip="Return to player" Click="CompactCloseButton_Click" />
+                                <Button x:Name="CompactCloseButton" Grid.Column="4" Content="&#x25A0;"
+                                        FontFamily="Segoe UI Symbol, Segoe UI" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Stop playback" AutomationProperties.AutomationId="CompactCloseButton"
+                                        ToolTipService.ToolTip="Stop playback" Click="CompactCloseButton_Click" />
                                 <Button x:Name="CompactMinimizeButton" Grid.Column="5" Content="&#xE921;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Minimize" AutomationProperties.AutomationId="CompactMinimizeButton"

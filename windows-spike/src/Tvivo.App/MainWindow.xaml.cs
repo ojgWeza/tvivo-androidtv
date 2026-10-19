@@ -154,6 +154,10 @@ public sealed partial class MainWindow : Window
     private EpgNowNext? _playerNowNext;
     private long _playerEpgGeneration;
     private bool _isClosing;
+    private bool _closeRequestLogged;
+    private bool _closeRequestedByButton;
+    private long _closeRequestedAt;
+    private string? _pendingNativeCloseVia;
     private bool _isCinemaMode;
     private bool _cinemaTransitionInProgress;
     private int _cinemaTransitionGeneration;
@@ -311,7 +315,16 @@ public sealed partial class MainWindow : Window
         _windowState = new WindowStateController(this);
         _windowMiniGeometry = ReadWindowMiniGeometry() ?? _windowState.GetDefaultWindowMiniGeometry();
         _windowState.InstallMinimizeInterceptor(WindowRoot.DispatcherQueue,
-            () => ShouldMinimizeBecomeWindowMini(), () => EnterWindowMiniPlayer(), HandleWindowMiniModeRequest, ForceExitWindowMini);
+            () => ShouldMinimizeBecomeWindowMini(), () => EnterWindowMiniPlayer(), HandleWindowMiniModeRequest, ForceExitWindowMini,
+            via =>
+            {
+                if (via != "unknown" || _pendingNativeCloseVia is null) _pendingNativeCloseVia = via;
+            });
+        AppWindow.Closing += (_, _) =>
+        {
+            if (!_closeRequestedByButton) LogCloseRequested(_pendingNativeCloseVia ?? "unknown");
+            _pendingNativeCloseVia = null;
+        };
         _windowState.WindowMiniGeometryChanged += WindowState_WindowMiniGeometryChanged;
         ApplySelectedTheme();
         ApplyWindowChromeState();
@@ -382,7 +395,30 @@ public sealed partial class MainWindow : Window
         else _windowState.Minimize();
     }
 
-    private void CloseWindowButton_Click(object sender, RoutedEventArgs args) => Close();
+    private void CloseWindowButton_Click(object sender, RoutedEventArgs args)
+    {
+        _closeRequestedByButton = true;
+        try
+        {
+            LogCloseRequested("x");
+            Close();
+        }
+        finally
+        {
+            _closeRequestedByButton = false;
+        }
+    }
+
+    private void LogCloseRequested(string via)
+    {
+        _closeRequestLogged = true;
+        _closeRequestedAt = Stopwatch.GetTimestamp();
+        var presentation = _windowState.IsWindowMini ? "WindowMini" : _playerPresentation.ToString();
+        LaunchDiagnostics.Write($"event=window.close-requested utc={DateTimeOffset.UtcNow:O} via={via} presentation={presentation} playing={(_currentSource is not null && (_engine.IsPlaying || _engine.IsPaused || _engine.IsBuffering)).ToString().ToLowerInvariant()}");
+    }
+
+    private static void LogCloseStage(string name, long startedAt) =>
+        LaunchDiagnostics.Write($"event=window.close-stage utc={DateTimeOffset.UtcNow:O} name={name} ms={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0}");
 
     private void TitleBarDragRegion_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
@@ -437,7 +473,7 @@ public sealed partial class MainWindow : Window
         else if (args.Key == Windows.System.VirtualKey.Escape &&
             _playerPresentation == PlayerPresentation.Compact && HasCompactKeyboardFocus())
         {
-            CompactCloseButton_Click(this, new RoutedEventArgs());
+            DismissInWindowCompact(CompactDismissInput.Escape);
             args.Handled = true;
         }
         else if (args.Key == Windows.System.VirtualKey.Escape && _currentPage == ShellPage.Player)
@@ -5118,9 +5154,7 @@ public sealed partial class MainWindow : Window
             PauseButton.Focus(FocusState.Programmatic);
             return;
         }
-        SetPlayerPresentation(PlayerPresentation.Full);
-        ShowPage(ShellPage.Player);
-        PauseButton.Focus(FocusState.Programmatic);
+        DismissInWindowCompact(CompactDismissInput.ExpandButton);
     }
 
     private void CompactCloseButton_Click(object sender, RoutedEventArgs args)
@@ -5136,7 +5170,16 @@ public sealed partial class MainWindow : Window
                 deferPageRestore: true);
             return;
         }
-        StopHeldSeek(commit: true, released: false);
+        DismissInWindowCompact(CompactDismissInput.CloseButton);
+    }
+
+    private void DismissInWindowCompact(CompactDismissInput input)
+    {
+        if (CompactDismissPolicy.ForInput(input) == CompactDismissAction.StopPlayback)
+        {
+            StopCompactPlaybackAndNavigate(_currentPage ?? ShellPage.Catalog, windowMiniClose: true);
+            return;
+        }
         SetPlayerPresentation(PlayerPresentation.Full);
         ShowPage(ShellPage.Player);
         PauseButton.Focus(FocusState.Programmatic);
@@ -5529,7 +5572,7 @@ public sealed partial class MainWindow : Window
         {
             button.Content = enabled ? "\uE73F" : "\uE740";
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, cinemaLabel);
-            ToolTipService.SetToolTip(button, cinemaLabel);
+            ToolTipService.SetToolTip(button, enabled ? "Exit cinema (Esc)" : cinemaLabel);
         }
         ApplyPlayerLayout();
         if (enabled) ShowCinemaControls(resetIdleDeadline: true);
@@ -5954,13 +5997,14 @@ public sealed partial class MainWindow : Window
     private void SetWindowMiniCompactControls(bool isWindowMini)
     {
         CompactMinimizeButton.Visibility = isWindowMini ? Visibility.Visible : Visibility.Collapsed;
-        var closeName = isWindowMini ? "Close (stop playback)" : "Return to player";
+        const string closeName = "Stop playback";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactCloseButton, closeName);
         ToolTipService.SetToolTip(CompactCloseButton, closeName);
     }
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        if (!_closeRequestLogged) LogCloseRequested(_pendingNativeCloseVia ?? "unknown");
         _isClosing = true;
         if (_playerPresentation == PlayerPresentation.Compact) SetCompactCursorVisible(true, "window-close");
         CancelRecentlyLeftCooldown();
@@ -5973,8 +6017,12 @@ public sealed partial class MainWindow : Window
             SaveWindowMiniGeometryIfChanged();
         }
         StopHeldSeek(commit: true, released: false);
+        var stageStartedAt = Stopwatch.GetTimestamp();
         FlushPendingVisits();
+        LogCloseStage("visits-flush", stageStartedAt);
+        stageStartedAt = Stopwatch.GetTimestamp();
         SaveResumePosition(force: true);
+        LogCloseStage("resume-save", stageStartedAt);
         if (_currentSource is { } closingSource)
             LaunchDiagnostics.Write($"event=playback.stop engine={(ReferenceEquals(_engine, _vlcEngine) ? "LibVLC" : "Native")} kind={closingSource.Kind} reason={(_engine.IsEnded ? "completed" : "user-cancelled")}");
         _playbackUiTimer.Stop();
@@ -6007,6 +6055,7 @@ public sealed partial class MainWindow : Window
         var sessionCts = Interlocked.Exchange(ref _playbackSessionCts, null);
         sessionCts?.Cancel();
         LaunchDiagnostics.Write("MainWindow closed");
+        stageStartedAt = Stopwatch.GetTimestamp();
         try
         {
             await StopBothPlaybackEnginesAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
@@ -6019,7 +6068,9 @@ public sealed partial class MainWindow : Window
         {
             LaunchDiagnostics.WriteException("Playback stop failed during window close", exception);
         }
+        LogCloseStage("engines-stop", stageStartedAt);
 
+        stageStartedAt = Stopwatch.GetTimestamp();
         try
         {
             await _vlcEngine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
@@ -6047,6 +6098,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            LogCloseStage("dispose", stageStartedAt);
+            LaunchDiagnostics.Write($"event=window.close-complete utc={DateTimeOffset.UtcNow:O} totalMs={Stopwatch.GetElapsedTime(_closeRequestedAt).TotalMilliseconds:0}");
             // WinUI's process can outlive its last window while LibVLC owns threads.
             // Both engines have had a bounded stop/dispose opportunity above.
             Environment.Exit(0);

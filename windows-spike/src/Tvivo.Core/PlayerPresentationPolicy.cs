@@ -18,6 +18,20 @@ public enum PlayerPresentationHost { MainWindow, WindowMini }
 
 public enum MiniPlayerEngineKind { LibVlc, Native }
 
+public enum CompactDismissInput { CloseButton, ExpandButton, Escape }
+
+public enum CompactDismissAction { StopPlayback, ReturnToPlayer }
+
+public static class CompactDismissPolicy
+{
+    public static CompactDismissAction ForInput(CompactDismissInput input) => input switch
+    {
+        CompactDismissInput.CloseButton => CompactDismissAction.StopPlayback,
+        CompactDismissInput.ExpandButton or CompactDismissInput.Escape => CompactDismissAction.ReturnToPlayer,
+        _ => throw new ArgumentOutOfRangeException(nameof(input)),
+    };
+}
+
 public readonly record struct WindowMiniGeometry(double Left, double Top, double Width, double Height)
 {
     public static WindowMiniGeometry Default => new(0, 0, 480, 270);

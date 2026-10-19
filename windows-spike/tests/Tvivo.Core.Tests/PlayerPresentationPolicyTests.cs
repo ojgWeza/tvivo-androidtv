@@ -6,6 +6,14 @@ namespace Tvivo.Core.Tests;
 public sealed class PlayerPresentationPolicyTests
 {
     [Theory]
+    [InlineData(CompactDismissInput.CloseButton, CompactDismissAction.StopPlayback)]
+    [InlineData(CompactDismissInput.ExpandButton, CompactDismissAction.ReturnToPlayer)]
+    [InlineData(CompactDismissInput.Escape, CompactDismissAction.ReturnToPlayer)]
+    public void In_window_compact_dismiss_keeps_close_and_expand_semantics_distinct(
+        CompactDismissInput input, CompactDismissAction expected) =>
+        Assert.Equal(expected, CompactDismissPolicy.ForInput(input));
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]
     public void Window_mode_change_expands_first_only_while_window_mini(bool isWindowMini, bool expected) =>

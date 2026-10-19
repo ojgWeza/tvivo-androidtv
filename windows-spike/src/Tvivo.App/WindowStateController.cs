@@ -46,6 +46,10 @@ internal sealed class WindowStateController : IDisposable
     private static readonly nint HwndTopmost = -1;
     private static readonly nint HwndNoTopmost = -2;
     private const uint WmActivate = 0x0006;
+    private const uint WmClose = 0x0010;
+    private const uint WmSysCommand = 0x0112;
+    private const int ScClose = 0xF060;
+    private const int VkMenu = 0x12;
 
     private readonly nint _hwnd;
     private readonly Microsoft.UI.Xaml.Window _window;
@@ -64,6 +68,7 @@ internal sealed class WindowStateController : IDisposable
     private Action? _enterMini;
     private Action<WindowMiniModeRequest>? _requestMiniModeChange;
     private Action<string>? _forceExitMini;
+    private Action<string>? _closeRequested;
     private bool _miniModeRequestQueued;
     private bool _minimizedFromMini;
     private SubclassProcedure? _subclassProcedure;
@@ -87,13 +92,15 @@ internal sealed class WindowStateController : IDisposable
         Func<bool> shouldEnterMini,
         Action enterMini,
         Action<WindowMiniModeRequest> requestMiniModeChange,
-        Action<string> forceExitMini)
+        Action<string> forceExitMini,
+        Action<string> closeRequested)
     {
         _dispatcher = dispatcher;
         _shouldEnterMini = shouldEnterMini;
         _enterMini = enterMini;
         _requestMiniModeChange = requestMiniModeChange;
         _forceExitMini = forceExitMini;
+        _closeRequested = closeRequested;
         _subclassProcedure = WindowSubclassProc;
         if (!SetWindowSubclass(_hwnd, _subclassProcedure, SubclassId, 0))
             throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -167,11 +174,15 @@ internal sealed class WindowStateController : IDisposable
 
     private nint WindowSubclassProc(nint hwnd, uint message, nint wParam, nint lParam, nuint idSubclass, nuint refData)
     {
-        const uint wmSysCommand = 0x0112;
         const int scMinimize = 0xF020;
         const int scMaximize = 0xF030;
         const int scRestore = 0xF120;
-        if (IsWindowMini && message == wmSysCommand)
+        if (message == WmSysCommand && ((int)wParam & 0xFFF0) == ScClose)
+            _closeRequested?.Invoke(WindowCloseRequestPolicy.ClassifyNative(systemCloseCommand: true,
+                altHeld: (GetKeyState(VkMenu) & KeyDownMask) != 0));
+        else if (message == WmClose)
+            _closeRequested?.Invoke(WindowCloseRequestPolicy.ClassifyNative(systemCloseCommand: false, altHeld: false));
+        if (IsWindowMini && message == WmSysCommand)
         {
             var command = (int)wParam & 0xFFF0;
             if (command == scMinimize)
@@ -198,7 +209,7 @@ internal sealed class WindowStateController : IDisposable
             QueueMiniModeChange(WindowMiniModeRequest.Maximize);
             return 0;
         }
-        if (message == wmSysCommand && ((int)wParam & 0xFFF0) == scMinimize &&
+        if (message == WmSysCommand && ((int)wParam & 0xFFF0) == scMinimize &&
             !IsShiftDown && _shouldEnterMini?.Invoke() == true)
         {
             _dispatcher?.TryEnqueue(() => _enterMini?.Invoke());
