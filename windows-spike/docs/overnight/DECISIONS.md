@@ -76,3 +76,64 @@ Available RAM stayed 0.81-1.24 GB for 13 min (Android emulator ~4.1 GB + agent p
 rule as written - no Tvivo launch below 1.5 GB, batch start needs >= 2.5 GB; Batch 1 recorded BLOCKED, not
 lowered thresholds. Reason: a launch at < 1 GB would page and corrupt every timing/stall metric and risks the box.
 The emulator belongs to the Android session (rule 1), so freeing memory is the orchestrator's call, not the runner's.
+
+## D-f  Static audit triage (Opus, 2026-10-19, after Sol's STATIC-AUDIT.md)
+
+14 findings verified against the code: 11 kept (SA-01/SA-02 merged into one brief), 3 discarded. Briefs S1-S7 in
+FIX-BRIEFS.md "Static audit batch". Design choices made for the owner:
+- D-f1 Close teardown (SA-01+02): engine stop/dispose stay on the UI thread (no `ConfigureAwait(false)`), under ONE
+  total budget of 5 s from close request for all async stages, plus a pool-thread hard backstop that calls
+  `Environment.Exit(0)` at budget + 1.5 s. Reason: native players are apartment-bound, and the backstop removes the
+  only reason the pool hop existed (a dead dispatcher can no longer keep the process alive).
+- D-f2 Spotlight settings (SA-06): Save bumps a settings revision; cached snapshots built under another revision are
+  ignored and dropped. Reason: one counter covers both the cached and the in-flight-refresh case without new plumbing.
+- D-f3 Artwork permits (SA-08): a decode permit is held until that load's own task exits, never released by
+  `StopArtwork`. Reason: the concurrency cap must be real; a hung `SetSourceAsync` (never seen) is the accepted risk.
+- D-f4 Folder search (SA-14): 200 ms debounce only; no virtualization tonight. Reason: removes the per-keystroke
+  rebuild with a tiny diff; virtualization is a UI redesign and waits for SS-04 evidence.
+- DEFER SA-09 (resume save on UI thread, 1 small transaction / 5 s) and SA-10 (episode-change DB reads): real but
+  unmeasured; `perf.stall`/`perf.slowop` and `episode.open.exit ms=` in SK-04/SE-01/SE-02 decide. Defect if a stall
+  > 250 ms coincides with `resume.save` or `episode.open.exit ms` > 250.
+- DEFER SA-11 (idle timers): the 250 ms dispatch probe and 2 s perf timer ARE tonight's stall/perf instruments;
+  stopping them would blind the matrix. The 500 ms playback timer's idle tick returns early. LC-01/SK-01/SK-03 idle
+  CPU thresholds (D-a) decide; revisit in a later slice if they fail.
+- DISCARD SA-07: cards are reused only when the item ID matches and the lookup is keyed by account + type + item,
+  so the applied summary is the right one. DISCARD SA-12: the CTS instances are plain (no timer, no link), so
+  not disposing them holds no native resource. DISCARD SA-13: every failure sweeps expired keys and lookups are
+  serialized network calls, so the map is bounded by ~30 s of failures.
+
+## D-g  OS window messages are allowed without foreground; input and UIA are not (2026-10-19, run 02)
+
+Windows refused the foreground to Tvivo in 5 of 6 launches (also via the app's own second-instance activation).
+Decision: `WM_SYSCOMMAND` SC_CLOSE / SC_MINIMIZE posted to Tvivo's own hwnd are OS checks (the path the taskbar
+uses): they inject no input, move no other window and steal no focus, so rows may use them as a recorded variant
+(LC-04, LC-07, LC-09). Keyboard, pointer and UIA Invoke run only while Tvivo is foreground (rule 4); otherwise
+BLOCKED. No SetForegroundWindow/AttachThreadInput/minimise-others tricks.
+
+## D-h  Startup baseline under external disk load (run 02)
+
+The first launch ran while the Android Gradle build held D: at queue ~65 (cachedRender 80.7 s): invalid as a
+baseline, not an app defect. Baseline = median of clean launches (D: queue < 10): cachedRender 7685 ms, authDone
+8055 ms (range 4.2-10.3 s). LC-07/LC-11 "within 20 %" is judged against that range until a quiet machine exists;
+a launch is a defect only if > 2x the median with D: quiet.
+
+## D-i  Harness UIA traffic counts as load (run 02)
+
+UIA calls are served on Tvivo's UI thread; descendant scans of the catalog tree coincided with 1-2.8 s stalls.
+Decision: during metric windows the harness uses a cached root and AutomationId lookups only (no TrueCondition or
+Name scans over Descendants); stalls overlapping a harness scan are recorded but not counted as defects. DF-03 stays
+"needs confirmation" until re-measured with no UIA traffic.
+
+## D-j  DF-02 is P1 although not reproduced (run 02)
+
+An unrequested provider stream start (unmuted, no Enter/click) breaks the stream rules and a basic user
+expectation, and it happened during ordinary typing. Keep it P1; Sol adds activation-source diagnostics first and
+fixes only a found cause (F2). Rows LC-05, NV-03..05 repeat it with the pointer resting over Spotlight.
+
+## D-k  Batches 2-3 not started; no lowered thresholds (run 02)
+
+At 15:11-15:13 Available RAM was 1314 -> 954 MB with the Android emulator back (~4.1 GB) and Sol's test run.
+Per D-e the floors stand. Batch 2+ also needs a foreground-capable launch: the runner must be started from the
+foreground session (or the owner leaves Tvivo foreground), otherwise every playback row is BLOCKED.
+Because Sol's static-audit slice (S1 close teardown) is in the tree uncommitted, Batch 1 close rows must be
+re-run on that build anyway; run 02 results stand for c6936d0 only.
