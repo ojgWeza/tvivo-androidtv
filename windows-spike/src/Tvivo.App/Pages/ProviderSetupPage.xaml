@@ -33,6 +33,10 @@
                 </StackPanel>
                 <TextBlock x:Name="ErrorText" Foreground="{ThemeResource AppDangerTextBrush}" FontSize="15" TextWrapping="Wrap"
                            Visibility="Collapsed" />
+                <Button Content="Save diagnostics for support" MinHeight="48" MinWidth="280"
+                        Style="{StaticResource AppQuietButtonStyle}" Click="SaveDiagnostics_Click" />
+                <TextBlock x:Name="DiagnosticsStatusText" FontSize="16" TextWrapping="Wrap"
+                           Foreground="{ThemeResource AppMutedTextBrush}" />
             </StackPanel>
         </ScrollViewer>
     </Grid>

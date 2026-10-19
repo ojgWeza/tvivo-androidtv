@@ -72,6 +72,13 @@ public sealed class CatalogRefreshRetry
             return !_failures.TryGetValue((accountId, type), out var state) || now >= state.NextAttempt;
     }
 
+    public DateTimeOffset? NextAutomaticAttempt(string accountId, CatalogItemType type)
+    {
+        lock (_gate)
+            return _failures.TryGetValue((accountId, type), out var state) &&
+                state.NextAttempt != DateTimeOffset.MaxValue ? state.NextAttempt : null;
+    }
+
     public DateTimeOffset RecordFailure(string accountId, CatalogItemType type, DateTimeOffset now)
     {
         lock (_gate)
@@ -83,6 +90,12 @@ public sealed class CatalogRefreshRetry
             _failures[key] = (failures, nextAttempt);
             return nextAttempt;
         }
+    }
+
+    public void BlockAutomatic(string accountId, CatalogItemType type)
+    {
+        lock (_gate)
+            _failures[(accountId, type)] = (0, DateTimeOffset.MaxValue);
     }
 
     public void RecordSuccess(string accountId, CatalogItemType type)

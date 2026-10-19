@@ -1019,7 +1019,9 @@ public sealed class SqliteCatalogRepositoryTests
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Live, new[] { Group(account,"g","News") }, new[] { ChannelFor(account,"old","g","Old") });
             var service = new CatalogRefreshService(new ThrowingProvider(), repo);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.RefreshAsync(account));
+            var failure = await Assert.ThrowsAsync<CatalogFailureException>(() => service.RefreshAsync(account));
+            Assert.Equal("Live.items", failure.Failure.Stage);
+            Assert.IsType<InvalidOperationException>(failure.InnerException);
             Assert.Equal("old", Assert.Single(repo.GetChannels(account, CatalogItemType.Live).Items).Id);
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
@@ -1033,8 +1035,9 @@ public sealed class SqliteCatalogRepositoryTests
         {
             var provider = new FailFirstRefreshProvider();
             var service = new CatalogRefreshService(provider, repo);
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.RefreshAsync(account));
-            Assert.Contains("Refreshing Live categories failed", error.Message);
+            var error = await Assert.ThrowsAsync<CatalogFailureException>(() => service.RefreshAsync(account));
+            Assert.Equal("Live.categories", error.Failure.Stage);
+            Assert.IsType<InvalidOperationException>(error.InnerException);
 
             await service.RefreshAsync(account);
             Assert.Equal(4, provider.GroupCalls);
@@ -1126,7 +1129,8 @@ public sealed class SqliteCatalogRepositoryTests
             Assert.Equal(new[] { "10", "11" }, repo.GetGroups(account, CatalogItemType.Live).Select(x => x.Id));
             Assert.Equal(new[] { "opaque-42", "123" }, repo.GetChannels(account, CatalogItemType.Live).Items.Select(x => x.Id));
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() => new CatalogRefreshService(new ThrowingProvider(), repo).RefreshAsync(account));
+            var failure = await Assert.ThrowsAsync<CatalogFailureException>(() => new CatalogRefreshService(new ThrowingProvider(), repo).RefreshAsync(account));
+            Assert.Equal("Live.items", failure.Failure.Stage);
             Assert.Equal(new[] { "opaque-42", "123" }, repo.GetChannels(account, CatalogItemType.Live).Items.Select(x => x.Id));
         }
         finally { repo.Dispose(); Directory.Delete(dir, true); }
@@ -1176,7 +1180,8 @@ public sealed class SqliteCatalogRepositoryTests
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(),
                 new[] { ChannelAdded(account, CatalogItemType.Movie, "old-movie", old) }, old);
             var provider = new FailMovieProvider();
-            await Assert.ThrowsAsync<InvalidOperationException>(() => new CatalogRefreshService(provider, repo).RefreshAsync(account));
+            var failure = await Assert.ThrowsAsync<CatalogFailureException>(() => new CatalogRefreshService(provider, repo).RefreshAsync(account));
+            Assert.Equal("Movie.items", failure.Failure.Stage);
             Assert.Equal(1, provider.LiveCalls);
             Assert.Equal(1, provider.MovieCalls);
             Assert.NotNull(repo.GetLastRefreshSuccess(account, CatalogItemType.Live));

@@ -52,10 +52,17 @@ public sealed class InfrastructureTests
         Assert.True(retry.CanAttempt("account-a", CatalogItemType.Movie, now));
         Assert.True(retry.CanAttempt("account-b", CatalogItemType.Live, now));
         Assert.False(retry.CanAttempt("account-a", CatalogItemType.Live, now.AddSeconds(19)));
+        Assert.Equal(now.AddSeconds(20), retry.NextAutomaticAttempt("account-a", CatalogItemType.Live));
         Assert.Equal(now.AddSeconds(60), retry.RecordFailure("account-a", CatalogItemType.Live, now));
         Assert.Equal(now.AddHours(1), retry.RecordFailure("account-a", CatalogItemType.Live, now));
         retry.RecordSuccess("account-a", CatalogItemType.Live);
         Assert.True(retry.CanAttempt("account-a", CatalogItemType.Live, now));
+        Assert.Null(retry.NextAutomaticAttempt("account-a", CatalogItemType.Live));
+        retry.BlockAutomatic("account-a", CatalogItemType.Series);
+        Assert.Null(retry.NextAutomaticAttempt("account-a", CatalogItemType.Series));
+        Assert.False(retry.CanAttempt("account-a", CatalogItemType.Series, now.AddYears(10)));
+        retry.RecordSuccess("account-a", CatalogItemType.Series);
+        Assert.True(retry.CanAttempt("account-a", CatalogItemType.Series, now));
     }
 
     [Fact]
@@ -301,7 +308,8 @@ public sealed class InfrastructureTests
             })));
             var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
             var account = Assert.IsType<ProviderAccount>(authentication.Account);
-            await Assert.ThrowsAnyAsync<System.Text.Json.JsonException>(() => provider.GetChannelGroupsAsync(account));
+            var failure = await Assert.ThrowsAsync<CatalogFailureException>(() => provider.GetChannelGroupsAsync(account));
+            Assert.Equal(CatalogFailureKind.Protocol, failure.Failure.Kind);
         }
     }
 
@@ -311,18 +319,20 @@ public sealed class InfrastructureTests
         var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
             request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
                 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
-                : JsonResponse("auth_success.json"))));
+                : JsonResponse("auth_success.json"))), delay: (_, _) => Task.CompletedTask);
         var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
         var account = Assert.IsType<ProviderAccount>(authentication.Account);
-        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetChannelsAsync(account));
+        Assert.Equal(CatalogFailureKind.ProviderBusy,
+            (await Assert.ThrowsAsync<CatalogFailureException>(() => provider.GetChannelsAsync(account))).Failure.Kind);
 
         var transportProvider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
             request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
                 ? throw new HttpRequestException("fixture transport failure")
-                : JsonResponse("auth_success.json"))));
+                : JsonResponse("auth_success.json"))), delay: (_, _) => Task.CompletedTask);
         var transportAuthentication = await transportProvider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
         var transportAccount = Assert.IsType<ProviderAccount>(transportAuthentication.Account);
-        await Assert.ThrowsAsync<HttpRequestException>(() => transportProvider.GetChannelGroupsAsync(transportAccount));
+        Assert.Equal(CatalogFailureKind.Network,
+            (await Assert.ThrowsAsync<CatalogFailureException>(() => transportProvider.GetChannelGroupsAsync(transportAccount))).Failure.Kind);
     }
 
     [Fact]
@@ -348,7 +358,7 @@ public sealed class InfrastructureTests
 
         Assert.Equal(2, channels.Count);
         Assert.Equal(3, calls);
-        Assert.Contains(TimeSpan.FromSeconds(7), waits);
+        Assert.Contains(waits, wait => wait.TotalSeconds is >= 6.9 and <= 7.1);
     }
 
     [Fact]
@@ -364,10 +374,10 @@ public sealed class InfrastructureTests
         var authentication = await provider.AuthenticateAsync(new ProviderConnection(Endpoint(), "u", "p"));
         var account = Assert.IsType<ProviderAccount>(authentication.Account);
 
-        var failure = await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetChannelsAsync(account));
+        var failure = await Assert.ThrowsAsync<CatalogFailureException>(() => provider.GetChannelsAsync(account));
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, failure.StatusCode);
-        Assert.Equal(4, calls);
+        Assert.Equal(429, failure.Failure.HttpStatus);
+        Assert.Equal(3, calls);
     }
 
     [Fact]

@@ -1072,7 +1072,8 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     private async Task AuthenticateSavedAccountAndRefreshAsync(
-        ProviderConnection connection, ProviderAccount cachedAccount, CancellationTokenSource authCts)
+        ProviderConnection connection, ProviderAccount cachedAccount, CancellationTokenSource authCts,
+        bool forceRefresh = false)
     {
         var authCompletion = _savedAuthCompletion;
         try
@@ -1095,7 +1096,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 authCompletion?.TrySetResult(false);
                 StartupPhaseCompleted?.Invoke("authDone");
                 ShowCachedUpdateFailure(result);
-                ScheduleAuthenticationRetry(cachedAccount);
+                ScheduleAuthenticationRetry(cachedAccount, result);
                 return;
             }
 
@@ -1107,7 +1108,7 @@ public sealed partial class CatalogLandingPage : UserControl
             UpdateSpotlightArtworkWindow();
             if (_hoveredCardElement is { } hovered) BeginCardSummary(hovered, _summaryTriggeredByFocus);
             StartupPhaseCompleted?.Invoke("authDone");
-            await LoadCatalogAsync(authenticatedAccount, Volatile.Read(ref _loadGeneration));
+            await LoadCatalogAsync(authenticatedAccount, Volatile.Read(ref _loadGeneration), forceRefresh: forceRefresh);
         }
         catch (Exception exception)
         {
@@ -1116,7 +1117,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 LaunchDiagnostics.Write($"event=auth.fail reason=exception code={exception.GetType().Name} path=cached");
                 StartupPhaseCompleted?.Invoke("authDone");
                 ShowCachedUpdateFailure(exception);
-                ScheduleAuthenticationRetry(cachedAccount);
+                ScheduleAuthenticationRetry(cachedAccount, exception: exception);
             }
         }
         finally
@@ -1142,10 +1143,16 @@ public sealed partial class CatalogLandingPage : UserControl
         LaunchDiagnostics.Write($"event=auth.saved outcome={(result.Success ? "success" : "failure")} reason={reason} code={result.DiagnosticCode ?? "none"} idMatch={match}");
     }
 
-    private void ScheduleAuthenticationRetry(ProviderAccount account)
+    private void ScheduleAuthenticationRetry(ProviderAccount account, AuthenticationResult? result = null, Exception? exception = null)
     {
         if (_refreshPolicyStore.Read() == CatalogRefreshPolicy.OnDemandOnly) return;
         var type = TypesForMode(_activeMode).First();
+        if ((result is not null && !CatalogFailureClassifier.IsRetryableAuthentication(result)) ||
+            (exception is not null && !CatalogFailureClassifier.Classify(null, exception, "auth").Retryable))
+        {
+            _refreshRetry.BlockAutomatic(account.AccountId, type);
+            return;
+        }
         var retryAt = _refreshRetry.RecordFailure(account.AccountId, type, DateTimeOffset.UtcNow);
         ScheduleRefreshRetry(account, type, retryAt);
     }
@@ -1239,7 +1246,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 if (!auth.Success || !session.HasSession(account.AccountId))
                 {
                     ShowCachedUpdateFailure(auth);
-                    ScheduleAuthenticationRetry(account);
+                    ScheduleAuthenticationRetry(account, auth);
                     return;
                 }
             }
@@ -1254,16 +1261,25 @@ public sealed partial class CatalogLandingPage : UserControl
             var liveChanged = false;
             foreach (var type in dueTypes)
             {
+                var typeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                var typeTrace = Guid.NewGuid().ToString("N")[..12];
                 try
                 {
+                    if (forceRefresh && _refreshTasks.TryGetActive(account.AccountId, type, out var active) && active is not null)
+                    {
+                        try { await active; }
+                        catch { /* A manual request must not reuse the previous result. */ }
+                    }
                     var changed = await _refreshTasks.RefreshTypeAsync(account, type,
                         _savedStartupAuthCts?.Token ?? CancellationToken.None);
                     if (!IsCurrentLoad(generation)) return;
-                    if (!changed) throw new InvalidOperationException("Catalog replacement was rejected");
+                    if (!changed) throw new CatalogFailureException(new(CatalogFailureKind.EmptyValid,
+                        "catalog.replace", null, Guid.NewGuid().ToString("N")[..12]));
                     anyChanged = true;
                     if (type == CatalogItemType.Live) liveChanged = true;
                     _refreshRetry.RecordSuccess(account.AccountId, type);
                     _refreshedThisStart.Add((account.AccountId, type));
+                    LaunchDiagnostics.Write($"utc={DateTimeOffset.UtcNow:O} trace={typeTrace} op=refresh stage=save attempt=1 outcome=ok http=none elapsedMs={System.Diagnostics.Stopwatch.GetElapsedTime(typeStarted).TotalMilliseconds:0} exception=none retryAt=none");
                 }
                 catch (Exception exception)
                 {
@@ -1271,9 +1287,15 @@ public sealed partial class CatalogLandingPage : UserControl
                     anyFailed = true;
                     refreshFailure ??= exception;
                     LaunchDiagnostics.Write($"Catalog {type} refresh failed: {DescribeForLog(exception)}");
-                    var retryAt = _refreshRetry.RecordFailure(account.AccountId, type, DateTimeOffset.UtcNow);
-                    if (!forceRefresh && policy != CatalogRefreshPolicy.OnDemandOnly)
-                        ScheduleRefreshRetry(account, type, retryAt);
+                    var failure = CatalogFailureClassifier.Classify(null, exception, "refresh");
+                    LaunchDiagnostics.Write($"utc={DateTimeOffset.UtcNow:O} trace={failure.TraceId} op=refresh stage={failure.Stage} attempt=1 outcome={failure.Kind} http={failure.HttpStatus?.ToString() ?? "none"} elapsedMs={System.Diagnostics.Stopwatch.GetElapsedTime(typeStarted).TotalMilliseconds:0} exception={exception.GetType().Name} retryAt=none");
+                    if (failure.Retryable)
+                    {
+                        var retryAt = _refreshRetry.RecordFailure(account.AccountId, type, DateTimeOffset.UtcNow);
+                        if (!forceRefresh && policy != CatalogRefreshPolicy.OnDemandOnly)
+                            ScheduleRefreshRetry(account, type, retryAt);
+                    }
+                    else _refreshRetry.BlockAutomatic(account.AccountId, type);
                 }
             }
             LaunchDiagnostics.Write($"event=catalog.cache.refresh.complete outcome={(anyFailed ? "failure" : "success")} durationMs={System.Diagnostics.Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds:0} mode={_activeMode}");
@@ -1320,7 +1342,7 @@ public sealed partial class CatalogLandingPage : UserControl
             LaunchDiagnostics.Write($"Catalog load failed: {DescribeForLog(exception)} (HRESULT 0x{exception.HResult:X8})");
             if (ContentState.Visibility == Visibility.Visible)
             {
-                ShowRefreshFailure(userInitiated: forceRefresh);
+                ShowRefreshFailure(userInitiated: forceRefresh, exception);
                 var visual = ElementCompositionPreview.GetElementVisual(ContentState);
                 if (visual.Opacity < 1f)
                     await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: Volatile.Read(ref _modeTransitionGeneration));
@@ -1582,6 +1604,13 @@ public sealed partial class CatalogLandingPage : UserControl
             await Task.Delay(retryAt - DateTimeOffset.UtcNow > TimeSpan.Zero ? retryAt - DateTimeOffset.UtcNow : TimeSpan.Zero);
             _scheduledRetries.Remove((account.AccountId, type));
             removed = true;
+            var currentRetryAt = _refreshRetry.NextAutomaticAttempt(account.AccountId, type);
+            if (currentRetryAt is null) return;
+            if (currentRetryAt > DateTimeOffset.UtcNow)
+            {
+                ScheduleRefreshRetry(account, type, currentRetryAt.Value);
+                return;
+            }
             if (!_isActive || _account?.AccountId != account.AccountId ||
                 _refreshPolicyStore.Read() == CatalogRefreshPolicy.OnDemandOnly) return;
             if (!TypesForMode(_activeMode).Contains(type) && _connection is not null) return;
@@ -4827,12 +4856,12 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     public Task RefreshNowAsync() => _account is { } account && _connection is null
-        ? RetrySavedAuthenticationAsync(account)
+        ? RetrySavedAuthenticationAsync(account, forceRefresh: true)
         : _account is { } authenticated
             ? LoadAsync(authenticated, forceRefresh: true, reason: "manual-refresh", refreshAll: true)
             : LoadSavedAsync();
 
-    private async Task RetrySavedAuthenticationAsync(ProviderAccount account)
+    private async Task RetrySavedAuthenticationAsync(ProviderAccount account, bool forceRefresh = false)
     {
         CancelSavedStartupAuthentication();
         var connection = await _credentialStore.LoadAsync();
@@ -4842,7 +4871,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _savedAuthCompletion = _savedAuthGate.Begin();
         _cachedStartupCatalogActive = _renderedSnapshot is not null && HasCatalogData(_renderedSnapshot);
         ShowCheckingAccountStatus();
-        await AuthenticateSavedAccountAndRefreshAsync(connection, account, cts);
+        await AuthenticateSavedAccountAndRefreshAsync(connection, account, cts, forceRefresh);
     }
 
     public async void RefreshCurrentType()
@@ -4966,27 +4995,18 @@ public sealed partial class CatalogLandingPage : UserControl
             AuthFailureReason.ProtocolError => "The provider returned an unexpected response.",
             _ => "The provider refused the update.",
         };
-        ShowCachedUpdateFailure(reason);
+        ShowCachedUpdateFailure($"{reason} Why: auth; code {result.DiagnosticCode ?? "Auth"}; trace none");
     }
 
     private void ShowCachedUpdateFailure(Exception exception)
     {
-        var inner = exception;
-        while (inner.InnerException is not null && inner is not HttpRequestException) inner = inner.InnerException;
-        var reason = inner switch
-        {
-            HttpRequestException { StatusCode: { } status } when (int)status == 429 => "The provider is rate limiting requests (429).",
-            HttpRequestException { StatusCode: { } status } when (int)status == 403 => "The provider refused access (403).",
-            HttpRequestException => "The provider is offline or unreachable.",
-            TaskCanceledException => "The provider is offline or unreachable.",
-            _ => "The provider refused the update.",
-        };
-        ShowCachedUpdateFailure(reason);
+        var failure = CatalogFailureClassifier.Classify(null, exception, "refresh");
+        ShowCachedUpdateFailure($"{failure.Reason}. {failure.Why}");
     }
 
     private void ShowCachedUpdateFailure(string reason)
     {
-        RefreshInfoBar.Message = $"Could not update. Showing your saved catalog. {reason}";
+        RefreshInfoBar.Message = $"Could not update. Showing your saved catalog. {UpdatedText}. {reason}";
         RefreshInfoBar.Severity = InfoBarSeverity.Warning;
         RefreshRetryButton.Visibility = Visibility.Collapsed;
         RefreshInfoBar.IsOpen = true;
@@ -5006,11 +5026,12 @@ public sealed partial class CatalogLandingPage : UserControl
         }
         if (!userInitiated)
         {
-            RefreshInfoBar.IsOpen = false;
+            ShowPersistedRefreshStatus();
             DismissFirstLoadTakeover();
             return;
         }
-        RefreshInfoBar.Message = "Couldn't refresh — showing saved items";
+        var failure = CatalogFailureClassifier.Classify(null, exception, "refresh");
+        RefreshInfoBar.Message = $"{failure.Reason}. Showing saved items. {UpdatedText}. {failure.Why}";
         RefreshInfoBar.Severity = InfoBarSeverity.Warning;
         RefreshRetryButton.Visibility = Visibility.Visible;
         RefreshInfoBar.IsOpen = true;
@@ -5735,39 +5756,4 @@ public static class ArtworkMemoryBudget
 
     public static bool ShouldEvict(long retainedBytes, long limitBytes, int entryCount, int countLimit) =>
         entryCount > 1 && (retainedBytes > limitBytes || entryCount > countLimit);
-}
-
-public sealed class CatalogRefreshTasks(Func<ProviderAccount, CatalogItemType, CancellationToken, Task<bool>> refresh)
-{
-    private readonly object _gate = new();
-    private readonly Dictionary<(string AccountId, CatalogItemType Type), Task<bool>> _active = new();
-
-    public Task<bool> RefreshTypeAsync(ProviderAccount account, CatalogItemType type,
-        CancellationToken cancellationToken = default)
-    {
-        var key = (account.AccountId, type);
-        lock (_gate)
-        {
-            if (_active.TryGetValue(key, out var pending) && !pending.IsCompleted) return pending;
-            var task = refresh(account, type, cancellationToken);
-            _active[key] = task;
-            _ = task.ContinueWith(_ =>
-            {
-                lock (_gate)
-                    if (_active.TryGetValue(key, out var current) && ReferenceEquals(current, task))
-                        _active.Remove(key);
-            }, TaskScheduler.Default);
-            return task;
-        }
-    }
-
-    public bool TryGetActive(string accountId, CatalogItemType type, out Task? task)
-    {
-        lock (_gate)
-        {
-            var found = _active.TryGetValue((accountId, type), out var pending);
-            task = pending;
-            return found;
-        }
-    }
 }

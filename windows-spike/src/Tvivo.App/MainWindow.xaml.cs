@@ -1913,14 +1913,14 @@ public sealed partial class MainWindow : Window
 
         if (_catalogLandingPage.Account is not { } account)
         {
-            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            ShowSeriesOpenMessage("Account needs attention. Why: account; code Auth; trace none", isFailure: true);
             LogSeriesOpenExit(startedAt, series, "no-account");
             return;
         }
 
         if (App.Services.GetService<ICatalogProvider>() is not ISeriesCatalogProvider provider)
         {
-            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            ShowSeriesOpenMessage("Provider sent unexpected data. Why: series-info; code Protocol; trace none", isFailure: true);
             LogSeriesOpenExit(startedAt, series, "provider-unsupported");
             return;
         }
@@ -1949,7 +1949,10 @@ public sealed partial class MainWindow : Window
 
                     var timedOut = infoCts.IsCancellationRequested && !selectionCts.IsCancellationRequested;
                     var exceptionType = timedOut ? nameof(TimeoutException) : exception.GetType().Name;
-                    ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+                    var failure = CatalogFailureClassifier.Classify(null, exception, "series-info", cancellationRequested: selectionCts.IsCancellationRequested);
+                    if (timedOut) failure = new(CatalogFailureKind.Timeout, "series-info", failure.HttpStatus, failure.TraceId);
+                    LaunchDiagnostics.Write($"utc={DateTimeOffset.UtcNow:O} trace={failure.TraceId} op=series-info stage={failure.Stage} attempt=1 outcome={failure.Kind} http={failure.HttpStatus?.ToString() ?? "none"} elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0} exception={exception.GetType().Name} retryAt=none");
+                    ShowSeriesOpenMessage($"{failure.Reason}. {failure.Why}", isFailure: true);
                     LogSeriesOpenExit(startedAt, series, "info-failed", $"exceptionType={exceptionType}");
                     return;
                 }
@@ -1969,7 +1972,7 @@ public sealed partial class MainWindow : Window
                 var selected = _catalogRepository.SelectResumeEpisode(account, details);
                 if (selected is null)
                 {
-                    ShowSeriesOpenMessage("This series has no episodes available.", isFailure: true);
+                    ShowSeriesOpenMessage("Provider returned no episodes. Saved catalog is still available. Why: series-info; code EmptyValid; trace none", isFailure: true);
                     LogSeriesOpenExit(startedAt, series, "no-episodes");
                     return;
                 }
@@ -2005,7 +2008,11 @@ public sealed partial class MainWindow : Window
             catch (Exception exception)
             {
                 if (selectionGeneration == Volatile.Read(ref _itemSelectionGeneration))
-                    ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+                {
+                    var failure = CatalogFailureClassifier.Classify(null, exception, "database.series-open");
+                    LaunchDiagnostics.Write($"utc={DateTimeOffset.UtcNow:O} trace={failure.TraceId} op=series-info stage={failure.Stage} attempt=1 outcome={failure.Kind} http=none elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0} exception={exception.GetType().Name} retryAt=none");
+                    ShowSeriesOpenMessage($"{failure.Reason}. {failure.Why}", isFailure: true);
+                }
                 LaunchDiagnostics.Write($"event=series.open.exception type={exception.GetType().Name}");
                 LogSeriesOpenExit(startedAt, series, "exception");
             }
@@ -2198,7 +2205,7 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write("event=episode.open.start ms=0");
         if (episode.Source.DirectUri is null)
         {
-            ShowSeriesOpenMessage("Couldn't load episodes. Try again.", isFailure: true);
+            ShowSeriesOpenMessage("Provider sent unexpected episode data. Why: episode-url; code Protocol; trace none", isFailure: true);
             LogEpisodeOpenExit(startedAt, episode, "no-direct-uri");
             return false;
         }

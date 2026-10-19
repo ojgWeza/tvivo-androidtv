@@ -156,3 +156,5 @@ is unchanged and was enforced twice in run 03 (21:25 close, 21:32 cycle stop). B
   without foreground. They inject no input into the foreground app and steal no focus. That would unblock
   LC-02/LC-05 (search via ValuePattern)/LC-08 and most Batch 2-3 rows; keyboard-only rows (Alt+F4, F11, Esc,
   Ctrl+Shift+T, Tab) would stay BLOCKED. Alternative: the owner leaves Tvivo foreground at the start of a run.
+
+- D-m (owner-delegated, 2026-10-19): UIA pattern calls (Invoke/Toggle/ExpandCollapse/Value read) are allowed WITHOUT foreground; SendInput/mouse/keyboard/hover tests still need the foreground; no focus-stealing tricks.

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Tvivo.Core;
+using Tvivo.Infrastructure;
 
 namespace Tvivo.App.Pages;
 
@@ -119,6 +120,22 @@ public sealed partial class ProviderSetupPage : UserControl
     {
         ErrorText.Text = message;
         ErrorText.Visibility = Visibility.Visible;
+    }
+
+    private async void SaveDiagnostics_Click(object sender, RoutedEventArgs args)
+    {
+        try
+        {
+            var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown";
+            var path = await Task.Run(() => SupportDiagnostics.SaveToDesktop(version));
+            SupportDiagnostics.Reveal(path);
+            DiagnosticsStatusText.Text = "Saved to your Desktop";
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"event=diagnostics.export outcome=failure exception={exception.GetType().Name}");
+            DiagnosticsStatusText.Text = "Couldn't save diagnostics. Please try again.";
+        }
     }
 }
 

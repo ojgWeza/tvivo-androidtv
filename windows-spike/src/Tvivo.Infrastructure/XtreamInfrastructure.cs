@@ -15,6 +15,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private readonly HttpClient _http;
     private readonly HttpClient _epgHttp;
     private readonly ConcurrentDictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string AccountId, string SeriesId), SeriesDetails> _seriesDetails = new();
     private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
     private readonly Action<string>? _epgLog;
@@ -28,7 +29,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     // times, honouring Retry-After, before surfacing a failure.
     private static readonly TimeSpan MinApiRequestSpacing = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(20);
-    private const int MaxThrottleRetries = 3;
+    private const int MaxThrottleRetries = CatalogRetryPolicy.MaxAttempts;
 
     public XtreamCatalogProvider(HttpClient? httpClient = null, HttpClient? epgHttpClient = null, Action<string>? epgLog = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null, EpgFeature? epgFeature = null)
@@ -101,6 +102,11 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         {
             return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure, "network_error");
         }
+        catch (CatalogFailureException failure)
+        {
+            return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure,
+                failure.Failure.Kind == CatalogFailureKind.Timeout ? "network_timeout" : "network_error");
+        }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return AuthenticationResult.Failed(AuthFailureReason.NetworkFailure, "network_timeout");
@@ -115,25 +121,76 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         }
     }
 
-    private async Task<HttpResponseMessage> SendApiAsync(Uri uri, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage> SendApiAsync(Uri uri, CancellationToken cancellationToken, string operation = "auth")
     {
-        for (var attempt = 0; ; attempt++)
+        var trace = Guid.NewGuid().ToString("N")[..12];
+        for (var attempt = 1; attempt <= MaxThrottleRetries; attempt++)
         {
-            await WaitForApiSlotAsync(cancellationToken).ConfigureAwait(false);
-            var response = await _http.GetAsync(uri, cancellationToken).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.TooManyRequests || attempt >= MaxThrottleRetries)
-                return response;
-
-            var wait = response.Headers.RetryAfter switch
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
-                { Delta: { } delta } => delta,
-                { Date: { } date } => date - DateTimeOffset.UtcNow,
-                _ => TimeSpan.FromSeconds(2 << attempt) + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 500)),
-            };
-            response.Dispose();
-            if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
-            if (wait > MaxRetryAfter) wait = MaxRetryAfter;
-            await _delay(wait, cancellationToken).ConfigureAwait(false);
+                await WaitForApiSlotAsync(cancellationToken).ConfigureAwait(false);
+                var response = await _http.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+                var status = (int)response.StatusCode;
+                var failure = CatalogFailureClassifier.Classify(status, null, "http", trace);
+                if (response.IsSuccessStatusCode || !failure.Retryable || attempt == MaxThrottleRetries)
+                {
+                    response.Headers.TryAddWithoutValidation("X-Tvivo-Trace", trace);
+                    Trace(trace, operation, "http", attempt, response.IsSuccessStatusCode ? "ok" : failure.Kind.ToString(), status,
+                        started, "none", null);
+                    if (!response.IsSuccessStatusCode && operation != "auth")
+                    {
+                        response.Dispose();
+                        throw new CatalogFailureException(failure);
+                    }
+                    return response;
+                }
+                var retryAfter = response.Headers.RetryAfter switch
+                {
+                    { Delta: { } delta } => DateTimeOffset.UtcNow + delta,
+                    { Date: { } date } => date,
+                    _ => (DateTimeOffset?)null,
+                };
+                var wait = CatalogRetryPolicy.Delay(attempt, DateTimeOffset.UtcNow, retryAfter, Random.Shared.NextDouble());
+                response.Dispose();
+                Trace(trace, operation, "http", attempt, failure.Kind.ToString(), status, started, "none", DateTimeOffset.UtcNow + wait);
+                await _delay(wait, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when ((exception is HttpRequestException or TaskCanceledException) && !cancellationToken.IsCancellationRequested)
+            {
+                var failure = CatalogFailureClassifier.Classify(null, exception, "http", trace);
+                if (!failure.Retryable || attempt == MaxThrottleRetries)
+                {
+                    Trace(trace, operation, "http", attempt, failure.Kind.ToString(), failure.HttpStatus, started, exception.GetType().Name, null);
+                    throw new CatalogFailureException(failure, exception);
+                }
+                var wait = CatalogRetryPolicy.Delay(attempt, DateTimeOffset.UtcNow, null, Random.Shared.NextDouble());
+                Trace(trace, operation, "http", attempt, failure.Kind.ToString(), failure.HttpStatus, started, exception.GetType().Name, DateTimeOffset.UtcNow + wait);
+                await _delay(wait, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        throw new InvalidOperationException("Catalog retry exhausted.");
+    }
+
+    private void Trace(string trace, string op, string stage, int attempt, string outcome, int? http,
+        long started, string exception, DateTimeOffset? retryAt) => _epgLog?.Invoke(
+        $"utc={DateTimeOffset.UtcNow:O} session=app trace={trace} op={op} stage={stage} attempt={attempt} outcome={outcome} http={http?.ToString() ?? "none"} elapsedMs={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0} exception={exception} retryAt={retryAt?.ToString("O") ?? "none"}");
+
+    private static string TraceId(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("X-Tvivo-Trace", out var values) ? values.First() : Guid.NewGuid().ToString("N")[..12];
+
+    private async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response, string operation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            var failure = new CatalogFailure(CatalogFailureKind.Protocol, "json.parse", (int)response.StatusCode, TraceId(response));
+            _epgLog?.Invoke($"utc={DateTimeOffset.UtcNow:O} session=app trace={failure.TraceId} op={operation} stage=json.parse attempt=1 outcome=Protocol http={(int)response.StatusCode} elapsedMs=0 exception=JsonException retryAt=none");
+            throw new CatalogFailureException(failure, exception);
         }
     }
 
@@ -162,23 +219,24 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
 
     public bool HasSession(string accountId) => _connections.ContainsKey(accountId);
 
-    private InvalidOperationException MissingSession(string operation)
+    private ProviderSessionException MissingSession(string operation)
     {
         var now = Environment.TickCount64;
         var last = Interlocked.Read(ref _lastMissingSessionLogTicks);
         if (now - last >= 60_000 && Interlocked.CompareExchange(ref _lastMissingSessionLogTicks, now, last) == last)
             _epgLog?.Invoke($"event=provider.not-authenticated op={operation} knownConnections={_connections.Count}");
-        return new InvalidOperationException("Provider session is not authenticated.");
+        return new ProviderSessionException();
     }
 
     public async Task<MovieDetails> GetMovieInfoAsync(ProviderAccount account, string movieId, CancellationToken cancellationToken = default)
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw MissingSession("vodInfo");
-        using var response = await SendApiAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken);
+        using var response = await SendApiAsync(XtreamRequest.VodInfoUri(connection, movieId), cancellationToken, "vod-info");
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        using var document = await ReadJsonAsync(response, "vod-info", cancellationToken);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "vod-info.shape", (int)response.StatusCode, TraceId(response)));
         var info = GetInfoObject(document.RootElement);
         return new MovieDetails(movieId, MapMetadata(info));
     }
@@ -188,11 +246,12 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw MissingSession("seriesInfo");
         var uri = XtreamRequest.SeriesInfoUri(connection, seriesId);
-        using var response = await SendApiAsync(uri, cancellationToken);
+        using var response = await SendApiAsync(uri, cancellationToken, "series-info");
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        using var document = await ReadJsonAsync(response, "series-info", cancellationToken);
         var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "series-info.shape", (int)response.StatusCode, TraceId(response)));
         var info = GetInfoObject(root);
         var title = JsonValue.String(info, "name");
         var seasons = new List<SeriesSeason>();
@@ -203,30 +262,64 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 var seasonId = group.Name;
                 var seasonNumber = int.TryParse(seasonId, out var parsedSeason) ? parsedSeason : seasons.Count + 1;
                 var seasonName = $"Season {seasonNumber}";
-                var episodes = new List<SeriesEpisode>();
-                if (group.Value.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in group.Value.EnumerateArray())
-                    {
-                        var id = JsonValue.String(item, "id");
-                        if (string.IsNullOrWhiteSpace(id)) continue;
-                        var episodeNumber = JsonValue.Int(item, "episode_num") ?? episodes.Count + 1;
-                        var episodeTitle = JsonValue.String(item, "title") ?? $"Episode {episodeNumber}";
-                        var extension = JsonValue.String(item, "container_extension")?.Trim().TrimStart('.');
-                        var durationValue = JsonValue.String(item, "duration");
-                        TimeSpan? duration = long.TryParse(durationValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var durationSeconds)
-                            ? TimeSpan.FromSeconds(durationSeconds)
-                            : TimeSpan.TryParse(durationValue, CultureInfo.InvariantCulture, out var parsedDuration) ? parsedDuration : null;
-                        var directUri = new Uri(StreamUrlBuilder.Series(connection.Endpoint, connection.Username, connection.Password, id, extension));
-                        episodes.Add(new SeriesEpisode(id, episodeTitle, seasonId, seasonName, seasonNumber, episodeNumber,
-                            new StreamSource(id, StreamKind.Episode, extension, directUri, duration)));
-                    }
-                }
+                var episodes = MapEpisodes(group.Value, connection, seasonId, seasonName, seasonNumber);
                 seasons.Add(new SeriesSeason(seasonId, seasonName, seasonNumber,
                     episodes.OrderBy(episode => episode.EpisodeNumber).ToArray()));
             }
         }
-        return new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info));
+        else if (root.TryGetProperty("episodes", out episodeGroups) && episodeGroups.ValueKind == JsonValueKind.Array)
+        {
+            var nested = episodeGroups.EnumerateArray().ToArray();
+            if (nested.Any(item => item.ValueKind == JsonValueKind.Array))
+            {
+                for (var index = 0; index < nested.Length; index++)
+                {
+                    var seasonId = (index + 1).ToString(CultureInfo.InvariantCulture);
+                    seasons.Add(new SeriesSeason(seasonId, $"Season {seasonId}", index + 1,
+                        MapEpisodes(nested[index], connection, seasonId, $"Season {seasonId}", index + 1)));
+                }
+            }
+            else
+                seasons.Add(new SeriesSeason("1", "Season 1", 1,
+                    MapEpisodes(episodeGroups, connection, "1", "Season 1", 1)));
+        }
+        // A malformed optional episodes field behaves like an empty result; keep the last usable details.
+        var details = new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info));
+        if (details.Seasons.Sum(season => season.Episodes.Count) == 0 &&
+            _seriesDetails.TryGetValue((account.AccountId, seriesId), out var saved))
+            return saved;
+        if (details.Seasons.Sum(season => season.Episodes.Count) > 0)
+            _seriesDetails[(account.AccountId, seriesId)] = details;
+        return details;
+    }
+
+    private static IReadOnlyList<SeriesEpisode> MapEpisodes(JsonElement value, ProviderConnection connection,
+        string seasonId, string seasonName, int seasonNumber)
+    {
+        var entries = value.ValueKind switch
+        {
+            JsonValueKind.Array => value.EnumerateArray().ToArray(),
+            JsonValueKind.Object => value.EnumerateObject().Select(property => property.Value).ToArray(),
+            _ => Array.Empty<JsonElement>(),
+        };
+        var episodes = new List<SeriesEpisode>();
+        foreach (var item in entries)
+        {
+            var id = JsonValue.String(item, "id");
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            var number = JsonValue.Int(item, "episode_num") ?? episodes.Count + 1;
+            var title = JsonValue.String(item, "title") ?? $"Episode {number}";
+            var extension = JsonValue.String(item, "container_extension")?.Trim().TrimStart('.');
+            var durationValue = JsonValue.String(item, "duration");
+            TimeSpan? duration = long.TryParse(durationValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) &&
+                seconds >= 0 && seconds <= TimeSpan.MaxValue.TotalSeconds
+                ? TimeSpan.FromSeconds(seconds)
+                : TimeSpan.TryParse(durationValue, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+            var directUri = new Uri(StreamUrlBuilder.Series(connection.Endpoint, connection.Username, connection.Password, id, extension));
+            episodes.Add(new SeriesEpisode(id, title, seasonId, seasonName, seasonNumber, number,
+                new StreamSource(id, StreamKind.Episode, extension, directUri, duration)));
+        }
+        return episodes;
     }
 
     private static JsonElement GetInfoObject(JsonElement root) =>
@@ -276,19 +369,32 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw MissingSession(action.Contains("categories", StringComparison.Ordinal) ? "categories" : "items");
-        using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken);
+        using var response = await SendApiAsync(XtreamRequest.Uri(connection, "player_api.php", action, groupId), cancellationToken,
+            action == "get_series" ? "series-list" : action.Contains("categories", StringComparison.Ordinal) ? "categories" : "items");
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var phase = PerfScope.BeginPhase("jsonParse");
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        if (document.RootElement.ValueKind != JsonValueKind.Array)
-            throw new JsonException("The catalog response was not a JSON array.");
+        using var document = await ReadJsonAsync(response, action == "get_series" ? "series-list" : "items", cancellationToken);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Null) return Array.Empty<T>();
+        var array = root;
+        if (array.ValueKind == JsonValueKind.Object && array.TryGetProperty("data", out var data)) array = data;
+        var entries = array.ValueKind switch
+        {
+            JsonValueKind.Array => array.EnumerateArray().ToArray(),
+            JsonValueKind.Object => array.EnumerateObject().Select(property => property.Value).ToArray(),
+            _ => Array.Empty<JsonElement>(),
+        };
+        if (array.ValueKind == JsonValueKind.Null) return Array.Empty<T>();
+        if (array.ValueKind is not (JsonValueKind.Array or JsonValueKind.Object))
+            throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "catalog.shape", (int)response.StatusCode, TraceId(response)));
         var result = new List<T>();
-        foreach (var item in document.RootElement.EnumerateArray())
+        foreach (var item in entries)
         {
             var mapped = item.ValueKind == JsonValueKind.Object ? map(item, account.AccountId) : null;
             if (mapped is not null) result.Add(mapped);
         }
+        if (entries.Length > 0 && result.Count == 0)
+            throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "catalog.items", (int)response.StatusCode, TraceId(response)));
         return result;
     }
 
@@ -679,8 +785,12 @@ internal static class JsonValue
         return false;
     }
     public static Uri? Uri(JsonElement parent, string name) => System.Uri.TryCreate(String(parent, name), UriKind.Absolute, out var uri) ? uri : null;
-    public static DateTimeOffset? UnixTime(JsonElement parent, string name) => long.TryParse(String(parent, name), out var value) ? DateTimeOffset.FromUnixTimeSeconds(value) : null;
-    public static DateTimeOffset? Expiry(JsonElement parent, string name) => long.TryParse(String(parent, name), out var value) && value > 0 ? DateTimeOffset.FromUnixTimeSeconds(value) : null;
+    public static DateTimeOffset? UnixTime(JsonElement parent, string name) =>
+        long.TryParse(String(parent, name), out var value) && value >= -62135596800 && value <= 253402300799
+            ? DateTimeOffset.FromUnixTimeSeconds(value) : null;
+    public static DateTimeOffset? Expiry(JsonElement parent, string name) =>
+        long.TryParse(String(parent, name), out var value) && value > 0 && value <= 253402300799
+            ? DateTimeOffset.FromUnixTimeSeconds(value) : null;
 }
 
 [SupportedOSPlatform("windows")]

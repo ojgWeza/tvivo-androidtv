@@ -23,7 +23,7 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new InvalidOperationException($"Refreshing {type} categories failed: {exception.Message}", exception);
+            throw new CatalogFailureException(CatalogFailureClassifier.Classify(null, exception, $"{type}.categories"), exception);
         }
 
         IReadOnlyList<Channel> channels;
@@ -34,7 +34,7 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new InvalidOperationException($"Refreshing {type} items failed: {exception.Message}", exception);
+            throw new CatalogFailureException(CatalogFailureClassifier.Classify(null, exception, $"{type}.items"), exception);
         }
 
         try
@@ -43,7 +43,8 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new InvalidOperationException($"Saving refreshed {type} catalog failed: {exception.Message}", exception);
+            throw new CatalogFailureException(new(CatalogFailureKind.Database, $"{type}.database.save", null,
+                Guid.NewGuid().ToString("N")[..12]), exception);
         }
     }
 }

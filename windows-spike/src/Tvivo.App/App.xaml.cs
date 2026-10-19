@@ -191,8 +191,7 @@ internal static class LaunchDiagnostics
             lock (Sync)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-                if (File.Exists(LogPath) && new FileInfo(LogPath).Length + Encoding.UTF8.GetByteCount(line) > MaxLogBytes)
-                    File.Move(LogPath, LogPath + ".1", overwrite: true);
+                DiagnosticLogRotation.RotateIfNeeded(LogPath, Encoding.UTF8.GetByteCount(line), MaxLogBytes);
                 File.AppendAllText(LogPath, line);
             }
         }
@@ -262,9 +261,7 @@ internal static class LaunchDiagnostics
     }
 
     public static void WriteException(string message, Exception exception) =>
-        Write(Scrubber.HasActiveSecrets
-            ? $"{message}: {exception.GetType().Name}: {exception.Message}"
-            : $"Exception before account registration: {exception.GetType().Name} (message omitted)");
+        Write($"{message}: {exception.GetType().Name} (message omitted)");
 
     public static void WriteExceptionDetails(string message, Exception exception)
     {

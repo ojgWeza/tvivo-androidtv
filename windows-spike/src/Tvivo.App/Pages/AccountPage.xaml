@@ -54,6 +54,10 @@
                     <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
                             FontSize="16" Content="Change user" Click="ChangeUserButton_Click" />
                 </StackPanel>
+                <Button Content="Save diagnostics for support" MinHeight="48" MinWidth="280"
+                        Style="{StaticResource AppQuietButtonStyle}" Click="SaveDiagnostics_Click" />
+                <TextBlock x:Name="DiagnosticsStatusText" FontSize="16" TextWrapping="Wrap"
+                           Foreground="{ThemeResource AppMutedTextBrush}" />
             </StackPanel>
 
             <StackPanel x:Name="ForYouTabPanel" Visibility="Collapsed">
