@@ -243,6 +243,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Image x:Name="PlayerLoadingPoster" Width="120" Height="180" Stretch="UniformToFill"
                                    Visibility="Collapsed" IsHitTestVisible="False"
@@ -257,6 +258,10 @@
                                          Minimum="0" Maximum="1" Value="0" Visibility="Collapsed"
                                          Foreground="#FFFFFFFF" Background="#FF555555"
                                          AutomationProperties.Name="Waiting for playback" />
+                            <ProgressBar x:Name="PlayerSelectionProgress" Grid.Row="4" Width="420" Height="10"
+                                         IsIndeterminate="True" Visibility="Collapsed"
+                                         Foreground="#FFFFFFFF" Background="#FF555555"
+                                         AutomationProperties.Name="Preparing playback" />
                         </Grid>
                     </Grid>
                     <Border x:Name="SleepTimerStatusPanel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"

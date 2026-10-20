@@ -127,6 +127,7 @@ public sealed partial class MainWindow : Window
     private bool _nextEpisodeAdvanceStarted;
     private long _catalogRequestGeneration;
     private long _itemSelectionGeneration;
+    private CancellationTokenSource? _playerSelectionCancellation;
     private StreamSource? _currentSource;
     private long _playbackSessionGeneration;
     private long _pendingPlaybackTargetGeneration = -1;
@@ -1066,6 +1067,7 @@ public sealed partial class MainWindow : Window
 
     private void AccountPage_SignOutCompleted(object? sender, EventArgs args)
     {
+        CancelPlayerSelectionResolution();
         LaunchDiagnostics.ClearActiveSecrets();
         Interlocked.Increment(ref _catalogRequestGeneration);
         _catalogLandingPage.ClearAccountState();
@@ -1078,6 +1080,7 @@ public sealed partial class MainWindow : Window
         // Same UI reset as sign-out, but intentionally does not touch the credential store:
         // if the user backs out of setup without connecting, the previous account's saved
         // credentials are still there next launch.
+        CancelPlayerSelectionResolution();
         LaunchDiagnostics.ClearActiveSecrets();
         Interlocked.Increment(ref _catalogRequestGeneration);
         _catalogLandingPage.ClearAccountState();
@@ -1122,6 +1125,7 @@ public sealed partial class MainWindow : Window
 
     private async void ProviderSetupPage_ConnectionSaved(object? sender, ProviderConnectedEventArgs args)
     {
+        CancelPlayerSelectionResolution();
         LaunchDiagnostics.SetActiveSecrets(args.Connection);
         _homePage.MarkDataChanged();
         Interlocked.Increment(ref _catalogRequestGeneration);
@@ -1162,6 +1166,8 @@ public sealed partial class MainWindow : Window
         }
         if (_currentPage == page)
             return;
+
+        if (page != ShellPage.Player) CancelPlayerSelectionResolution();
 
         if (_currentPage == ShellPage.Account && page != ShellPage.Account)
             _accountPage.StopPendingSpotlightSearch();
@@ -1774,6 +1780,7 @@ public sealed partial class MainWindow : Window
         if (_seriesOpenInfoVisible)
             ClearSeriesOpenMessage();
 
+        CancelPlayerSelectionResolution();
         if (IsPlaybackUiActive) SaveResumePosition(force: true);
         var selectionGeneration = Interlocked.Increment(ref _itemSelectionGeneration);
         var playerEntryTraceId = Interlocked.Increment(ref _playerEntryTraceId);
@@ -1803,17 +1810,37 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (selectedChannel.Source.DirectUri is null)
+        var preResolvedChannel = _catalogLandingPage.GetPreResolvedSpotlightChannel(selectedChannel);
+        var preResolvedMs = preResolvedChannel is null
+            ? null
+            : _catalogLandingPage.GetPreResolvedSpotlightResolveMs(selectedChannel);
+        selectedChannel = preResolvedChannel ?? selectedChannel;
+        var selectionCancellation = new CancellationTokenSource();
+        var selectionToken = selectionCancellation.Token;
+        _playerSelectionCancellation = selectionCancellation;
+        var selectionStartedAt = Stopwatch.GetTimestamp();
+        var selectionSource = args.Via.StartsWith("spotlight", StringComparison.Ordinal) ? "spotlight" :
+            args.Via == "search-result" ? "search" : "shelf";
+        var selectionResolved = selectedChannel.Source.DirectUri is not null;
+        double? playerVisibleMs = null;
+        double? resolveMs = selectionResolved ? preResolvedMs ?? 0 : null;
+        void LogSelectionPerfWhenReady()
         {
-            var resolvedChannel = await _catalogLandingPage.ResolvePlayableChannelAsync(selectedChannel);
-            if (resolvedChannel?.Source.DirectUri is null)
-            {
-                ShowContentSelectionError(args.Channel.Source.Kind, "unavailable");
-                return;
-            }
-            selectedChannel = resolvedChannel;
+            if (playerVisibleMs is not { } visible || resolveMs is not { } resolved) return;
+            LaunchDiagnostics.Write($"event=perf.selection source={selectionSource} clickToPlayerVisibleMs={visible:0.0} resolveMs={resolved:0.0}");
+            playerVisibleMs = null;
         }
-        LaunchDiagnostics.Write($"event=content-selected outcome=resolved kind={selectedChannel.Source.Kind}");
+        EventHandler<object> firstRenderedFrame = null!;
+        firstRenderedFrame = (_, _) =>
+        {
+            CompositionTarget.Rendering -= firstRenderedFrame;
+            if (!PlayerSelectionTransitionPolicy.CanApplyResolution(selectionGeneration,
+                    Volatile.Read(ref _itemSelectionGeneration), selectionToken.IsCancellationRequested)) return;
+            playerVisibleMs = Stopwatch.GetElapsedTime(selectionStartedAt).TotalMilliseconds;
+            if (selectionResolved) PlayerSelectionProgress.Visibility = Visibility.Collapsed;
+            LogSelectionPerfWhenReady();
+        };
+        CompositionTarget.Rendering += firstRenderedFrame;
 
         _currentSeriesId = null;
         _currentSeriesTitle = null;
@@ -1849,10 +1876,79 @@ public sealed partial class MainWindow : Window
         PlayerNowPlayingText.Text = string.Empty;
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
+        PlayerSelectionProgress.Visibility = Visibility.Visible;
+        PlayerSelectionProgress.IsIndeterminate = true;
+        PlayerLoadingText.Text = selectedChannel.DisplayName;
+        PlayerLoadingPoster.Source = selectedChannel.LogoUri is { } selectedPosterUri
+            ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(selectedPosterUri)
+            : null;
+        PlayerLoadingPoster.Visibility = selectedChannel.LogoUri is null ? Visibility.Collapsed : Visibility.Visible;
+        PlayerLoadingPopcorn.Visibility = selectedChannel.LogoUri is null ? Visibility.Visible : Visibility.Collapsed;
         _playbackCompletionShown = false;
         SetPlayerList(_playerSiblings, selectedChannel);
         UpdateEpisodeNavigationButtons();
         ShowPage(ShellPage.Player);
+        if (selectedChannel.Source.DirectUri is null)
+        {
+            var resolveStartedAt = Stopwatch.GetTimestamp();
+            Channel? resolvedChannel = null;
+            try
+            {
+                resolvedChannel = await _catalogLandingPage.ResolvePlayableChannelAsync(
+                    selectedChannel, selectionToken);
+            }
+            catch (OperationCanceledException) when (selectionToken.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                LaunchDiagnostics.Write($"event=perf.selection.resolve outcome=error exception={exception.GetType().Name}");
+            }
+            resolveMs = Stopwatch.GetElapsedTime(resolveStartedAt).TotalMilliseconds;
+            LogSelectionPerfWhenReady();
+            if (!PlayerSelectionTransitionPolicy.CanApplyResolution(selectionGeneration,
+                    Volatile.Read(ref _itemSelectionGeneration), selectionToken.IsCancellationRequested) ||
+                _catalogLandingPage.Account?.AccountId != selectedChannel.ProviderAccountId)
+            {
+                FinishPlayerSelectionResolution(selectionCancellation);
+                return;
+            }
+            if (resolvedChannel?.Source.DirectUri is null)
+            {
+                if (PlayerSelectionTransitionPolicy.ShouldShowResolutionError(selectionGeneration,
+                        Volatile.Read(ref _itemSelectionGeneration), selectionToken.IsCancellationRequested,
+                        resolutionFailed: true))
+                {
+                    PlayerLoadingText.Text = "Unable to prepare playback. Go back and try again.";
+                    PlayerSelectionProgress.Visibility = Visibility.Collapsed;
+                    ShowContentSelectionError(args.Channel.Source.Kind, "unavailable");
+                }
+                FinishPlayerSelectionResolution(selectionCancellation);
+                return;
+            }
+            selectedChannel = resolvedChannel;
+            selectionResolved = true;
+            if (playerVisibleMs is not null) PlayerSelectionProgress.Visibility = Visibility.Collapsed;
+            _nowPlayingChannel = selectedChannel;
+            _currentSource = selectedChannel.Source;
+            _playerSiblings = new[] { selectedChannel };
+            SetPlayerList(_playerSiblings, selectedChannel);
+            PlayerLoadingPoster.Source = selectedChannel.LogoUri is { } resolvedPosterUri
+                ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(resolvedPosterUri)
+                : null;
+            PlayerLoadingPoster.Visibility = selectedChannel.LogoUri is null ? Visibility.Collapsed : Visibility.Visible;
+            PlayerLoadingPopcorn.Visibility = selectedChannel.LogoUri is null ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else
+        {
+            resolveMs ??= 0;
+            LogSelectionPerfWhenReady();
+        }
+        if (!PlayerSelectionTransitionPolicy.CanApplyResolution(selectionGeneration,
+                Volatile.Read(ref _itemSelectionGeneration), selectionToken.IsCancellationRequested))
+        {
+            FinishPlayerSelectionResolution(selectionCancellation);
+            return;
+        }
+        LaunchDiagnostics.Write($"event=content-selected outcome=resolved kind={selectedChannel.Source.Kind}");
         if (selectedChannel.Source.Kind == StreamKind.Movie)
             _ = LoadMovieCategorySiblingsAsync(selectedChannel, selectionGeneration);
         else if (selectedChannel.Source.Kind == StreamKind.Live)
@@ -1862,6 +1958,7 @@ public sealed partial class MainWindow : Window
         var trigger = args.Input switch { "pointer" => "click", "keyboard" => "enter", _ => "selection" };
         LaunchDiagnostics.Write($"event=playback.start.trigger source={trigger} page={_playerReturnPage} via={args.Via}");
         _ = StartPlaybackAsync(selectedChannel.Source, entryKind: PlayerResetEntryKind.NewItem);
+        FinishPlayerSelectionResolution(selectionCancellation);
     }
 
     private static string FocusDescriptor(object? element)
@@ -3396,6 +3493,20 @@ public sealed partial class MainWindow : Window
         !sessionCts.IsCancellationRequested &&
         IsPlaybackUiActive;
 
+    private void CancelPlayerSelectionResolution()
+    {
+        var cancellation = _playerSelectionCancellation;
+        _playerSelectionCancellation = null;
+        cancellation?.Cancel();
+    }
+
+    private void FinishPlayerSelectionResolution(CancellationTokenSource cancellation)
+    {
+        if (ReferenceEquals(_playerSelectionCancellation, cancellation))
+            _playerSelectionCancellation = null;
+        cancellation.Dispose();
+    }
+
     private void TraceClickAway(long traceId, string message)
     {
         if (traceId == 0) return;
@@ -3406,6 +3517,7 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        CancelPlayerSelectionResolution();
         CancelRecentlyLeftCooldown();
         CancelSleepTimer("navigation");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
@@ -5222,6 +5334,7 @@ public sealed partial class MainWindow : Window
 
     private void ReturnFromPlayer()
     {
+        CancelPlayerSelectionResolution();
         CancelSleepTimer("back");
         SetPlaybackIntent(PlaybackUserIntent.StoppedByUser, awaitForwardProgress: false);
         BeginBackTransitionTrace($"return-from-player input returnPage={_playerReturnPage} cinema={_isCinemaMode} bounds={WindowRoot.ActualWidth:0.0}x{WindowRoot.ActualHeight:0.0}");
@@ -6113,6 +6226,7 @@ public sealed partial class MainWindow : Window
             Environment.Exit(0);
         });
         _isClosing = true;
+        CancelPlayerSelectionResolution();
         if (_playerPresentation == PlayerPresentation.Compact) SetCompactCursorVisible(true, "window-close");
         CancelRecentlyLeftCooldown();
         CancelSleepTimer("window-close");
@@ -6190,7 +6304,8 @@ public sealed partial class MainWindow : Window
         stageStartedAt = Stopwatch.GetTimestamp();
         try
         {
-            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } timeout)
+            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt),
+                    WindowCloseRequestPolicy.DisposeStageMaximum) is { } timeout)
                 await _vlcEngine.DisposeAsync().AsTask().WaitAsync(timeout);
             else
                 LaunchDiagnostics.Write("event=window.close-stage stage=vlc-dispose skipped=budget");
@@ -6206,7 +6321,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt)) is { } timeout)
+            if (WindowCloseRequestPolicy.StageTimeout(Stopwatch.GetElapsedTime(_closeRequestedAt),
+                    WindowCloseRequestPolicy.DisposeStageMaximum) is { } timeout)
                 await _nativeEngine.DisposeAsync().AsTask().WaitAsync(timeout);
             else
                 LaunchDiagnostics.Write("event=window.close-stage stage=native-dispose skipped=budget");

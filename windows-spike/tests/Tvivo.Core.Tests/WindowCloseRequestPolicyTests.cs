@@ -19,6 +19,13 @@ public sealed class WindowCloseRequestPolicyTests
         Assert.Null(WindowCloseRequestPolicy.StageTimeout(TimeSpan.FromSeconds(5)));
 
     [Theory]
+    [InlineData(0, 1500)]
+    [InlineData(4000, 1000)]
+    public void Dispose_stage_timeout_is_capped_at_about_one_and_a_half_seconds(int elapsedMs, int expectedMs) =>
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedMs), WindowCloseRequestPolicy.StageTimeout(
+            TimeSpan.FromMilliseconds(elapsedMs), WindowCloseRequestPolicy.DisposeStageMaximum));
+
+    [Theory]
     [InlineData(true, true, "alt-f4")]
     [InlineData(true, false, "taskbar")]
     [InlineData(false, true, "unknown")]

@@ -4,11 +4,13 @@ public static class WindowCloseRequestPolicy
 {
     public static readonly TimeSpan TeardownBudget = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan BackstopGrace = TimeSpan.FromMilliseconds(1500);
+    public static readonly TimeSpan DisposeStageMaximum = TimeSpan.FromMilliseconds(1500);
 
-    public static TimeSpan? StageTimeout(TimeSpan elapsed)
+    public static TimeSpan? StageTimeout(TimeSpan elapsed, TimeSpan? maximumStageWait = null)
     {
         var remaining = TeardownBudget - elapsed;
-        return remaining <= TimeSpan.Zero ? null : TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(3).Ticks, remaining.Ticks));
+        var stageMaximum = maximumStageWait ?? TimeSpan.FromSeconds(3);
+        return remaining <= TimeSpan.Zero ? null : TimeSpan.FromTicks(Math.Min(stageMaximum.Ticks, remaining.Ticks));
     }
 
     // A non-Alt system close is normally issued by the taskbar; WM_CLOSE alone

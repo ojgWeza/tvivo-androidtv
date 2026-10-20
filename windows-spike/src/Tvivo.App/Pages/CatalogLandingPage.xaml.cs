@@ -83,6 +83,10 @@ public sealed partial class CatalogLandingPage : UserControl
     private SpotlightStripState _spotlightState = SpotlightStripState.Create(0);
     private CancellationTokenSource? _spotlightDwellCts;
     private CancellationTokenSource? _spotlightMetadataCts;
+    private CancellationTokenSource? _spotlightResolveCts;
+    private Channel? _spotlightResolvedChannel;
+    private CatalogCard? _spotlightResolveCard;
+    private double? _spotlightResolveElapsedMs;
     private long _spotlightRenderGeneration;
     private int _spotlightTouchArmedIndex = -1;
     private CatalogCard? _spotlightMetadataCard;
@@ -269,6 +273,17 @@ public sealed partial class CatalogLandingPage : UserControl
     }
 
     public Task<Channel?> ResolvePlayableChannelAsync(Channel channel)
+        => ResolvePlayableChannelAsync(channel, CancellationToken.None);
+
+    public Channel? GetPreResolvedSpotlightChannel(Channel channel) =>
+        ReferenceEquals(_spotlightCard?.Channel, channel) && ReferenceEquals(_spotlightResolveCard, _spotlightCard)
+            ? _spotlightResolvedChannel
+            : null;
+
+    public double? GetPreResolvedSpotlightResolveMs(Channel channel) =>
+        GetPreResolvedSpotlightChannel(channel) is not null ? _spotlightResolveElapsedMs : null;
+
+    public Task<Channel?> ResolvePlayableChannelAsync(Channel channel, CancellationToken cancellationToken)
     {
         if (channel.Source.DirectUri is not null)
             return Task.FromResult<Channel?>(channel);
@@ -276,7 +291,7 @@ public sealed partial class CatalogLandingPage : UserControl
             !StringComparer.Ordinal.Equals(account.AccountId, channel.ProviderAccountId))
             return Task.FromResult<Channel?>(null);
         var type = TypeForSource(channel.Source.Kind);
-        return Task.Run(() => _repository.GetChannel(account, connection, type, channel.Id));
+        return Task.Run(() => _repository.GetChannel(account, connection, type, channel.Id), cancellationToken);
     }
 
     public Task<IReadOnlyList<Channel>> GetFullCategoryChannelsForAsync(Channel channel)
@@ -3023,11 +3038,13 @@ public sealed partial class CatalogLandingPage : UserControl
         if (via != "touch") _spotlightTouchArmedIndex = -1;
         if (index < 0 || index >= _spotlightCards.Count || index == _spotlightState.OpenIndex) return;
         var previousOpenIndex = _spotlightState.OpenIndex;
+        CancelSpotlightResolution();
         _spotlightState = _spotlightState.Open(index);
         _spotlightCard = _spotlightCards[index];
         UpdateSpotlightCardStates(previousOpenIndex, index);
         EnsureSpotlightVisible(index);
         UpdateSpotlightArtworkWindow();
+        StartSpotlightResolution(_spotlightCard);
         LaunchDiagnostics.Write($"event=spotlight.open index={index + 1} via={via}");
         if (announce && via == "keyboard")
         {
@@ -3323,6 +3340,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightMetadataCts?.Cancel();
         _spotlightMetadataCts = null;
         _spotlightMetadataCard = null;
+        CancelSpotlightResolution();
         _spotlightArtworkLayoutPending = false;
         foreach (var card in _spotlightCards)
             if (card.SpotlightButton is not null)
@@ -3341,6 +3359,53 @@ public sealed partial class CatalogLandingPage : UserControl
         if (IsSnapshotCurrent(entry.Snapshot)) return entry.Snapshot;
         RemoveCachedSnapshot(key);
         return null;
+    }
+
+    private void StartSpotlightResolution(CatalogCard card)
+    {
+        if (card.Channel is not { } channel || channel.Source.DirectUri is not null || _connection is null) return;
+        var cancellation = _spotlightResolveCts = new CancellationTokenSource();
+        var generation = Interlocked.Read(ref _spotlightRenderGeneration);
+        _spotlightResolveCard = card;
+        _spotlightResolvedChannel = null;
+        _spotlightResolveElapsedMs = null;
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        _ = ResolveAsync();
+
+        async Task ResolveAsync()
+        {
+            try
+            {
+                var resolved = await ResolvePlayableChannelAsync(channel, cancellation.Token);
+                if (resolved?.Source.DirectUri is not null &&
+                    SpotlightMetadataOwnership.CanApply(generation, _spotlightRenderGeneration,
+                        ReferenceEquals(_spotlightCard, card), ReferenceEquals(card.Channel, channel),
+                        cancellation.IsCancellationRequested))
+                {
+                    _spotlightResolvedChannel = resolved;
+                    _spotlightResolveElapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                }
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                LaunchDiagnostics.Write($"event=perf.selection.prefetch outcome=error exception={exception.GetType().Name}");
+            }
+            finally
+            {
+                if (ReferenceEquals(_spotlightResolveCts, cancellation)) _spotlightResolveCts = null;
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private void CancelSpotlightResolution()
+    {
+        _spotlightResolveCts?.Cancel();
+        _spotlightResolveCts = null;
+        _spotlightResolveCard = null;
+        _spotlightResolvedChannel = null;
+        _spotlightResolveElapsedMs = null;
     }
 
     private bool IsSnapshotCurrent(CatalogSnapshot snapshot) =>
