@@ -1845,12 +1845,6 @@ public sealed partial class MainWindow : Window
         PlayerSideTitle.Text = selectedChannel.Source.Kind is StreamKind.Movie or StreamKind.Live
             ? "Loading category…"
             : "Now playing";
-        PlayerSideSubtitle.Text = selectedChannel.Source.Kind switch
-        {
-            StreamKind.Movie => _playerSiblings.Count <= 1 ? "No other movies are available." : "Other movies in this category",
-            StreamKind.Live => _playerSiblings.Count <= 1 ? "No other channels are available." : "Other channels in this shelf",
-            _ => string.Empty,
-        };
         PlayerNowPlayingText.Text = string.Empty;
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
@@ -1905,9 +1899,6 @@ public sealed partial class MainWindow : Window
             .Append(selected)
             .DistinctBy(channel => channel.Id)
             .ToArray();
-        PlayerSideSubtitle.Text = _playerSiblings.Count <= 1
-            ? "No other movies are available."
-            : "Other movies in this category";
         SetPlayerList(_playerSiblings, selected);
         UpdateEpisodeNavigationButtons();
     }
@@ -2263,7 +2254,6 @@ public sealed partial class MainWindow : Window
             _playbackCompletionShown = false;
             PlayerTitleText.Text = episode.DisplayName;
             PlayerSideTitle.Text = PlayerSideTitleResolver.ForEpisodes(_currentSeriesTitle);
-            PlayerSideSubtitle.Text = "Select an episode to play";
             PlayerNowPlayingText.Text = string.Empty;
             SetPlayerMetadata(_currentSeriesMetadata, CatalogItemType.Series);
             PlayerVideoCurtain.Visibility = Visibility.Visible;
@@ -3478,7 +3468,6 @@ public sealed partial class MainWindow : Window
         SetPlayerMetadata(null);
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         PlayerSideTitle.Text = string.Empty;
-        PlayerSideSubtitle.Text = string.Empty;
         PlayerNowPlayingText.Text = string.Empty;
         PlayerNowPlayingText.Visibility = Visibility.Collapsed;
         PlayerSeasonComboBox.SelectedItem = null;
@@ -6084,7 +6073,7 @@ public sealed partial class MainWindow : Window
                      AudioSubtitlesButton, VolumeButton, SleepTimerButton, CompactSleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
-        StatusText.Foreground = ThemeBrush(mutedKey);
+        StatusText.Foreground = ThemeBrush("AppTextBrush");
         ElapsedText.Foreground = ThemeBrush(mutedKey);
         DurationText.Foreground = ThemeBrush(mutedKey);
         VolumeStateText.Foreground = ThemeBrush(mutedKey);

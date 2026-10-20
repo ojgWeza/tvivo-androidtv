@@ -16,8 +16,11 @@ public sealed record SpotlightStripState(int OpenIndex, int ItemCount)
     public static bool ShouldOpenAfterDwell(int currentIndex, int targetIndex, TimeSpan elapsed,
         TimeSpan? dwell = null) => targetIndex >= 0 && targetIndex != currentIndex && elapsed >= (dwell ?? DwellDuration);
 
-    public static double OpenWidth(double viewportWidth) => Math.Clamp(viewportWidth * 0.42,
-        viewportWidth < 776 ? 420 : 480, 672);
+    public static double OpenWidth(double viewportWidth, int itemCount, double collapsedWidth = 64, double gap = 8)
+    {
+        var collapsedCount = Math.Max(0, itemCount - 1);
+        return Math.Max(collapsedWidth, viewportWidth - collapsedCount * (collapsedWidth + gap));
+    }
 
     public static double ScrollIntoViewTarget(double itemStart, double itemWidth, double viewportStart, double viewportWidth) =>
         itemStart < viewportStart ? itemStart : itemStart + itemWidth > viewportStart + viewportWidth

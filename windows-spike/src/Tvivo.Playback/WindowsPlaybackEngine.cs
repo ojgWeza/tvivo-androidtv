@@ -467,13 +467,17 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
             StopCore(_currentSession);
             await _abandonedCleanupTask.ConfigureAwait(true);
             _abandonedCleanupTask = Task.CompletedTask;
+            LibVLCSharp.Shared.LibVLC? toRelease;
             lock (_lifecycleLock)
             {
-                if (_libVlc is { } libVlc) libVlc.Log -= OnLibVlcLog;
-                _libVlc?.Dispose();
+                toRelease = _libVlc;
+                if (toRelease is not null) toRelease.Log -= OnLibVlcLog;
                 _libVlc = null;
                 _disposed = true;
             }
+            // libvlc_release can block for seconds (module/thread teardown). Run it off the UI thread
+            // so callers' WaitAsync timeouts can actually fire and the window closes promptly.
+            if (toRelease is not null) await Task.Run(toRelease.Dispose).ConfigureAwait(true);
             LifecycleEvent?.Invoke("event=playback.engine.dispose engine=LibVLC context=released");
         }
         finally

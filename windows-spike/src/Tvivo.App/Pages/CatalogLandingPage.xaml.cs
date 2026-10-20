@@ -2922,7 +2922,9 @@ public sealed partial class CatalogLandingPage : UserControl
         for (var i = 0; i < _spotlightCards.Count; i++)
         {
             var card = _spotlightCards[i];
-            var targetWidth = i == _spotlightState.OpenIndex ? SpotlightStripState.OpenWidth(viewport) : 64;
+            var targetWidth = i == _spotlightState.OpenIndex
+                ? SpotlightStripState.OpenWidth(viewport, _spotlightCards.Count)
+                : 64;
             var animateOpening = i == newOpenIndex && _uiSettings.AnimationsEnabled &&
                 card.SpotlightButton is { ActualWidth: > 0 } openingButton &&
                 Math.Abs(openingButton.ActualWidth - targetWidth) > 0.5;
@@ -3122,7 +3124,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 button.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightInput_KeyDown), true);
             }
             card.SpotlightButton = button;
-            button.Width = Math.Clamp(card.SpotlightWidth, 64, 672);
+            button.Width = Math.Max(64, card.SpotlightWidth);
             RequestSpotlightArtworkLayout();
         }
     }

@@ -24,12 +24,21 @@ public sealed class SpotlightStripStateTests
     }
 
     [Theory]
-    [InlineData(776, 480)]
-    [InlineData(700, 420)]
-    [InlineData(1200, 504)]
-    [InlineData(1600, 672)]
-    public void OpenWidthUsesResponsiveClamp(double viewport, double expected) =>
-        Assert.Equal(expected, SpotlightStripState.OpenWidth(viewport));
+    [InlineData(800)]
+    [InlineData(1280)]
+    [InlineData(1920)]
+    [InlineData(3840)]
+    public void EightSpotlightItemsFillAvailableWidth(double viewport)
+    {
+        const int itemCount = 8;
+        const double gap = 8;
+        const double collapsedWidth = 64;
+        var openWidth = SpotlightStripState.OpenWidth(viewport, itemCount, collapsedWidth, gap);
+        var totalWidth = openWidth + (itemCount - 1) * collapsedWidth + (itemCount - 1) * gap;
+
+        Assert.InRange(Math.Abs(totalWidth - viewport), 0, 1);
+        Assert.True(openWidth >= collapsedWidth);
+    }
 
     [Fact]
     public void ScrollTargetMovesOnlyWhenItemIsOutsideViewport()
