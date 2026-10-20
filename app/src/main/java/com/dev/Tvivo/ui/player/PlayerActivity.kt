@@ -1087,8 +1087,23 @@ class PlayerActivity : ComponentActivity() {
                 isChangingConfigurations, stopPending)) {
             pipWindowOpen = false
             stopAndFinish(finishImmediately = true)
+        } else {
+            stopAfterDismissedPip()
         }
         super.onStop()
+    }
+
+    private fun stopAfterDismissedPip() {
+        // System PiP X can stop the Activity while it still reports PiP mode,
+        // then move the task out of PiP without another onStop callback.
+        android.os.Handler(mainLooper).postDelayed({
+            if (pipWindowOpen && !isInPictureInPictureMode &&
+                !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) &&
+                !isChangingConfigurations && !stopPending && !isFinishing) {
+                pipWindowOpen = false
+                stopAndFinish(finishImmediately = true)
+            }
+        }, 350L)
     }
 
     override fun onDestroy() {

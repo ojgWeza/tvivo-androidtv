@@ -54,6 +54,7 @@ import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import com.dev.Tvivo.AppIdentity
+import com.dev.Tvivo.data.AppError
 
 /**
  * The first impression, on the worst input device. A realistic credential set is ~44
@@ -66,6 +67,8 @@ fun LoginScreen(
     viewModel: LoginViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val unreachable = state.error is AppError.Unreachable
+    val rejected = state.error is AppError.AuthFailed
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val configuration = LocalConfiguration.current
@@ -298,35 +301,52 @@ fun LoginScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)
             ) {
                 Button(
-                    onClick = { submit() },
-                    enabled = state.canSubmit,
+                    onClick = {
+                        if (rejected) {
+                            runCatching { passwordFocus.requestFocus() }
+                            keyboard?.show()
+                        } else submit()
+                    },
+                    enabled = rejected || state.canSubmit,
                     modifier = Modifier.tvFocusFrame()
                 ) {
-                    Text(if (state.isSubmitting) "Signing in…" else "Sign in")
+                    Text(when {
+                        state.isSubmitting -> "Signing in…"
+                        rejected -> "Edit credentials"
+                        unreachable -> "Retry"
+                        else -> "Sign in"
+                    })
                 }
                 Button(
                     onClick = {
-                        DiagnosticLog.info("interaction", "Login password visibility toggled")
-                        viewModel.onTogglePasswordVisibility()
+                        if (unreachable) {
+                            runCatching { serverFocus.requestFocus() }
+                            keyboard?.show()
+                        } else {
+                            DiagnosticLog.info("interaction", "Login password visibility toggled")
+                            viewModel.onTogglePasswordVisibility()
+                        }
                     },
                     modifier = Modifier.tvFocusFrame()
                 ) {
                     Text(
-                        if (state.showPassword) {
+                        if (unreachable) "Edit server" else if (state.showPassword) {
                             if (isHandset) "Hide" else "Hide password"
                         } else {
                             if (isHandset) "Show" else "Show password"
                         }
                     )
                 }
-                Button(
-                    onClick = {
-                        DiagnosticLog.info("interaction", "Login credentials cleared")
-                        viewModel.onClear()
-                    },
-                    modifier = Modifier.tvFocusFrame()
-                ) {
-                    Text("Clear")
+                if (state.error == null) {
+                    Button(
+                        onClick = {
+                            DiagnosticLog.info("interaction", "Login credentials cleared")
+                            viewModel.onClear()
+                        },
+                        modifier = Modifier.tvFocusFrame()
+                    ) {
+                        Text("Clear")
+                    }
                 }
             }
         }

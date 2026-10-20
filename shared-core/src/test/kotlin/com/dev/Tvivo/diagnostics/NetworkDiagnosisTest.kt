@@ -120,6 +120,20 @@ class NetworkDiagnosisTest {
         assertEquals(FindingSeverity.CRITICAL, findings.first().severity)
     }
 
+    @Test fun providerFailuresTakePriorityOverHistoricalDrops() {
+        val drops = DropPattern(dropsIn24Hours = 4)
+        val unavailable = NetworkDiagnosis.diagnose(wifi,
+            probes = ProbeResults(internet = CheckState.PASS, providerControl = CheckState.FAIL,
+                providerStatus = 503),
+            recent = RecentEventSummary(dropPattern = drops))
+        assertEquals("provider_path_possible", unavailable.first().id)
+
+        val throttled = NetworkDiagnosis.diagnose(wifi,
+            probes = ProbeResults(internet = CheckState.PASS, providerControl = CheckState.PASS),
+            recent = RecentEventSummary(http429Count = 3, dropPattern = drops))
+        assertEquals("provider_429", throttled.first().id)
+    }
+
     @Test fun dnsThresholdAndPublicResolverComparisonAreQualified() {
         assertFalse(ids(wifi, ProbeResults(systemDnsMedianMs = 500)).contains("slow_or_failing_dns"))
         assertTrue(ids(wifi, ProbeResults(systemDnsMedianMs = 501)).contains("slow_or_failing_dns"))

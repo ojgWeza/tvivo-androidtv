@@ -125,8 +125,8 @@ async function streamFile(req, res, url, kind, id, ext) {
   const eofByte = Math.floor(stat.size * eofPercent / 100);
   const byteLimit = Math.max(0, Math.min(selectedLength, eofByte - start));
   const loopLive = kind === 'live' && !range && eofPercent === 100;
-  const stallAt = lengthlessMovie ? -1 : withQuery(url, 'stallAfterBytes', state.stallAfterBytes);
-  const stallMs = lengthlessMovie ? 0 : Math.max(0, withQuery(url, 'stallSeconds', state.stallSeconds) * 1000);
+  const stallAt = withQuery(url, 'stallAfterBytes', state.stallAfterBytes);
+  const stallMs = Math.max(0, withQuery(url, 'stallSeconds', state.stallSeconds) * 1000);
   const mime = ext === 'ts' ? 'video/mp2t' : 'video/mp4';
   res.writeHead(status, {
     'content-type': mime,

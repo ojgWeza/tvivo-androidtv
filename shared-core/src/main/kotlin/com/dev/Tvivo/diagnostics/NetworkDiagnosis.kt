@@ -320,8 +320,10 @@ object NetworkDiagnosis {
         "wifi_radio_firmware_pattern" -> 80
         "repeated_drops_unknown_cause" -> 75
         "clock_skew" -> 70
-        "provider_403", "provider_429" -> 65
-        "provider_path_possible" -> 60
+        // A provider response observed in the current check or recent requests is more
+        // actionable than an old drop pattern retained in the 24-hour timeline.
+        "provider_403", "provider_429" -> 82
+        "provider_path_possible", "provider_server_errors" -> 78
         "slow_or_failing_dns", "dns_failures", "ipv6_path_may_fail" -> 55
         "request_samples_unstable", "throughput_below_track" -> 50
         "weak_wifi_signal" -> 45
