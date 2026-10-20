@@ -87,6 +87,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private CatalogCard? _spotlightMetadataCard;
     private readonly HashSet<Button> _wiredSpotlightInputButtons = new();
     private Button? _lastSpotlightInputButton;
+    private bool _spotlightKeyboardSinceActivation;
     private string _lastSpotlightInput = "unknown";
     private string _lastSpotlightKey = "none";
     private string _lastSpotlightDevice = "unknown";
@@ -306,6 +307,7 @@ public sealed partial class CatalogLandingPage : UserControl
         OpenShelfGrid.Unloaded += OpenShelfGrid_Unloaded;
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         SpotlightStripItems.ItemsSource = _spotlightCards;
+        CatalogPageRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightPage_KeyDown), true);
         SpotlightStripItems.LayoutUpdated += SpotlightStripItems_LayoutUpdated;
         _epgTimer.Tick += EpgTimer_Tick;
         _perfSummaryTimer.Tick += PerfSummaryTimer_Tick;
@@ -357,6 +359,11 @@ public sealed partial class CatalogLandingPage : UserControl
     public void SetActive(bool active)
     {
         _isActive = active;
+        if (!active)
+        {
+            _spotlightKeyboardSinceActivation = false;
+            foreach (var card in _spotlightCards) card.SetSpotlightFocused(false);
+        }
         if (active && _pendingInitialShelfCards is not null) _initialShelfCardsTimer?.Start();
         else if (!active) _initialShelfCardsTimer?.Stop();
         UpdatePerfTimerLifecycle();
@@ -1559,8 +1566,16 @@ public sealed partial class CatalogLandingPage : UserControl
         var selection = _spotlightSettingsService.Select(account, page,
             DateOnly.FromDateTime(DateTime.UtcNow), moviePool, seriesPool);
         var channels = moviePool.Concat(seriesPool).ToDictionary(channel => (TypeForSource(channel.Source.Kind), channel.Id));
+        var folderNames = new Dictionary<(CatalogItemType Type, string Id), string>();
+        foreach (var type in new[] { CatalogItemType.Movie, CatalogItemType.Series })
+            if (mode == CatalogMode.MyTvivo || mode == CatalogMode.Movies && type == CatalogItemType.Movie ||
+                mode == CatalogMode.Series && type == CatalogItemType.Series)
+                foreach (var group in _repository.GetGroups(account, type))
+                    folderNames[(type, group.Id)] = group.DisplayName;
         var cards = selection.Items.Select(item => channels.TryGetValue((item.Type, item.ItemId), out var channel)
-            ? ToCard(channel, item.Type) : null).Where(card => card is not null).Cast<CatalogCard>().ToArray();
+            ? ToCard(channel, item.Type, originFolder: channel.GroupId is { } id &&
+                folderNames.TryGetValue((item.Type, id), out var name) ? name : null)
+            : null).Where(card => card is not null).Cast<CatalogCard>().ToArray();
         return cards.Length == 0 ? Array.Empty<CatalogShelf>() :
             new[] { CreateShelf(account, "__spotlight_strip", "Spotlight", CountLabel(cards.Length, "title"), cards,
                 cards[0].Type, null, false, null) };
@@ -2059,7 +2074,7 @@ public sealed partial class CatalogLandingPage : UserControl
     };
 
     private CatalogCard ToCard(Channel channel, CatalogItemType type, string? categoryQuality = null,
-        string? subtitleOverride = null, bool isContinueWatching = false)
+        string? subtitleOverride = null, bool isContinueWatching = false, string? originFolder = null)
     {
         var (title, qualityBadge) = SplitQualityBadge(channel.DisplayName);
         var card = new CatalogCard(
@@ -2073,7 +2088,8 @@ public sealed partial class CatalogLandingPage : UserControl
             qualityBadge ?? categoryQuality,
             type,
             isContinueWatching,
-            EpgEnabled);
+            EpgEnabled,
+            originFolder);
         if (type == CatalogItemType.Movie)
             card.ApplyWatchProgress(_movieProgressById.GetValueOrDefault(channel.Id));
         else if (type == CatalogItemType.Series)
@@ -2279,7 +2295,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private void ShowCardToolTip(CatalogCard card, FrameworkElement cardElement)
     {
         using var perfScope = PerfScope.Begin("HoverLookupUiUpdate");
-        if (!card.HasHoverSummary)
+        if (!card.HasHoverSummary && card.FileSizeText is null)
         {
             DetachCardToolTip(cardElement);
             return;
@@ -3012,6 +3028,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (!isTouch) _spotlightTouchArmedIndex = -1;
         if (card.Channel is { } channel)
         {
+            card.SetSpotlightFocused(false);
             RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray(),
                  "spotlight-click", recentInput ? _lastSpotlightInput : "unknown",
                  recentInput ? _lastSpotlightKey : "none", recentInput ? _lastSpotlightDevice : "unknown",
@@ -3061,7 +3078,8 @@ public sealed partial class CatalogLandingPage : UserControl
         var keyboard = button.FocusState == FocusState.Keyboard;
         if (keyboard && card.SpotlightIndex != _spotlightState.OpenIndex)
             OpenSpotlight(card.SpotlightIndex, "keyboard", keyboard);
-        card.SetSpotlightFocused(true);
+        card.SetSpotlightFocused(SpotlightFocusPolicy.ShowRing(_isActive,
+            _spotlightKeyboardSinceActivation, keyboard));
     }
 
     private void SpotlightItem_LostFocus(object sender, RoutedEventArgs args)
@@ -3081,7 +3099,17 @@ public sealed partial class CatalogLandingPage : UserControl
         if (next == card.SpotlightIndex) return;
         args.Handled = true;
         OpenSpotlight(next, "keyboard", announce: true);
-        _spotlightCards[next].SpotlightButton?.Focus(FocusState.Programmatic);
+        _spotlightCards[next].SpotlightButton?.Focus(FocusState.Keyboard);
+    }
+
+    private void SpotlightPage_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (!_isActive) return;
+        _spotlightKeyboardSinceActivation = true;
+        if (XamlRoot is null || FocusManager.GetFocusedElement(XamlRoot) is not Button button ||
+            button.DataContext is not CatalogCard card || !_spotlightCards.Contains(card)) return;
+        card.SetSpotlightFocused(SpotlightFocusPolicy.ShowRing(true, true,
+            button.FocusState == FocusState.Keyboard));
     }
 
     private void SpotlightItem_Loaded(object sender, RoutedEventArgs args)
@@ -3101,6 +3129,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightInput_PointerPressed(object sender, PointerRoutedEventArgs args)
     {
+        _spotlightKeyboardSinceActivation = false;
+        foreach (var card in _spotlightCards) card.SetSpotlightFocused(false);
         _lastSpotlightInputButton = sender as Button;
         _lastSpotlightInput = "pointer";
         _lastSpotlightKey = "none";
@@ -5641,7 +5671,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private sealed class CatalogCard(string id, string title, string subtitle, string? artworkUrl,
         double width, double height, Channel? channel, string? qualityBadge, CatalogItemType type,
-        bool isContinueWatching, bool epgEnabled) : INotifyPropertyChanged
+        bool isContinueWatching, bool epgEnabled, string? originFolder) : INotifyPropertyChanged
     {
         private EpgNowNext? _nowNext;
         private PlaybackProgress? _watchProgress;
@@ -5666,6 +5696,9 @@ public sealed partial class CatalogLandingPage : UserControl
         public Thickness SpotlightPadding => SpotlightExpanded ? new Thickness(16) : new Thickness(0);
         public bool SpotlightExpanded { get; private set; }
         public string SpotlightDetails => DetailsLine;
+        public string? SpotlightOriginFolder { get; private set; } = originFolder;
+        public Visibility SpotlightOriginFolderVisibility => string.IsNullOrWhiteSpace(SpotlightOriginFolder)
+            ? Visibility.Collapsed : Visibility.Visible;
         public bool SpotlightSummaryResolved { get; private set; } =
             !string.IsNullOrWhiteSpace(channel?.Metadata.GetValueOrDefault("plot"));
         public string SpotlightSummary => !string.IsNullOrWhiteSpace(HoverPlot) ? HoverPlot! :
@@ -5685,6 +5718,12 @@ public sealed partial class CatalogLandingPage : UserControl
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightAutomationName)));
             }
             ArtworkUrl = incoming.ArtworkUrl;
+            if (SpotlightOriginFolder != incoming.SpotlightOriginFolder)
+            {
+                SpotlightOriginFolder = incoming.SpotlightOriginFolder;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightOriginFolder)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightOriginFolderVisibility)));
+            }
             if (incoming.Channel is { } newChannel)
             {
                 var previousPlot = HoverPlot;
@@ -5749,7 +5788,10 @@ public sealed partial class CatalogLandingPage : UserControl
             Channel.Metadata.GetValueOrDefault("year"),
             Channel.Metadata.TryGetValue("rating", out var rating) && CatalogRatingFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
             Channel.Metadata.GetValueOrDefault("genre"),
+            FileSizeText,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        public string? FileSizeText => FileSizeFormatter.Format(_hoverMetadata?.SizeBytes ??
+            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes")));
         private string? HoverPlot => _hoverMetadata is not null
             ? _hoverMetadata.Plot
             : Channel?.Metadata.GetValueOrDefault("plot");
@@ -5768,6 +5810,8 @@ public sealed partial class CatalogLandingPage : UserControl
             Add("genre", metadata.Genre);
             Add("plot", metadata.Plot);
             Add("cast", metadata.Cast);
+            if (metadata.SizeBytes is { } sizeBytes)
+                values["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
             Channel = Channel with { Metadata = values };
             SetHoverMetadata(metadata);
 

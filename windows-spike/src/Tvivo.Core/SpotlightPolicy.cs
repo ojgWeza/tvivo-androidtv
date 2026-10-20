@@ -10,8 +10,10 @@ public enum SpotlightPageKind { Movies, Series, ForYou }
 public sealed record SpotlightContentSettings(SpotlightSourceMode SourceMode,
     IReadOnlyList<string>? SelectedCategoryIds = null);
 
-public sealed record SpotlightSettings(SpotlightContentSettings Movies, SpotlightContentSettings Series)
+public sealed record SpotlightSettings(SpotlightContentSettings Movies, SpotlightContentSettings Series,
+    int RotationDays = 1)
 {
+    public static int NormalizeRotationDays(int days) => days is 1 or 3 or 7 or 10 or 14 ? days : 1;
     public static SpotlightSettings Default { get; } = new(
         new(SpotlightSourceMode.RecentlyAdded), new(SpotlightSourceMode.RecentlyAdded));
 }
@@ -51,11 +53,17 @@ public enum SpotlightEmptyReason { NoEligibleCandidates, NoSelectedFolderCandida
 public sealed record SpotlightSelectionResult(IReadOnlyList<SpotlightCandidate> Items,
     SpotlightEmptyReason? EmptyReason = null);
 
-/// <summary>Deterministic, bounded daily Spotlight selection. Candidate inputs must already be bounded source pools.</summary>
+/// <summary>Deterministic, bounded Spotlight selection. Candidate inputs must already be bounded source pools.</summary>
 public static class SpotlightSelector
 {
-    public const int SelectionSize = 12;
+    public const int SelectionSize = 8;
     public const int CandidatePoolLimit = 200;
+
+    public static DateOnly BucketStart(DateOnly utcDate, int rotationDays)
+    {
+        var days = SpotlightSettings.NormalizeRotationDays(rotationDays);
+        return DateOnly.FromDayNumber(utcDate.DayNumber / days * days);
+    }
 
     public static SpotlightSelectionResult Select(SpotlightPageKind page, string opaqueAccountKey,
         DateOnly utcDate, SpotlightSettings settings,
@@ -66,6 +74,7 @@ public static class SpotlightSelector
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(movieCandidates);
         ArgumentNullException.ThrowIfNull(seriesCandidates);
+        utcDate = BucketStart(utcDate, settings.RotationDays);
         var movieConfig = settings.Movies ?? SpotlightSettings.Default.Movies;
         var seriesConfig = settings.Series ?? SpotlightSettings.Default.Series;
         if (page == SpotlightPageKind.Movies)

@@ -365,7 +365,7 @@ public sealed partial class MainWindow : Window
         PageHost.Children.Add(_homePage);
         PageHost.Children.Add(_providerSetupPage);
         PageHost.Children.Add(_accountPage);
-        _homePage.Visibility = Visibility.Visible;
+        _homePage.Visibility = Visibility.Collapsed;
         _providerSetupPage.Visibility = Visibility.Collapsed;
         _accountPage.Visibility = Visibility.Collapsed;
         CatalogPageHost.Content = _catalogLandingPage;
@@ -1014,7 +1014,8 @@ public sealed partial class MainWindow : Window
     private void MyTvivoNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
-    private void HomeNavigation_Click(object sender, RoutedEventArgs args) => ShowPage(ShellPage.Home);
+    private void HomeNavigation_Click(object sender, RoutedEventArgs args) =>
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
     private void MoviesNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.Movies);
@@ -1153,6 +1154,11 @@ public sealed partial class MainWindow : Window
 
     private void ShowPage(ShellPage page, bool updateTopNavigation = true)
     {
+        if (page == ShellPage.Home)
+        {
+            _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
+            return;
+        }
         if (_currentPage == page)
             return;
 
@@ -2197,17 +2203,24 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"event=series.open.exit ms={elapsed:0.000} reason={reason}{suffix} title=\"{seriesTitle}\" itemRef={itemRef}");
     }
 
-    private static Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
+    private Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
     {
-        var displayName = $"S{episode.SeasonNumber:00} E{episode.EpisodeNumber:00} · {episode.Title}";
-        return new Channel(account.AccountId, episode.Id, seriesId, episode.Title, displayName, null, null,
+        var season = _playerSeriesSeasons.FirstOrDefault(item => item.Id == episode.SeasonId);
+        var index = season is null ? Math.Max(0, episode.EpisodeNumber - 1) :
+            Math.Max(0, Array.FindIndex(season.Episodes.ToArray(), item => item.Id == episode.Id));
+        var displayName = EpisodeDisplayNamePolicy.Format(_currentSeriesTitle, episode.SeasonNumber,
+            episode.EpisodeNumber, episode.Title, index);
+        var metadata = new Dictionary<string, string>
+        {
+            ["seriesId"] = seriesId,
+            ["seasonId"] = episode.SeasonId,
+            ["seasonNumber"] = episode.SeasonNumber.ToString(CultureInfo.InvariantCulture),
+        };
+        if (episode.SizeBytes is { } bytes)
+            metadata["size_bytes"] = bytes.ToString(CultureInfo.InvariantCulture);
+        return new Channel(account.AccountId, episode.Id, seriesId, displayName, displayName, null, null,
             episode.EpisodeNumber, episode.Source,
-            new Dictionary<string, string>
-            {
-                ["seriesId"] = seriesId,
-                ["seasonId"] = episode.SeasonId,
-                ["seasonNumber"] = episode.SeasonNumber.ToString(CultureInfo.InvariantCulture),
-            });
+            metadata);
     }
 
     private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false, bool autoplayNext = false)
@@ -3635,6 +3648,8 @@ public sealed partial class MainWindow : Window
             Add("genre", metadata.Genre);
             Add("plot", metadata.Plot);
             Add("cast", metadata.Cast);
+            if (metadata.SizeBytes is { } sizeBytes)
+                values["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
             void Add(string key, string? value)
             {
                 if (!string.IsNullOrWhiteSpace(value)) values[key] = value;
@@ -3648,14 +3663,18 @@ public sealed partial class MainWindow : Window
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
     {
         var hasAbout = type is CatalogItemType.Movie or CatalogItemType.Series;
+        var sizeBytes = FileSizeFormatter.ParseBytes(_nowPlayingChannel?.Metadata.GetValueOrDefault("size_bytes"));
+        if (_nowPlayingChannel?.Source.Kind != StreamKind.Episode)
+            sizeBytes ??= metadata?.SizeBytes;
+        var size = FileSizeFormatter.Format(sizeBytes);
         var hasDescription = !string.IsNullOrWhiteSpace(metadata?.Plot) || !string.IsNullOrWhiteSpace(metadata?.Cast);
         PlayerAboutButton.Visibility = hasAbout && hasDescription
             ? Visibility.Visible
             : Visibility.Collapsed;
-        PlayerMetadataLine.Visibility = hasAbout ? Visibility.Visible : Visibility.Collapsed;
+        PlayerMetadataLine.Visibility = hasAbout || size is not null ? Visibility.Visible : Visibility.Collapsed;
         if (metadata is null)
         {
-            PlayerMetadataLine.Text = string.Empty;
+            PlayerMetadataLine.Text = size ?? string.Empty;
             PlayerAboutText.Text = "Loading details…";
             return;
         }
@@ -3664,6 +3683,7 @@ public sealed partial class MainWindow : Window
             metadata.Year,
             CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
             metadata.Genre,
+            size,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
         if (!string.IsNullOrWhiteSpace(metadata.Plot)) about.Add(metadata.Plot);
@@ -5204,7 +5224,7 @@ public sealed partial class MainWindow : Window
     private void PlayerBackButton_Click(object sender, RoutedEventArgs args) => ReturnFromPlayer();
 
     private void PlayerHomeButton_Click(object sender, RoutedEventArgs args) =>
-        ShowPage(ShellPage.Home);
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
 
     private void ReturnFromPlayer()
     {
@@ -6239,6 +6259,9 @@ public sealed partial class MainWindow : Window
 
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
+        public string? FileSizeText => FileSizeFormatter.Format(FileSizeFormatter.ParseBytes(
+            Channel.Metadata.GetValueOrDefault("size_bytes")));
+        public Visibility FileSizeVisibility => FileSizeText is null ? Visibility.Collapsed : Visibility.Visible;
         public Visibility FavoriteVisibility => FavoriteTargetResolver.ShowsPerItemFavorite(Channel)
             ? Visibility.Visible
             : Visibility.Collapsed;

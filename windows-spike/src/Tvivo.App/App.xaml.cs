@@ -156,6 +156,9 @@ internal static class LaunchDiagnostics
         const string configuration = "Release";
 #endif
         var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown";
+#if DEBUG
+        SentryBridge.Start(version);
+#endif
         Write($"event=app.start version={version} config={configuration} engine={_engine} theme={_theme}");
     }
 
@@ -186,6 +189,9 @@ internal static class LaunchDiagnostics
         var safeMessage = Sanitize(message);
         var line = $"{DateTimeOffset.Now:O} session={SessionId} {safeMessage}{Environment.NewLine}";
         Debug.Write(line);
+#if DEBUG
+        SentryBridge.OnLog(safeMessage);
+#endif
         try
         {
             lock (Sync)

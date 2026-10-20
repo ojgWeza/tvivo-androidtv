@@ -21,7 +21,10 @@ public sealed class SpotlightSettingsStore
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var root = document.RootElement;
             if (root.GetProperty("version").GetInt32() != CurrentVersion) return SpotlightSettings.Default;
-            return new SpotlightSettings(ReadContent(root.GetProperty("movies")), ReadContent(root.GetProperty("series")));
+            var rotationDays = root.TryGetProperty("rotationDays", out var rotation) &&
+                rotation.ValueKind == JsonValueKind.Number && rotation.TryGetInt32(out var parsed)
+                ? SpotlightSettings.NormalizeRotationDays(parsed) : 1;
+            return new SpotlightSettings(ReadContent(root.GetProperty("movies")), ReadContent(root.GetProperty("series")), rotationDays);
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or
                                              KeyNotFoundException or InvalidOperationException or FormatException)
@@ -40,7 +43,8 @@ public sealed class SpotlightSettingsStore
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var json = JsonSerializer.Serialize(new { version = CurrentVersion, movies, series });
+            var json = JsonSerializer.Serialize(new { version = CurrentVersion, movies, series,
+                rotationDays = SpotlightSettings.NormalizeRotationDays(settings.RotationDays) });
             File.WriteAllText(temporary, json);
             File.Move(temporary, path, true);
         }
@@ -97,7 +101,7 @@ public sealed class SpotlightDailySelectionStore
         ArgumentNullException.ThrowIfNull(selection);
         if (selection.Items.Count > SpotlightSelector.SelectionSize || selection.Items.Any(item =>
                 item.Type is not (CatalogItemType.Movie or CatalogItemType.Series) || string.IsNullOrWhiteSpace(item.ItemId)))
-            throw new ArgumentException("Daily Spotlight selections must contain at most twelve movie/series IDs.", nameof(selection));
+            throw new ArgumentException($"Spotlight selections must contain at most {SpotlightSelector.SelectionSize} movie/series IDs.", nameof(selection));
         var entries = Load(selection.AccountKey)
             .Where(item => !(item.Page == selection.Page && item.UtcDate == selection.UtcDate &&
                             item.SourceMode == selection.SourceMode && item.FolderFingerprint == selection.FolderFingerprint))

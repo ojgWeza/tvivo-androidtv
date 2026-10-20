@@ -230,6 +230,13 @@ public sealed partial class AccountPage : UserControl
     private void SpotlightSeriesModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs args) =>
         SpotlightModeChanged(CatalogItemType.Series, SpotlightSeriesModeSelector);
 
+    private void SpotlightRotationSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_suppressSpotlightUi || SpotlightRotationSelector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
+            !int.TryParse(tag, out var days)) return;
+        _spotlightDraft = _spotlightDraft with { RotationDays = SpotlightSettings.NormalizeRotationDays(days) };
+    }
+
     private void SpotlightModeChanged(CatalogItemType type, ComboBox selector)
     {
         if (_suppressSpotlightUi || selector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
@@ -332,6 +339,9 @@ public sealed partial class AccountPage : UserControl
         {
             SetSpotlightModeSelector(SpotlightMoviesModeSelector, _spotlightDraft.Movies.SourceMode);
             SetSpotlightModeSelector(SpotlightSeriesModeSelector, _spotlightDraft.Series.SourceMode);
+            SpotlightRotationSelector.SelectedItem = SpotlightRotationSelector.Items.OfType<ComboBoxItem>()
+                .First(item => string.Equals(item.Tag as string,
+                    SpotlightSettings.NormalizeRotationDays(_spotlightDraft.RotationDays).ToString(), StringComparison.Ordinal));
             SpotlightMoviesFoldersPanel.Visibility = _spotlightDraft.Movies.SourceMode == SpotlightSourceMode.SpecificFolders
                 ? Visibility.Visible : Visibility.Collapsed;
             SpotlightSeriesFoldersPanel.Visibility = _spotlightDraft.Series.SourceMode == SpotlightSourceMode.SpecificFolders

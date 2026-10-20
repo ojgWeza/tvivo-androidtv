@@ -239,7 +239,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "vod-info.shape", (int)response.StatusCode, TraceId(response)));
         var info = GetInfoObject(document.RootElement);
-        return new MovieDetails(movieId, MapMetadata(info));
+        return new MovieDetails(movieId, MapMetadata(info, document.RootElement));
     }
 
     public async Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default)
@@ -285,7 +285,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                     MapEpisodes(episodeGroups, connection, "1", "Season 1", 1)));
         }
         // A malformed optional episodes field behaves like an empty result; keep the last usable details.
-        var details = new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info));
+        var details = new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info, root));
         if (details.Seasons.Sum(season => season.Episodes.Count) == 0 &&
             _seriesDetails.TryGetValue((account.AccountId, seriesId), out var saved))
             return saved;
@@ -318,7 +318,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 : TimeSpan.TryParse(durationValue, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
             var directUri = new Uri(StreamUrlBuilder.Series(connection.Endpoint, connection.Username, connection.Password, id, extension));
             episodes.Add(new SeriesEpisode(id, title, seasonId, seasonName, seasonNumber, number,
-                new StreamSource(id, StreamKind.Episode, extension, directUri, duration)));
+                new StreamSource(id, StreamKind.Episode, extension, directUri, duration),
+                ReadSizeBytes(item, GetInfoObject(item))));
         }
         return episodes;
     }
@@ -328,10 +329,37 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
             ? info
             : root;
 
-    private static CatalogMetadata MapMetadata(JsonElement info) => new(
+    private static CatalogMetadata MapMetadata(JsonElement info, JsonElement root) => new(
         JsonValue.String(info, "year"), JsonValue.String(info, "rating"), JsonValue.String(info, "genre"),
         FirstNonEmpty(JsonValue.String(info, "plot"), JsonValue.String(info, "description")),
-        FirstNonEmpty(JsonValue.String(info, "cast"), JsonValue.String(info, "actors")));
+        FirstNonEmpty(JsonValue.String(info, "cast"), JsonValue.String(info, "actors")), ReadSizeBytes(info, root));
+
+    private static long? ReadSizeBytes(params JsonElement[] nodes)
+    {
+        foreach (var node in nodes)
+            foreach (var field in new[] { "size", "filesize", "file_size", "size_bytes" })
+                if (FileSizeFormatter.ParseBytes(JsonValue.String(node, field)) is { } bytes) return bytes;
+        return null;
+    }
+
+    private static Uri? ArtworkUri(JsonElement item)
+    {
+        foreach (var field in new[] { "cover", "cover_big", "backdrop_path", "stream_icon", "movie_image" })
+        {
+            if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty(field, out var value)) continue;
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in value.EnumerateArray())
+                    if (entry.ValueKind == JsonValueKind.String &&
+                        Uri.TryCreate(entry.GetString(), UriKind.Absolute, out var arrayUri) &&
+                        arrayUri.Scheme is "http" or "https") return arrayUri;
+            }
+            else if (value.ValueKind == JsonValueKind.String &&
+                     Uri.TryCreate(value.GetString(), UriKind.Absolute, out var uri) &&
+                     uri.Scheme is "http" or "https") return uri;
+        }
+        return null;
+    }
 
     private static string? FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
@@ -413,7 +441,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         var id = JsonValue.String(value, type == CatalogItemType.Series ? "series_id" : "stream_id");
         if (string.IsNullOrWhiteSpace(id)) return null;
         var name = JsonValue.String(value, "name") ?? id;
-        var icon = JsonValue.Uri(value, type == CatalogItemType.Series ? "cover" : "stream_icon");
+        var icon = ArtworkUri(value);
         // Xtream movies and live channels carry "added"; series only carry "last_modified".
         var added = JsonValue.UnixTime(value, "added") ??
             (type == CatalogItemType.Series ? JsonValue.UnixTime(value, "last_modified") : null);
@@ -423,6 +451,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
             ? JsonValue.String(value, "ext")?.Trim().TrimStart('.')
             : JsonValue.String(value, "container_extension")?.Trim().TrimStart('.');
         var metadata = new Dictionary<string, string>();
+        if (ReadSizeBytes(value) is { } sizeBytes)
+            metadata["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
         if (type == CatalogItemType.Live && JsonValue.String(value, "epg_channel_id")?.Trim() is { Length: > 0 } epgChannelId)
             metadata["epg_channel_id"] = epgChannelId;
         return new Channel(accountId, id, groupId, name, name.Trim(), icon, added, order,

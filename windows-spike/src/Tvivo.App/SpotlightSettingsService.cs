@@ -39,12 +39,13 @@ public sealed class SpotlightSettingsService
             ? $"Movies:{settings.Movies.SourceMode},Series:{settings.Series.SourceMode}"
             : pageSource.ToString();
         var fingerprint = SpotlightSelector.SelectedFolderFingerprint(settings);
-        var previous = _dailyStore.Read(account.AccountId, page, utcDate, pageSource, fingerprint)?.Items
+        var bucketDate = SpotlightSelector.BucketStart(utcDate, settings.RotationDays);
+        var previous = _dailyStore.Read(account.AccountId, page, bucketDate, pageSource, fingerprint)?.Items
             .Select(item => candidates.FirstOrDefault(candidate => candidate.Type == item.Type && candidate.ItemId == item.ItemId))
             .Where(candidate => candidate is not null).Cast<SpotlightCandidate>().ToArray();
         var selected = SpotlightSelector.Select(page, account.AccountId, utcDate, settings,
             movieChannels.Select(SpotlightCandidate.FromChannel).ToArray(), seriesChannels.Select(SpotlightCandidate.FromChannel).ToArray(), previous);
-        _dailyStore.Write(new SpotlightDailySelection(account.AccountId, page, utcDate, pageSource, fingerprint,
+        _dailyStore.Write(new SpotlightDailySelection(account.AccountId, page, bucketDate, pageSource, fingerprint,
             selected.Items.Select(item => new SpotlightDailyItem(item.Type, item.ItemId)).ToArray()));
         var dayHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(utcDate.ToString("yyyy-MM-dd"))))[..12];

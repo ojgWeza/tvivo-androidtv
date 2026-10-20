@@ -12,6 +12,49 @@ public sealed class InfrastructureTests
 {
     private static ProviderEndpoint Endpoint(string host = "panel.example.com", int port = 8080, string scheme = "http") => new(scheme, host, port);
 
+    [Theory]
+    [InlineData("cover")]
+    [InlineData("cover_big")]
+    [InlineData("backdrop_path")]
+    [InlineData("stream_icon")]
+    [InlineData("movie_image")]
+    public async Task Series_artwork_uses_each_available_list_field(string imageField)
+    {
+        var image = new UriBuilder(Uri.UriSchemeHttps, "example.invalid") { Path = "/poster" }.Uri;
+        var series = new Dictionary<string, object?>
+        {
+            ["series_id"] = "series-1", ["name"] = "Series", ["cover"] = "invalid",
+            [imageField] = imageField == "backdrop_path" ? new[] { image.ToString() } : image.ToString(),
+        };
+        if (imageField != "cover") series["cover"] = "invalid";
+        var json = System.Text.Json.JsonSerializer.Serialize(new[] { series });
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+            request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
+                ? JsonBody(json) : JsonResponse("auth_success.json"))));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+        var item = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Series));
+        Assert.Equal(image, item.LogoUri);
+    }
+
+    [Fact]
+    public async Task Provider_reads_movie_and_episode_file_sizes_from_tolerant_shapes()
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("get_vod_info", StringComparison.Ordinal))
+                return JsonBody("""{"info":{"filesize":"1.4 GB"}}""");
+            return JsonBody("""{"info":{"name":"Series"},"episodes":{"1":[{"id":"episode-1","title":"Pilot","info":{"file_size":650000000}}]}}""");
+        })));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+        Assert.Equal(1_400_000_000, (await provider.GetMovieInfoAsync(account, "movie")).Metadata.SizeBytes);
+        Assert.Equal(650_000_000, Assert.Single(Assert.Single((await provider.GetSeriesInfoAsync(account, "series")).Seasons)
+            .Episodes).SizeBytes);
+    }
+
     [Fact]
     public void Catalog_refresh_policy_survives_restart_and_failed_atomic_replacement()
     {

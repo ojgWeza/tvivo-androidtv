@@ -14,15 +14,43 @@ public sealed class SpotlightStoresTests
         {
             var store = new SpotlightSettingsStore(directory);
             var settings = new SpotlightSettings(new(SpotlightSourceMode.SpecificFolders, new[] { "movie-folder" }),
-                new(SpotlightSourceMode.UnexploredFolders, Array.Empty<string>()));
+                new(SpotlightSourceMode.UnexploredFolders, Array.Empty<string>()), 7);
             store.Write("opaque-account-key", settings);
             var restored = store.Read("opaque-account-key");
             Assert.Equal(settings.Movies.SourceMode, restored.Movies.SourceMode);
             Assert.Equal(settings.Movies.SelectedCategoryIds, restored.Movies.SelectedCategoryIds);
             Assert.Equal(settings.Series.SourceMode, restored.Series.SourceMode);
+            Assert.Equal(7, restored.RotationDays);
             Assert.Equal(SpotlightSettings.Default, store.Read("another-key"));
             Assert.Single(Directory.GetFiles(directory, "*.json"));
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData("14", 14)]
+    [InlineData("2", 1)]
+    [InlineData("99", 1)]
+    [InlineData("\"invalid\"", 1)]
+    public void Rotation_settings_read_old_json_and_normalize_unknown_values(string? rotation, int expected)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-spotlight-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SpotlightSettingsStore(directory);
+            store.Write("key", SpotlightSettings.Default with
+            {
+                Movies = new SpotlightContentSettings(SpotlightSourceMode.SpecificFolders, new[] { "folder" })
+            });
+            var path = Directory.GetFiles(directory, "*.json").Single();
+            var json = File.ReadAllText(path);
+            json = System.Text.RegularExpressions.Regex.Replace(json, ",\"rotationDays\":1", "");
+            if (rotation is not null) json = json[..^1] + $",\"rotationDays\":{rotation}" + "}";
+            File.WriteAllText(path, json);
+            Assert.Equal(expected, store.Read("key").RotationDays);
+            Assert.Equal(SpotlightSourceMode.SpecificFolders, store.Read("key").Movies.SourceMode);
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

@@ -579,7 +579,7 @@
                             </Button>
                         </StackPanel>
                         <TextBlock x:Name="PlayerMetadataLine" Visibility="Collapsed"
-                                   Foreground="{ThemeResource AppMutedTextBrush}" FontSize="13"
+                                   Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16"
                                    TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <Button x:Name="NativeCinemaButton"
@@ -788,7 +788,7 @@
                                               Click="PlaybackModeToggle_Click" />
                             </StackPanel>
                             </Grid>
-                            <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Margin="0,4,0,0" Foreground="{ThemeResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
+                            <TextBlock x:Name="PlayerSideSubtitle" Grid.Row="1" Margin="0,4,0,0" FontSize="16" Foreground="{ThemeResource AppMutedTextBrush}" Text="Other movies in this category" TextWrapping="Wrap" />
                             <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="2" Visibility="Collapsed" />
                             <Grid Grid.Row="3" ColumnSpacing="8" Margin="0,10,0,0">
                                 <Grid.ColumnDefinitions>
@@ -796,17 +796,17 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="PlayerSeasonLabel" Visibility="Collapsed"
-                                           Foreground="{ThemeResource AppMutedTextBrush}" FontSize="13" />
+                                           Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" />
                                 <ComboBox x:Name="PlayerSeasonComboBox" Visibility="Collapsed"
                                           DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                           AutomationProperties.Name="Series season" />
                                 <TextBlock x:Name="PlayerSeasonWatchedCount" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
-                                           Visibility="Collapsed" Foreground="{ThemeResource AppMutedTextBrush}" FontSize="12" />
+                                           Visibility="Collapsed" Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" />
                             </Grid>
                             <ListView x:Name="PlayerRelatedList" Grid.Row="4" Margin="0,10,0,0" Background="Transparent" BorderThickness="0" SelectionMode="Single" IsItemClickEnabled="True" PointerPressed="PlayerRelatedList_PointerPressed" ItemClick="PlayerRelatedList_ItemClick">
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
-                                        <Setter Property="MinHeight" Value="0" />
+                                        <Setter Property="MinHeight" Value="44" />
                                         <Setter Property="Padding" Value="0" />
                                         <Setter Property="Margin" Value="0,1" />
                                     </Style>
@@ -820,9 +820,14 @@
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Text="{Binding Title}" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                                <StackPanel VerticalAlignment="Center" Spacing="2">
+                                                    <TextBlock Text="{Binding Title}" FontSize="16" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{Binding FileSizeText}" FontSize="16"
+                                                               Visibility="{Binding FileSizeVisibility}"
+                                                               Foreground="{ThemeResource AppMutedTextBrush}" />
+                                                </StackPanel>
                                                 <Button Grid.Column="1" Content="{Binding FavoriteGlyph}" Tag="{Binding}" Style="{StaticResource AppIconButtonStyle}"
-                                                        Width="32" Height="32" MinWidth="32" MinHeight="32"
+                                                        Width="44" Height="44" MinWidth="44" MinHeight="44"
                                                         FontSize="18" Padding="0" HorizontalContentAlignment="Center"
                                                         VerticalContentAlignment="Center"
                                                         Foreground="{Binding FavoriteBrush}" Background="Transparent"

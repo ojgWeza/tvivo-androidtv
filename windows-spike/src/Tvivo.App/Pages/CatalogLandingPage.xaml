@@ -468,7 +468,8 @@
                                                                 <TextBlock Text="{Binding SpotlightSummary}" FontSize="18" MaxLines="4"
                                                                            TextTrimming="CharacterEllipsis" TextWrapping="WrapWholeWords"
                                                                            Foreground="{ThemeResource AppTextBrush}" />
-                                                                <TextBlock Text="More details · Select to play or view" FontSize="16"
+                                                                <TextBlock Text="{Binding SpotlightOriginFolder}" FontSize="16"
+                                                                           Visibility="{Binding SpotlightOriginFolderVisibility}"
                                                                            Foreground="{ThemeResource AppAccentBrush}" />
                                                             </StackPanel>
                                                             <Border Grid.ColumnSpan="2" BorderThickness="3" BorderBrush="{ThemeResource AppAccentBrush}"

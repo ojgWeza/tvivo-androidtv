@@ -46,6 +46,8 @@
     <ProjectReference Include="..\Tvivo.Playback\Tvivo.Playback.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <!-- Debug-only opt-in telemetry (TVIVO_SENTRY_DSN); Release/MSI builds never reference it. -->
+    <PackageReference Include="Sentry" Version="5.*" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <!-- The Windows SDK PRI targets generate the app PRI but their publish hook does not
