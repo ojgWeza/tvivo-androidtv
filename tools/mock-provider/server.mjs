@@ -147,13 +147,21 @@ async function streamFile(req, res, url, kind, id, ext) {
     if (res.destroyed) return;
     source = fs.createReadStream(fullPath, { start, end: start + byteLimit - 1, highWaterMark: 64 * 1024 });
     source.on('data', (chunk) => {
-      if (!stalled && stallAt >= 0 && sent <= stallAt && sent + chunk.length >= stallAt && stallMs > 0) {
+      // Use a strict crossing check: if the threshold lands exactly on a source
+      // chunk boundary, defer the pause to the next chunk so it happens before
+      // more bytes are sent (rather than after a full chunk has drained).
+      if (!stalled && stallAt >= 0 && sent <= stallAt && sent + chunk.length > stallAt && stallMs > 0) {
         source.pause();
         const prefix = chunk.subarray(0, Math.max(0, stallAt - sent));
         if (prefix.length) { sent += prefix.length; res.write(prefix); }
         stalled = true;
         const currentSource = source;
-        setTimeout(() => { if (!res.destroyed) { const rest = chunk.subarray(prefix.length); if (rest.length) { sent += rest.length; res.write(rest); } currentSource.resume(); } }, stallMs).unref();
+        setTimeout(() => {
+          if (res.destroyed) return;
+          const rest = chunk.subarray(prefix.length);
+          if (rest.length) { sent += rest.length; res.write(rest); }
+          currentSource.resume();
+        }, stallMs);
         return;
       }
       sent += chunk.length;

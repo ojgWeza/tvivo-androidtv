@@ -98,6 +98,23 @@ try {
   assert.equal(earlyEofBody.length, Math.floor(bytes.length * 0.4) - 100000);
   assert.deepEqual(earlyEofBody, bytes.subarray(100000, Math.floor(bytes.length * 0.4)));
 
+  const stalled = await fetch(`${base}/movie/demo/demo/2001.mp4?stallAfterBytes=1&stallSeconds=0.15`);
+  assert.equal(stalled.status, 200);
+  const stalledReader = stalled.body.getReader();
+  await stalledReader.read();
+  const stallStart = Date.now();
+  await stalledReader.read();
+  assert.ok(Date.now() - stallStart >= 100, 'configured stream stall must delay subsequent bytes');
+  await stalledReader.cancel();
+
+  await ctl({ stallAfterBytes: 262144, stallSeconds: 0.15 });
+  const boundaryStart = Date.now();
+  const boundaryStall = await fetch(`${base}/movie/demo/demo/2025.ts`);
+  assert.equal(boundaryStall.status, 200);
+  await boundaryStall.arrayBuffer();
+  assert.ok(Date.now() - boundaryStart >= 120, 'a stall at an exact chunk boundary must delay subsequent bytes');
+  await ctl({ stallAfterBytes: -1, stallSeconds: 0 });
+
   firstStream = await fetch(`${base}/movie/demo/demo/2001.mp4?stallAfterBytes=1&stallSeconds=10`, { headers: { range: 'bytes=0-400000' } });
   assert.equal(firstStream.status, 206);
   const capped = await fetch(`${base}/live/demo/demo/1001.ts`);
