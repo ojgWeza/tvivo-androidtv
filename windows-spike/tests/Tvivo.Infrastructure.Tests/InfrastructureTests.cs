@@ -23,10 +23,10 @@ public sealed class InfrastructureTests
         var image = new UriBuilder(Uri.UriSchemeHttps, "example.invalid") { Path = "/poster" }.Uri;
         var series = new Dictionary<string, object?>
         {
-            ["series_id"] = "series-1", ["name"] = "Series", ["cover"] = "invalid",
+            ["series_id"] = "series-1", ["name"] = "Series", ["cover"] = "javascript:invalid",
             [imageField] = imageField == "backdrop_path" ? new[] { image.ToString() } : image.ToString(),
         };
-        if (imageField != "cover") series["cover"] = "invalid";
+        if (imageField != "cover") series["cover"] = "javascript:invalid";
         var json = System.Text.Json.JsonSerializer.Serialize(new[] { series });
         var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
             request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
@@ -35,6 +35,38 @@ public sealed class InfrastructureTests
             new ProviderConnection(Endpoint(), "u", "p"))).Account);
         var item = Assert.Single(await provider.GetChannelsAsync(account, CatalogItemType.Series));
         Assert.Equal(image, item.LogoUri);
+    }
+
+    [Fact]
+    public async Task Relative_series_artwork_survives_parser_snapshot_and_readback()
+    {
+        const string seriesJson = """[{"series_id":"series-art","name":"Series Art","cover":"","cover_big":"bad://cover","backdrop_path":["","images/series.jpg"],"stream_icon":"fallback.jpg"}]""";
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+            request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)
+                ? JsonBody(seriesJson) : JsonResponse("auth_success.json"))));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+        var parsed = await provider.GetChannelsAsync(account, CatalogItemType.Series);
+        var item = Assert.Single(parsed);
+        Assert.Equal("http://panel.example.com:8080/images/series.jpg", item.LogoUri!.ToString());
+
+        var path = Path.Combine(Path.GetTempPath(), $"tvivo-series-artwork-{Guid.NewGuid():N}.sqlite");
+        try
+        {
+            using var repository = new SqliteCatalogRepository(path);
+            var unmatched = item with { Id = "retained-series", Name = "Retained" };
+            Assert.True(repository.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), parsed.Append(unmatched).ToArray()));
+            Assert.Equal(item.LogoUri, repository.GetChannel(account, null, CatalogItemType.Series, item.Id)!.LogoUri);
+            repository.ToggleFavorite(account, CatalogItemType.Series, item.Id);
+            repository.UpdateResumePosition(account, CatalogItemType.Series, item.Id, 42_000);
+            repository.SaveMetadata(account, CatalogItemType.Series, item.Id, new CatalogMetadata("2024", "8.1", "Drama", "Manual plot", null, null));
+            Assert.Equal(1, repository.RefreshSeriesArtwork(account, parsed, CatalogRefreshService.SeriesParserVersion));
+            Assert.Contains(repository.GetFavorites(account, CatalogItemType.Series), favorite => favorite.Id == item.Id);
+            Assert.Equal(42_000, repository.GetResumePosition(account, CatalogItemType.Series, item.Id));
+            Assert.Equal("Manual plot", repository.GetMetadata(account, CatalogItemType.Series, item.Id)!.Plot);
+            Assert.NotNull(repository.GetChannel(account, null, CatalogItemType.Series, "retained-series"));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
     }
 
     [Fact]

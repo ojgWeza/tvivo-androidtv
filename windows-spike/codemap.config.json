@@ -28,7 +28,7 @@
     "ignore": "Tests",
     "stripPrefix": "src/Tvivo.App/"
   },
-  "ownTables": "^(items|categories|favorites|series_playback|incoming_item_ids)$",
+  "ownTables": "^(items|categories|favorites|series_playback|incoming_item_ids|catalog_parser_versions)$",
   "notes": {
     "../TODO.md": [
       "src/**/*.cs"

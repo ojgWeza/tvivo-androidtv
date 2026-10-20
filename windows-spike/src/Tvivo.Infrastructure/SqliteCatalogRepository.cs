@@ -39,6 +39,11 @@ public sealed class SqliteCatalogRepository : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
         using var connection = Open();
+        using (var parserVersion = connection.CreateCommand())
+        {
+            parserVersion.CommandText = "CREATE TABLE IF NOT EXISTS catalog_parser_versions(account_id TEXT NOT NULL,type TEXT NOT NULL,version INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
+            parserVersion.ExecuteNonQuery();
+        }
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
@@ -354,6 +359,53 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.Parameters.AddWithValue("$type", TypeName(type));
         var value = command.ExecuteScalar();
         return value is null ? null : DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(value));
+    }
+
+    public int GetParserVersion(ProviderAccount account, CatalogItemType type)
+    {
+        using var connection = Open(); using var command = connection.CreateCommand();
+        command.CommandText = "SELECT version FROM catalog_parser_versions WHERE account_id=$a AND type=$type";
+        command.Parameters.AddWithValue("$a", account.AccountId); command.Parameters.AddWithValue("$type", TypeName(type));
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0);
+    }
+
+    public bool HasItems(ProviderAccount account, CatalogItemType type)
+    {
+        using var connection = Open(); using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM items WHERE account_id=$a AND type=$type)";
+        command.Parameters.AddWithValue("$a", account.AccountId); command.Parameters.AddWithValue("$type", TypeName(type));
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
+    public void SetParserVersion(ProviderAccount account, CatalogItemType type, int version)
+    {
+        using var connection = Open(); using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO catalog_parser_versions(account_id,type,version) VALUES($a,$type,$v) ON CONFLICT(account_id,type) DO UPDATE SET version=excluded.version";
+        command.Parameters.AddWithValue("$a", account.AccountId); command.Parameters.AddWithValue("$type", TypeName(type)); command.Parameters.AddWithValue("$v", version);
+        command.ExecuteNonQuery();
+    }
+
+    public int RefreshSeriesArtwork(ProviderAccount account, IReadOnlyList<Channel> channels, int parserVersion)
+    {
+        using var connection = Open(); using var transaction = connection.BeginTransaction();
+        var updated = 0;
+        foreach (var channel in channels)
+        {
+            using var command = connection.CreateCommand(); command.Transaction = transaction;
+            command.CommandText = "UPDATE items SET artwork=COALESCE($art,artwork) WHERE account_id=$a AND type='Series' AND id=$id";
+            command.Parameters.AddWithValue("$art", (object?)channel.LogoUri?.ToString() ?? DBNull.Value);
+            command.Parameters.AddWithValue("$a", account.AccountId); command.Parameters.AddWithValue("$id", channel.Id);
+            updated += command.ExecuteNonQuery();
+        }
+        using (var version = connection.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = "INSERT INTO catalog_parser_versions(account_id,type,version) VALUES($a,'Series',$v) ON CONFLICT(account_id,type) DO UPDATE SET version=excluded.version";
+            version.Parameters.AddWithValue("$a", account.AccountId); version.Parameters.AddWithValue("$v", parserVersion);
+            version.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return updated;
     }
 
     public IReadOnlyList<ChannelGroup> GetGroups(ProviderAccount account, CatalogItemType type)

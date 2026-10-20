@@ -115,6 +115,7 @@ public sealed partial class MainWindow : Window
     private long _progressWriteGeneration;
     private string? _currentSeriesId;
     private string? _currentSeriesTitle;
+    private Uri? _currentSeriesArtwork;
     private ProviderAccount? _currentSeriesAccount;
     private CatalogMetadata? _currentSeriesMetadata;
     private Channel? _nowPlayingChannel;
@@ -1012,10 +1013,10 @@ public sealed partial class MainWindow : Window
     }
 
     private void MyTvivoNavigation_Click(object sender, RoutedEventArgs args) =>
-        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo, CatalogEntryIntent.StartAtTop);
 
     private void HomeNavigation_Click(object sender, RoutedEventArgs args) =>
-        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo);
+        _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.MyTvivo, CatalogEntryIntent.StartAtTop);
 
     private void MoviesNavigation_Click(object sender, RoutedEventArgs args) =>
         _ = ShowCatalogAsync(CatalogLandingPage.CatalogMode.Movies);
@@ -1096,14 +1097,14 @@ public sealed partial class MainWindow : Window
             LaunchDiagnostics.SetActiveSecrets(connection);
     }
 
-    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode)
+    private async Task ShowCatalogAsync(CatalogLandingPage.CatalogMode mode, CatalogEntryIntent intent = CatalogEntryIntent.Restore)
     {
         var returningFromPlayer = _currentPage == ShellPage.Player;
         var generation = Interlocked.Increment(ref _catalogRequestGeneration);
         TraceBackTransition($"show-catalog-start mode={mode} fromPlayer={returningFromPlayer} generation={generation}");
         ShowPage(ShellPage.Catalog, updateTopNavigation: false);
         TraceBackTransition($"show-catalog-after-showpage catalog={CatalogPageArea.Visibility} player={PlayerPage.Visibility}");
-        await _catalogLandingPage.PrepareModeAsync(mode);
+        await _catalogLandingPage.PrepareModeAsync(mode, intent);
         if (generation != Volatile.Read(ref _catalogRequestGeneration)) return;
         UpdateTopNavigationState();
 
@@ -1995,6 +1996,7 @@ public sealed partial class MainWindow : Window
                 Interlocked.Increment(ref _metadataGeneration);
                 _currentSeriesId = series.Id;
                 _currentSeriesTitle = string.IsNullOrWhiteSpace(details.Title) ? series.DisplayName : details.Title;
+                _currentSeriesArtwork = series.LogoUri;
                 _currentSeriesAccount = account;
                 UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));
                 _currentSeriesMetadata = details.Metadata;
@@ -2209,7 +2211,8 @@ public sealed partial class MainWindow : Window
         };
         if (episode.SizeBytes is { } bytes)
             metadata["size_bytes"] = bytes.ToString(CultureInfo.InvariantCulture);
-        return new Channel(account.AccountId, episode.Id, seriesId, displayName, displayName, null, null,
+        return new Channel(account.AccountId, episode.Id, seriesId, displayName, displayName,
+            SeriesArtworkPolicy.InheritEpisode(null, _currentSeriesArtwork), null,
             episode.EpisodeNumber, episode.Source,
             metadata);
     }
@@ -3436,6 +3439,7 @@ public sealed partial class MainWindow : Window
         _nowPlayingChannel = null;
         _currentSeriesId = null;
         _currentSeriesTitle = null;
+        _currentSeriesArtwork = null;
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
@@ -5172,6 +5176,7 @@ public sealed partial class MainWindow : Window
         Interlocked.Increment(ref _metadataGeneration);
         _currentSeriesId = null;
         _currentSeriesTitle = null;
+        _currentSeriesArtwork = null;
         _currentSeriesAccount = null;
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();

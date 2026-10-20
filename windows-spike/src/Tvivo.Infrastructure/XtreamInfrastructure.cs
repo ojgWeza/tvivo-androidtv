@@ -342,21 +342,16 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         return null;
     }
 
-    private static Uri? ArtworkUri(JsonElement item)
+    private static Uri? ArtworkUri(JsonElement item, Uri providerBase)
     {
         foreach (var field in new[] { "cover", "cover_big", "backdrop_path", "stream_icon", "movie_image" })
         {
             if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty(field, out var value)) continue;
-            if (value.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var entry in value.EnumerateArray())
-                    if (entry.ValueKind == JsonValueKind.String &&
-                        Uri.TryCreate(entry.GetString(), UriKind.Absolute, out var arrayUri) &&
-                        arrayUri.Scheme is "http" or "https") return arrayUri;
-            }
-            else if (value.ValueKind == JsonValueKind.String &&
-                     Uri.TryCreate(value.GetString(), UriKind.Absolute, out var uri) &&
-                     uri.Scheme is "http" or "https") return uri;
+            var candidates = value.ValueKind == JsonValueKind.Array
+                ? value.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.String).Select(entry => entry.GetString())
+                : value.ValueKind == JsonValueKind.String ? new[] { value.GetString() } : Array.Empty<string?>();
+            foreach (var candidate in candidates)
+                if (SeriesArtworkPolicy.Resolve(candidate, providerBase) is { } resolved && Uri.TryCreate(resolved, UriKind.Absolute, out var uri)) return uri;
         }
         return null;
     }
@@ -365,11 +360,12 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 
     public Task<IReadOnlyList<ChannelGroup>> GetChannelGroupsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, CancellationToken cancellationToken = default) =>
-        GetArrayAsync(account, CategoryAction(type), null, MapGroup, cancellationToken);
+        GetArrayAsync(account, CategoryAction(type), null, (value, accountId, _) => MapGroup(value, accountId), cancellationToken);
 
     public async Task<IReadOnlyList<Channel>> GetChannelsAsync(ProviderAccount account, CatalogItemType type = CatalogItemType.Live, string? groupId = null, CancellationToken cancellationToken = default)
     {
-        var channels = await GetArrayAsync(account, ItemAction(type), groupId, (value, accountId) => MapChannel(value, accountId, type), cancellationToken).ConfigureAwait(false);
+        var channels = await GetArrayAsync(account, ItemAction(type), groupId,
+            (value, accountId, baseUri) => MapChannel(value, accountId, type, baseUri), cancellationToken).ConfigureAwait(false);
         if (type == CatalogItemType.Live && _epgFeature.Enabled)
         {
             var incoming = channels
@@ -395,7 +391,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     }
 
     private async Task<IReadOnlyList<T>> GetArrayAsync<T>(ProviderAccount account, string action, string? groupId,
-        Func<JsonElement, string, T?> map, CancellationToken cancellationToken) where T : class
+        Func<JsonElement, string, Uri, T?> map, CancellationToken cancellationToken) where T : class
     {
         if (!_connections.TryGetValue(account.AccountId, out var connection))
             throw MissingSession(action.Contains("categories", StringComparison.Ordinal) ? "categories" : "items");
@@ -420,7 +416,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         var result = new List<T>();
         foreach (var item in entries)
         {
-            var mapped = item.ValueKind == JsonValueKind.Object ? map(item, account.AccountId) : null;
+            var baseUri = new UriBuilder(connection.Endpoint.Scheme, connection.Endpoint.Host,
+                connection.Endpoint.Port > 0 ? connection.Endpoint.Port : -1).Uri;
+            var mapped = item.ValueKind == JsonValueKind.Object ? map(item, account.AccountId, baseUri) : null;
             if (mapped is not null) result.Add(mapped);
         }
         if (entries.Length > 0 && result.Count == 0)
@@ -436,12 +434,12 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         return new ChannelGroup(accountId, id, name, name.Trim());
     }
 
-    private static Channel? MapChannel(JsonElement value, string accountId, CatalogItemType type)
+    private static Channel? MapChannel(JsonElement value, string accountId, CatalogItemType type, Uri providerBase)
     {
         var id = JsonValue.String(value, type == CatalogItemType.Series ? "series_id" : "stream_id");
         if (string.IsNullOrWhiteSpace(id)) return null;
         var name = JsonValue.String(value, "name") ?? id;
-        var icon = ArtworkUri(value);
+        var icon = ArtworkUri(value, providerBase);
         // Xtream movies and live channels carry "added"; series only carry "last_modified".
         var added = JsonValue.UnixTime(value, "added") ??
             (type == CatalogItemType.Series ? JsonValue.UnixTime(value, "last_modified") : null);

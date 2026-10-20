@@ -75,6 +75,7 @@ public sealed partial class CatalogLandingPage : UserControl
     private long _modeTransitionGeneration;
     private long _contentFadeGeneration;
     private long _browseRestoreGeneration;
+    private bool _pendingExplicitHomeReset;
     private readonly SemaphoreSlim _modeTransitionGate = new(1, 1);
     private CatalogCard? _spotlightCard;
     private readonly ObservableCollection<CatalogCard> _spotlightCards = new();
@@ -830,8 +831,22 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    public async Task PrepareModeAsync(CatalogMode mode)
+    public async Task PrepareModeAsync(CatalogMode mode, CatalogEntryIntent intent = CatalogEntryIntent.Restore)
     {
+        if (CatalogScrollEntryPolicy.ShouldResetToTop(intent))
+        {
+            Interlocked.Increment(ref _browseRestoreGeneration);
+            _pendingExplicitHomeReset = true;
+            foreach (var key in _browsePositions.Keys.Where(key => key.Mode == mode).ToArray())
+                _browsePositions.Remove(key);
+            _openShelfId = null;
+            _openShelfType = null;
+            _selectedGroupId = null;
+            _offset = 0;
+            SetSearchTextWithoutReload(string.Empty);
+        }
+        else
+            _pendingExplicitHomeReset = false;
         var transitionGeneration = Interlocked.Increment(ref _modeTransitionGeneration);
         ResetContentFadeForGeneration(transitionGeneration);
         if (_activeMode == mode)
@@ -872,7 +887,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _showModeLoadingFrame = !keepVisibleSnapshot;
         CancelSpotlightAsyncWork();
         _openShelfType = null;
-        if (_modeStates.TryGetValue(mode, out var state))
+        if (!CatalogScrollEntryPolicy.ShouldResetToTop(intent) && _modeStates.TryGetValue(mode, out var state))
         {
             _openShelfId = state.OpenShelfId;
             _openShelfType = state.OpenShelfType;
@@ -1267,6 +1282,9 @@ public sealed partial class CatalogLandingPage : UserControl
             var dueTypes = forceRefresh ? types : await Task.Run(() => types
                 .Where(type =>
                 {
+                    if (type == CatalogItemType.Series &&
+                        _repository.GetParserVersion(account, type) < CatalogRefreshService.SeriesParserVersion)
+                        return true;
                     var stamp = _repository.GetLastRefreshSuccess(account, type);
                     return ShouldAutoRefresh(policy, stamp, DateTimeOffset.UtcNow,
                         refreshedThisStart.Contains(type) || stamp >= _sessionStartedAt,
@@ -2739,7 +2757,17 @@ public sealed partial class CatalogLandingPage : UserControl
             // Browse restoration is applied before the rebound surface is revealed.
             var preserveScrollOffset = !shouldRender || (contentChanged && sameOrderedShelfIds);
             using (PerfScope.Begin("ApplySnapshotRestore"))
-                RestoreBrowseStateIfMatching(snapshot.Mode, preserveScrollOffset);
+            {
+                if (_pendingExplicitHomeReset)
+                {
+                    _pendingExplicitHomeReset = false;
+                    Interlocked.Increment(ref _browseRestoreGeneration);
+                    _browsePositions.Remove((snapshot.Mode, string.Empty));
+                    ResetBrowseScroll();
+                }
+                else
+                    RestoreBrowseStateIfMatching(snapshot.Mode, preserveScrollOffset);
+            }
             if (_openShelfId is null && !snapshot.IsFlatSearch && snapshot.Mode != CatalogMode.MyTvivo &&
                 _pendingInitialShelfCards is null)
                 ScheduleShelfViewportUpdate("apply");

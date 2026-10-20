@@ -4,6 +4,8 @@ namespace Tvivo.Infrastructure;
 
 public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatalogRepository repository)
 {
+    public const int SeriesParserVersion = 2;
+
     public Task RefreshAsync(ProviderAccount account, CancellationToken cancellationToken = default) =>
         RefreshAllAsync(account, cancellationToken);
 
@@ -15,6 +17,8 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
 
     public async Task<bool> RefreshTypeAsync(ProviderAccount account, CatalogItemType type, CancellationToken cancellationToken = default)
     {
+        var artworkOnlyReingest = type == CatalogItemType.Series &&
+            repository.GetParserVersion(account, type) < SeriesParserVersion && repository.HasItems(account, type);
         IReadOnlyList<ChannelGroup> groups;
         try
         {
@@ -39,7 +43,12 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
 
         try
         {
-            return repository.ReplaceSnapshot(account, type, groups, channels);
+            if (artworkOnlyReingest)
+                return repository.RefreshSeriesArtwork(account, channels, SeriesParserVersion) > 0;
+            var replaced = repository.ReplaceSnapshot(account, type, groups, channels);
+            if (type == CatalogItemType.Series && replaced)
+                repository.SetParserVersion(account, type, SeriesParserVersion);
+            return replaced;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
