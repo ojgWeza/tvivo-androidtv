@@ -16,8 +16,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     private readonly HttpClient _epgHttp;
     private readonly ConcurrentDictionary<string, ProviderConnection> _connections = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string AccountId, string SeriesId), SeriesDetails> _seriesDetails = new();
-    private readonly Dictionary<string, int?> _httpsPorts = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _httpsPorts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IReadOnlyList<EpgChannelMap>> _epgMaps = new(StringComparer.Ordinal);
     private readonly Action<string>? _epgLog;
     private readonly EpgFeature _epgFeature;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
@@ -90,8 +90,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 JsonValue.Expiry(user, "exp_date"));
             _connections[accountId] = connection with { Endpoint = endpoint };
             _connections[adjustedId] = connection with { Endpoint = endpoint };
-            _httpsPorts[accountId] = JsonValue.Int(server, "https_port");
-            _httpsPorts[adjustedId] = JsonValue.Int(server, "https_port");
+            var httpsPort = JsonValue.Int(server, "https_port") ?? 0;
+            _httpsPorts[accountId] = httpsPort;
+            _httpsPorts[adjustedId] = httpsPort;
             return AuthenticationResult.Succeeded(account);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -215,7 +216,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
     }
 
     public int? GetHttpsPort(ProviderAccount account) =>
-        _httpsPorts.TryGetValue(account.AccountId, out var port) ? port : null;
+        _httpsPorts.TryGetValue(account.AccountId, out var port) && port > 0 ? port : null;
 
     public bool HasSession(string accountId) => _connections.ContainsKey(accountId);
 
@@ -354,11 +355,12 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
                 _epgMaps[account.AccountId] = incoming;
             else
             {
-                var merged = _epgMaps.TryGetValue(account.AccountId, out var existing)
-                    ? existing.ToDictionary(map => map.StreamId, StringComparer.Ordinal)
-                    : new Dictionary<string, EpgChannelMap>(StringComparer.Ordinal);
-                foreach (var map in incoming) merged[map.StreamId] = map;
-                _epgMaps[account.AccountId] = merged.Values.ToArray();
+                _epgMaps.AddOrUpdate(account.AccountId, incoming, (_, existing) =>
+                {
+                    var merged = existing.ToDictionary(map => map.StreamId, StringComparer.Ordinal);
+                    foreach (var map in incoming) merged[map.StreamId] = map;
+                    return merged.Values.ToArray();
+                });
             }
         }
         return channels;

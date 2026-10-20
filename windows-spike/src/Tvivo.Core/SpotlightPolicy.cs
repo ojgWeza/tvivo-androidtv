@@ -120,8 +120,12 @@ public static class SpotlightSelector
         if (config.SourceMode == SpotlightSourceMode.SpecificFolders)
         {
             if (selected.Count == 0) return new();
-            var folders = selected.OrderBy(id => id, StringComparer.Ordinal)
-                .Select(id => source.Where(item => item.CategoryId == id).Take(CandidatePoolLimit).ToList()).ToArray();
+            var byFolder = selected.ToDictionary(id => id, _ => new List<SpotlightCandidate>(), StringComparer.Ordinal);
+            foreach (var item in source)
+                if (byFolder.TryGetValue(item.CategoryId, out var folder) && folder.Count < CandidatePoolLimit)
+                    folder.Add(item);
+            var folders = byFolder.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => pair.Value).ToArray();
             var output = new List<SpotlightCandidate>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var index = 0; output.Count < limit; index++)

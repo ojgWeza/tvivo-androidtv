@@ -31,4 +31,14 @@ public sealed record SpotlightStripState(int OpenIndex, int ItemCount)
 
     /// <returns>True when this tap should activate; false when it only opens.</returns>
     public bool TouchTapActivates(int index) => index == OpenIndex;
+
+    public bool TouchTapActivates(int index, int armedTouchIndex) =>
+        index == OpenIndex && index == armedTouchIndex;
+}
+
+public static class SpotlightMetadataOwnership
+{
+    public static bool CanApply(long requestedRender, long currentRender,
+        bool sameCard, bool sameChannel, bool cancellationRequested) =>
+        !cancellationRequested && requestedRender == currentRender && sameCard && sameChannel;
 }

@@ -82,6 +82,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private SpotlightStripState _spotlightState = SpotlightStripState.Create(0);
     private CancellationTokenSource? _spotlightDwellCts;
     private CancellationTokenSource? _spotlightMetadataCts;
+    private long _spotlightRenderGeneration;
+    private int _spotlightTouchArmedIndex = -1;
     private CatalogCard? _spotlightMetadataCard;
     private readonly HashSet<Button> _wiredSpotlightInputButtons = new();
     private Button? _lastSpotlightInputButton;
@@ -2831,6 +2833,9 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
+        Interlocked.Increment(ref _spotlightRenderGeneration);
+        _spotlightTouchArmedIndex = -1;
+        _spotlightMetadataCts?.Cancel();
         _spotlightDwellCts?.Cancel();
         _spotlightDwellCts = null;
         _spotlightWindowFirst = _spotlightWindowLast = -1;
@@ -2969,6 +2974,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void OpenSpotlight(int index, string via, bool announce = false)
     {
+        if (via != "touch") _spotlightTouchArmedIndex = -1;
         if (index < 0 || index >= _spotlightCards.Count || index == _spotlightState.OpenIndex) return;
         var previousOpenIndex = _spotlightState.OpenIndex;
         _spotlightState = _spotlightState.Open(index);
@@ -2989,15 +2995,23 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightItem_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { DataContext: CatalogCard card } button) return;
+        var recentInput = ReferenceEquals(_lastSpotlightInputButton, button) &&
+            Environment.TickCount64 - _lastSpotlightInputAt < 2_000;
+        var isTouch = recentInput && _lastSpotlightDevice == "Touch";
+        if (isTouch && !_spotlightState.TouchTapActivates(card.SpotlightIndex, _spotlightTouchArmedIndex))
+        {
+            _spotlightTouchArmedIndex = card.SpotlightIndex;
+            OpenSpotlight(card.SpotlightIndex, "touch");
+            return;
+        }
         if (!_spotlightState.TouchTapActivates(card.SpotlightIndex))
         {
             OpenSpotlight(card.SpotlightIndex, "click");
             return;
         }
+        if (!isTouch) _spotlightTouchArmedIndex = -1;
         if (card.Channel is { } channel)
         {
-            var recentInput = ReferenceEquals(_lastSpotlightInputButton, button) &&
-                Environment.TickCount64 - _lastSpotlightInputAt < 2_000;
             RaiseChannelSelected(channel, _spotlightCards.Select(item => item.Channel!).ToArray(),
                  "spotlight-click", recentInput ? _lastSpotlightInput : "unknown",
                  recentInput ? _lastSpotlightKey : "none", recentInput ? _lastSpotlightDevice : "unknown",
@@ -3010,17 +3024,28 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Button { DataContext: CatalogCard card }) return;
         _spotlightDwellCts?.Cancel();
         var cancellation = _spotlightDwellCts = new CancellationTokenSource();
+        var renderGeneration = Interlocked.Read(ref _spotlightRenderGeneration);
+        void Complete()
+        {
+            if (ReferenceEquals(_spotlightDwellCts, cancellation)) _spotlightDwellCts = null;
+            cancellation.Dispose();
+        }
         try
         {
             await Task.Delay(SpotlightStripState.DwellDuration, cancellation.Token);
-            DispatcherQueue.TryEnqueue(() =>
+            if (!DispatcherQueue.TryEnqueue(() =>
             {
-                if (!cancellation.IsCancellationRequested && _isActive &&
-                    SpotlightStripState.ShouldOpenAfterDwell(_spotlightState.OpenIndex, card.SpotlightIndex,
-                        SpotlightStripState.DwellDuration)) OpenSpotlight(card.SpotlightIndex, "hover");
-            });
+                try
+                {
+                    if (!cancellation.IsCancellationRequested && _isActive &&
+                        _spotlightRenderGeneration == renderGeneration &&
+                        SpotlightStripState.ShouldOpenAfterDwell(_spotlightState.OpenIndex, card.SpotlightIndex,
+                            SpotlightStripState.DwellDuration)) OpenSpotlight(card.SpotlightIndex, "hover");
+                }
+                finally { Complete(); }
+            })) Complete();
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { Complete(); }
     }
 
     private void SpotlightItem_PointerExited(object sender, PointerRoutedEventArgs args)
@@ -3190,6 +3215,7 @@ public sealed partial class CatalogLandingPage : UserControl
             ReferenceEquals(_spotlightMetadataCard, card) && _spotlightMetadataCts is { IsCancellationRequested: false }) return;
         _spotlightMetadataCts?.Cancel();
         var cancellation = _spotlightMetadataCts = new CancellationTokenSource();
+        var renderGeneration = Interlocked.Read(ref _spotlightRenderGeneration);
         _spotlightMetadataCard = card;
         var token = cancellation.Token;
         try
@@ -3203,14 +3229,19 @@ public sealed partial class CatalogLandingPage : UserControl
             if (metadata is null || token.IsCancellationRequested) return;
             await RunOnUiThreadAsync(() =>
             {
-                if (token.IsCancellationRequested || !ReferenceEquals(_spotlightCard, card)) return;
+                if (!SpotlightMetadataOwnership.CanApply(renderGeneration, _spotlightRenderGeneration,
+                    ReferenceEquals(_spotlightCard, card), ReferenceEquals(card.Channel, channel),
+                    token.IsCancellationRequested)) return;
                 card.ApplyMetadata(metadata);
                 card.ResolveSpotlightSummary();
                 card.NotifyMetadataChanged();
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch { }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.Write($"event=spotlight.metadata.failure exception={exception.GetType().Name}");
+        }
         finally
         {
             if (ReferenceEquals(_spotlightMetadataCts, cancellation))
@@ -3218,6 +3249,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 _spotlightMetadataCts = null;
                 _spotlightMetadataCard = null;
             }
+            cancellation.Dispose();
         }
     }
 

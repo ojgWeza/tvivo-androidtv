@@ -16,3 +16,5 @@
      LC-11 cycle 10 + log rotation, then Batch 2 (PC-01..10), Batch 3 (RO-01..11), Batches 4-5.
 - Row status: LC-01/04(SC_CLOSE)/07/09 PASS (368a25d); LC-06, LC-11 PARTIAL; LC-02/03/05/08/10 BLOCKED (focus);
   all Batch 2+ rows NOT-RUN.
+
+- Iteration 3 (2026-10-20): Sol round 2 done: STATIC-AUDIT-2 (11 findings, 5 P1 / 6 P2, all fixed), 17 new test methods incl. 4 perf checks, MATRIX coverage in SOL-ROUND2.md. One round-2 test had a backwards-clock bug (fixed in the test). Core 455 / Infrastructure 203 green, build 0 errors. Live UI batches still pending (RAM/foreground).

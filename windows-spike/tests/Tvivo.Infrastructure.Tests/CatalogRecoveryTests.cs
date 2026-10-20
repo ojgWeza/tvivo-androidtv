@@ -134,6 +134,24 @@ public sealed class CatalogRecoveryTests
     }
 
     [Fact]
+    public async Task Cancelled_refresh_owner_does_not_capture_a_new_manual_refresh()
+    {
+        var account = new ProviderAccount("account", Connection.Endpoint, "fixture");
+        using var firstOwner = new CancellationTokenSource();
+        var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var tasks = new CatalogRefreshTasks((_, _, _) => ++calls == 1 ? first.Task : Task.FromResult(true));
+        var abandoned = tasks.RefreshTypeAsync(account, CatalogItemType.Movie, firstOwner.Token);
+        Assert.True(tasks.TryGetActive(account.AccountId, CatalogItemType.Movie, out _));
+        firstOwner.Cancel();
+        Assert.False(tasks.TryGetActive(account.AccountId, CatalogItemType.Movie, out _));
+        Assert.True(await tasks.RefreshTypeAsync(account, CatalogItemType.Movie));
+        Assert.Equal(2, calls);
+        first.SetCanceled();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => abandoned);
+    }
+
+    [Fact]
     public void Diagnostics_zip_has_bounded_redacted_entries()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -142,19 +160,19 @@ public sealed class CatalogRecoveryTests
         try
         {
             File.WriteAllText(Path.Combine(root, "tvivo-launch.log.1"),
-                "2026-10-19T12:00:00Z trace=old op=series-list outcome=Network secret=https://hidden.invalid/series/u/p/1.ts\n");
+                "2026-10-19T12:00:00Z trace=abcdef123456 op=series-list outcome=Network secret=https://hidden.invalid/series/u/p/1.ts\n");
             File.WriteAllText(Path.Combine(root, "tvivo-launch.log"),
-                "2026-10-19T12:00:01Z trace=new op=series-info outcome=ok title=عنوان\n");
+                "2026-10-19T12:00:01Z trace=123456abcdef op=series-info outcome=ok title=عنوان\n");
             var path = SupportDiagnostics.SaveToDesktop("1.2.3", desktop, root);
             Assert.True(new FileInfo(path).Length < 2_000_000);
             using var zip = ZipFile.OpenRead(path);
             Assert.Equal(3, zip.Entries.Count);
             var log = Read(zip, "app-log.txt");
-            Assert.Contains("trace=old", log);
-            Assert.Contains("trace=new", log);
+            Assert.Contains("trace=abcdef123456", log);
+            Assert.Contains("trace=123456abcdef", log);
             Assert.DoesNotContain("hidden", log);
             Assert.DoesNotContain("عنوان", log);
-            Assert.Contains("trace=new", Read(zip, "catalog-requests.txt"));
+            Assert.Contains("trace=123456abcdef", Read(zip, "catalog-requests.txt"));
             Assert.Contains("appVersion=1.2.3", Read(zip, "summary.txt"));
         }
         finally { Directory.Delete(root, true); }
@@ -168,12 +186,52 @@ public sealed class CatalogRecoveryTests
         try
         {
             var log = Path.Combine(root, "tvivo-launch.log");
-            File.WriteAllText(log + ".1", "2026-10-19T12:00:00Z trace=old op=series-list outcome=ok\n");
+            File.WriteAllText(log + ".1", "2026-10-19T12:00:00Z trace=abcdef123456 op=series-list outcome=ok\n");
             File.WriteAllLines(log, Enumerable.Repeat("2026-10-19T12:00:01Z event=idle", 600));
-            Assert.DoesNotContain(SupportDiagnostics.ReadLogTail(log, 500), line => line.Contains("trace=old", StringComparison.Ordinal));
-            Assert.Contains(SupportDiagnostics.ReadRequestTail(log, 100), line => line.Contains("trace=old", StringComparison.Ordinal));
+            Assert.DoesNotContain(SupportDiagnostics.ReadLogTail(log, 500), line => line.Contains("trace=abcdef123456", StringComparison.Ordinal));
+            Assert.Contains(SupportDiagnostics.ReadRequestTail(log, 100), line => line.Contains("trace=abcdef123456", StringComparison.Ordinal));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Export_bounds_entries_and_discards_ambiguous_structured_values()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var desktop = Path.Combine(root, "Desktop");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var line = "2026-10-19T12:00:00Z trace=abcdef123456 op=items " +
+                "stage=private.invalid event=account.private outcome=private title=عنوان " + new string('x', 20_000);
+            File.WriteAllLines(Path.Combine(root, "tvivo-launch.log"), Enumerable.Repeat(line, 1_000));
+            var path = SupportDiagnostics.SaveToDesktop("1.2.3", desktop, root);
+            Assert.True(new FileInfo(path).Length < 2_000_000);
+            using var zip = ZipFile.OpenRead(path);
+            Assert.Equal(3, zip.Entries.Count);
+            var exported = Read(zip, "app-log.txt");
+            Assert.Equal(500, exported.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+            Assert.DoesNotContain("private", exported, StringComparison.Ordinal);
+            Assert.DoesNotContain("عنوان", exported, StringComparison.Ordinal);
+            Assert.True(exported.Length < 50_000);
+            Assert.Equal(100, Read(zip, "catalog-requests.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task Concurrent_authentication_and_https_port_reads_use_consistent_state()
+    {
+        var provider = Provider((_, _) => Json(Auth));
+        var results = await Task.WhenAll(Enumerable.Range(0, 64).Select(async index =>
+        {
+            var connection = Connection with { AccountId = "account-" + index };
+            var result = await provider.AuthenticateAsync(connection);
+            Assert.True(result.Success);
+            Assert.True(provider.HasSession(result.Account!.AccountId));
+            return provider.GetHttpsPort(result.Account);
+        }));
+        Assert.All(results, port => Assert.Null(port));
     }
 
     private static string Read(ZipArchive zip, string name)

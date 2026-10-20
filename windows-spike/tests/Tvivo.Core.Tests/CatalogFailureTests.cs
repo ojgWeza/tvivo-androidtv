@@ -54,10 +54,10 @@ public sealed class CatalogFailureTests
     [Fact]
     public void Diagnostic_export_drops_urls_secrets_unicode_and_long_lines()
     {
-        var line = "2026-10-19T12:00:00Z trace=abc op=series-info stage=http attempt=1 outcome=Network http=503 " +
+        var line = "2026-10-19T12:00:00Z trace=abcdef123456 op=series-info stage=http attempt=1 outcome=Network http=503 " +
             "https://private.invalid/series/user/pass/4.ts عنوان " + new string('x', 30_000);
         var safe = DiagnosticRedactor.RedactLine(line);
-        Assert.Contains("trace=abc", safe);
+        Assert.Contains("trace=abcdef123456", safe);
         Assert.DoesNotContain("private", safe);
         Assert.DoesNotContain("user", safe);
         Assert.DoesNotContain("عنوان", safe);

@@ -481,11 +481,12 @@
                                     </ScrollViewer>
                                     <Grid Grid.Row="1" ColumnSpacing="16">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="SpotlightPositionText" FontSize="14" Foreground="{ThemeResource AppTextBrush}"
+                                        <TextBlock x:Name="SpotlightPositionText" FontSize="16" Foreground="{ThemeResource AppTextBrush}"
                                                    AutomationProperties.LiveSetting="Polite" />
                                         <TextBlock x:Name="SpotlightTouchHint" Grid.Column="1" Text="Select once to open; select again to play or view"
-                                                   FontSize="14" Foreground="{ThemeResource AppTextBrush}" />
+                                                   FontSize="16" Foreground="{ThemeResource AppTextBrush}" />
                                         <Button x:Name="SpotlightEmptySettingsButton" Grid.Column="2" Content="Settings → Spotlight"
+                                                MinHeight="44" MinWidth="44"
                                                 Visibility="Collapsed" Click="SpotlightEmptySettingsButton_Click" />
                                     </Grid>
                                 </Grid>
@@ -521,7 +522,7 @@
                                                         Content="{Binding CountLabel}"
                                                         Tag="{Binding}"
                                                         Style="{StaticResource AppShelfTitleButtonStyle}"
-                                                        FontSize="12"
+                                                        FontSize="16"
                                                         FontWeight="Normal"
                                                         Foreground="{ThemeResource AppMutedTextBrush}"
                                                         VerticalAlignment="Center"

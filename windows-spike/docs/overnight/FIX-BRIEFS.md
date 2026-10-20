@@ -15,7 +15,7 @@ Source: STATIC-AUDIT.md, verified line by line; decisions in DECISIONS.md D-f. O
 artwork permits, Spotlight settings revision"). SA-09/10/11 were deferred for that slice and are addressed in the DF-03 slice below.
 No new log line may contain a URL, host, title or credential.
 
-### S1 - P1 - Close teardown: UI apartment + one budget (SA-01 + SA-02) - FIX WITH CARE (D-f1)
+### S1 - P1 - Close teardown: UI apartment + one budget (SA-01 + SA-02) - CODE DONE; live timing pending (D-f1)
 - Files: `src/Tvivo.App/MainWindow.xaml.cs` `OnClosed` (~6004-6107), `FlushPendingVisits` (~2576);
   `src/Tvivo.Core/WindowCloseRequestPolicy.cs` (or a new `CloseTeardownBudget` in Tvivo.Core);
   `src/Tvivo.Infrastructure/SqliteCatalogRepository.cs` (`RecordVisit` ~977);
@@ -39,7 +39,7 @@ No new log line may contain a URL, host, title or credential.
 - Live verify: LC-02, LC-07, LC-08, PC-02, PC-03, PC-08, NE-01, EN-01 (`window.close-complete totalMs` <= 5000,
   no backstop line in normal closes, no "failed during window close" exception lines).
 
-### S2 - P1 - Catalog async work after Shutdown (SA-03) - FIX NOW
+### S2 - P1 - Catalog async work after Shutdown (SA-03) - CODE DONE; live close pending
 - File: `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `Shutdown` (~406), `IsCurrentLoad` (~4884), page-query
   check (~4783), shelf-preview checks (~3977, ~4160), browse restore (~3197, ~3207, ~3312).
 - Behaviour: add `private bool _isShuttingDown;`. At the top of `Shutdown` set it, then `Interlocked.Increment`
@@ -50,7 +50,7 @@ No new log line may contain a URL, host, title or credential.
 - Tests: none practical (XAML page); covered live.
 - Live verify: LC-07, LC-08, NV-03, PC-08 (no exception lines between `MainWindow closed` and `window.close-complete`).
 
-### S3 - P1 - Sleep-timer stop must not tear down a newer session (SA-04) - FIX NOW
+### S3 - P1 - Sleep-timer stop must not tear down a newer session (SA-04) - CODE DONE; live overlap pending
 - File: `src/Tvivo.App/MainWindow.xaml.cs` `EndPlaybackForSleepTimerAsync` (~4177-4226).
 - Behaviour: capture `var endedGeneration = Interlocked.Increment(ref _playbackSessionGeneration);` (replaces the bare
   increment). In `finally`, run `SetPlaybackSurfaceVisibility(false)`, the curtain line and `_playbackUiTimer.Stop()`
@@ -62,7 +62,7 @@ No new log line may contain a URL, host, title or credential.
 - Tests: optional Core helper `IsSameSession(captured, current, ended)` with 3 cases.
 - Live verify: ST-02, ST-05, SE-06, RO-06, NV-02 (Watch again right after expiry: elapsed time keeps moving).
 
-### S4 - P1 - Cooldown/retry progress bar has an owner (SA-05) - FIX NOW
+### S4 - P1 - Cooldown/retry progress bar has an owner (SA-05) - CODE DONE; live overlap pending
 - Files: `src/Tvivo.App/MainWindow.xaml.cs` `WaitForRecentlyLeftCooldownAsync` (~2748-2851),
   `StartPlaybackRetryProgress` (~2068), the post-attempt stop (~3201), `StopRecentlyLeftCooldownProgress` (~2881).
 - Behaviour: add `long _cooldownProgressOwner` (playback session generation, -1 = none). Cooldown start and
@@ -75,7 +75,7 @@ No new log line may contain a URL, host, title or credential.
 - Tests: Core - if the owner check is extracted as a pure helper: match / mismatch / none.
 - Live verify: RO-02, RO-03, RO-05, RO-06, RO-08 (Back during cooldown, open another item: its bar advances).
 
-### S5 - P1 - Spotlight settings Save invalidates snapshots (SA-06) - FIX WITH CARE (D-f2)
+### S5 - P1 - Spotlight settings Save invalidates snapshots (SA-06) - CODE DONE; live settings pending (D-f2)
 - Files: `src/Tvivo.App/SpotlightSettingsService.cs` (`Save`); `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs`
   `CatalogSnapshot` record (~5138), `BuildSpotlightShelves` and its caller (~1390), `TryGetCachedSnapshot`,
   `CacheSnapshot`, the `_renderedSnapshot` reuse path.
@@ -89,7 +89,7 @@ No new log line may contain a URL, host, title or credential.
   failed Save); otherwise covered live.
 - Live verify: SS-01, SS-05, SS-06, SS-08, NV-06 (change the Movies source, Save, return: Spotlight follows it).
 
-### S6 - P1 - Artwork decode permits held until the decode ends (SA-08) - FIX WITH CARE (D-f3)
+### S6 - P1 - Artwork decode permits held until the decode ends (SA-08) - CODE DONE; live artwork pending (D-f3)
 - File: `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `StopArtwork` (~3735), `ReleaseArtworkSlot(Image)` (~3747),
   request method `finally` (~3618).
 - Behaviour: `StopArtwork` cancels and detaches (remove from `_artworkLoads`, clear `Source`, opacity 0) but no
@@ -101,7 +101,7 @@ No new log line may contain a URL, host, title or credential.
 - Tests: none practical (WinUI bitmap); covered live.
 - Live verify: SP-06, SP-07, TH-04, NV-01, EN-01 (artwork keeps loading after rapid page switches; WS within D-a).
 
-### S7 - P2 - Spotlight folder search debounce (SA-14) - FIX NOW (D-f4)
+### S7 - P2 - Spotlight folder search debounce (SA-14) - CODE DONE; live typing pending (D-f4)
 - File: `src/Tvivo.App/Pages/AccountPage.xaml.cs` `SpotlightMoviesSearchBox_TextChanged` /
   `SpotlightSeriesSearchBox_TextChanged` (~239-243).
 - Behaviour: one non-repeating 200 ms `DispatcherQueueTimer` per list; TextChanged restarts it; Tick calls
@@ -120,7 +120,7 @@ commit + push the branch. Then re-run only Batches 1, 2, 3, 5, 7, 8 for the rows
 Order: land the static audit slice first (it is already in the tree), then F1 as its own slice, then F2.
 No log line may contain a URL, host, port, username, title or credential; IDs only as booleans or counts.
 
-### F1 - P1 - Provider "not authenticated" after cached start (DF-01 + DF-04) - DIAGNOSE, THEN FIX
+### F1 - P1 - Provider "not authenticated" after cached start (DF-01 + DF-04) - DONE
 Implementation note: fixed the saved-ID/provider-session key mismatch, added auth outcome and missing-session diagnostics, re-authentication on bounded refresh retry, and an auth wait gate for the first Spotlight/hover lookup. Core gate tests added. Live LC-01, LC-08, SP-01/SP-03 and NV-06 remain to verify.
 - Files: `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `AuthenticateSavedAccountAndRefreshAsync` (~1040-1090),
   `AuthenticateSavedAccountNetworkFirstAsync` (~1013), `ScheduleRefreshRetry` (~1494), the refresh loop (~1174-1200);
@@ -147,7 +147,7 @@ Implementation note: fixed the saved-ID/provider-session key mismatch, added aut
 - Live verify: LC-01 (a `catalog.cache.refresh.complete outcome=success` after a cached start, given network), LC-08,
   SP-01/SP-03 (open card gets a summary), NV-06, and `event=auth.saved` shows the outcome on every start.
 
-### F2 - P1 - Unrequested playback while typing in search (DF-02) - DIAGNOSE FIRST, FIX ONLY WITH A FOUND CAUSE
+### F2 - P1 - Unrequested playback while typing in search (DF-02) - CODE GUARD DONE; live cause check pending
 Implementation note: queued Spotlight focus restoration could take focus from a text box during a rerender; it now checks the current focus before restoring. The actual activation that started the stream is still unproven. Added selection input/key/device/focus and playback-trigger diagnostics for LC-05 x5 and NV-03..05.
 - Files: `src/Tvivo.App/MainWindow.xaml.cs` `CatalogLandingPage_ChannelSelected` (~1730), `TopSearchBox_*` (~1351-1391,
   ~1707); `src/Tvivo.App/Pages/CatalogLandingPage.xaml.cs` `SpotlightItem_Click` (~2822, `TouchTapActivates`),

@@ -11,6 +11,7 @@ public sealed class RecentlyLeftCooldownPolicy
 {
     public static readonly TimeSpan RecentOpenWindow = TimeSpan.FromSeconds(70);
     public static readonly TimeSpan MaximumDuration = TimeSpan.FromSeconds(65);
+    public const int HistoryCapacity = 512;
     private static readonly TimeSpan[] CheckOffsets =
     [
         TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(25),
@@ -38,6 +39,13 @@ public sealed class RecentlyLeftCooldownPolicy
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemIdentity);
         var now = _monotonicNow();
+        if (_lastOpenedByItem.Count >= HistoryCapacity && !_lastOpenedByItem.ContainsKey(itemIdentity))
+        {
+            foreach (var old in _lastOpenedByItem.Where(pair => now < pair.Value || now - pair.Value > RecentOpenWindow)
+                .Select(pair => pair.Key).ToArray()) _lastOpenedByItem.Remove(old);
+            if (_lastOpenedByItem.Count >= HistoryCapacity)
+                _lastOpenedByItem.Remove(_lastOpenedByItem.MinBy(pair => pair.Value).Key);
+        }
         var eligible = (kind is StreamKind.Movie or StreamKind.Episode) &&
             _lastOpenedByItem.TryGetValue(itemIdentity, out var previousItemOpen) &&
             now >= previousItemOpen && now - previousItemOpen <= RecentOpenWindow &&
