@@ -115,10 +115,12 @@ object NetworkDiagnosis {
                 "This describes the device route; it does not identify why it is unavailable.")
         }
 
-        if (snapshot.wifiAssociated == true && snapshot.ipAssigned == true &&
+        val webReachable = probes.internet == CheckState.PASS || probes.neutralHttps == CheckState.PASS ||
+            probes.providerControl == CheckState.PASS
+        if (snapshot.wifiAssociated == true && snapshot.ipAssigned == true && !webReachable &&
             (snapshot.routerReachable == false || probes.routerReachable == CheckState.FAIL)) {
             add("wifi_router_unreachable", FindingSeverity.CRITICAL,
-                "The TV is associated with Wi-Fi but cannot reach the router",
+                "The device is associated with Wi-Fi but cannot reach the router",
                 "Wi-Fi association and an assigned IP are present, while router reachability failed.",
                 listOf("reconnect", "router_if_others_fail", "try_ethernet"),
                 "A router reachability check is required; Android's internet validation alone cannot prove this.")

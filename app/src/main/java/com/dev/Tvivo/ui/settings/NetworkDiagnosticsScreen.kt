@@ -46,8 +46,8 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import android.content.ComponentName
 import android.os.Bundle
-import androidx.tv.material3.Button
 import androidx.tv.material3.Text
+import com.dev.Tvivo.ui.common.AdaptiveActionButton as Button
 import com.dev.Tvivo.R
 import com.dev.Tvivo.diagnostics.CheckState
 import com.dev.Tvivo.diagnostics.DiagnosticLog

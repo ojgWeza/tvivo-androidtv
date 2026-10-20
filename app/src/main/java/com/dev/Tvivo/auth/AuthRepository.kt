@@ -31,7 +31,7 @@ class AuthRepository {
                     .authenticate(input.username, input.password)
 
                 if (!response.isSuccessful) {
-                    DiagnosticLog.error(AREA, "Sign-in rejected, HTTP ${response.code()}")
+                    DiagnosticLog.error(AREA, "Sign-in request failed, HTTP ${response.code()}")
                     return@withContext Result.failure(
                         AppErrorException(ErrorMapper.fromHttpCode(response.code()))
                     )

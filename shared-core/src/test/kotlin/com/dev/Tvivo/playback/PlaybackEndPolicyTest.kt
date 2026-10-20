@@ -32,4 +32,16 @@ class PlaybackEndPolicyTest {
         assertTrue(PlaybackEndPolicy.isGenuineEnd(200_000, 100_000, true))
         assertFalse(PlaybackEndPolicy.isGenuineEnd(-1, 100_000, true))
     }
+
+    @Test fun known_runtime_finishes_when_source_drains_past_duration() {
+        assertTrue(PlaybackEndPolicy.isKnownDurationEnd(120_001, 120_000, true, true))
+        assertFalse(PlaybackEndPolicy.isKnownDurationEnd(119_999, 120_000, true, true))
+        assertFalse(PlaybackEndPolicy.isKnownDurationEnd(120_001, 120_000, false, true))
+        assertFalse(PlaybackEndPolicy.isKnownDurationEnd(120_001, 120_000, true, false))
+        assertFalse(PlaybackEndPolicy.isKnownDurationEnd(120_001, 0, true, true))
+        assertTrue(PlaybackEndPolicy.isKnownSourceEof(120_000, true, true, 5_000, 119_000, 120_000))
+        assertFalse(PlaybackEndPolicy.isKnownSourceEof(120_000, true, true, 4_999, 119_000, 120_000))
+        assertFalse(PlaybackEndPolicy.isKnownSourceEof(0, true, true, 5_000, 119_000, 120_000))
+        assertFalse(PlaybackEndPolicy.isKnownSourceEof(120_000, true, true, 5_000, 71_000, 110_000))
+    }
 }

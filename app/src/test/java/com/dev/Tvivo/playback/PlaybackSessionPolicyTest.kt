@@ -46,6 +46,13 @@ class PlaybackSessionPolicyTest {
         assertEquals(40_000L, PlaybackSessionPolicy.positionToSave(40_000L, 61_000L, failed = false))
     }
 
+    @Test fun savedPositionNeverExceedsKnownRuntime() {
+        assertEquals(119_988L, PlaybackSessionPolicy.positionToSave(224_761L, 100_000L,
+            failed = false, durationMs = 119_988L))
+        assertEquals(119_988L, PlaybackSessionPolicy.positionToSave(0L, 224_761L,
+            failed = true, durationMs = 119_988L))
+    }
+
     @Test fun onlyGenuineEndCompletesAnItemWhileTheTimerIsActive() {
         assertFalse(PlaybackSessionPolicy.allowCompletionOnStop(false, true, true, false))
         assertFalse(PlaybackSessionPolicy.allowCompletionOnStop(false, false, true, false))

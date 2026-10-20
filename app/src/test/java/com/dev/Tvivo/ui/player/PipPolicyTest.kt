@@ -39,9 +39,10 @@ class PipPolicyTest {
     }
 
     @Test fun stoppedPipExitIsDismissalButResumedExpansionIsNot() {
-        assertEquals(true, PipPolicy.shouldStopAfterExit(true, false, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(false, false, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(true, true, false))
-        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, true))
+        assertEquals(true, PipPolicy.shouldStopAfterExit(true, false, false, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(false, false, false, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(true, true, false, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, true, false))
+        assertEquals(false, PipPolicy.shouldStopAfterExit(true, false, false, true))
     }
 }

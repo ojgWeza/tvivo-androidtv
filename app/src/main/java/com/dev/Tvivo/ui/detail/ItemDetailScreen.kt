@@ -17,8 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,6 +72,20 @@ fun ItemDetailScreen(
     val scope = rememberCoroutineScope()
     val isSeries = contentType == ContentType.SERIES
     val isLive = contentType == ContentType.LIVE
+    var pendingPlay by remember(itemId) { mutableStateOf(false) }
+    LaunchedEffect(state.isLoading, state.notFound, pendingPlay) {
+        if (pendingPlay && !state.isLoading) {
+            pendingPlay = false
+            if (!state.notFound) {
+                if (isSeries) onOpenEpisodes() else onPlay(
+                    if (DetailPlaybackPolicy.movieActions(state.resumeFromMs,
+                            state.durationMs ?: state.durationMinutes?.times(60_000L)).primary == MovieActionKind.Resume)
+                        state.resumeFromMs ?: 0L else 0L,
+                    state.extension, state.title,
+                    state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
+            }
+        }
+    }
     val compact = LocalWindowSizeClass.current == WindowSizeClass.Compact
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner, vm) {
@@ -129,8 +145,10 @@ fun ItemDetailScreen(
                     }
                     else -> stringResource(com.dev.Tvivo.R.string.player_play)
                 }
-                if (!state.isLoading) DetailTextButton(primaryLabel, Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
-                    if (isSeries) onOpenEpisodes() else onPlay(
+                DetailTextButton(if (pendingPlay) stringResource(com.dev.Tvivo.R.string.detail_loading) else primaryLabel,
+                    Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
+                    if (state.isLoading) pendingPlay = true
+                    else if (isSeries) onOpenEpisodes() else onPlay(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
                         state.extension, state.title,
                         state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
@@ -142,7 +160,8 @@ fun ItemDetailScreen(
                             state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
                     }
                 }
-                DetailTextButton(if (state.isFavourite) "Remove from favourites" else "Add to favourites",
+                DetailTextButton(stringResource(if (state.isFavourite)
+                    com.dev.Tvivo.R.string.menu_remove_favourite else com.dev.Tvivo.R.string.menu_add_favourite),
                     Modifier.testTag("detail-favourite")) {
                     if (vm != null) vm.toggleFavourite() else onToggleFavouriteOverride()
                 }

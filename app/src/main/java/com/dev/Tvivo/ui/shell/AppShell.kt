@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Menu
+import com.dev.Tvivo.ui.common.LiveTvIcon
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.dev.Tvivo.R
@@ -120,7 +121,7 @@ fun AppShell(
             if (showPhoneTopBar) Row(Modifier.fillMaxWidth().height(56.dp).background(AppColors.Surface)
                 .padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(when (selected) {
-                    ShellTab.MyTvivo -> R.string.nav_my_tvivo
+                    ShellTab.MyTvivo -> R.string.nav_for_you
                     ShellTab.Movies -> R.string.nav_movies
                     ShellTab.Series -> R.string.nav_series
                     ShellTab.Live -> R.string.nav_live_tv
@@ -167,7 +168,7 @@ private fun TabButton(
     modifier: Modifier = Modifier
 ) {
     val title = when (tab) {
-        ShellTab.MyTvivo -> stringResource(if (underlineSelected || compact) R.string.nav_for_you else R.string.nav_my_tvivo)
+        ShellTab.MyTvivo -> stringResource(R.string.nav_for_you)
         ShellTab.Movies -> stringResource(R.string.nav_movies)
         ShellTab.Series -> stringResource(R.string.nav_series)
         ShellTab.Live -> stringResource(if (compact) R.string.nav_live else R.string.nav_live_tv)
@@ -188,7 +189,7 @@ private fun TabButton(
                 ShellTab.MyTvivo -> Icon(Icons.Default.Home, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Movies -> Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Series -> Icon(Icons.Default.Menu, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
-                ShellTab.Live -> Text("▣", color = ink, style = TvType.title)
+                ShellTab.Live -> Icon(LiveTvIcon, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Search -> Icon(Icons.Default.Search, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
             }

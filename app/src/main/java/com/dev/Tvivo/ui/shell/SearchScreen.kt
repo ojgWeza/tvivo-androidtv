@@ -65,6 +65,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun SearchScreen(
     accountId: String,
+    query: String,
+    onQueryChanged: (String) -> Unit,
     pendingFocusCardKey: String? = null,
     onPendingFocusConsumed: () -> Unit = {},
     onOpen: (HomeCard) -> Unit,
@@ -72,7 +74,6 @@ fun SearchScreen(
 ) {
     val context = LocalContext.current
     val repository = remember(accountId) { HomeRepository(AppDatabase.get(context), accountId) }
-    var query by rememberSaveable(accountId) { mutableStateOf("") }
     var typeFilter by rememberSaveable(accountId) { mutableStateOf<ContentType?>(null) }
     var shelves by remember { mutableStateOf<List<HomeShelf>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
@@ -85,7 +86,7 @@ fun SearchScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     // Back with text clears it while Search stays open. Empty Back reaches the shell's
     // existing handler and returns to My Tvivo.
-    BackHandler(enabled = searchBackAction(query) == SearchBackAction.Clear) { query = "" }
+    BackHandler(enabled = searchBackAction(query) == SearchBackAction.Clear) { onQueryChanged("") }
     LaunchedEffect(accountId, pendingFocusCardKey, query.isEmpty()) {
         if (pendingFocusCardKey == null) runCatching { fieldFocus.requestFocus() }
     }
@@ -141,7 +142,7 @@ fun SearchScreen(
         BasicTextField(
             value = query,
             onValueChange = {
-                query = it
+                onQueryChanged(it)
                 if (it.isNotEmpty()) onPendingFocusConsumed()
             },
             singleLine = true,
@@ -162,7 +163,7 @@ fun SearchScreen(
         )
         if (query.isNotEmpty()) {
             IconPill(Icons.Default.Close, stringResource(R.string.search_clear),
-                onClick = { query = ""; runCatching { fieldFocus.requestFocus() } },
+                onClick = { onQueryChanged(""); runCatching { fieldFocus.requestFocus() } },
                 modifier = Modifier.focusRequester(clearFocus)
                     .focusProperties { left = fieldFocus }
                     .semantics { contentDescription = context.getString(R.string.search_clear) }

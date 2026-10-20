@@ -6,6 +6,19 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 class StallRecoveryPolicyTest {
+    @Test fun buffering_without_prior_progress_gets_one_reconnect_then_failure() {
+        val policy = StallRecoveryPolicy(1_000)
+        policy.beginSession(9, false)
+        assertEquals(StallDecision.None, policy.observe(9, true, true, 0, 0,
+            recoverBeforeProgress = true))
+        assertEquals(StallDecision.Recover, policy.observe(9, true, true, 0, 1_000,
+            recoverBeforeProgress = true))
+        policy.beginSession(10, true)
+        assertEquals(StallDecision.None, policy.observe(10, true, true, 0, 2_000,
+            recoverBeforeProgress = true))
+        assertEquals(StallDecision.GiveUp, policy.observe(10, true, true, 0, 3_000,
+            recoverBeforeProgress = true))
+    }
     @Test fun real_forward_progress_arms_exactly_one_recovery() {
         val policy = StallRecoveryPolicy(10_000)
         policy.beginSession(7, false)

@@ -30,6 +30,9 @@ class NetworkDiagnosisTest {
         )
         assertTrue(routerFailure.any { it.id == "wifi_router_unreachable" })
         assertFalse(routerFailure.any { it.id == "internet_unvalidated" })
+        assertFalse(ids(wifi.copy(wifiAssociated = true, ipAssigned = true, routerReachable = false),
+            ProbeResults(internet = CheckState.PASS, providerControl = CheckState.PASS))
+            .contains("wifi_router_unreachable"))
 
         val internetFailure = NetworkDiagnosis.diagnose(
             wifi.copy(routerReachable = true, validated = false)

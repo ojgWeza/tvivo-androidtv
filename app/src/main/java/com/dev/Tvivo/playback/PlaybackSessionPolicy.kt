@@ -19,9 +19,11 @@ internal object PlaybackSessionPolicy {
         } else cleaned
     }
 
-    fun positionToSave(currentPositionMs: Long, lastGoodPositionMs: Long, failed: Boolean): Long =
+    fun positionToSave(currentPositionMs: Long, lastGoodPositionMs: Long, failed: Boolean,
+                       durationMs: Long = 0L): Long =
         (if (failed || currentPositionMs <= 0L && lastGoodPositionMs > 0L)
             lastGoodPositionMs else currentPositionMs).coerceAtLeast(0L)
+            .let { if (durationMs > 0L) it.coerceAtMost(durationMs) else it }
 
     fun allowCompletionOnStop(ended: Boolean, timed: Boolean, timerArmed: Boolean, retrying: Boolean): Boolean =
         ended || !timed && !timerArmed && !retrying

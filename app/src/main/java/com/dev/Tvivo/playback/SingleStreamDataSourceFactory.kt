@@ -79,6 +79,7 @@ internal fun <T> openAfterRecentClose(
 internal class SingleStreamDataSourceFactory(
     private val upstream: DataSource.Factory,
     private val accountPartition: () -> String? = { null },
+    private val onRead: (Int) -> Unit = {},
 ) : DataSource.Factory {
     // Service replacement can create a new factory before the previous service is gone.
     // Keep the release-before-open rule across both factories, not only within one player.
@@ -102,7 +103,7 @@ internal class SingleStreamDataSourceFactory(
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-            delegate.read(buffer, offset, length)
+            delegate.read(buffer, offset, length).also(onRead)
 
         override fun getUri(): Uri? = delegate.uri
 

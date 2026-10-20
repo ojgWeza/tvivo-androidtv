@@ -53,11 +53,11 @@ import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.data.AppError
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import com.dev.Tvivo.ui.common.HeaderIconButton
 import com.dev.Tvivo.ui.common.IconPill
+import com.dev.Tvivo.ui.common.CategoriesIcon
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import com.dev.Tvivo.ui.common.dpadFieldNavigation
@@ -605,10 +605,10 @@ private fun Header(
                     sortFocusRequester, Modifier.padding(end = 10.dp)
                 )
                 if (onToggleCategories != null) {
-                    HeaderIconButton(Icons.Default.Menu, openCategoriesDescription,
+                    HeaderIconButton(CategoriesIcon, openCategoriesDescription,
                         onClick = onToggleCategories,
                         modifier = Modifier.focusRequester(categoriesFocusRequester)
-                            .testTag("category-picker-button"))
+                            .padding(end = 10.dp).testTag("category-picker-button"))
                 }
                 // Visible progress that dismisses at 100%. The rail counts filling in
                 // category by category are the secondary signal.

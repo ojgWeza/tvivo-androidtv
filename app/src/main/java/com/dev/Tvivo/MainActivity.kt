@@ -20,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -111,7 +112,7 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG) CodecProbe.log()
         // Phase 5. Idempotent and cheap; scheduling here rather than in an Application
         // subclass keeps it in the one place that already owns start-up ordering.
-        RefreshWorker.schedule(applicationContext)
+        lifecycleScope.launch(Dispatchers.IO) { RefreshWorker.schedule(applicationContext) }
         setContent {
             val themeMode by PlayerPreferencesStore(LocalContext.current).themeMode.collectAsState(initial = initialThemeMode)
             SideEffect {
@@ -246,6 +247,19 @@ internal fun browseRoute(credentials: Credentials, type: ContentType): Route.Bro
 internal fun shouldReturnToSearchAfterSeeAll(wasOpenedFromSearch: Boolean, currentTabIsSearch: Boolean) =
     wasOpenedFromSearch && !currentTabIsSearch
 
+internal data class ShellBrowseState(val categoryId: String? = null, val query: String = "") {
+    fun savedFields(): List<String> = listOf(categoryId.orEmpty(), query)
+    companion object {
+        fun restore(fields: List<String>): ShellBrowseState =
+            ShellBrowseState(fields.firstOrNull()?.takeIf { it.isNotEmpty() }, fields.getOrNull(1).orEmpty())
+    }
+}
+
+private val shellBrowseSaver = listSaver<ShellBrowseState, String>(
+    save = { it.savedFields() },
+    restore = { ShellBrowseState.restore(it) },
+)
+
 private fun Route.diagnosticName(): String = when (this) {
     is Route.Loading -> "Loading"
     Route.Login -> "Login"
@@ -271,7 +285,9 @@ private fun TvivoApp() {
     var savedTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
     var searchSeeAllReturn by rememberSaveable { mutableStateOf(false) }
     var detailOriginTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
-    var browseCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var shellBrowse by rememberSaveable(stateSaver = shellBrowseSaver) {
+        mutableStateOf(ShellBrowseState())
+    }
     var pendingHomeFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSearchFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCatalogFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -409,7 +425,7 @@ private fun TvivoApp() {
                 savedTab = ShellTab.MyTvivo
                 pendingHomeFocusKey = null
                 pendingSearchFocusKey = null
-                browseCategoryId = null
+                shellBrowse = ShellBrowseState()
                 lastOpened = null
                 route = Route.Main(authenticated.credentials, ShellTab.MyTvivo)
             }
@@ -424,7 +440,7 @@ private fun TvivoApp() {
             fun select(tab: ShellTab) {
                 searchSeeAllReturn = false
                 savedTab = tab
-                browseCategoryId = null
+                shellBrowse = shellBrowse.copy(categoryId = null)
                 route = Route.Main(current.credentials, tab)
             }
             fun openCard(card: com.dev.Tvivo.data.repository.HomeCard, shelfId: String? = null) {
@@ -440,7 +456,7 @@ private fun TvivoApp() {
                 selected = current.tab,
                 onSelect = ::select,
                 sortEnabled = current.tab == ShellTab.Movies || current.tab == ShellTab.Series || current.tab == ShellTab.Live,
-                openedCategory = browseCategoryId != null,
+                openedCategory = shellBrowse.categoryId != null,
                 refreshEnabled = current.tab != ShellTab.Search && current.tab != ShellTab.Settings,
                 sortChoice = shellSortChoice,
                 onSortSelected = { shellSortChoice = it; shellSortRevision++ },
@@ -476,7 +492,6 @@ private fun TvivoApp() {
                                 })
                             },
                             onOpenSearch = { select(ShellTab.Search) },
-                            onOpenSettings = { select(ShellTab.Settings) },
                             onOpenCard = { card, shelfId -> openCard(card, shelfId) },
                             onPlayCard = { card, resumeMs, shelfId ->
                                 pendingHomeFocusKey = ShelfRestoreKey.of(shelfId, card.key)
@@ -502,12 +517,12 @@ private fun TvivoApp() {
                                             )
                                         )
                                     }
-                                    browseCategoryId = shelf.categoryId ?: when {
+                                    shellBrowse = shellBrowse.copy(categoryId = shelf.categoryId ?: when {
                                         shelf.id.startsWith("__my_continue_") -> VirtualFolder.CONTINUE_WATCHING.id
                                         shelf.id.startsWith("__my_added_") -> VirtualFolder.RECENTLY_ADDED.id
                                         shelf.id.startsWith("__my_favorites_") -> VirtualFolder.FAVOURITES.id
                                         else -> null
-                                    }
+                                    })
                                     savedTab = when (shelf.type) {
                                         ContentType.MOVIES -> ShellTab.Movies
                                         ContentType.SERIES -> ShellTab.Series
@@ -522,6 +537,8 @@ private fun TvivoApp() {
                             onPendingFocusConsumed = { pendingHomeFocusKey = null }
                         )
                         ShellTab.Search -> SearchScreen(accountId,
+                            query = shellBrowse.query,
+                            onQueryChanged = { shellBrowse = shellBrowse.copy(query = it) },
                             pendingFocusCardKey = pendingSearchFocusKey,
                             onPendingFocusConsumed = { pendingSearchFocusKey = null },
                             onOpen = { card -> openCard(card) },
@@ -540,7 +557,7 @@ private fun TvivoApp() {
                                 savedTab = ShellTab.MyTvivo
                                 pendingHomeFocusKey = null
                                 pendingSearchFocusKey = null
-                                browseCategoryId = null
+                                shellBrowse = ShellBrowseState()
                                 route = Route.Login
                             },
                             onSwitchAccount = {
@@ -565,14 +582,15 @@ private fun TvivoApp() {
                             CatalogLandingScreen(
                                 contentType = type,
                                 accountId = accountId,
-                                initialCategoryId = browseCategoryId,
+                                initialCategoryId = shellBrowse.categoryId,
+                                onOpenedCategoryChanged = { shellBrowse = shellBrowse.copy(categoryId = it) },
                                 shellSortChoice = shellSortChoice,
                                 shellSortRevision = shellSortRevision,
                                 shellRefreshRevision = shellRefreshRevision,
                                 onShellSortStateChanged = { shellSortChoice = it },
                                 pendingFocusCardKey = pendingCatalogFocusKey,
                                 onPendingFocusConsumed = { pendingCatalogFocusKey = null },
-                                onReturnToLanding = { browseCategoryId = null },
+                                onReturnToLanding = { shellBrowse = shellBrowse.copy(categoryId = null) },
                                 onOpenDetail = { item, shelfId ->
                                     pendingCatalogFocusKey = ShelfRestoreKey.of(
                                         shelfId, "${type.name}:${item.id}")

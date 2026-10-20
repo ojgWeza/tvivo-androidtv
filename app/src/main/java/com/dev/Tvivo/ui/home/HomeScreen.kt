@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.ui.window.Dialog
@@ -42,9 +41,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.tv.material3.Icon
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -130,7 +126,6 @@ fun HomeScreen(
     onRefreshEverything: () -> Unit,
     onSelect: (ContentType) -> Unit,
     onOpenSearch: () -> Unit,
-    onOpenSettings: () -> Unit,
     onOpenCard: (HomeCard, String) -> Unit,
     onPlayCard: (HomeCard, Long, String) -> Unit,
     onSeeAll: (HomeShelf) -> Unit,
@@ -247,17 +242,6 @@ fun HomeScreen(
     ) {
         item(key = "home:header") {
             Column(Modifier.fillMaxWidth().screenHeadingRequester(screenHeadingRequester)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (!LocalIsTelevision.current) Text(stringResource(R.string.nav_my_tvivo),
-                        color = AppColors.Ink, style = TvType.headline)
-                    Spacer(Modifier.weight(1f))
-                    if (phone) Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.nav_settings),
-                        tint = AppColors.Ink,
-                        modifier = Modifier.testTag("home-settings")
-                            .heightIn(min = 48.dp).widthIn(min = 48.dp)
-                            .tvFocusFrame().tvClickable(onClick = onOpenSettings)
-                            .padding(10.dp))
-                }
                 if (refreshMessage != null) {
                     val failed = refreshMessage.contains("fail", true) ||
                         refreshMessage.contains("error", true) || refreshMessage.contains("could not", true)

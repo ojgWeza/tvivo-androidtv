@@ -118,6 +118,9 @@ class PlaybackService : MediaSessionService() {
     private var lastSamplePositionMs = 0L
     private var lastSampleAtMs = 0L
     private var hasPlaybackProgress = false
+    @Volatile private var lastStreamDataAtMs = 0L
+    @Volatile private var streamEof = false
+    private var endingGeneration = 0L
     private val stallPolicy = StallRecoveryPolicy(30_000L)
 
     override fun onCreate() {
@@ -136,7 +139,14 @@ class PlaybackService : MediaSessionService() {
         player = ExoPlayer.Builder(this)
             .setRenderersFactory(DefaultRenderersFactory(this).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER))
             .setMediaSourceFactory(DefaultMediaSourceFactory(
-                SingleStreamDataSourceFactory(DefaultDataSource.Factory(this), accountPartition = { handoff.current?.accountId }), extractors))
+                SingleStreamDataSourceFactory(DefaultDataSource.Factory(this),
+                    accountPartition = { handoff.current?.accountId },
+                    onRead = { count ->
+                        if (count > 0) {
+                            lastStreamDataAtMs = SystemClock.elapsedRealtime()
+                            streamEof = false
+                        } else if (count < 0) streamEof = true
+                    }), extractors))
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
@@ -157,9 +167,9 @@ class PlaybackService : MediaSessionService() {
             override suspend fun save(item: PlaybackHandoff.Item, ended: Boolean, allowCompletion: Boolean) {
                 if (item.isLive || item.accountId == null || item.contentType == null || item.itemId == null) return
                 val failed = playbackState == "retry" || playbackState == "reconnecting" || player.playerError != null
-                val position = PlaybackSessionPolicy.positionToSave(
-                    player.currentPosition, lastGoodPositionMs, failed && !ended)
                 val duration = effectiveDurationMs(item)
+                val position = PlaybackSessionPolicy.positionToSave(
+                    player.currentPosition, lastGoodPositionMs, failed && !ended, duration)
                 val canComplete = allowCompletion && !failed
                 Log.i("PlaybackResume", "save begin type=${item.contentType} current=${player.currentPosition} " +
                     "sample=$lastGoodPositionMs chosen=$position duration=$duration ended=$ended " +
@@ -196,6 +206,9 @@ class PlaybackService : MediaSessionService() {
                 lastGoodPositionMs = if (item.isLive) 0L else item.resumeFromMs.coerceAtLeast(0L)
                 lastSamplePositionMs = lastGoodPositionMs
                 lastSampleAtMs = android.os.SystemClock.elapsedRealtime()
+                lastStreamDataAtMs = lastSampleAtMs
+                streamEof = false
+                endingGeneration = 0L
                 if (!recoveryOpen) hasPlaybackProgress = false
                 stallPolicy.beginSession(generation, isRecovery = stallRecoveryOpen)
                 recoveryOpen = false
@@ -273,13 +286,18 @@ class PlaybackService : MediaSessionService() {
                     failureKind = null
                 }
                 if (state != Player.STATE_ENDED) return
-                val generation = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return
-                if (handoff.isCurrent(generation)) scope.launch {
+                val generation = player.currentMediaItem?.mediaId?.toLongOrNull() ?: handoff.generation
+                if (handoff.isCurrent(generation) && endingGeneration != generation) scope.launch {
                     yield()
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
                     if (PlaybackEndPolicy.isGenuineEnd(player.currentPosition,
                             handoff.current?.let { effectiveDurationMs(it) }, true)) {
+                        endingGeneration = generation
                         advanceAfterEnd()
+                    } else if (handoff.current?.let { effectiveDurationMs(it) }?.let { it > 0L } == true) {
+                        // An early source EOF is an end to the UI, but does not earn a watched mark.
+                        endingGeneration = generation
+                        triggerTimedStop(ended = false)
                     } else {
                         failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnknownFailure, earlyEnd = true)
                         markFinalFailure()
@@ -288,7 +306,7 @@ class PlaybackService : MediaSessionService() {
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 openTimeoutJob?.cancel()
-                val generation = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return
+                val generation = player.currentMediaItem?.mediaId?.toLongOrNull() ?: handoff.generation
                 if (handoff.isCurrent(generation)) scope.launch {
                     yield()
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
@@ -577,7 +595,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_FROM_UI) {
-            scope.launch { stopSession() }
+            // The service is exported for Media3 controllers; only our own process knows this token.
+            if (intent.getStringExtra(EXTRA_INTERNAL_TOKEN) == INTERNAL_TOKEN) scope.launch { stopSession() }
             return START_NOT_STICKY
         }
         if (stopRequested || intent == null && handoff.current == null) {
@@ -653,6 +672,24 @@ class PlaybackService : MediaSessionService() {
                     val generation = handoff.generation
                     val now = android.os.SystemClock.elapsedRealtime()
                     val position = player.currentPosition.coerceAtLeast(0L)
+                    val duration = if (item.isLive) 0L else effectiveDurationMs(item)
+                    val noDataMs = now - lastStreamDataAtMs
+                    if (PlaybackEndPolicy.isKnownDurationEnd(position, duration,
+                            player.playWhenReady, streamEof || noDataMs >= 2_000L) &&
+                        endingGeneration != generation) {
+                        endingGeneration = generation
+                        scope.launch { advanceAfterEnd() }
+                        continue
+                    }
+                    if (PlaybackEndPolicy.isKnownSourceEof(duration, player.playWhenReady,
+                            streamEof, noDataMs, position, player.bufferedPosition) &&
+                        endingGeneration != generation) {
+                        endingGeneration = generation
+                        if (PlaybackEndPolicy.isGenuineEnd(position, duration, true))
+                            scope.launch { advanceAfterEnd() }
+                        else triggerTimedStop(ended = false)
+                        continue
+                    }
                     val delta = position - lastSamplePositionMs
                     val elapsed = (now - lastSampleAtMs).coerceAtLeast(0L)
                     if (delta > 0L && delta <= elapsed * 2L + 1_000L) {
@@ -662,8 +699,11 @@ class PlaybackService : MediaSessionService() {
                     lastSamplePositionMs = position
                     lastSampleAtMs = now
                     val eligible = item.isLive || player.isCurrentMediaItemSeekable
-                    when (stallPolicy.observe(generation, player.playbackState == Player.STATE_READY,
-                        eligible && player.playWhenReady, position, now)) {
+                    when (stallPolicy.observe(generation,
+                        player.playbackState == Player.STATE_READY ||
+                            item.isLive && player.playbackState == Player.STATE_BUFFERING,
+                        eligible && player.playWhenReady, position, now,
+                        recoverBeforeProgress = item.isLive)) {
                         StallDecision.Recover -> {
                             NetworkEventRecorder.occurrence(NetworkEventSource.PLAYBACK, item.accountId,
                                 NetworkEventKind.STALL, "playback position stopped advancing")
@@ -835,7 +875,7 @@ class PlaybackService : MediaSessionService() {
         val prefs = savedPlaybackModes
         val mode = if (kind == StreamKind.Movie) prefs.movieMode else prefs.episodeMode
         val next = selectedNext(item, mode)
-        if (mode == PlaybackMode.Off || next == null) { stopSession(ended = true); return }
+        if (mode == PlaybackMode.Off || next == null) { triggerTimedStop(ended = true); return }
         handoff.play(item.copy(requestId = java.util.UUID.randomUUID().toString(), url = next.url,
             title = next.title, itemId = next.id, resumeFromMs = 0L, knownDurationMs = next.knownDurationMs,
             playlistIndex = item.playlist.indexOf(next)), previousEnded = true)
@@ -1093,6 +1133,8 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         const val ACTION_STOP_FROM_UI = "com.dev.Tvivo.playback.STOP_FROM_UI"
+        const val EXTRA_INTERNAL_TOKEN = "internalToken"
+        val INTERNAL_TOKEN: String = java.util.UUID.randomUUID().toString()
         const val ACTION_REOPEN_SESSION = "com.dev.Tvivo.playback.REOPEN_SESSION"
         const val TIMER_CHANNEL_ID = "playback_timer"
         const val TIMER_NOTIFICATION_ID = 1001

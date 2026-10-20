@@ -69,7 +69,9 @@
     <string name="player_error_unavailable">This stream is not available right now. Try again later or choose another item.</string>
     <string name="player_error_provider">The provider is not responding right now. Wait a moment, then retry.</string>
     <string name="player_error_request">The provider rejected this stream request. Try again or choose another item.</string>
-    <string name="player_error_format">This stream format is not supported on this device. Choose another item.</string>
+    <string name="player_error_format">This stream could not be decoded on this device. Retry or choose another item.</string>
+    <string name="player_audio_track_number">Audio track %1$d</string>
+    <string name="player_subtitle_track_number">Subtitle track %1$d</string>
     <string name="player_error_stall">The stream took too long to respond. Check your connection, then retry.</string>
     <string name="player_error_stopped">Go back and open an item to play again.</string>
     <string name="player_error_early_end">The stream ended unexpectedly. Retry to continue from where you stopped.</string>
@@ -137,7 +139,7 @@
     <string name="subscription_connections">Connections</string>
     <string name="subscription_trial_status">%1$s (trial)</string>
     <string name="subscription_checking">Checking with the panel…</string>
-    <string name="network_deep_timing">HTTP %1$s · connect %2$s ms · first byte %3$s ms</string>
+    <string name="network_deep_timing">HTTP %1$s · connect %2$s · first byte %3$s</string>
     <string name="network_deep_transfer">%1$d bytes · %2$s · %3$s · %4$d stalls · %5$d retries</string>
     <string name="network_rate_unavailable">rate unavailable</string>
     <string name="network_bitrate_unavailable">bitrate unavailable</string>
@@ -153,6 +155,11 @@
     <string name="diagnostics_export_log">Export log</string>
     <string name="diagnostics_clear_log">Clear log</string>
     <string name="diagnostics_profile_catalog">Profile catalog</string>
+    <string name="diagnostics_profile_running">Profiling saved catalog…</string>
+    <string name="diagnostics_profile_failed">Could not profile the saved catalog.</string>
+    <string name="diagnostics_profile_complete">Catalog profile complete · %1$d checks</string>
+    <string name="diagnostics_technical">Technical details</string>
+    <string name="diagnostics_hide_technical">Hide technical details</string>
     <string name="diagnostics_no_catalog">No cached catalog is available to profile.</string>
     <string name="diagnostics_catalog_profile">Catalog profile (local reads only)</string>
     <string name="appearance">Appearance</string>

@@ -25,8 +25,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.tv.material3.Button
 import androidx.tv.material3.Text
+import com.dev.Tvivo.ui.common.AdaptiveActionButton as Button
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.diagnostics.CatalogProfiler
 import com.dev.Tvivo.diagnostics.DbMetrics
@@ -150,13 +150,19 @@ fun DiagnosticsScreen() {
             }
             Spacer(Modifier.width(12.dp))
             Button(onClick = { showTechnicalDetails = !showTechnicalDetails }) {
-                Text(if (showTechnicalDetails) "Hide technical details" else "Technical details")
+                Text(stringResource(if (showTechnicalDetails)
+                    com.dev.Tvivo.R.string.diagnostics_hide_technical else com.dev.Tvivo.R.string.diagnostics_technical))
             }
         }
+        if (profileRunning) Text(stringResource(com.dev.Tvivo.R.string.diagnostics_profile_running),
+            color = AppColors.Dim, style = TvType.body)
+        else if (profileFailed) Text(stringResource(com.dev.Tvivo.R.string.diagnostics_profile_failed),
+            color = AppColors.Error, style = TvType.body)
+        else catalogProfile?.let { profile ->
+            Text(stringResource(com.dev.Tvivo.R.string.diagnostics_profile_complete, profile.samples.size), color = AppColors.Ink,
+                style = TvType.body)
+        }
         Spacer(Modifier.height(20.dp))
-
-        if (profileRunning) Text("Profiling saved catalog…", color = AppColors.Dim, style = TvType.body)
-        if (profileFailed) Text("Could not profile the saved catalog.", color = AppColors.Error, style = TvType.body)
 
         catalogProfile?.let { profile ->
             if (profile.samples.isEmpty()) {

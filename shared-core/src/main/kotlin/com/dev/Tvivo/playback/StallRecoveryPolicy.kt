@@ -28,6 +28,7 @@ class StallRecoveryPolicy(private val timeoutMilliseconds: Long) {
         eligible: Boolean,
         positionMs: Long,
         nowMilliseconds: Long,
+        recoverBeforeProgress: Boolean = false,
     ): StallDecision {
         if (!hasSession || currentGeneration != sessionGeneration || !sessionReady || !eligible) {
             hasBaseline = false
@@ -47,7 +48,7 @@ class StallRecoveryPolicy(private val timeoutMilliseconds: Long) {
         if ((nowMilliseconds - lastChangeAtMs).toDouble() < timeoutMilliseconds.toDouble()) return StallDecision.None
         lastChangeAtMs = nowMilliseconds
         if (gaveUp) return StallDecision.None
-        if (hasAdvanced && !recoveryAttempted) {
+        if ((hasAdvanced || recoverBeforeProgress) && !recoveryAttempted) {
             recoveryAttempted = true
             return StallDecision.Recover
         }

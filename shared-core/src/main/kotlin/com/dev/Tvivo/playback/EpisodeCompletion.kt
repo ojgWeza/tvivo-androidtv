@@ -10,6 +10,18 @@ object PlaybackEndPolicy {
     const val END_TOLERANCE_MILLISECONDS = 30_000L
     const val MINIMUM_UNKNOWN_END_MILLISECONDS = 60_000L
 
+    fun isKnownDurationEnd(positionMilliseconds: Long, durationMilliseconds: Long,
+                           playWhenReady: Boolean, sourceDrained: Boolean): Boolean =
+        playWhenReady && sourceDrained && durationMilliseconds > 0L &&
+            positionMilliseconds >= durationMilliseconds
+
+    fun isKnownSourceEof(durationMilliseconds: Long, playWhenReady: Boolean,
+                         sourceEof: Boolean, millisecondsWithoutData: Long,
+                         positionMilliseconds: Long, bufferedPositionMilliseconds: Long): Boolean =
+        durationMilliseconds > 0L && playWhenReady && sourceEof &&
+            millisecondsWithoutData >= 5_000L &&
+            bufferedPositionMilliseconds - positionMilliseconds <= 2_000L
+
     fun isGenuineEnd(positionMilliseconds: Long, durationMilliseconds: Long?, ended: Boolean): Boolean {
         if (!ended) return false
         if (durationMilliseconds == null || durationMilliseconds <= 0)

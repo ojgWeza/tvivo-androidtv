@@ -49,6 +49,7 @@ import androidx.tv.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.R
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.entities.CategoryEntity
@@ -95,6 +96,7 @@ fun CatalogLandingScreen(
     contentType: ContentType,
     accountId: String,
     initialCategoryId: String? = null,
+    onOpenedCategoryChanged: (String?) -> Unit = {},
     shellSortChoice: CatalogSort = CatalogSort.MostVisited,
     shellSortRevision: Int = 0,
     shellRefreshRevision: Int = 0,
@@ -119,8 +121,7 @@ fun CatalogLandingScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val repository = remember(accountId) { HomeRepository(AppDatabase.get(application), accountId) }
     val landingSpec = remember(contentType) { LandingSpec.forType(contentType.toShelfContentType()) }
-    var openCategoryId by rememberSaveable(accountId, contentType) { mutableStateOf(initialCategoryId) }
-    var appliedInitialCategoryId by rememberSaveable(accountId, contentType) { mutableStateOf(initialCategoryId) }
+    val openCategoryId = initialCategoryId
     var openItemFilter by rememberSaveable(accountId, contentType) { mutableStateOf<String?>(null) }
     val sort by viewModel.sort.collectAsStateWithLifecycle()
     val categorySort by viewModel.categorySort.collectAsStateWithLifecycle()
@@ -164,12 +165,6 @@ fun CatalogLandingScreen(
     val shellFocus = LocalShellFocus.current
     val hasCachedCatalog = state.categories.isNotEmpty() || state.counts.values.any { it > 0 }
 
-    LaunchedEffect(initialCategoryId) {
-        if (initialCategoryId != null && initialCategoryId != appliedInitialCategoryId) {
-            openCategoryId = initialCategoryId
-            appliedInitialCategoryId = initialCategoryId
-        }
-    }
     LaunchedEffect(shellSortRevision) {
         if (shellSortRevision > 0) viewModel.setSort(shellSortChoice)
     }
@@ -214,7 +209,7 @@ fun CatalogLandingScreen(
     fun open(categoryId: String, filter: String = "") {
         panelSelectedId = categoryId
         openItemFilter = filter.takeIf { it.isNotBlank() }
-        openCategoryId = categoryId
+        onOpenedCategoryChanged(categoryId)
         panelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
     }
 
@@ -229,7 +224,7 @@ fun CatalogLandingScreen(
             categorySort = categorySort, onCategorySortChanged = viewModel::setCategorySort,
             categoryMetrics = metrics,
             onBackToLanding = {
-                openCategoryId = null
+                onOpenedCategoryChanged(null)
                 openItemFilter = null
                 landingReload++
                 restoreSeeAll = lastFocusWasSeeAll
@@ -385,8 +380,12 @@ fun CatalogLandingScreen(
                             if (it.contains("failed", ignoreCase = true))
                                 RetryAction(viewModel::refreshType)
                         }
-                        if (state.error != null && state.refreshConfirmation == null) {
-                            if (showRefreshFeedback) Text(stringResource(R.string.browse_refresh_failed, contentTypeLabel),
+                        state.error?.takeIf { state.refreshConfirmation == null }?.let { error ->
+                            Text(stringResource(when (error) {
+                                AppError.RateLimited -> R.string.refresh_rate_limited
+                                AppError.ServiceUnavailable -> R.string.refresh_service_unavailable
+                                else -> R.string.refresh_unreachable
+                            }),
                                 color = AppColors.Dim, style = TvType.label)
                             RetryAction(viewModel::refreshType)
                         }

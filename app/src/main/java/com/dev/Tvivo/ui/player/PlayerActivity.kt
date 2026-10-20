@@ -100,7 +100,6 @@ class PlayerActivity : ComponentActivity() {
     private var playerView: PlayerView? = null
     private var composeView: ComposeView? = null
     private var pipWindowOpen = false
-    private var pipExitPending = false
     private var pipReceiverRegistered = false
     private var videoAspectRatio = Rational(16, 9)
     private var lastPipEntry: PipPolicy.Entry? = null
@@ -161,7 +160,10 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         override fun onTracksChanged(tracks: Tracks) { updateTracks(tracks); updateControls() }
-        override fun onPlayerError(error: PlaybackException) { updateControls() }
+        override fun onPlayerError(error: PlaybackException) {
+            showControls()
+            updateControls()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -355,9 +357,15 @@ class PlayerActivity : ComponentActivity() {
         if (!activeSessionConfirmed && queuedReplay == null) { finish(); return }
         queuedReplay?.let { replay ->
             queuedReplay = null
-            if (++replayReconnectAttempts > 3) { finish(); return }
+            if (++replayReconnectAttempts > 20) {
+                queuedReplay = null
+                replayStarting = false
+                replay.item.itemId?.let { showEndedView(EndedItemSnapshot(
+                    replay.requestId, replay.item.title, it)) }
+                return
+            }
             lifecycleScope.launch {
-                delay(150L * replayReconnectAttempts)
+                delay((150L * replayReconnectAttempts).coerceAtMost(500L))
                 if (!isFinishing && !isDestroyed) startReplay(replay)
             }
         }
@@ -471,7 +479,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun switchChannel(id: String) {
         if (!isLive || stopPending || channelSwitchPending) return
-        if (DeepStreamCheckGate.isHeld || DeepStreamCheckGate.cooldownRemainingMs() > 0L) {
+        if (DeepStreamCheckGate.isHeld) {
             android.widget.Toast.makeText(this, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -536,15 +544,20 @@ class PlayerActivity : ComponentActivity() {
     private fun stopServiceWithoutController() {
         runCatching {
             startService(Intent(this, PlaybackService::class.java)
-                .setAction(PlaybackService.ACTION_STOP_FROM_UI))
+                .setAction(PlaybackService.ACTION_STOP_FROM_UI)
+                .putExtra(PlaybackService.EXTRA_INTERNAL_TOKEN, PlaybackService.INTERNAL_TOKEN))
         }
     }
 
     private fun requestStopAndFinish(finishImmediately: Boolean = false) {
         val future = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
-        if (future == null) { finish(); return }
+        if (future == null) { stopServiceWithoutController(); finish(); return }
         stopResultFuture = future
-        future.addListener({ finish() }, ContextCompat.getMainExecutor(this))
+        future.addListener({
+            if (runCatching { future.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS)
+                stopServiceWithoutController()
+            finish()
+        }, ContextCompat.getMainExecutor(this))
         if (finishImmediately) finish()
     }
 
@@ -589,9 +602,13 @@ class PlayerActivity : ComponentActivity() {
     )
 
     private fun pipAction(action: String, title: String, iconId: Int, requestCode: Int): RemoteAction {
-        val pending = PendingIntent.getBroadcast(
-            this, requestCode, Intent(action).setPackage(packageName),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pending = if (action == PipPlaybackAction.CLOSE) PendingIntent.getService(
+            this, requestCode, Intent(this, PlaybackService::class.java)
+                .setAction(PlaybackService.ACTION_STOP_FROM_UI)
+                .putExtra(PlaybackService.EXTRA_INTERNAL_TOKEN, PlaybackService.INTERNAL_TOKEN), flags,
+        ) else PendingIntent.getBroadcast(
+            this, requestCode, Intent(action).setPackage(packageName), flags,
         )
         return RemoteAction(Icon.createWithResource(this, iconId), title, title, pending)
     }
@@ -650,12 +667,7 @@ class PlayerActivity : ComponentActivity() {
         super.onPictureInPictureModeChanged(inPip, newConfig)
         if (inPip) {
             pipWindowOpen = true
-            pipExitPending = false
             hideControls()
-        } else if (pipWindowOpen) {
-            // Expansion has window focus; a closed PiP goes to Stop without it.
-            pipExitPending = !window.decorView.hasWindowFocus()
-            if (!pipExitPending) pipWindowOpen = false
         }
         composeView?.visibility = if (inPip) View.GONE else View.VISIBLE
         if (!inPip && !isFinishing && !stopPending) {
@@ -674,7 +686,6 @@ class PlayerActivity : ComponentActivity() {
         super.onResume()
         if (Build.VERSION.SDK_INT >= 26 && !isInPictureInPictureMode && !isFinishing &&
             !stopPending) {
-            pipExitPending = false
             pipWindowOpen = false
             composeView?.visibility = View.VISIBLE
         }
@@ -685,10 +696,6 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && Build.VERSION.SDK_INT >= 26 && !isInPictureInPictureMode && pipWindowOpen) {
-            pipExitPending = false
-            pipWindowOpen = false
-        }
         if (hasFocus) {
             hideSystemBars()
             updateControls()
@@ -836,6 +843,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun watchEndedItem() {
+        replayReconnectAttempts = 0
         val endedId = overlayState.sleepTimer.endedItemId ?: intent.getStringExtra(EXTRA_ITEM_ID)
         val queueIndex = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.indexOf(endedId) ?: -1
         val url = if (queueIndex >= 0)
@@ -890,8 +898,19 @@ class PlayerActivity : ComponentActivity() {
         subtitleTracks = collect(C.TRACK_TYPE_TEXT)
         fun choices(refs: List<TrackRef>, kind: TrackKind) = refs.mapIndexed { ordinal, ref ->
             val format = ref.group.getTrackFormat(ref.index)
+            val name = TrackSelectionPolicy.getDisplayName(kind, format.label, format.language, ordinal + 1)
+            val language = format.language
             TrackChoice(
-                TrackSelectionPolicy.getDisplayName(kind, format.label, format.language, ordinal + 1),
+                when (name) {
+                    "Audio track ${ordinal + 1}" -> getString(R.string.player_audio_track_number, ordinal + 1)
+                    "Subtitle track ${ordinal + 1}" -> getString(R.string.player_subtitle_track_number, ordinal + 1)
+                    else -> {
+                        if (format.label.isNullOrBlank() && !language.isNullOrBlank() && language != "und")
+                            java.util.Locale.forLanguageTag(language)
+                                .getDisplayLanguage(resources.configuration.locales[0]).ifBlank { name }
+                        else name
+                    }
+                },
                 ref.group.isTrackSelected(ref.index)
             )
         }
@@ -1063,12 +1082,11 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         playerView?.player = null
-        if (PipPolicy.shouldStopAfterExit(pipExitPending, isChangingConfigurations, stopPending)) {
-            // PiP close exits into Stop; expansion reaches onResume and clears the pending exit.
-            pipExitPending = false
+        if (PipPolicy.shouldStopAfterExit(
+                pipWindowOpen, isInPictureInPictureMode && !isFinishing,
+                isChangingConfigurations, stopPending)) {
             pipWindowOpen = false
-            stopResultFuture = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
-            if (stopResultFuture == null) stopServiceWithoutController()
+            stopAndFinish(finishImmediately = true)
         }
         super.onStop()
     }
@@ -1077,8 +1095,9 @@ class PlayerActivity : ComponentActivity() {
         positionTicker?.cancel()
         autoHideJob?.cancel(); feedbackJob?.cancel()
         // On API 26-32 the system close affordance has no custom close callback.
-        if (pipWindowOpen && isFinishing && !stopPending &&
-            player?.playbackState != Player.STATE_ENDED
+        if (PipPolicy.shouldStopAfterExit(
+                pipWindowOpen, isInPictureInPictureMode && !isFinishing,
+                isChangingConfigurations, stopPending)
         ) {
             stopResultFuture = player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.STOP), Bundle.EMPTY)
             if (stopResultFuture == null) stopServiceWithoutController()

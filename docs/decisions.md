@@ -1733,7 +1733,7 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
 
 **Decision (updated in Slice 6):** Home shows mixed Continue watching and Favourites, then separate Recently added Movies, Series and Live TV shelves, followed by Suggestions and visited folders. Empty core shelves are hidden; first run still shows route tiles. Type landing shelves are bounded and lazy. Recently added includes titles without a panel `added` timestamp, sorting them last, so a populated type never loses its shelf entirely. Home source queries remain bounded at 20 rows per type.
 
-**Navigation:** Search is reached from the shell, and Home's header has only the title plus a phone Settings gear. Settings owns manual library refresh and its last successful time; phone Home supports pull-to-refresh. Back on My Tvivo opens the existing safe-focused exit confirmation. TV top-bar Down targets the first shelf and first-shelf Up targets the selected tab. The opened-grid Filter sits after Sort in the horizontal row, while grid Up targets Sort. No focus-restorer modifier is used.
+**Navigation:** Search and Settings are reached from the shell. Home relies on the shell's For You title and Settings tab, without a repeated title or gear. Settings owns manual library refresh and its last successful time; phone Home supports pull-to-refresh. Back on For You opens the existing safe-focused exit confirmation. TV top-bar Down targets the first shelf and first-shelf Up targets the selected tab. The opened-grid Filter sits after Sort in the horizontal row, while grid Up targets Sort. No focus-restorer modifier is used.
 
 **See all:** one shared policy requires a real total greater than the displayed preview and a meaningful destination. Mixed Home shelves open a type chooser leading to existing per-type virtual folders; type-specific Recently added shelves open their matching folder directly. Suggestions has no See all destination; category and per-type shelves open their existing paged or virtual folders only when they exceed the preview. Landing category previews remain lazy and bounded.
 
@@ -1745,7 +1745,7 @@ against the last committed `CODEMAP.md`). `.githooks/pre-commit` extended to loo
 
 **Decision:** Home and type landing shelves share a vertical-navigation helper. Up and Down select the adjacent non-empty shelf, scroll its heading into view, then request its remembered card by stable item key with bounded retries while the lazy row composes. Returning to the first shelf scrolls the screen header and shelf heading into view together. The row registers focus actions only while composed; no `FocusRequester` is linked to an offscreen or absent row.
 
-**Categories and sort:** Movies, Series, Live and opened lists use a 48 dp start-edge Categories tab. Left from the first card focuses the tab; Right returns to content; OK opens the category drawer and Back restores focus to the tab. The drawer orders categories with Most visited, A–Z or Z–A. Opened-list Sort is a header menu beside Filter with A–Z, Z–A and Recently added; it changes the SQL paging order and is saved per account, profile and type. Category order has its own saved selection and does not change item order. The TV top bar contains centered tabs without a duplicate brand; the My Tvivo page title is omitted on TV while the phone keeps it.
+**Categories and sort:** Movies, Series, Live and opened lists use a 48 dp start-edge Categories tab. Left from the first card focuses the tab; Right returns to content; OK opens the category drawer and Back restores focus to the tab. The drawer orders categories with Most visited, A–Z or Z–A. Opened-list Sort is a header menu beside Filter with A–Z, Z–A and Recently added; it changes the SQL paging order and is saved per account, profile and type. Category order has its own saved selection and does not change item order. The TV top bar contains centered tabs without a duplicate brand; Home uses the shell's For You label without a second title on phone or TV.
 
 **Empty shelves and Home order:** Empty Continue watching and Favourites are hidden without hints; Recently added is shown when that type has catalog titles. Suggestions and folder previews are hidden when empty. The Live Last watched shelf retains its focusable empty hint. First-run Home route tiles remain unchanged. My Tvivo shows mixed Continue watching, mixed Favourites, then separate bounded Recently added Movies, Series and Live TV shelves, followed by Suggestions and most-visited folders. The per-type Recently added shelves use the existing stable virtual-folder IDs and only show See all when the total exceeds the 20-card preview. Category landing shelves are lazy and bounded; unknown counts show a loading placeholder until the catalog count arrives, and zero-count shelves disappear.
 
@@ -1961,13 +1961,22 @@ Player Activity treats PLAY and notification reopen as different paths: PLAY res
 the overlay and starts a new request; reopen must prove that its request still owns
 an active service item. A rejected PLAY retries a bounded fresh controller
 connection, while a dead reopen finishes. PiP Pause keeps the window and a
-foreground paused notification; PiP close sends Stop to release the stream and
-notification. Device verification remains necessary for PiP lifecycle ordering and
-live video rendering.
+foreground paused notification. A later QA pass found that PiP X can stop the
+Activity before its mode-exit callback; the close path now uses the remembered PiP
+window and finishing/stopped state, sends Stop before releasing the controller,
+and keeps expansion tied to onResume. The service removes its notification when
+Stop completes. Device verification remains necessary for PiP lifecycle ordering
+and live video rendering.
 
 Library shelves observe both resume and recently played Room flows. Failed refresh
 keeps the prior successful refresh timestamp and surfaces the mapped 429, 503, or
 unreachable reason; partial cache writes cannot count as a completed manual
 refresh. Large font scale allows titles to wrap, with compact phone navigation
 keeping icon semantics. Mock episode IDs include their series ID to prevent
-cross-series collisions in QA.
+cross-series collisions in QA. Round-2 QA found that the deep-check cooldown had
+leaked into live channel switching: only a running deep check now blocks PLAY;
+the 60-second recently-left-stream wait remains inside the diagnostic check.
+Known-runtime EOF after the stream drains now reaches the ended UI and clamps
+resume saves to runtime; an early EOF leaves the item unwatched. Live buffering
+gets one reconnect even before first progress. Open category and Search query
+live in shell saveable state so the compact/expanded layout swap retains them.

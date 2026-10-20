@@ -23,8 +23,8 @@ internal object PipPolicy {
         else -> Exit.KeepVideo
     }
 
-    /** Expansion resumes the Activity; dismissal leaves it stopped after exiting PiP. */
-    fun shouldStopAfterExit(exitPending: Boolean, changingConfigurations: Boolean,
-                            stopPending: Boolean): Boolean =
-        exitPending && !changingConfigurations && !stopPending
+    /** Expansion clears the remembered PiP window in onResume; a stopped exit is dismissal. */
+    fun shouldStopAfterExit(wasInPip: Boolean, inPip: Boolean,
+                            changingConfigurations: Boolean, stopPending: Boolean): Boolean =
+        wasInPip && !inPip && !changingConfigurations && !stopPending
 }

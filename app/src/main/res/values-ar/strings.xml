@@ -107,7 +107,9 @@
     <string name="player_error_unavailable">هذا البث غير متاح الآن. حاول لاحقًا أو اختر عنصرًا آخر.</string>
     <string name="player_error_provider">المزوّد لا يستجيب الآن. انتظر قليلاً ثم أعد المحاولة.</string>
     <string name="player_error_request">رفض المزوّد طلب البث. أعد المحاولة أو اختر عنصرًا آخر.</string>
-    <string name="player_error_format">صيغة هذا البث غير مدعومة على هذا الجهاز. اختر عنصرًا آخر.</string>
+    <string name="player_error_format">تعذر فك ترميز هذا البث على هذا الجهاز. أعد المحاولة أو اختر عنصرًا آخر.</string>
+    <string name="player_audio_track_number">مسار صوتي %1$d</string>
+    <string name="player_subtitle_track_number">مسار ترجمة %1$d</string>
     <string name="player_error_stall">استغرق البث وقتًا طويلاً للاستجابة. تحقق من الاتصال ثم أعد المحاولة.</string>
     <string name="player_error_stopped">ارجع وافتح عنصرًا للتشغيل مرة أخرى.</string>
     <string name="player_error_early_end">انتهى البث قبل المتوقع. أعد المحاولة للمتابعة من موضع التوقف.</string>
@@ -191,6 +193,11 @@
     <string name="diagnostics_export_log">تصدير السجل</string>
     <string name="diagnostics_clear_log">مسح السجل</string>
     <string name="diagnostics_profile_catalog">تحليل الفهرس</string>
+    <string name="diagnostics_profile_running">جارٍ تحليل الفهرس المحفوظ…</string>
+    <string name="diagnostics_profile_failed">تعذر تحليل الفهرس المحفوظ.</string>
+    <string name="diagnostics_profile_complete">اكتمل تحليل الفهرس · %1$d فحوصات</string>
+    <string name="diagnostics_technical">تفاصيل تقنية</string>
+    <string name="diagnostics_hide_technical">إخفاء التفاصيل التقنية</string>
     <string name="diagnostics_no_catalog">لا يوجد فهرس مخزن لتحليله.</string>
     <string name="diagnostics_catalog_profile">تحليل الفهرس (قراءة محلية فقط)</string>
     <string name="appearance">المظهر</string>

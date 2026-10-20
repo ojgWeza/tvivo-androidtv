@@ -28,6 +28,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,7 +89,9 @@ fun DetailHero(
             maxLines = 3, overflow = TextOverflow.Ellipsis)
         val facts = listOfNotNull(year?.takeIf { it.isNotBlank() },
             rating?.let { "${it.asRatingLabel()} / 10" }, quality?.takeIf { it.isNotBlank() },
-            durationMinutes?.takeIf { it > 0 }?.let { "$it min" })
+            durationMinutes?.takeIf { it > 0 }?.let {
+                pluralStringResource(com.dev.Tvivo.R.plurals.duration_minutes, it, it)
+            })
         if (facts.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
