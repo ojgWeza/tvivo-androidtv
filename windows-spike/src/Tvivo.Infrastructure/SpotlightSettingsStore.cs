@@ -24,7 +24,9 @@ public sealed class SpotlightSettingsStore
             var rotationDays = root.TryGetProperty("rotationDays", out var rotation) &&
                 rotation.ValueKind == JsonValueKind.Number && rotation.TryGetInt32(out var parsed)
                 ? SpotlightSettings.NormalizeRotationDays(parsed) : 1;
-            return new SpotlightSettings(ReadContent(root.GetProperty("movies")), ReadContent(root.GetProperty("series")), rotationDays);
+            return new SpotlightSettings(ReadContent(root.GetProperty("movies")), ReadContent(root.GetProperty("series")), rotationDays,
+                ReadOptionalContent(root, "moviesPage"), ReadOptionalContent(root, "seriesPage"),
+                ReadOptionalContent(root, "forYouMovies"), ReadOptionalContent(root, "forYouSeries"));
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or
                                              KeyNotFoundException or InvalidOperationException or FormatException)
@@ -44,7 +46,11 @@ public sealed class SpotlightSettingsStore
         try
         {
             var json = JsonSerializer.Serialize(new { version = CurrentVersion, movies, series,
-                rotationDays = SpotlightSettings.NormalizeRotationDays(settings.RotationDays) });
+                rotationDays = SpotlightSettings.NormalizeRotationDays(settings.RotationDays),
+                moviesPage = settings.MoviesPage is null ? null : ValidateContent(settings.MoviesPage),
+                seriesPage = settings.SeriesPage is null ? null : ValidateContent(settings.SeriesPage),
+                forYouMovies = settings.ForYouMovies is null ? null : ValidateContent(settings.ForYouMovies),
+                forYouSeries = settings.ForYouSeries is null ? null : ValidateContent(settings.ForYouSeries) });
             File.WriteAllText(temporary, json);
             File.Move(temporary, path, true);
         }
@@ -61,6 +67,9 @@ public sealed class SpotlightSettingsStore
             throw new JsonException("Invalid Spotlight category IDs.");
         return new(mode, ids);
     }
+
+    private static SpotlightContentSettings? ReadOptionalContent(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.Object ? ReadContent(node) : null;
 
     private static object ValidateContent(SpotlightContentSettings? content)
     {

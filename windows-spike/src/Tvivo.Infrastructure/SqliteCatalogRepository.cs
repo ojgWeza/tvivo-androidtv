@@ -427,7 +427,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     }
 
     public IReadOnlyList<CatalogCategoryShelfDescriptor> GetCategoryShelfDescriptors(
-        ProviderAccount account, CatalogItemType type, string? filter = null)
+        ProviderAccount account, CatalogItemType type, string? filter = null, bool includeEmptyCategories = false)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
@@ -438,13 +438,14 @@ public sealed class SqliteCatalogRepository : IDisposable
               AND ($filter IS NULL OR c.name LIKE $pattern ESCAPE '\' OR i.title LIKE $pattern ESCAPE '\')
             WHERE c.account_id=$a AND c.type=$type
             GROUP BY c.id,c.name,c.position
-            HAVING COUNT(i.id)>0
+            HAVING $includeEmpty=1 OR COUNT(i.id)>0
             ORDER BY c.position,c.id;
             """;
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
         command.Parameters.AddWithValue("$pattern", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : "%" + filter.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+        command.Parameters.AddWithValue("$includeEmpty", includeEmptyCategories ? 1 : 0);
         using var reader = command.ExecuteReader();
         var rows = new List<CatalogCategoryShelfDescriptor>();
         while (reader.Read())

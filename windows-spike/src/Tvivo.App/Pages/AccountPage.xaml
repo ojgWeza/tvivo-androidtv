@@ -2,24 +2,26 @@
     x:Class="Tvivo.App.Pages.AccountPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Padding="52,24" Background="{ThemeResource AppCanvasBrush}">
-        <StackPanel MaxWidth="780" Spacing="14">
+    <Grid Background="{ThemeResource AppCanvasBrush}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      ZoomMode="Disabled" IsTabStop="False">
+        <StackPanel MaxWidth="900" HorizontalAlignment="Center" Margin="24,20" Spacing="14">
             <StackPanel Orientation="Horizontal" Spacing="28">
                 <Button x:Name="LibraryTabButton" Content="Library" Tag="Library"
-                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
-                        FontSize="16"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8" MinHeight="44"
+                        FontSize="16" AutomationProperties.Name="Library settings"
                         Click="SettingsTab_Click" />
                 <Button x:Name="ForYouTabButton" Content="For You" Tag="ForYou"
-                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
-                        FontSize="16"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8" MinHeight="44"
+                        FontSize="16" AutomationProperties.Name="For You settings"
                         Click="SettingsTab_Click" />
                 <Button x:Name="PlayerTabButton" Content="Player" Tag="Player"
-                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
-                        FontSize="16"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8" MinHeight="44"
+                        FontSize="16" AutomationProperties.Name="Player settings"
                         Click="SettingsTab_Click" />
                 <Button x:Name="AccountTabButton" Content="Account" Tag="Account"
-                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8"
-                        FontSize="16"
+                        Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8" MinHeight="44"
+                        FontSize="16" AutomationProperties.Name="Account settings"
                         Click="SettingsTab_Click" />
             </StackPanel>
 
@@ -27,35 +29,38 @@
                 <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
                     <StackPanel Spacing="14">
                         <StackPanel Spacing="2">
-                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Signed in as" />
+                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Signed in as" />
                             <TextBlock x:Name="DisplayNameText" Foreground="{ThemeResource AppTextBrush}" FontSize="22" FontWeight="SemiBold" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Username" />
+                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Username" />
                             <TextBlock x:Name="UsernameText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Server" />
+                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Server" />
                             <TextBlock x:Name="ServerText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Max connections" />
+                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Max connections" />
                             <TextBlock x:Name="MaxConnectionsText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Subscription expiry" />
+                            <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Subscription expiry" />
                             <TextBlock x:Name="ExpiryText" FontSize="18" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
                 <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}"
-                            FontSize="16" Content="Sign out" Click="SignOutButton_Click" />
-                    <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}"
-                            FontSize="16" Content="Change user" Click="ChangeUserButton_Click" />
+                    <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44"
+                            FontSize="16" Content="Sign out" AutomationProperties.Name="Sign out of this account"
+                            Click="SignOutButton_Click" />
+                    <Button x:Name="ChangeUserButton" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44"
+                            FontSize="16" Content="Change user" AutomationProperties.Name="Change account"
+                            Click="ChangeUserButton_Click" />
                 </StackPanel>
                 <Button Content="Save diagnostics for support" MinHeight="48" MinWidth="280"
-                        Style="{StaticResource AppQuietButtonStyle}" Click="SaveDiagnostics_Click" />
+                        Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Save diagnostics for support"
+                        Click="SaveDiagnostics_Click" />
                 <TextBlock x:Name="DiagnosticsStatusText" FontSize="16" TextWrapping="Wrap"
                            Foreground="{ThemeResource AppMutedTextBrush}" />
             </StackPanel>
@@ -63,11 +68,12 @@
             <StackPanel x:Name="ForYouTabPanel" Visibility="Collapsed">
                 <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
                     <StackPanel Spacing="10">
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="Choose which shelves appear on For You and the order they show in." />
                         <StackPanel x:Name="ForYouShelfList" Spacing="4" />
                         <Button Style="{StaticResource AppQuietButtonStyle}" FontSize="16"
-                                HorizontalAlignment="Left" Content="Reset to default"
+                                MinHeight="44" HorizontalAlignment="Left" Content="Reset to default"
+                                AutomationProperties.Name="Reset For You shelf order to default"
                                 Click="ResetForYouLayout_Click" />
                         <Border BorderBrush="{ThemeResource AppMutedTextBrush}" BorderThickness="0,1,0,0"
                                 Margin="0,8,0,0" Padding="0,12,0,0">
@@ -76,7 +82,7 @@
                                            FontWeight="SemiBold" Text="Spotlight" />
                                 <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16"
                                            TextWrapping="Wrap"
-                                           Text="My Tvivo mixes Movies and Series using these settings evenly." />
+                                           Text="Choose sources for each page. For You shows four movies and four series." />
                                 <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="18"
                                            FontWeight="SemiBold" Text="Change the Spotlight every" />
                                 <ComboBox x:Name="SpotlightRotationSelector" FontSize="16" MinHeight="44"
@@ -89,81 +95,8 @@
                                     <ComboBoxItem Content="14 days" Tag="14" />
                                 </ComboBox>
 
-                                <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="18"
-                                           FontWeight="SemiBold" Text="Movies" />
-                                <ComboBox x:Name="SpotlightMoviesModeSelector" FontSize="16" MinHeight="44"
-                                          SelectionChanged="SpotlightMoviesModeSelector_SelectionChanged"
-                                          AutomationProperties.Name="Movies Spotlight source">
-                                    <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
-                                    <ComboBoxItem Content="Specific folders" Tag="SpecificFolders" />
-                                    <ComboBoxItem Content="Folders I haven't explored" Tag="UnexploredFolders" />
-                                </ComboBox>
-                                <StackPanel x:Name="SpotlightMoviesFoldersPanel" Spacing="8" Visibility="Collapsed">
-                                    <TextBox x:Name="SpotlightMoviesSearchBox" FontSize="16" MinHeight="44"
-                                             PlaceholderText="Search movie folders"
-                                             AutomationProperties.Name="Search movie folders"
-                                             TextChanged="SpotlightMoviesSearchBox_TextChanged" />
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Button x:Name="SpotlightMoviesSelectAllButton" Content="Select all"
-                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
-                                                AutomationProperties.Name="Select all movie folders"
-                                                Click="SpotlightMoviesSelectAllButton_Click" />
-                                        <Button x:Name="SpotlightMoviesClearButton" Content="Clear"
-                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
-                                                AutomationProperties.Name="Clear selected movie folders"
-                                                Click="SpotlightMoviesClearButton_Click" />
-                                        <TextBlock x:Name="SpotlightMoviesSelectedCountText" FontSize="16"
-                                                   VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
-                                    </StackPanel>
-                                    <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Disabled">
-                                        <StackPanel x:Name="SpotlightMoviesFolderList" Spacing="4" />
-                                    </ScrollViewer>
-                                    <TextBlock x:Name="SpotlightMoviesEmptyText" Foreground="{ThemeResource AppMutedTextBrush}"
-                                               FontSize="16" TextWrapping="Wrap" Visibility="Collapsed"
-                                               Text="No movie folders match this search." />
-                                </StackPanel>
-                                <TextBlock x:Name="SpotlightMoviesPreviewText" Foreground="{ThemeResource AppMutedTextBrush}"
-                                           FontSize="16" TextWrapping="Wrap" />
-
-                                <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="18"
-                                           FontWeight="SemiBold" Text="Series" />
-                                <ComboBox x:Name="SpotlightSeriesModeSelector" FontSize="16" MinHeight="44"
-                                          SelectionChanged="SpotlightSeriesModeSelector_SelectionChanged"
-                                          AutomationProperties.Name="Series Spotlight source">
-                                    <ComboBoxItem Content="Recently added" Tag="RecentlyAdded" />
-                                    <ComboBoxItem Content="Specific folders" Tag="SpecificFolders" />
-                                    <ComboBoxItem Content="Folders I haven't explored" Tag="UnexploredFolders" />
-                                </ComboBox>
-                                <StackPanel x:Name="SpotlightSeriesFoldersPanel" Spacing="8" Visibility="Collapsed">
-                                    <TextBox x:Name="SpotlightSeriesSearchBox" FontSize="16" MinHeight="44"
-                                             PlaceholderText="Search series folders"
-                                             AutomationProperties.Name="Search series folders"
-                                             TextChanged="SpotlightSeriesSearchBox_TextChanged" />
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Button x:Name="SpotlightSeriesSelectAllButton" Content="Select all"
-                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
-                                                AutomationProperties.Name="Select all series folders"
-                                                Click="SpotlightSeriesSelectAllButton_Click" />
-                                        <Button x:Name="SpotlightSeriesClearButton" Content="Clear"
-                                                FontSize="16" MinHeight="44" Style="{StaticResource AppQuietButtonStyle}"
-                                                AutomationProperties.Name="Clear selected series folders"
-                                                Click="SpotlightSeriesClearButton_Click" />
-                                        <TextBlock x:Name="SpotlightSeriesSelectedCountText" FontSize="16"
-                                                   VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
-                                    </StackPanel>
-                                    <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Disabled">
-                                        <StackPanel x:Name="SpotlightSeriesFolderList" Spacing="4" />
-                                    </ScrollViewer>
-                                    <TextBlock x:Name="SpotlightSeriesEmptyText" Foreground="{ThemeResource AppMutedTextBrush}"
-                                               FontSize="16" TextWrapping="Wrap" Visibility="Collapsed"
-                                               Text="No series folders match this search." />
-                                </StackPanel>
-                                <TextBlock x:Name="SpotlightSeriesPreviewText" Foreground="{ThemeResource AppMutedTextBrush}"
-                                           FontSize="16" TextWrapping="Wrap" />
-
-                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                                <StackPanel x:Name="SpotlightSourcesPanel" Spacing="12" />
+                                <StackPanel Orientation="Vertical" Spacing="8" Margin="0,4,0,0">
                                     <Button x:Name="SpotlightSaveButton" Content="Save" MinWidth="100" MinHeight="48"
                                             FontSize="16" Style="{StaticResource AppQuietButtonStyle}"
                                             AutomationProperties.Name="Save Spotlight settings"
@@ -173,7 +106,8 @@
                                             AutomationProperties.Name="Cancel Spotlight settings changes"
                                             Click="SpotlightCancelButton_Click" />
                                     <TextBlock x:Name="SpotlightSettingsStatusText" FontSize="16"
-                                               VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" />
+                                               VerticalAlignment="Center" TextWrapping="Wrap"
+                                               Foreground="{ThemeResource AppMutedTextBrush}" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -184,8 +118,8 @@
             <StackPanel x:Name="PlayerTabPanel" Visibility="Collapsed">
                 <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
                     <StackPanel Spacing="10">
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Playback engine" />
-                        <ComboBox x:Name="PlaybackEngineSelector"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Playback engine" />
+                        <ComboBox x:Name="PlaybackEngineSelector" MinHeight="44"
                                   MinWidth="220"
                                   FontSize="16"
                                   SelectionChanged="PlaybackEngineSelector_SelectionChanged"
@@ -193,8 +127,8 @@
                             <ComboBoxItem Content="Native player" Tag="Native" />
                             <ComboBoxItem Content="LibVLC" Tag="LibVLC" />
                         </ComboBox>
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Playback attempts" />
-                        <ComboBox x:Name="PlaybackAttemptsSelector" MinWidth="220" FontSize="16"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Playback attempts" />
+                        <ComboBox x:Name="PlaybackAttemptsSelector" MinHeight="44" MinWidth="220" FontSize="16"
                                   SelectionChanged="PlaybackAttemptsSelector_SelectionChanged"
                                   AutomationProperties.Name="Playback attempts">
                             <ComboBoxItem Content="1" Tag="1" />
@@ -208,18 +142,18 @@
                             <ComboBoxItem Content="9" Tag="9" />
                             <ComboBoxItem Content="10" Tag="10" />
                         </ComboBox>
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="How many times Tvivo tries before giving up (default 5)." />
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16"
                                    Text="When minimizing while a video is open" />
-                        <ComboBox x:Name="MinimizeToMiniSelector" MinWidth="300" FontSize="16"
+                        <ComboBox x:Name="MinimizeToMiniSelector" MinHeight="44" MinWidth="300" FontSize="16"
                                   SelectionChanged="MinimizeToMiniSelector_SelectionChanged"
                                   AutomationProperties.Name="When minimizing while a video is open">
                             <ComboBoxItem Content="Mini player while playing" Tag="MiniPlayerWhilePlaying" />
                             <ComboBoxItem Content="Mini player while playing or paused" Tag="MiniPlayerWhilePlayingOrPaused" />
                             <ComboBoxItem Content="Always minimize normally" Tag="AlwaysMinimizeNormally" />
                         </ComboBox>
-                        <TextBlock x:Name="MinimizeToMiniDescription" Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                        <TextBlock x:Name="MinimizeToMiniDescription" Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="When LibVLC is playing or paused, minimizing keeps the video in a small always-on-top window." />
                     </StackPanel>
                 </Border>
@@ -228,10 +162,10 @@
             <StackPanel x:Name="LibraryTabPanel" Visibility="Collapsed">
                 <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
                     <StackPanel Spacing="10">
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Most recent catalog refresh" />
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Most recent catalog refresh" />
                         <TextBlock x:Name="LastRefreshText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" Text="Refresh catalog" />
-                        <ComboBox x:Name="CatalogRefreshPolicySelector" MinWidth="300" FontSize="16"
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Refresh catalog" />
+                        <ComboBox x:Name="CatalogRefreshPolicySelector" MinHeight="44" MinWidth="300" FontSize="16"
                                   SelectionChanged="CatalogRefreshPolicySelector_SelectionChanged"
                                   AutomationProperties.Name="Refresh catalog">
                             <ComboBoxItem Content="Only when I refresh" Tag="OnDemandOnly" />
@@ -240,14 +174,16 @@
                             <ComboBoxItem Content="Every time the app opens" Tag="EveryStart" />
                         </ComboBox>
                         <Button x:Name="RefreshCatalogButton" Style="{StaticResource AppQuietButtonStyle}"
-                                FontSize="16" HorizontalAlignment="Left" Content="Refresh all"
+                                FontSize="16" MinHeight="44" HorizontalAlignment="Left" Content="Refresh all"
+                                AutomationProperties.Name="Refresh all catalog content"
                                 Click="RefreshCatalogButton_Click" />
                         <Button x:Name="ClearArtworkCacheButton" Style="{StaticResource AppQuietButtonStyle}"
-                                FontSize="16" HorizontalAlignment="Left" Content="Clear artwork cache"
+                                FontSize="16" MinHeight="44" HorizontalAlignment="Left" Content="Clear artwork cache"
+                                AutomationProperties.Name="Clear artwork cache"
                                 Click="ClearArtworkCacheButton_Click" />
                         <TextBlock x:Name="ArtworkCacheStatusText" Foreground="{ThemeResource AppMutedTextBrush}"
-                                   FontSize="15" Visibility="Collapsed" />
-                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="15" TextWrapping="Wrap"
+                                   FontSize="16" Visibility="Collapsed" />
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="Re-downloads your provider's catalog. Favorites, resume positions and visit history are kept. Large catalogs can take a few minutes." />
                     </StackPanel>
                 </Border>
@@ -256,5 +192,6 @@
             <TextBlock x:Name="ErrorText" Foreground="{ThemeResource AppDangerTextBrush}" FontSize="18" TextWrapping="Wrap"
                        Visibility="Collapsed" />
         </StackPanel>
+        </ScrollViewer>
     </Grid>
 </UserControl>

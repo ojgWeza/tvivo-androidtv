@@ -14,16 +14,50 @@ public sealed class SpotlightStoresTests
         {
             var store = new SpotlightSettingsStore(directory);
             var settings = new SpotlightSettings(new(SpotlightSourceMode.SpecificFolders, new[] { "movie-folder" }),
-                new(SpotlightSourceMode.UnexploredFolders, Array.Empty<string>()), 7);
+                new(SpotlightSourceMode.UnexploredFolders, Array.Empty<string>()), 7,
+                new(SpotlightSourceMode.RecentlyAdded), new(SpotlightSourceMode.SpecificFolders, new[] { "series-page" }),
+                new(SpotlightSourceMode.SpecificFolders, new[] { "for-you-movie" }),
+                new(SpotlightSourceMode.UnexploredFolders, new[] { "for-you-series" }));
             store.Write("opaque-account-key", settings);
             var restored = store.Read("opaque-account-key");
             Assert.Equal(settings.Movies.SourceMode, restored.Movies.SourceMode);
             Assert.Equal(settings.Movies.SelectedCategoryIds, restored.Movies.SelectedCategoryIds);
             Assert.Equal(settings.Series.SourceMode, restored.Series.SourceMode);
+            Assert.Equal("series-page", Assert.Single(restored.SeriesPage!.SelectedCategoryIds!));
+            Assert.Equal("for-you-movie", Assert.Single(restored.ForYouMovies!.SelectedCategoryIds!));
+            Assert.Equal("for-you-series", Assert.Single(restored.ForYouSeries!.SelectedCategoryIds!));
             Assert.Equal(7, restored.RotationDays);
             Assert.Equal(SpotlightSettings.Default, store.Read("another-key"));
             Assert.Single(Directory.GetFiles(directory, "*.json"));
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Legacy_settings_json_seeds_all_page_sources_from_movies_and_series()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-spotlight-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SpotlightSettingsStore(directory);
+            store.Write("key", SpotlightSettings.Default with
+            {
+                Movies = new(SpotlightSourceMode.SpecificFolders, new[] { "old-movie" }),
+                Series = new(SpotlightSourceMode.UnexploredFolders, new[] { "old-series" }),
+            });
+            var path = Directory.GetFiles(directory, "*.json").Single();
+            var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            json.Remove("moviesPage"); json.Remove("seriesPage"); json.Remove("forYouMovies"); json.Remove("forYouSeries");
+            File.WriteAllText(path, json.ToJsonString());
+
+            var restored = store.Read("key");
+
+            Assert.Equal("old-movie", Assert.Single(restored.ForPage(SpotlightPageKind.Movies, CatalogItemType.Movie).SelectedCategoryIds!));
+            Assert.Equal("old-movie", Assert.Single(restored.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Movie).SelectedCategoryIds!));
+            Assert.Equal("old-series", Assert.Single(restored.ForPage(SpotlightPageKind.Series, CatalogItemType.Series).SelectedCategoryIds!));
+            Assert.Equal(SpotlightSourceMode.UnexploredFolders,
+                restored.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Series).SourceMode);
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

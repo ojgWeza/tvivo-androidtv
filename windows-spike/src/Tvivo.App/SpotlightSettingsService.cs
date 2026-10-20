@@ -26,17 +26,17 @@ public sealed class SpotlightSettingsService
         IReadOnlyList<Channel>? seriesPool = null)
     {
         var settings = ReadEffectiveSettings(account.AccountId);
-        var movieChannels = page == SpotlightPageKind.Series ? Array.Empty<Channel>() : moviePool ?? GetChannels(account, CatalogItemType.Movie, settings);
-        var seriesChannels = page == SpotlightPageKind.Movies ? Array.Empty<Channel>() : seriesPool ?? GetChannels(account, CatalogItemType.Series, settings);
+        var movieChannels = page == SpotlightPageKind.Series ? Array.Empty<Channel>() : moviePool ?? GetChannels(account, page, CatalogItemType.Movie, settings);
+        var seriesChannels = page == SpotlightPageKind.Movies ? Array.Empty<Channel>() : seriesPool ?? GetChannels(account, page, CatalogItemType.Series, settings);
         var candidates = movieChannels.Concat(seriesChannels).Select(SpotlightCandidate.FromChannel).ToArray();
         var pageSource = page switch
         {
-            SpotlightPageKind.Movies => settings.Movies.SourceMode,
-            SpotlightPageKind.Series => settings.Series.SourceMode,
-            _ => settings.Movies.SourceMode,
+            SpotlightPageKind.Movies => settings.ForPage(page, CatalogItemType.Movie).SourceMode,
+            SpotlightPageKind.Series => settings.ForPage(page, CatalogItemType.Series).SourceMode,
+            _ => settings.ForPage(page, CatalogItemType.Movie).SourceMode,
         };
         var sourceLabel = page == SpotlightPageKind.ForYou
-            ? $"Movies:{settings.Movies.SourceMode},Series:{settings.Series.SourceMode}"
+            ? $"Movies:{settings.ForPage(page, CatalogItemType.Movie).SourceMode},Series:{settings.ForPage(page, CatalogItemType.Series).SourceMode}"
             : pageSource.ToString();
         var fingerprint = SpotlightSelector.SelectedFolderFingerprint(settings);
         var bucketDate = SpotlightSelector.BucketStart(utcDate, settings.RotationDays);
@@ -65,12 +65,14 @@ public sealed class SpotlightSettingsService
     }
 
     public IReadOnlyList<string> PreviewTitles(ProviderAccount account, CatalogItemType type, SpotlightSettings settings)
+        => PreviewTitles(account, type == CatalogItemType.Movie ? SpotlightPageKind.Movies : SpotlightPageKind.Series, type, settings);
+
+    public IReadOnlyList<string> PreviewTitles(ProviderAccount account, SpotlightPageKind page, CatalogItemType type, SpotlightSettings settings)
     {
-        var channels = GetChannels(account, type, settings);
+        var channels = GetChannels(account, page, type, settings);
         var candidates = channels.Select(SpotlightCandidate.FromChannel).ToArray();
         IReadOnlyList<SpotlightCandidate> movies = type == CatalogItemType.Movie ? candidates : Array.Empty<SpotlightCandidate>();
         IReadOnlyList<SpotlightCandidate> series = type == CatalogItemType.Series ? candidates : Array.Empty<SpotlightCandidate>();
-        var page = type == CatalogItemType.Movie ? SpotlightPageKind.Movies : SpotlightPageKind.Series;
         var displayTitles = channels.GroupBy(channel => channel.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().DisplayName, StringComparer.Ordinal);
         return SpotlightSelector.Select(page, account.AccountId, DateOnly.FromDateTime(DateTime.UtcNow), settings,
@@ -78,12 +80,12 @@ public sealed class SpotlightSettingsService
             .Items.Take(3).Select(item => displayTitles.GetValueOrDefault(item.ItemId, item.NormalizedTitle)).ToArray();
     }
 
-    public IReadOnlyList<Channel> GetChannelsForSelection(ProviderAccount account, CatalogItemType type, SpotlightSettings settings) =>
-        GetChannels(account, type, settings);
+    public IReadOnlyList<Channel> GetChannelsForSelection(ProviderAccount account, SpotlightPageKind page, CatalogItemType type, SpotlightSettings settings) =>
+        GetChannels(account, page, type, settings);
 
-    private IReadOnlyList<Channel> GetChannels(ProviderAccount account, CatalogItemType type, SpotlightSettings settings)
+    private IReadOnlyList<Channel> GetChannels(ProviderAccount account, SpotlightPageKind page, CatalogItemType type, SpotlightSettings settings)
     {
-        var content = type == CatalogItemType.Movie ? settings.Movies : settings.Series;
+        var content = settings.ForPage(page, type);
         return content.SourceMode switch
         {
             SpotlightSourceMode.SpecificFolders => (content.SelectedCategoryIds ?? Array.Empty<string>())

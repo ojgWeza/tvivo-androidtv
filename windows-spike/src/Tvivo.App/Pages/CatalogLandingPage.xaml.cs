@@ -1578,9 +1578,9 @@ public sealed partial class CatalogLandingPage : UserControl
             _ => SpotlightPageKind.ForYou,
         };
         var moviePool = mode == CatalogMode.Series ? Array.Empty<Channel>() :
-            _spotlightSettingsService.GetChannelsForSelection(account, CatalogItemType.Movie, settings);
+            _spotlightSettingsService.GetChannelsForSelection(account, page, CatalogItemType.Movie, settings);
         var seriesPool = mode == CatalogMode.Movies ? Array.Empty<Channel>() :
-            _spotlightSettingsService.GetChannelsForSelection(account, CatalogItemType.Series, settings);
+            _spotlightSettingsService.GetChannelsForSelection(account, page, CatalogItemType.Series, settings);
         var selection = _spotlightSettingsService.Select(account, page,
             DateOnly.FromDateTime(DateTime.UtcNow), moviePool, seriesPool);
         var channels = moviePool.Concat(seriesPool).ToDictionary(channel => (TypeForSource(channel.Source.Kind), channel.Id));

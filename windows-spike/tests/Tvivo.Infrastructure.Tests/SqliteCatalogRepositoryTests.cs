@@ -894,7 +894,7 @@ public sealed class SqliteCatalogRepositoryTests
         try
         {
             repo.ReplaceSnapshot(account, CatalogItemType.Movie,
-                new[] { Group(account, "a", "Drama"), Group(account, "b", "Comedy") }, new[]
+                new[] { Group(account, "a", "Drama"), Group(account, "b", "Comedy"), Group(account, "empty", "Not indexed yet") }, new[]
                 {
                     ChannelFor(account, "m1", "a", "Needle one"),
                     ChannelFor(account, "m2", "a", "Other drama"),
@@ -903,6 +903,10 @@ public sealed class SqliteCatalogRepositoryTests
 
             var descriptors = repo.GetCategoryShelfDescriptors(account, CatalogItemType.Movie, "Drama");
             Assert.Equal(new[] { ("a", 2) }, descriptors.Select(descriptor => (descriptor.Group.Id, descriptor.TotalCount)));
+
+            var pickerFolders = repo.GetCategoryShelfDescriptors(account, CatalogItemType.Movie, includeEmptyCategories: true);
+            Assert.Equal(new[] { ("a", 2), ("b", 1), ("empty", 0) },
+                pickerFolders.Select(descriptor => (descriptor.Group.Id, descriptor.TotalCount)));
 
             var preview = repo.GetChannelsGroupedByCategory(account, null, CatalogItemType.Movie, "Needle", 1,
                 new[] { "a", "b" }, sortOrder: CatalogItemSortOrder.AlphabeticalAsc);

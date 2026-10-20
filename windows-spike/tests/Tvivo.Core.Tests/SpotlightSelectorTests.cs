@@ -150,4 +150,70 @@ public sealed class SpotlightSelectorTests
 
         Assert.Equal(new[] { "deleted" }, missing);
     }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(15, false)]
+    [InlineData(16, true)]
+    public void Folder_search_is_shown_only_above_fifteen_entries(int count, bool expected) =>
+        Assert.Equal(expected, SpotlightFolderSelectionPolicy.ShouldShowSearch(count));
+
+    [Fact]
+    public void Legacy_movie_and_series_settings_seed_each_page_until_page_specific_values_are_saved()
+    {
+        var legacy = new SpotlightSettings(
+            new(SpotlightSourceMode.SpecificFolders, new[] { "movie-old" }),
+            new(SpotlightSourceMode.UnexploredFolders, new[] { "series-old" }));
+
+        Assert.Equal("movie-old", Assert.Single(legacy.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Movie).SelectedCategoryIds!));
+        Assert.Equal("series-old", Assert.Single(legacy.ForPage(SpotlightPageKind.Series, CatalogItemType.Series).SelectedCategoryIds!));
+        var updated = legacy.SeedPageSettings().WithPage(SpotlightPageKind.ForYou, CatalogItemType.Movie,
+            new(SpotlightSourceMode.RecentlyAdded));
+        Assert.Equal("movie-old", Assert.Single(updated.ForPage(SpotlightPageKind.Movies, CatalogItemType.Movie).SelectedCategoryIds!));
+        Assert.Equal(SpotlightSourceMode.RecentlyAdded, updated.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Movie).SourceMode);
+        Assert.Equal("series-old", Assert.Single(updated.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Series).SelectedCategoryIds!));
+    }
+
+    [Fact]
+    public void Per_page_selection_keeps_content_types_separate_and_drops_unavailable_ids()
+    {
+        var settings = SpotlightSettings.Default
+            .WithPage(SpotlightPageKind.ForYou, CatalogItemType.Movie,
+                new(SpotlightSourceMode.SpecificFolders, new[] { "m1", "missing", "m1" }))
+            .WithPage(SpotlightPageKind.ForYou, CatalogItemType.Series,
+                new(SpotlightSourceMode.SpecificFolders, new[] { "s1" }));
+        var movies = new[] { new SpotlightFolderOption("m1", "Film", 0) };
+        var series = new[] { new SpotlightFolderOption("s1", "Show", 0) };
+
+        Assert.Equal(new[] { "m1" }, SpotlightFolderSelectionPolicy.KeepAvailableSelection(
+            settings.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Movie).SelectedCategoryIds, movies));
+        Assert.Equal(new[] { "s1" }, SpotlightFolderSelectionPolicy.KeepAvailableSelection(
+            settings.ForPage(SpotlightPageKind.ForYou, CatalogItemType.Series).SelectedCategoryIds, series));
+        Assert.Equal("m1", Assert.Single(SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day,
+            settings with { MoviesPage = new(SpotlightSourceMode.SpecificFolders, new[] { "m1" }) },
+            new[] { Item(CatalogItemType.Movie, "m1", "m1") }, []).Items).CategoryId);
+    }
+
+    [Theory]
+    [InlineData(true, false, false, "Loading folders...")]
+    [InlineData(false, true, true, "No folders yet - the catalogue is still being indexed")]
+    [InlineData(false, false, false, "This provider has no folders")]
+    public void Empty_folder_message_explains_loading_indexing_or_empty_provider(bool loading, bool hasFolders,
+        bool indexing, string expected) =>
+        Assert.Equal(expected, SpotlightFolderSelectionPolicy.EmptyMessage(loading, hasFolders, indexing));
+
+    [Fact]
+    public void Cancel_returns_saved_settings_without_mutating_the_draft()
+    {
+        var saved = SpotlightSettings.Default with { RotationDays = 7 };
+        var draft = SpotlightFolderSelectionPolicy.BeginDraft(saved)
+            .WithPage(SpotlightPageKind.ForYou, CatalogItemType.Movie,
+                new(SpotlightSourceMode.SpecificFolders, new[] { "selected" })) with { RotationDays = 14 };
+
+        Assert.Equal(7, SpotlightFolderSelectionPolicy.CancelDraft(saved).RotationDays);
+        Assert.Equal(14, draft.RotationDays);
+        var committed = SpotlightFolderSelectionPolicy.SaveDraft(draft);
+        Assert.Equal("selected", Assert.Single(committed.ForYouMovies!.SelectedCategoryIds!));
+        Assert.Equal(SpotlightSourceMode.RecentlyAdded, committed.MoviesPage!.SourceMode);
+    }
 }

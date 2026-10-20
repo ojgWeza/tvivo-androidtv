@@ -24,12 +24,15 @@ public sealed partial class AccountPage : UserControl
     private IReadOnlyList<SpotlightFolderOption> _movieFolders = Array.Empty<SpotlightFolderOption>();
     private IReadOnlyList<SpotlightFolderOption> _seriesFolders = Array.Empty<SpotlightFolderOption>();
     private bool _suppressSpotlightUi;
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _movieSearchTimer;
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _seriesSearchTimer;
+    private bool _spotlightFoldersLoaded;
+    private bool _spotlightFoldersLoading;
+    private int _spotlightFolderLoadGeneration;
+    private readonly Dictionary<(SpotlightPageKind Page, CatalogItemType Type), SpotlightSourceControls> _spotlightSources = new();
 
     public AccountPage()
     {
         InitializeComponent();
+        BuildSpotlightSources();
         ActualThemeChanged += AccountPage_ActualThemeChanged;
         _artworkCacheStatusTimer.Tick += ArtworkCacheStatusTimer_Tick;
     }
@@ -45,6 +48,20 @@ public sealed partial class AccountPage : UserControl
     private bool _suppressPlaybackAttemptsChanged;
     private bool _suppressMinimizeToMiniModeChanged;
     private bool _suppressCatalogRefreshPolicyChanged;
+
+    private sealed class SpotlightSourceControls
+    {
+        public required SpotlightPageKind Page { get; init; }
+        public required CatalogItemType Type { get; init; }
+        public required StackPanel Root { get; init; }
+        public required StackPanel FolderPanel { get; init; }
+        public required TextBox Search { get; init; }
+        public required StackPanel List { get; init; }
+        public required TextBlock Status { get; init; }
+        public required TextBlock SelectedCount { get; init; }
+        public required TextBlock LegacyMessage { get; init; }
+        public required TextBlock Preview { get; init; }
+    }
 
     public void SetMinimizeToMiniMode(MinimizeToMiniMode mode)
     {
@@ -121,14 +138,10 @@ public sealed partial class AccountPage : UserControl
         MarkTab(ForYouTabButton, tab == "ForYou");
         if (tab == "ForYou")
         {
-            if (_spotlightAccount is not null)
-            {
-                _movieFolders = ReadSpotlightFolders(_spotlightAccount, CatalogItemType.Movie);
-                _seriesFolders = ReadSpotlightFolders(_spotlightAccount, CatalogItemType.Series);
-            }
             RenderForYouLayout();
             RenderSpotlightSettings();
             RenderSpotlightPreviews();
+            _ = LoadSpotlightFoldersAsync();
         }
     }
 
@@ -149,7 +162,8 @@ public sealed partial class AccountPage : UserControl
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            var toggle = new CheckBox { Content = definition.Title, IsChecked = visible, FontSize = 16 };
+            var toggle = new CheckBox { Content = definition.Title, IsChecked = visible, FontSize = 16, MinHeight = 44 };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, $"Show {definition.Title} on For You");
             toggle.Click += (_, _) => SaveForYouLayout(entries, position, delta: 0, visible: toggle.IsChecked == true);
             row.Children.Add(toggle);
 
@@ -175,6 +189,7 @@ public sealed partial class AccountPage : UserControl
             FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
             Style = (Style)App.Current.Resources["AppIconButtonStyle"],
             IsEnabled = enabled,
+            MinHeight = 44,
         };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, name);
         return button;
@@ -224,12 +239,6 @@ public sealed partial class AccountPage : UserControl
         ApplyExpiryBrush();
     }
 
-    private void SpotlightMoviesModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs args) =>
-        SpotlightModeChanged(CatalogItemType.Movie, SpotlightMoviesModeSelector);
-
-    private void SpotlightSeriesModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs args) =>
-        SpotlightModeChanged(CatalogItemType.Series, SpotlightSeriesModeSelector);
-
     private void SpotlightRotationSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         if (_suppressSpotlightUi || SpotlightRotationSelector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
@@ -237,69 +246,94 @@ public sealed partial class AccountPage : UserControl
         _spotlightDraft = _spotlightDraft with { RotationDays = SpotlightSettings.NormalizeRotationDays(days) };
     }
 
-    private void SpotlightModeChanged(CatalogItemType type, ComboBox selector)
+    private void BuildSpotlightSources()
     {
-        if (_suppressSpotlightUi || selector.SelectedItem is not ComboBoxItem { Tag: string tag } ||
-            !Enum.TryParse<SpotlightSourceMode>(tag, out var mode)) return;
-        SetSpotlightContent(type, CurrentSpotlightContent(type) with { SourceMode = mode });
-        RenderSpotlightSettings();
-        RenderSpotlightPreviews();
-    }
-
-    private void SpotlightMoviesSearchBox_TextChanged(object sender, TextChangedEventArgs args) =>
-        DebounceSpotlightSearch(CatalogItemType.Movie);
-
-    private void SpotlightSeriesSearchBox_TextChanged(object sender, TextChangedEventArgs args) =>
-        DebounceSpotlightSearch(CatalogItemType.Series);
-
-    private void DebounceSpotlightSearch(CatalogItemType type)
-    {
-        var timer = type == CatalogItemType.Movie ? _movieSearchTimer : _seriesSearchTimer;
-        if (timer is null)
+        foreach (var (page, type, title) in new[]
         {
-            timer = DispatcherQueue.CreateTimer();
-            timer.Interval = TimeSpan.FromMilliseconds(200);
-            timer.IsRepeating = false;
-            timer.Tick += (_, _) => RenderSpotlightFolderList(type);
-            if (type == CatalogItemType.Movie) _movieSearchTimer = timer;
-            else _seriesSearchTimer = timer;
+            (SpotlightPageKind.Movies, CatalogItemType.Movie, "Movies page"),
+            (SpotlightPageKind.Series, CatalogItemType.Series, "Series page"),
+            (SpotlightPageKind.ForYou, CatalogItemType.Movie, "For You page — movie source"),
+            (SpotlightPageKind.ForYou, CatalogItemType.Series, "For You page — series source"),
+        })
+        {
+            var card = new StackPanel { Spacing = 8, Margin = new Thickness(12) };
+            var heading = new TextBlock { Text = title, FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = AppThemeBrushResolver.For(this, "AppTextBrush"), TextWrapping = TextWrapping.Wrap };
+            card.Children.Add(heading);
+            var modePanel = new StackPanel { Orientation = Orientation.Vertical, Spacing = 4 };
+            SpotlightSourceControls binding = null!;
+            foreach (var (mode, label) in new[]
+            {
+                (SpotlightSourceMode.RecentlyAdded, "Recently added"),
+                (SpotlightSourceMode.SpecificFolders, "Chosen folders"),
+            })
+            {
+                var radio = new RadioButton { Content = label, Tag = mode, GroupName = $"spotlight-{page}-{type}",
+                    FontSize = 16, MinHeight = 44, VerticalContentAlignment = VerticalAlignment.Center };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(radio, $"{title}: {label}");
+                radio.Checked += (_, _) =>
+                {
+                    if (_suppressSpotlightUi) return;
+                    _spotlightDraft = _spotlightDraft.WithPage(page, type,
+                        _spotlightDraft.ForPage(page, type) with { SourceMode = mode });
+                    RenderSpotlightSource(binding);
+                    RenderSpotlightPreviews();
+                };
+                modePanel.Children.Add(radio);
+            }
+            card.Children.Add(modePanel);
+            var legacyMessage = new TextBlock { FontSize = 16, TextWrapping = TextWrapping.Wrap,
+                Foreground = AppThemeBrushResolver.For(this, "AppMutedTextBrush"),
+                Text = "This saved source is still active. Choose a new source above to replace it.",
+                Visibility = Visibility.Collapsed };
+            card.Children.Add(legacyMessage);
+            var folderPanel = new StackPanel { Spacing = 8 };
+            var search = new TextBox { FontSize = 16, MinHeight = 44, PlaceholderText = "Search folders" };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(search, $"Search {title} folders");
+            var list = new StackPanel { Spacing = 2 };
+            var scroll = new ScrollViewer { MaxHeight = 240, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = list };
+            var actions = new StackPanel { Orientation = Orientation.Vertical, Spacing = 4 };
+            var selectAll = new Button { Content = "Select all", FontSize = 16, MinHeight = 44,
+                Style = (Style)App.Current.Resources["AppQuietButtonStyle"] };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(selectAll, $"Select all {title} folders");
+            selectAll.Click += (_, _) => ChangeAllFolders(binding, true);
+            var clear = new Button { Content = "Clear", FontSize = 16, MinHeight = 44,
+                Style = (Style)App.Current.Resources["AppQuietButtonStyle"] };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(clear, $"Clear {title} folders");
+            clear.Click += (_, _) => ChangeAllFolders(binding, false);
+            var selectedCount = new TextBlock { FontSize = 16, VerticalAlignment = VerticalAlignment.Center,
+                Foreground = AppThemeBrushResolver.For(this, "AppMutedTextBrush") };
+            actions.Children.Add(selectAll); actions.Children.Add(clear); actions.Children.Add(selectedCount);
+            var status = new TextBlock { FontSize = 16, TextWrapping = TextWrapping.Wrap,
+                Foreground = AppThemeBrushResolver.For(this, "AppMutedTextBrush") };
+            folderPanel.Children.Add(search); folderPanel.Children.Add(actions); folderPanel.Children.Add(scroll); folderPanel.Children.Add(status);
+            card.Children.Add(folderPanel);
+            var preview = new TextBlock { FontSize = 16, TextWrapping = TextWrapping.Wrap,
+                Foreground = AppThemeBrushResolver.For(this, "AppMutedTextBrush") };
+            card.Children.Add(preview);
+            binding = new SpotlightSourceControls { Page = page, Type = type, Root = card, FolderPanel = folderPanel,
+                Search = search, List = list, Status = status, SelectedCount = selectedCount,
+                LegacyMessage = legacyMessage, Preview = preview };
+            _spotlightSources.Add((page, type), binding);
+            search.TextChanged += (_, _) => RenderSpotlightSource(binding);
+            SpotlightSourcesPanel.Children.Add(new Border { Background = AppThemeBrushResolver.For(this, "AppPanelSurfaceBrush"),
+                CornerRadius = new CornerRadius(10), Padding = new Thickness(8), Child = card });
         }
-        timer.Stop();
-        timer.Start();
     }
 
-    public void StopPendingSpotlightSearch()
-    {
-        _movieSearchTimer?.Stop();
-        _seriesSearchTimer?.Stop();
-    }
-
-    private void StopPendingSpotlightSearch(CatalogItemType type)
-    {
-        if (type == CatalogItemType.Movie) _movieSearchTimer?.Stop();
-        else _seriesSearchTimer?.Stop();
-    }
-
-    private void SpotlightMoviesSelectAllButton_Click(object sender, RoutedEventArgs args) =>
-        SelectAllSpotlightFolders(CatalogItemType.Movie);
-
-    private void SpotlightSeriesSelectAllButton_Click(object sender, RoutedEventArgs args) =>
-        SelectAllSpotlightFolders(CatalogItemType.Series);
-
-    private void SpotlightMoviesClearButton_Click(object sender, RoutedEventArgs args) =>
-        ClearSpotlightFolders(CatalogItemType.Movie);
-
-    private void SpotlightSeriesClearButton_Click(object sender, RoutedEventArgs args) =>
-        ClearSpotlightFolders(CatalogItemType.Series);
+    public void StopPendingSpotlightSearch() { }
 
     private void SpotlightSaveButton_Click(object sender, RoutedEventArgs args)
     {
-        StopPendingSpotlightSearch();
-        RenderSpotlightFolderList(CatalogItemType.Movie);
-        RenderSpotlightFolderList(CatalogItemType.Series);
         if (_spotlightAccount is null) return;
         try
         {
+            _spotlightDraft = SpotlightFolderSelectionPolicy.SaveDraft(_spotlightDraft) with
+            {
+                Movies = _spotlightDraft.ForPage(SpotlightPageKind.Movies, CatalogItemType.Movie),
+                Series = _spotlightDraft.ForPage(SpotlightPageKind.Series, CatalogItemType.Series),
+            };
             _spotlightSettingsService.Save(_spotlightAccount.AccountId, _spotlightDraft);
             SpotlightSettingsService.LogSaved(_spotlightDraft);
             SpotlightSettingsStatusText.Text = "Spotlight settings saved.";
@@ -314,7 +348,9 @@ public sealed partial class AccountPage : UserControl
 
     private void SpotlightCancelButton_Click(object sender, RoutedEventArgs args)
     {
-        LoadSpotlightDraft();
+        if (_spotlightAccount is not null)
+            _spotlightDraft = SpotlightFolderSelectionPolicy.CancelDraft(
+                _spotlightSettingsService.ReadEffectiveSettings(_spotlightAccount.AccountId)).SeedPageSettings();
         SpotlightSettingsStatusText.Text = "Changes canceled.";
         RenderSpotlightSettings();
         RenderSpotlightPreviews();
@@ -323,51 +359,84 @@ public sealed partial class AccountPage : UserControl
     private void LoadSpotlightDraft()
     {
         if (_spotlightAccount is null) return;
-        _spotlightDraft = _spotlightSettingsService.ReadEffectiveSettings(_spotlightAccount.AccountId);
-        _movieFolders = ReadSpotlightFolders(_spotlightAccount, CatalogItemType.Movie);
-        _seriesFolders = ReadSpotlightFolders(_spotlightAccount, CatalogItemType.Series);
+        _spotlightDraft = SpotlightFolderSelectionPolicy.BeginDraft(
+            _spotlightSettingsService.ReadEffectiveSettings(_spotlightAccount.AccountId));
     }
 
-    private IReadOnlyList<SpotlightFolderOption> ReadSpotlightFolders(ProviderAccount account, CatalogItemType type) =>
-        _catalogRepository.GetCategoryShelfDescriptors(account, type)
-            .Select(item => new SpotlightFolderOption(item.Group.Id, item.Group.DisplayName, item.TotalCount)).ToArray();
+    private async Task LoadSpotlightFoldersAsync()
+    {
+        if (_spotlightAccount is null || _spotlightFoldersLoaded || _spotlightFoldersLoading) return;
+        var account = _spotlightAccount;
+        _spotlightFoldersLoading = true;
+        var generation = ++_spotlightFolderLoadGeneration;
+        foreach (var source in _spotlightSources.Values) { source.Status.Text = "Loading folders..."; source.Status.Visibility = Visibility.Visible; }
+        try
+        {
+            var result = await Task.Run(() => (
+                Movies: _catalogRepository.GetCategoryShelfDescriptors(account, CatalogItemType.Movie, includeEmptyCategories: true)
+                    .Select(item => new SpotlightFolderOption(item.Group.Id, item.Group.DisplayName, item.TotalCount)).ToArray(),
+                Series: _catalogRepository.GetCategoryShelfDescriptors(account, CatalogItemType.Series, includeEmptyCategories: true)
+                    .Select(item => new SpotlightFolderOption(item.Group.Id, item.Group.DisplayName, item.TotalCount)).ToArray(),
+                MovieRefreshed: _catalogRepository.GetLastRefreshSuccess(account, CatalogItemType.Movie) is not null,
+                SeriesRefreshed: _catalogRepository.GetLastRefreshSuccess(account, CatalogItemType.Series) is not null));
+            if (generation != _spotlightFolderLoadGeneration || !ReferenceEquals(account, _spotlightAccount)) return;
+            _movieFolders = result.Movies;
+            _seriesFolders = result.Series;
+            _spotlightFoldersLoaded = true;
+            _spotlightFoldersLoading = false;
+            if (result.MovieRefreshed) _spotlightDraft = DropUnavailableFolders(_spotlightDraft, CatalogItemType.Movie, _movieFolders);
+            if (result.SeriesRefreshed) _spotlightDraft = DropUnavailableFolders(_spotlightDraft, CatalogItemType.Series, _seriesFolders);
+            RenderSpotlightSettings(result.MovieRefreshed, result.SeriesRefreshed);
+            RenderSpotlightPreviews();
+        }
+        catch
+        {
+            if (generation != _spotlightFolderLoadGeneration) return;
+            _spotlightFoldersLoading = false;
+            foreach (var source in _spotlightSources.Values) source.Status.Text = "Folders could not be loaded. Try refreshing the catalogue.";
+        }
+    }
 
-    private void RenderSpotlightSettings()
+    private static SpotlightSettings DropUnavailableFolders(SpotlightSettings settings, CatalogItemType type,
+        IReadOnlyList<SpotlightFolderOption> folders)
+    {
+        foreach (var page in Enum.GetValues<SpotlightPageKind>())
+        {
+            var content = settings.ForPage(page, type);
+            settings = settings.WithPage(page, type, content with
+            { SelectedCategoryIds = SpotlightFolderSelectionPolicy.KeepAvailableSelection(content.SelectedCategoryIds, folders) });
+        }
+        return settings;
+    }
+
+    private void RenderSpotlightSettings(bool moviesRefreshed = false, bool seriesRefreshed = false)
     {
         _suppressSpotlightUi = true;
         try
         {
-            SetSpotlightModeSelector(SpotlightMoviesModeSelector, _spotlightDraft.Movies.SourceMode);
-            SetSpotlightModeSelector(SpotlightSeriesModeSelector, _spotlightDraft.Series.SourceMode);
+            foreach (var source in _spotlightSources.Values) RenderSpotlightSource(source, moviesRefreshed, seriesRefreshed);
             SpotlightRotationSelector.SelectedItem = SpotlightRotationSelector.Items.OfType<ComboBoxItem>()
                 .First(item => string.Equals(item.Tag as string,
                     SpotlightSettings.NormalizeRotationDays(_spotlightDraft.RotationDays).ToString(), StringComparison.Ordinal));
-            SpotlightMoviesFoldersPanel.Visibility = _spotlightDraft.Movies.SourceMode == SpotlightSourceMode.SpecificFolders
-                ? Visibility.Visible : Visibility.Collapsed;
-            SpotlightSeriesFoldersPanel.Visibility = _spotlightDraft.Series.SourceMode == SpotlightSourceMode.SpecificFolders
-                ? Visibility.Visible : Visibility.Collapsed;
-            RenderSpotlightFolderList(CatalogItemType.Movie);
-            RenderSpotlightFolderList(CatalogItemType.Series);
         }
         finally { _suppressSpotlightUi = false; }
     }
 
-    private static void SetSpotlightModeSelector(ComboBox selector, SpotlightSourceMode mode) =>
-        selector.SelectedItem = selector.Items.OfType<ComboBoxItem>()
-            .First(item => string.Equals(item.Tag as string, mode.ToString(), StringComparison.Ordinal));
-
-    private void RenderSpotlightFolderList(CatalogItemType type)
+    private void RenderSpotlightSource(SpotlightSourceControls source, bool moviesRefreshed = false, bool seriesRefreshed = false)
     {
+        var type = source.Type;
         var folders = type == CatalogItemType.Movie ? _movieFolders : _seriesFolders;
-        var content = CurrentSpotlightContent(type);
+        var content = _spotlightDraft.ForPage(source.Page, type);
+        var radioPanel = (StackPanel)source.Root.Children[1];
+        foreach (var radio in radioPanel.Children.OfType<RadioButton>())
+            radio.IsChecked = radio.Tag is SpotlightSourceMode mode && mode == content.SourceMode;
+        source.LegacyMessage.Visibility = content.SourceMode == SpotlightSourceMode.UnexploredFolders
+            ? Visibility.Visible : Visibility.Collapsed;
+        source.FolderPanel.Visibility = content.SourceMode == SpotlightSourceMode.SpecificFolders ? Visibility.Visible : Visibility.Collapsed;
         var selected = (content.SelectedCategoryIds ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
-        var search = type == CatalogItemType.Movie ? SpotlightMoviesSearchBox.Text : SpotlightSeriesSearchBox.Text;
-        var visible = SpotlightFolderList.Filter(folders, search);
-        var missing = SpotlightFolderList.FindMissing(content.SelectedCategoryIds, folders);
-        var list = type == CatalogItemType.Movie ? SpotlightMoviesFolderList : SpotlightSeriesFolderList;
-        var count = type == CatalogItemType.Movie ? SpotlightMoviesSelectedCountText : SpotlightSeriesSelectedCountText;
-        var empty = type == CatalogItemType.Movie ? SpotlightMoviesEmptyText : SpotlightSeriesEmptyText;
-        list.Children.Clear();
+        var visible = SpotlightFolderList.Filter(folders, SpotlightFolderSelectionPolicy.ShouldShowSearch(folders.Count) ? source.Search.Text : null);
+        source.Search.Visibility = SpotlightFolderSelectionPolicy.ShouldShowSearch(folders.Count) ? Visibility.Visible : Visibility.Collapsed;
+        source.List.Children.Clear();
 
         foreach (var folder in visible)
         {
@@ -394,109 +463,63 @@ public sealed partial class AccountPage : UserControl
             rowContent.Children.Add(itemCount);
             var checkbox = new CheckBox { Content = rowContent, IsChecked = selected.Contains(folder.Id), MinHeight = 56, FontSize = 16 };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(checkbox,
-                $"{folder.Name}, {folder.ItemCount.ToString(CultureInfo.InvariantCulture)} items");
-            checkbox.Click += (_, _) => SetSpotlightFolderSelected(type, folder.Id, checkbox.IsChecked == true);
-            list.Children.Add(checkbox);
+                $"{source.Page} {type} folder: {folder.Name}, {folder.ItemCount.ToString(CultureInfo.InvariantCulture)} items");
+            checkbox.Click += (_, _) => SetSpotlightFolderSelected(source, folder.Id, checkbox.IsChecked == true);
+            source.List.Children.Add(checkbox);
         }
 
-        foreach (var id in missing)
+        source.SelectedCount.Text = $"{folders.Count(folder => selected.Contains(folder.Id))} selected";
+        if (folders.Count == 0)
         {
-            var row = new Grid { ColumnSpacing = 8, MinHeight = 48 };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var unavailable = new CheckBox
-            {
-                Content = "Folder no longer available",
-                IsChecked = false,
-                IsEnabled = false,
-                FontSize = 16,
-                MinHeight = 44,
-            };
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(unavailable, "Folder no longer available");
-            row.Children.Add(unavailable);
-            var remove = new Button { Content = "Remove", FontSize = 16, MinHeight = 44, Style = (Style)App.Current.Resources["AppQuietButtonStyle"] };
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(remove, "Remove unavailable folder");
-            remove.Click += (_, _) => RemoveSpotlightFolder(type, id);
-            Grid.SetColumn(remove, 1);
-            row.Children.Add(remove);
-            list.Children.Add(row);
+            var refreshed = type == CatalogItemType.Movie ? moviesRefreshed : seriesRefreshed;
+            source.Status.Text = SpotlightFolderSelectionPolicy.EmptyMessage(!_spotlightFoldersLoaded,
+                providerHasFolders: false, catalogIsIndexing: !refreshed);
+            source.Status.Visibility = Visibility.Visible;
         }
-
-        count.Text = $"{folders.Count(folder => selected.Contains(folder.Id))} selected";
-        empty.Visibility = visible.Count == 0 && missing.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        else if (visible.Count == 0)
+        {
+            source.Status.Text = "No folders match this search.";
+            source.Status.Visibility = Visibility.Visible;
+        }
+        else source.Status.Visibility = Visibility.Collapsed;
     }
 
-    private void SetSpotlightFolderSelected(CatalogItemType type, string id, bool isSelected)
+    private void SetSpotlightFolderSelected(SpotlightSourceControls source, string id, bool isSelected)
     {
-        var current = CurrentSpotlightContent(type);
+        var current = _spotlightDraft.ForPage(source.Page, source.Type);
         var ids = (current.SelectedCategoryIds ?? Array.Empty<string>()).ToList();
         if (isSelected && !ids.Contains(id, StringComparer.Ordinal)) ids.Add(id);
         else if (!isSelected) ids.RemoveAll(value => value == id);
-        SetSpotlightContent(type, current with { SelectedCategoryIds = ids });
-        var folders = type == CatalogItemType.Movie ? _movieFolders : _seriesFolders;
-        var count = type == CatalogItemType.Movie ? SpotlightMoviesSelectedCountText : SpotlightSeriesSelectedCountText;
-        count.Text = $"{folders.Count(folder => ids.Contains(folder.Id, StringComparer.Ordinal))} selected";
+        _spotlightDraft = _spotlightDraft.WithPage(source.Page, source.Type, current with { SelectedCategoryIds = ids });
+        RenderSpotlightSource(source);
         RenderSpotlightPreviews();
     }
 
-    private void SelectAllSpotlightFolders(CatalogItemType type)
+    private void ChangeAllFolders(SpotlightSourceControls source, bool select)
     {
-        StopPendingSpotlightSearch(type);
-        var current = CurrentSpotlightContent(type);
-        var ids = (current.SelectedCategoryIds ?? Array.Empty<string>()).ToList();
-        var folders = type == CatalogItemType.Movie ? _movieFolders : _seriesFolders;
-        foreach (var folder in folders)
-            if (!ids.Contains(folder.Id, StringComparer.Ordinal)) ids.Add(folder.Id);
-        SetSpotlightContent(type, current with { SelectedCategoryIds = ids });
-        RenderSpotlightFolderList(type);
+        var current = _spotlightDraft.ForPage(source.Page, source.Type);
+        var folders = source.Type == CatalogItemType.Movie ? _movieFolders : _seriesFolders;
+        var ids = select ? folders.Select(folder => folder.Id).ToArray() : Array.Empty<string>();
+        _spotlightDraft = _spotlightDraft.WithPage(source.Page, source.Type, current with { SelectedCategoryIds = ids });
+        RenderSpotlightSource(source);
         RenderSpotlightPreviews();
     }
-
-    private void ClearSpotlightFolders(CatalogItemType type)
-    {
-        StopPendingSpotlightSearch(type);
-        SetSpotlightContent(type, CurrentSpotlightContent(type) with { SelectedCategoryIds = Array.Empty<string>() });
-        RenderSpotlightFolderList(type);
-        RenderSpotlightPreviews();
-    }
-
-    private void RemoveSpotlightFolder(CatalogItemType type, string id)
-    {
-        var current = CurrentSpotlightContent(type);
-        SetSpotlightContent(type, current with
-        {
-            SelectedCategoryIds = (current.SelectedCategoryIds ?? Array.Empty<string>()).Where(value => value != id).ToArray(),
-        });
-        RenderSpotlightFolderList(type);
-        (type == CatalogItemType.Movie ? SpotlightMoviesSearchBox : SpotlightSeriesSearchBox).Focus(FocusState.Programmatic);
-        RenderSpotlightPreviews();
-    }
-
-    private SpotlightContentSettings CurrentSpotlightContent(CatalogItemType type) =>
-        type == CatalogItemType.Movie ? _spotlightDraft.Movies : _spotlightDraft.Series;
-
-    private void SetSpotlightContent(CatalogItemType type, SpotlightContentSettings content) =>
-        _spotlightDraft = type == CatalogItemType.Movie
-            ? _spotlightDraft with { Movies = content }
-            : _spotlightDraft with { Series = content };
 
     private void RenderSpotlightPreviews()
     {
         if (_spotlightAccount is null)
         {
-            SpotlightMoviesPreviewText.Text = "Preview will appear when a catalog is available.";
-            SpotlightSeriesPreviewText.Text = "Preview will appear when a catalog is available.";
+            foreach (var source in _spotlightSources.Values) source.Preview.Text = "Preview will appear when a catalog is available.";
             return;
         }
-        SpotlightMoviesPreviewText.Text = FormatSpotlightPreview(CatalogItemType.Movie);
-        SpotlightSeriesPreviewText.Text = FormatSpotlightPreview(CatalogItemType.Series);
+        foreach (var source in _spotlightSources.Values) source.Preview.Text = FormatSpotlightPreview(source.Page, source.Type);
     }
 
-    private string FormatSpotlightPreview(CatalogItemType type)
+    private string FormatSpotlightPreview(SpotlightPageKind page, CatalogItemType type)
     {
         try
         {
-            var titles = _spotlightSettingsService.PreviewTitles(_spotlightAccount!, type, _spotlightDraft);
+            var titles = _spotlightSettingsService.PreviewTitles(_spotlightAccount!, page, type, _spotlightDraft);
             return titles.Count == 0 ? "Preview: no titles available." : "Preview: " + string.Join(" · ", titles);
         }
         catch { return "Preview unavailable."; }
@@ -519,6 +542,11 @@ public sealed partial class AccountPage : UserControl
     public void ShowAccount(ProviderAccount account, DateTimeOffset? lastRefreshAt)
     {
         StopPendingSpotlightSearch();
+        _spotlightFolderLoadGeneration++;
+        _spotlightFoldersLoaded = false;
+        _spotlightFoldersLoading = false;
+        _movieFolders = Array.Empty<SpotlightFolderOption>();
+        _seriesFolders = Array.Empty<SpotlightFolderOption>();
         _spotlightAccount = account;
         LoadSpotlightDraft();
         SetOpenTab("Library");

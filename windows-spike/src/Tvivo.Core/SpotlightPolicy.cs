@@ -11,11 +11,41 @@ public sealed record SpotlightContentSettings(SpotlightSourceMode SourceMode,
     IReadOnlyList<string>? SelectedCategoryIds = null);
 
 public sealed record SpotlightSettings(SpotlightContentSettings Movies, SpotlightContentSettings Series,
-    int RotationDays = 1)
+    int RotationDays = 1,
+    SpotlightContentSettings? MoviesPage = null,
+    SpotlightContentSettings? SeriesPage = null,
+    SpotlightContentSettings? ForYouMovies = null,
+    SpotlightContentSettings? ForYouSeries = null)
 {
     public static int NormalizeRotationDays(int days) => days is 1 or 3 or 7 or 10 or 14 ? days : 1;
     public static SpotlightSettings Default { get; } = new(
         new(SpotlightSourceMode.RecentlyAdded), new(SpotlightSourceMode.RecentlyAdded));
+
+    public SpotlightContentSettings ForPage(SpotlightPageKind page, CatalogItemType type) => page switch
+    {
+        SpotlightPageKind.Movies when type == CatalogItemType.Movie => MoviesPage ?? Movies,
+        SpotlightPageKind.Series when type == CatalogItemType.Series => SeriesPage ?? Series,
+        SpotlightPageKind.ForYou when type == CatalogItemType.Movie => ForYouMovies ?? Movies,
+        SpotlightPageKind.ForYou when type == CatalogItemType.Series => ForYouSeries ?? Series,
+        _ => type == CatalogItemType.Movie ? Movies : Series,
+    };
+
+    public SpotlightSettings WithPage(SpotlightPageKind page, CatalogItemType type, SpotlightContentSettings content) => page switch
+    {
+        SpotlightPageKind.Movies when type == CatalogItemType.Movie => this with { MoviesPage = content },
+        SpotlightPageKind.Series when type == CatalogItemType.Series => this with { SeriesPage = content },
+        SpotlightPageKind.ForYou when type == CatalogItemType.Movie => this with { ForYouMovies = content },
+        SpotlightPageKind.ForYou when type == CatalogItemType.Series => this with { ForYouSeries = content },
+        _ => this,
+    };
+
+    public SpotlightSettings SeedPageSettings() => this with
+    {
+        MoviesPage = MoviesPage ?? Movies,
+        SeriesPage = SeriesPage ?? Series,
+        ForYouMovies = ForYouMovies ?? Movies,
+        ForYouSeries = ForYouSeries ?? Series,
+    };
 }
 
 public sealed record SpotlightFolderOption(string Id, string Name, int ItemCount);
@@ -33,6 +63,27 @@ public static class SpotlightFolderList
         return (selectedIds ?? Array.Empty<string>()).Where(id => !available.Contains(id))
             .Distinct(StringComparer.Ordinal).ToArray();
     }
+}
+
+public static class SpotlightFolderSelectionPolicy
+{
+    public const int SearchThreshold = 15;
+
+    public static bool ShouldShowSearch(int folderCount) => folderCount > SearchThreshold;
+
+    public static IReadOnlyList<string> KeepAvailableSelection(IEnumerable<string>? selectedIds,
+        IEnumerable<SpotlightFolderOption> folders) =>
+        (selectedIds ?? Array.Empty<string>()).Where(id => folders.Any(folder => folder.Id == id))
+            .Distinct(StringComparer.Ordinal).ToArray();
+
+    public static string EmptyMessage(bool isLoading, bool providerHasFolders, bool catalogIsIndexing) =>
+        isLoading ? "Loading folders..." : providerHasFolders || catalogIsIndexing
+            ? "No folders yet - the catalogue is still being indexed"
+            : "This provider has no folders";
+
+    public static SpotlightSettings BeginDraft(SpotlightSettings saved) => saved.SeedPageSettings();
+    public static SpotlightSettings SaveDraft(SpotlightSettings draft) => draft.SeedPageSettings();
+    public static SpotlightSettings CancelDraft(SpotlightSettings saved) => saved;
 }
 
 public sealed record SpotlightCandidate(CatalogItemType Type, string ItemId, string CategoryId,
@@ -75,8 +126,8 @@ public static class SpotlightSelector
         ArgumentNullException.ThrowIfNull(movieCandidates);
         ArgumentNullException.ThrowIfNull(seriesCandidates);
         utcDate = BucketStart(utcDate, settings.RotationDays);
-        var movieConfig = settings.Movies ?? SpotlightSettings.Default.Movies;
-        var seriesConfig = settings.Series ?? SpotlightSettings.Default.Series;
+        var movieConfig = settings.ForPage(page, CatalogItemType.Movie) ?? SpotlightSettings.Default.Movies;
+        var seriesConfig = settings.ForPage(page, CatalogItemType.Series) ?? SpotlightSettings.Default.Series;
         if (page == SpotlightPageKind.Movies)
             return SelectSingle(CatalogItemType.Movie, movieConfig, movieCandidates, opaqueAccountKey, page, utcDate, previousSelection);
         if (page == SpotlightPageKind.Series)
@@ -209,7 +260,11 @@ public static class SpotlightSelector
             ? SpotlightEmptyReason.NoSelectedFolderCandidates : SpotlightEmptyReason.NoEligibleCandidates;
 
     public static string SelectedFolderFingerprint(SpotlightSettings settings) => Hash(string.Join("\n",
-        "M:" + Fingerprint(settings.Movies), "S:" + Fingerprint(settings.Series)));
+        "M:" + Fingerprint(settings.Movies), "S:" + Fingerprint(settings.Series),
+        "MP:" + Fingerprint(settings.MoviesPage ?? settings.Movies),
+        "SP:" + Fingerprint(settings.SeriesPage ?? settings.Series),
+        "FYM:" + Fingerprint(settings.ForYouMovies ?? settings.Movies),
+        "FYS:" + Fingerprint(settings.ForYouSeries ?? settings.Series)));
 
     private static string Fingerprint(SpotlightContentSettings settings) =>
         settings.SourceMode + ":" + string.Join(",", (settings.SelectedCategoryIds ?? Array.Empty<string>())
