@@ -196,9 +196,14 @@ object DiagnosticLog {
             append(redact(appendix.trimEnd()))
             appendLine()
         }
-        entries.forEach { entry ->
-            appendLine("${entry.time}\t${entry.severity}\t${redact(entry.screen)}\t${redact(entry.event)}\t${redact(entry.payload)}")
-        }
+        entries.asSequence()
+            .filterNot { entry ->
+                entry.event.contains("username field focused", ignoreCase = true) ||
+                    entry.event.contains("password field focused", ignoreCase = true)
+            }
+            .forEach { entry ->
+                appendLine("${entry.time}\t${entry.severity}\t${redact(entry.screen)}\t${redact(entry.event)}\t${redact(entry.payload)}")
+            }
     }
 
     private fun encode(value: String): String =
