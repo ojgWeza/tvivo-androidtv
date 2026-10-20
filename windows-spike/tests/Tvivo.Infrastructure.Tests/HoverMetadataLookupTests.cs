@@ -13,7 +13,7 @@ public sealed class HoverMetadataLookupTests
     public async Task CachedMetadataIncludingEmptyMetadataMakesNoProviderCall()
     {
         var store = new MetadataStore();
-        var expected = new CatalogMetadata();
+        var expected = new CatalogMetadata(SizeCheckedAt: DateTimeOffset.UtcNow);
         store.Save(Account, CatalogItemType.Movie, "movie-1", expected);
         var provider = new FakeProvider();
         var lookup = store.Create(provider);
@@ -22,6 +22,26 @@ public sealed class HoverMetadataLookupTests
 
         Assert.Equal(expected, actual);
         Assert.Equal(0, provider.MovieCalls);
+    }
+
+    [Fact]
+    public async Task CachedMissingSizeIsRetriedAtSevenDaysButNotBefore()
+    {
+        var now = DateTimeOffset.Parse("2026-10-21T12:00:00Z");
+        var clock = new ManualTimeProvider(now);
+        var store = new MetadataStore();
+        store.Save(Account, CatalogItemType.Movie, "movie-1",
+            new CatalogMetadata(SizeCheckedAt: now.AddDays(-6)));
+        var provider = new FakeProvider { MovieResult = new CatalogMetadata(SizeBytes: 1_400_000_000) };
+        var lookup = store.Create(provider, clock);
+
+        await lookup.GetAsync(Account, CatalogItemType.Movie, "movie-1");
+        Assert.Equal(0, provider.MovieCalls);
+        clock.Advance(TimeSpan.FromDays(1));
+        var refreshed = await lookup.GetAsync(Account, CatalogItemType.Movie, "movie-1");
+
+        Assert.Equal(1, provider.MovieCalls);
+        Assert.Equal(1_400_000_000, refreshed?.SizeBytes);
     }
 
     [Fact]
@@ -125,7 +145,9 @@ public sealed class HoverMetadataLookupTests
         var result = await lookup.GetAsync(Account, CatalogItemType.Movie, "movie-1");
 
         Assert.Equal(new CatalogMetadata(), result);
-        Assert.Equal(result, store.Get(Account, CatalogItemType.Movie, "movie-1"));
+        var saved = store.Get(Account, CatalogItemType.Movie, "movie-1");
+        Assert.Equal(result, saved! with { SizeCheckedAt = null });
+        Assert.NotNull(saved?.SizeCheckedAt);
     }
 
     [Fact]
@@ -139,7 +161,9 @@ public sealed class HoverMetadataLookupTests
 
         Assert.Equal("series summary", result?.Plot);
         Assert.Equal(1, provider.SeriesCalls);
-        Assert.Equal(result, store.Get(Account, CatalogItemType.Series, "series-1"));
+        var saved = store.Get(Account, CatalogItemType.Series, "series-1");
+        Assert.Equal(result, saved! with { SizeCheckedAt = null });
+        Assert.NotNull(saved?.SizeCheckedAt);
     }
 
     [Fact]
@@ -202,7 +226,10 @@ public sealed class HoverMetadataLookupTests
         }
 
         public void Save(ProviderAccount account, CatalogItemType type, string itemId, CatalogMetadata metadata) =>
-            _items[(account.AccountId, type, itemId)] = metadata;
+            _items[(account.AccountId, type, itemId)] = metadata with
+            {
+                SizeCheckedAt = metadata.SizeCheckedAt ?? DateTimeOffset.UtcNow,
+            };
 
         public HoverMetadataLookup Create(FakeProvider provider, TimeProvider? clock = null) =>
             new(provider, Get, Save, clock);

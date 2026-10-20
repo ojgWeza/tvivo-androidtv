@@ -28,7 +28,7 @@ public sealed record PlaybackProgressPresentation(bool IsVisible, double Value, 
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 17;
+    private const int SchemaVersion = 18;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -47,7 +47,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != 17 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -116,6 +116,12 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 16)
                 MigrateFileSize(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 17)
+                MigrateFileSizeCheckTime(connection);
+        }
         using var refreshState = connection.CreateCommand();
         refreshState.CommandText = "CREATE TABLE IF NOT EXISTS catalog_refresh_state(account_id TEXT NOT NULL,type TEXT NOT NULL,last_success_utc_ms INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
         refreshState.ExecuteNonQuery();
@@ -132,6 +138,13 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, "ALTER TABLE items ADD COLUMN size_bytes INTEGER; PRAGMA user_version=17;");
+        transaction.Commit();
+    }
+
+    private static void MigrateFileSizeCheckTime(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "ALTER TABLE items ADD COLUMN size_checked_at INTEGER; PRAGMA user_version=18;");
         transaction.Commit();
     }
 
@@ -159,13 +172,14 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE items SET year=$year,rating=$rating,genre=$genre,plot=$plot,[cast]=$cast,size_bytes=COALESCE($size,size_bytes),metadata_fetched=1 WHERE account_id=$a AND type=$type AND id=$id";
+        command.CommandText = "UPDATE items SET year=$year,rating=$rating,genre=$genre,plot=$plot,[cast]=$cast,size_bytes=COALESCE($size,size_bytes),size_checked_at=$checkedAt,metadata_fetched=1 WHERE account_id=$a AND type=$type AND id=$id";
         command.Parameters.AddWithValue("$year", (object?)metadata.Year ?? DBNull.Value);
         command.Parameters.AddWithValue("$rating", (object?)metadata.Rating ?? DBNull.Value);
         command.Parameters.AddWithValue("$genre", (object?)metadata.Genre ?? DBNull.Value);
         command.Parameters.AddWithValue("$plot", (object?)metadata.Plot ?? DBNull.Value);
         command.Parameters.AddWithValue("$cast", (object?)metadata.Cast ?? DBNull.Value);
         command.Parameters.AddWithValue("$size", (object?)metadata.SizeBytes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$checkedAt", (metadata.SizeCheckedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$id", itemId);
@@ -176,14 +190,15 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT year,rating,genre,plot,[cast],metadata_fetched,size_bytes FROM items WHERE account_id=$a AND type=$type AND id=$id";
+        command.CommandText = "SELECT year,rating,genre,plot,[cast],metadata_fetched,size_bytes,size_checked_at FROM items WHERE account_id=$a AND type=$type AND id=$id";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$id", itemId);
         using var reader = command.ExecuteReader();
         if (!reader.Read() || reader.GetInt32(5) == 0) return null;
         return new CatalogMetadata(ReadNullable(reader, 0), ReadNullable(reader, 1), ReadNullable(reader, 2),
-            ReadNullable(reader, 3), ReadNullable(reader, 4), reader.IsDBNull(6) ? null : reader.GetInt64(6));
+            ReadNullable(reader, 3), ReadNullable(reader, 4), reader.IsDBNull(6) ? null : reader.GetInt64(6),
+            reader.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(7)));
     }
 
     private static string? ReadNullable(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

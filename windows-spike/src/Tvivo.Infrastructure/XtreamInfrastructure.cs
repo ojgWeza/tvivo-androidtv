@@ -239,7 +239,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new CatalogFailureException(new(CatalogFailureKind.Protocol, "vod-info.shape", (int)response.StatusCode, TraceId(response)));
         var info = GetInfoObject(document.RootElement);
-        return new MovieDetails(movieId, MapMetadata(info, document.RootElement));
+        var metadata = MapMetadata(info, document.RootElement);
+        PerfScope.Logger?.Invoke($"event=filesize.coverage source=movie-details itemsParsed=1 itemsWithSize={(metadata.SizeBytes is > 0 ? 1 : 0)}");
+        return new MovieDetails(movieId, metadata);
     }
 
     public async Task<SeriesDetails> GetSeriesInfoAsync(ProviderAccount account, string seriesId, CancellationToken cancellationToken = default)
@@ -286,6 +288,9 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         }
         // A malformed optional episodes field behaves like an empty result; keep the last usable details.
         var details = new SeriesDetails(seriesId, title ?? seriesId, seasons.OrderBy(season => season.Number).ToArray(), MapMetadata(info, root));
+        var parsedEpisodes = details.Seasons.Sum(season => season.Episodes.Count);
+        var sizedEpisodes = details.Seasons.Sum(season => season.Episodes.Count(episode => episode.SizeBytes is > 0));
+        PerfScope.Logger?.Invoke($"event=filesize.coverage source=episode-list itemsParsed={parsedEpisodes} itemsWithSize={sizedEpisodes}");
         if (details.Seasons.Sum(season => season.Episodes.Count) == 0 &&
             _seriesDetails.TryGetValue((account.AccountId, seriesId), out var saved))
             return saved;
@@ -449,7 +454,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
             ? JsonValue.String(value, "ext")?.Trim().TrimStart('.')
             : JsonValue.String(value, "container_extension")?.Trim().TrimStart('.');
         var metadata = new Dictionary<string, string>();
-        if (ReadSizeBytes(value) is { } sizeBytes)
+        if (ReadSizeBytes(value, GetInfoObject(value)) is { } sizeBytes)
             metadata["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
         if (type == CatalogItemType.Live && JsonValue.String(value, "epg_channel_id")?.Trim() is { Length: > 0 } epgChannelId)
             metadata["epg_channel_id"] = epgChannelId;

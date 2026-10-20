@@ -89,7 +89,7 @@ public sealed record SeriesEpisode(string Id, string Title, string SeasonId, str
 public sealed record SeriesSeason(string Id, string Name, int Number, IReadOnlyList<SeriesEpisode> Episodes);
 
 public sealed record CatalogMetadata(string? Year = null, string? Rating = null, string? Genre = null,
-    string? Plot = null, string? Cast = null, long? SizeBytes = null);
+    string? Plot = null, string? Cast = null, long? SizeBytes = null, DateTimeOffset? SizeCheckedAt = null);
 
 public static class RatingDisplayFormatter
 {

@@ -70,21 +70,59 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
-    public async Task Provider_reads_movie_and_episode_file_sizes_from_tolerant_shapes()
+    public async Task Provider_reads_file_sizes_from_item_info_numeric_and_human_readable_shapes()
     {
         var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
         {
             var query = request.RequestUri!.Query;
             if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
             if (query.Contains("get_vod_info", StringComparison.Ordinal))
-                return JsonBody("""{"info":{"filesize":"1.4 GB"}}""");
-            return JsonBody("""{"info":{"name":"Series"},"episodes":{"1":[{"id":"episode-1","title":"Pilot","info":{"file_size":650000000}}]}}""");
+                return JsonBody("""{"size_bytes":"1400000000","info":{"filesize":"1.4 GB"}}""");
+            return JsonBody("""{"info":{"name":"Series"},"episodes":{"1":[{"id":"episode-1","title":"Pilot","info":{"size":"650000000"}}]}}""");
         })));
         var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
             new ProviderConnection(Endpoint(), "u", "p"))).Account);
         Assert.Equal(1_400_000_000, (await provider.GetMovieInfoAsync(account, "movie")).Metadata.SizeBytes);
         Assert.Equal(650_000_000, Assert.Single(Assert.Single((await provider.GetSeriesInfoAsync(account, "series")).Seasons)
             .Episodes).SizeBytes);
+    }
+
+    [Theory]
+    [InlineData("size", "1400000000")]
+    [InlineData("filesize", "1400000000")]
+    [InlineData("file_size", "1400000000")]
+    [InlineData("size_bytes", "1400000000")]
+    public async Task Movie_info_accepts_each_documented_size_field_as_numeric_string(string field, string value)
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            if (!request.RequestUri!.Query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            return JsonBody($"{{\"info\":{{\"{field}\":\"{value}\"}}}}");
+        })));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+
+        Assert.Equal(1_400_000_000, (await provider.GetMovieInfoAsync(account, "movie")).Metadata.SizeBytes);
+    }
+
+    [Fact]
+    public async Task Catalog_items_read_item_and_nested_info_size_without_deriving_from_bitrate_or_duration()
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("categories", StringComparison.Ordinal)) return JsonBody("[]");
+            return JsonBody("""[{"stream_id":"movie-size","name":"Movie size","size":1400000000},{"stream_id":"movie-info","name":"Movie info","info":{"size_bytes":"650000000"}},{"stream_id":"movie-unknown","name":"Movie unknown","bitrate":8000000,"duration_secs":7200}]""");
+        })));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+
+        var items = await provider.GetChannelsAsync(account, CatalogItemType.Movie);
+
+        Assert.Equal("1400000000", items.Single(item => item.Id == "movie-size").Metadata["size_bytes"]);
+        Assert.Equal("650000000", items.Single(item => item.Id == "movie-info").Metadata["size_bytes"]);
+        Assert.False(items.Single(item => item.Id == "movie-unknown").Metadata.ContainsKey("size_bytes"));
     }
 
     [Fact]

@@ -38,4 +38,19 @@ public sealed class DisplayPoliciesTests
     [InlineData("-1")]
     public void Unknown_sizes_stay_hidden(string? raw) =>
         Assert.Null(FileSizeFormatter.Format(FileSizeFormatter.ParseBytes(raw)));
+
+    [Fact]
+    public void File_size_availability_rechecks_missing_values_after_seven_days_only()
+    {
+        var now = DateTimeOffset.Parse("2026-10-21T12:00:00Z");
+        Assert.Equal(FileSizeAvailability.NeverChecked, FileSizeAvailabilityPolicy.Classify(null, null));
+        Assert.True(FileSizeAvailabilityPolicy.ShouldCheck(null, null, now));
+        Assert.Equal(FileSizeAvailability.CheckedAbsent,
+            FileSizeAvailabilityPolicy.Classify(null, now.AddDays(-6)));
+        Assert.False(FileSizeAvailabilityPolicy.ShouldCheck(null, now.AddDays(-6), now));
+        Assert.True(FileSizeAvailabilityPolicy.ShouldCheck(null, now.AddDays(-7), now));
+        Assert.Equal(FileSizeAvailability.Known,
+            FileSizeAvailabilityPolicy.Classify(1_400_000_000, now.AddDays(-30)));
+        Assert.False(FileSizeAvailabilityPolicy.ShouldCheck(1_400_000_000, now.AddDays(-30), now));
+    }
 }

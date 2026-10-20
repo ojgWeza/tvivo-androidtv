@@ -3713,7 +3713,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var metadata = _catalogRepository.GetMetadata(account, type, channel.Id);
-            if (metadata is null)
+            if (metadata is null || FileSizeAvailabilityPolicy.ShouldCheck(
+                    metadata.SizeBytes, metadata.SizeCheckedAt, DateTimeOffset.UtcNow))
             {
                 var provider = App.Services.GetRequiredService<ICatalogProvider>();
                 if (type == CatalogItemType.Movie && provider is IMovieInfoProvider movieProvider)
@@ -3779,7 +3780,8 @@ public sealed partial class MainWindow : Window
         PlayerMetadataLine.Visibility = hasAbout || size is not null ? Visibility.Visible : Visibility.Collapsed;
         if (metadata is null)
         {
-            PlayerMetadataLine.Text = size ?? string.Empty;
+            PlayerMetadataLine.Visibility = size is null ? Visibility.Collapsed : Visibility.Visible;
+            PlayerMetadataLine.Text = size is null ? string.Empty : $"File size: {size}";
             PlayerAboutText.Text = "Loading details…";
             return;
         }
@@ -3788,7 +3790,7 @@ public sealed partial class MainWindow : Window
             metadata.Year,
             CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
             metadata.Genre,
-            size,
+            size is null ? null : $"File size: {size}",
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
         if (!string.IsNullOrWhiteSpace(metadata.Plot)) about.Add(metadata.Plot);
@@ -6370,7 +6372,7 @@ public sealed partial class MainWindow : Window
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
         public string? FileSizeText => FileSizeFormatter.Format(FileSizeFormatter.ParseBytes(
-            Channel.Metadata.GetValueOrDefault("size_bytes")));
+            Channel.Metadata.GetValueOrDefault("size_bytes"))) is { } size ? $"File size: {size}" : null;
         public Visibility FileSizeVisibility => FileSizeText is null ? Visibility.Collapsed : Visibility.Visible;
         public Visibility FavoriteVisibility => FavoriteTargetResolver.ShowsPerItemFavorite(Channel)
             ? Visibility.Visible

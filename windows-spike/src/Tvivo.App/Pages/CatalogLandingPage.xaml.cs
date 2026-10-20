@@ -5886,7 +5886,8 @@ public sealed partial class CatalogLandingPage : UserControl
             FileSizeText,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         public string? FileSizeText => FileSizeFormatter.Format(_hoverMetadata?.SizeBytes ??
-            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes")));
+            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes"))) is { } size
+                ? $"File size: {size}" : null;
         private string? HoverPlot => _hoverMetadata is not null
             ? _hoverMetadata.Plot
             : Channel?.Metadata.GetValueOrDefault("plot");

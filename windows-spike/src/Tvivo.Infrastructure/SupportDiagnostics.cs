@@ -116,10 +116,12 @@ public static class SupportDiagnostics
             var counts = new List<string>();
             foreach (var type in new[] { "Live", "Movie", "Series" })
             {
-                command.CommandText = "SELECT COUNT(*) FROM items WHERE type=$type";
+                command.CommandText = "SELECT COUNT(*),COALESCE(SUM(CASE WHEN size_bytes>0 THEN 1 ELSE 0 END),0) FROM items WHERE type=$type";
                 command.Parameters.Clear();
                 command.Parameters.AddWithValue("$type", type);
-                counts.Add($"{type.ToLowerInvariant()}Rows={Convert.ToInt64(command.ExecuteScalar())}");
+                using var reader = command.ExecuteReader();
+                reader.Read();
+                counts.Add($"{type.ToLowerInvariant()}Rows={reader.GetInt64(0)} {type.ToLowerInvariant()}SizeRows={reader.GetInt64(1)}");
             }
             return $"dbUserVersion={version} {string.Join(' ', counts)}";
         }

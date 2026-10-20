@@ -379,7 +379,9 @@ public sealed class SqliteCatalogRepositoryTests
 
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, new[] { movie });
 
-            Assert.Equal(metadata, repo.GetMetadata(account, CatalogItemType.Movie, movie.Id));
+            var restoredMetadata = repo.GetMetadata(account, CatalogItemType.Movie, movie.Id)!;
+            Assert.Equal(metadata with { SizeCheckedAt = restoredMetadata.SizeCheckedAt }, restoredMetadata);
+            Assert.NotNull(restoredMetadata.SizeCheckedAt);
             var cachedChannel = Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items);
             Assert.Equal("A cached plot.", cachedChannel.Metadata["plot"]);
             Assert.Equal("2024", cachedChannel.Metadata["year"]);
@@ -682,7 +684,7 @@ public sealed class SqliteCatalogRepositoryTests
                     Assert.False(reader.Read());
                 }
                 verify.CommandText = "PRAGMA user_version;";
-                Assert.Equal(17, Convert.ToInt32(verify.ExecuteScalar()));
+                Assert.Equal(18, Convert.ToInt32(verify.ExecuteScalar()));
             }
         }
         finally
@@ -715,7 +717,7 @@ public sealed class SqliteCatalogRepositoryTests
             migrated.Open();
             using var verify = migrated.CreateCommand();
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(17, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(18, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }
@@ -752,7 +754,7 @@ public sealed class SqliteCatalogRepositoryTests
                 migrated.Open();
                 using var verify = migrated.CreateCommand();
                 verify.CommandText = "PRAGMA user_version;";
-                Assert.Equal(17, Convert.ToInt32(verify.ExecuteScalar()));
+                Assert.Equal(18, Convert.ToInt32(verify.ExecuteScalar()));
                 verify.CommandText = "SELECT COUNT(*) FROM media_progress WHERE account_id='account-a' AND series_id='show';";
                 Assert.Equal(1, Convert.ToInt32(verify.ExecuteScalar()));
                 verify.CommandText = "SELECT finished,resume_ms FROM media_progress WHERE account_id='account-b' AND item_id='finished-id';";
@@ -970,7 +972,7 @@ public sealed class SqliteCatalogRepositoryTests
             {
                 connection.Open();
                 using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-                Assert.Equal(17, Convert.ToInt32(version.ExecuteScalar()));
+                Assert.Equal(18, Convert.ToInt32(version.ExecuteScalar()));
             }
             repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Movie, "movie", DateTimeOffset.UtcNow) });
@@ -1157,7 +1159,7 @@ public sealed class SqliteCatalogRepositoryTests
             legacyReader.Open();
             using var command = legacyReader.CreateCommand();
             command.CommandText = "PRAGMA user_version";
-            Assert.Equal(17, Convert.ToInt32(command.ExecuteScalar()));
+            Assert.Equal(18, Convert.ToInt32(command.ExecuteScalar()));
             command.CommandText = "SELECT favourite,resume_ms,visit_count FROM items WHERE account_id='account-a' AND type='Movie' AND id='movie'";
             using (var oldRow = command.ExecuteReader())
             {

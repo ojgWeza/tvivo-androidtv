@@ -41,6 +41,10 @@ public sealed class CatalogRefreshService(ICatalogProvider provider, SqliteCatal
             throw new CatalogFailureException(CatalogFailureClassifier.Classify(null, exception, $"{type}.items"), exception);
         }
 
+        var itemsWithSize = channels.Count(channel => FileSizeFormatter.ParseBytes(
+            channel.Metadata.GetValueOrDefault("size_bytes")) is > 0);
+        PerfScope.Logger?.Invoke($"event=filesize.coverage source=catalog-refresh type={type} itemsParsed={channels.Count} itemsWithSize={itemsWithSize}");
+
         try
         {
             if (artworkOnlyReingest)
