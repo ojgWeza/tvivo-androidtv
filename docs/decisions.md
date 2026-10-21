@@ -117,6 +117,8 @@ tightened to the target; actual IME traversal still requires the owner's device 
 
 **Prevention:** Gate conditional links through `FocusLinkPolicy`, test the fallback policy for each state/direction, and keep restore requests bounded with explicit consumed/absent handling. `NormalizedNameKey` is the single shared normalization primitive for persisted names and in-memory sort keys.
 
+The TV ALL grid exposed another conditional link: its top row pointed Up at the landing Sort control, which TV does not render. The direct browse route pointed at the item-filter field, which is absent while collapsed. The item-filter field also pointed Right at a Refresh control hidden on TV. Keep the grid's Up target attached to the visible Search pill or expanded field, and use `FocusRequester.Default` for the absent TV Refresh control. Guarding explicit `requestFocus()` calls does not protect a directional `focusProperties` target resolved by Compose during a D-pad key event.
+
 ## Kotlin (native) over Flutter
 
 **Decision:** Build native with Kotlin, not Flutter.

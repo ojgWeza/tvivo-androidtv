@@ -397,7 +397,7 @@ fun BrowseScreen(
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
-                    itemFilterFocusRequester = if (landingMode) sortFocusRequester
+                    itemFilterFocusRequester = if (landingMode && !LocalIsTelevision.current) sortFocusRequester
                         else itemFilterFocusRequester,
                     onActivate = { item ->
                         viewModel.pendingFocusItemId = item.id
@@ -640,7 +640,8 @@ private fun Header(
                         icon = Icons.Default.Search,
                         contentDescription = stringResource(R.string.browse_filter_items),
                         onClick = { onItemFilterOpenChanged(true) },
-                        modifier = Modifier.padding(end = 12.dp).testTag("browse-filter")
+                        modifier = Modifier.focusRequester(itemFilterFocusRequester)
+                            .padding(end = 12.dp).testTag("browse-filter")
                     )
                 }
 
@@ -730,6 +731,7 @@ internal fun ItemFilterField(
     val focus = itemFilterFocusRequester
     val clearFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val refreshAvailable = !LocalIsTelevision.current
     val clearLabel = stringResource(R.string.browse_clear)
     LaunchedEffect(Unit) {
         repeat(5) {
@@ -771,7 +773,11 @@ internal fun ItemFilterField(
                     left = FocusLinkPolicy.targetIfRendered(
                         railFocusRequester, railAvailable
                     ) ?: FocusRequester.Default
-                    right = if (value.isNotEmpty()) clearFocusRequester else refreshFocusRequester
+                    right = when {
+                        value.isNotEmpty() -> clearFocusRequester
+                        refreshAvailable -> refreshFocusRequester
+                        else -> FocusRequester.Default
+                    }
                     down = FocusLinkPolicy.targetIfRendered(
                         gridFocusRequester, gridAvailable
                     ) ?: FocusRequester.Default
@@ -792,7 +798,10 @@ internal fun ItemFilterField(
                 modifier = Modifier.testTag("item-filter-clear")
                     .semantics { contentDescription = clearLabel }
                     .focusRequester(clearFocusRequester)
-                    .focusProperties { left = focus; right = refreshFocusRequester }
+                    .focusProperties {
+                        left = focus
+                        right = if (refreshAvailable) refreshFocusRequester else FocusRequester.Default
+                    }
                     .padding(end = 12.dp)
             )
         }
