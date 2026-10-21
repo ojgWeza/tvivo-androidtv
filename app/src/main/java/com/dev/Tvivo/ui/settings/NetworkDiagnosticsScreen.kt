@@ -206,6 +206,11 @@ fun NetworkDiagnosticsScreen(accountPartition: String, credentials: Credentials)
             Text(stringResource(R.string.network_deep_transfer, result.bytes, rate, bitrate,
                 result.stalls, result.retries),
                 color = AppColors.Dim, style = TvType.label)
+            if (result.stalls > 0 && result.stallDurationMs != null && result.bytesAtStall != null) {
+                Text(stringResource(R.string.network_deep_stall_detail,
+                    (result.stallDurationMs + 500) / 1_000, result.bytesAtStall / 1_000_000.0),
+                    color = AppColors.Dim, style = TvType.label)
+            }
         }
         if (deepConfirm) ConfirmDialog(
             title = stringResource(R.string.network_deep_confirm_title),
