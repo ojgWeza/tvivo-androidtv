@@ -447,6 +447,23 @@
         "app/src/test/java/com/dev/Tvivo/ui/browse/CategoryPickerStateTest.kt",
         ".codex-android-qa-exec-report.md#tv-remake-slice-1-2"
       ]
+    },
+    {
+      "id": "A-TV-RAIL-FOCUS-ENTRY",
+      "title": "TV browse focuses selected rail and first loaded card on entry",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "N-A",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/ui/browse/BrowseScreen.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/browse/CategoryRail.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/browse/ContentGrid.kt",
+        ".codex-android-qa-exec-report.md#tv-rail-focus-fix--device-verify"
+      ]
     }
   ]
 }

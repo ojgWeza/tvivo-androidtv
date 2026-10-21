@@ -81,6 +81,8 @@ fun ContentGrid(
     cardShape: CardShape,
     /** The rail's RIGHT target; a focus group forwards it to its first focusable card. */
     gridFocusRequester: FocusRequester,
+    /** Direct entry target when no card has been focused in this category yet. */
+    firstCardFocusRequester: FocusRequester? = null,
     itemFilterFocusRequester: FocusRequester? = null,
     /** OK on a card. Opens the pre-run page — it has not started a stream since the
      *  detail screen landed, and the old name said otherwise. */
@@ -293,7 +295,10 @@ fun ContentGrid(
                         Modifier.focusRequester(restoreRequester)
                     } else {
                     Modifier
-                }).then(if (onLeadingLeft != null &&
+                }).then(if (index == items.itemSnapshotList.placeholdersBefore && item != null &&
+                    firstCardFocusRequester != null)
+                    Modifier.focusRequester(firstCardFocusRequester) else Modifier)
+                    .then(if (onLeadingLeft != null &&
                     (index % columns == 0 || index == gridState.firstVisibleItemIndex))
                     Modifier.onPreviewKeyEvent { event ->
                         val native = event.nativeKeyEvent

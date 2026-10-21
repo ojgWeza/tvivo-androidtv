@@ -79,8 +79,7 @@ fun CategoryRail(
      *  Refresh — it is also to the right, and further from the rail than the first card
      *  only in a way the search does not weigh. The rail must reach the grid. */
     gridFocusRequester: FocusRequester,
-    /** The screen's resting focus. Requested once categories arrive, so the first D-pad
-     *  press has somewhere to move *from* — see [BrowseScreen]. */
+    /** Focuses the selected row directly for initial entry and return from the grid. */
     railFocusRequester: FocusRequester,
     listState: LazyListState,
     gridAvailable: Boolean,
@@ -94,7 +93,6 @@ fun CategoryRail(
 ) {
     val filterFocusRequester = remember { FocusRequester() }
     val categorySortFocusRequester = remember { FocusRequester() }
-    val selectedRowRequester = remember { FocusRequester() }
     val categoryKeys = remember(categories) {
         CatalogLazyKeys.categoryPicker(categories.map { it.categoryId })
     }
@@ -159,13 +157,12 @@ fun CategoryRail(
             // not composed yet. The same pattern the grid already uses.
             modifier = Modifier
                 .fillMaxHeight()
-                .focusRequester(railFocusRequester)
                 .onFocusChanged { if (it.hasFocus) onRailFocused() }
                 .focusProperties {
                     enter = { runCatching {
                         if (listState.layoutInfo.visibleItemsInfo.any { info ->
                                 categories.getOrNull(info.index)?.categoryId == selectedCategoryId
-                            }) selectedRowRequester else FocusRequester.Default
+                            }) railFocusRequester else FocusRequester.Default
                     }.getOrDefault(FocusRequester.Default) }
                 }
                 .focusGroup(),
@@ -192,7 +189,7 @@ fun CategoryRail(
                     gridFocusRequester = gridFocusRequester,
                     gridAvailable = gridAvailable,
                     confineFocus = confineFocus,
-                    selectedRowRequester = selectedRowRequester.takeIf { category.categoryId == selectedCategoryId },
+                    selectedRowRequester = railFocusRequester.takeIf { category.categoryId == selectedCategoryId },
                     // Only the first row sends UP to the filter. Declared per-row rather
                     // than on the group, or UP from row 40 would jump to the filter
                     // instead of row 39.

@@ -158,6 +158,7 @@ fun BrowseScreen(
     var categoryPanelOpen by rememberSaveable { mutableStateOf(false) }
     val categoriesFocusRequester = remember { FocusRequester() }
     val gridFocusRequester = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
+    val firstCardFocusRequester = remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
     val recoveryFocusRequester = remember { FocusRequester() }
     var focusInGrid by remember { mutableStateOf(false) }
@@ -351,12 +352,14 @@ fun BrowseScreen(
                 scope.launch {
                     repeat(12) {
                         androidx.compose.runtime.withFrameNanos {}
-                        val target = if (tvBrowseContentTarget(items.itemCount) == TvBrowseContentTarget.Grid)
-                            gridFocusRequester else recoveryFocusRequester
-                        if (runCatching { target.requestFocus() }.isSuccess) {
-                            focusInGrid = true
-                            return@launch
+                        val target = when (tvBrowseContentTarget(items.itemCount)) {
+                            TvBrowseContentTarget.Grid -> if (viewModel.pendingFocusItemId == null)
+                                firstCardFocusRequester else gridFocusRequester
+                            TvBrowseContentTarget.Recovery -> recoveryFocusRequester
                         }
+                        runCatching { target.requestFocus() }
+                        androidx.compose.runtime.withFrameNanos {}
+                        if (focusInGrid) return@launch
                     }
                 }
             }) else null,
@@ -475,6 +478,7 @@ fun BrowseScreen(
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
+                    firstCardFocusRequester = firstCardFocusRequester,
                     itemFilterFocusRequester = if (landingMode && !LocalIsTelevision.current) sortFocusRequester
                         else itemFilterFocusRequester,
                     onActivate = { item ->
