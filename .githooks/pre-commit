@@ -19,6 +19,21 @@
 
 set -e
 
+# Parity reminder: informational only, so cross-platform ledger maintenance
+# never blocks an otherwise valid commit.
+ROOT="$(git rev-parse --show-toplevel)"
+COMMIT_EDITMSG="$(git rev-parse --git-path COMMIT_EDITMSG)"
+if [ -f "$COMMIT_EDITMSG" ]; then
+  COMMIT_SUBJECT="$(sed -n '1{s/\r$//;p;}' "$COMMIT_EDITMSG")"
+  case "$COMMIT_SUBJECT" in
+    Fix*|Android:*|WinUI:*)
+      if ! git -C "$ROOT" diff --cached --name-only -- vault/parity/ledger.json | grep -q .; then
+        echo "pre-commit: parity ledger not staged for '$COMMIT_SUBJECT'; consider updating vault/parity/ledger.json (warning only)." >&2
+      fi
+      ;;
+  esac
+fi
+
 # Only file types any codemap in this repo can index (plus its own config/script).
 if ! git diff --cached --name-only --diff-filter=ACMRD \
      | grep -qiE '\.(sql|cs|kt|tsx?|jsx?|mjs)$|codemap\.config\.json$'; then
@@ -32,8 +47,6 @@ fi
 
 # One folder per codemap in this repo, each holding its own codemap.config.json.
 CODEMAP_DIRS="windows-spike app"
-ROOT="$(git rev-parse --show-toplevel)"
-
 for CODEMAP_DIR in $CODEMAP_DIRS; do
   PROJECT="$ROOT/$CODEMAP_DIR"
   SCRIPT="$PROJECT/scripts/codemap.mjs"

@@ -1,5 +1,9 @@
 # Tvivo — Session Entry Point
 
+## Parity ledger
+
+At the start of every Android or WinUI session, read `vault/parity/ledger.json`. After every fix, UX perk, or cross-platform lesson, add/update its ledger entry with per-platform status and links to commits/tests using `node tools/parity/parity.mjs add '<JSON entry>'`; run `check` before handing off.
+
 > **DELEGATION:** follow the global order at the top of `C:\Users\Dell\.claude\CLAUDE.md` (Sonnet orchestrates, luna implements, sol plans, Haiku tests, Opus reviews).
 
 **Read in this order:**

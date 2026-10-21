@@ -1,5 +1,9 @@
 # AGENTS.md — for Codex and any non-Claude agent
 
+## Parity ledger
+
+At the start of every Android or WinUI session, read `vault/parity/ledger.json`. After every fix, UX perk, or cross-platform lesson, add/update its ledger entry with per-platform status and links to commits/tests using `node tools/parity/parity.mjs add '<JSON entry>'`; run `check` before handing off.
+
 `CLAUDE.md` in this directory is the compact project-bible index. **Read it before
 proposing anything**, then load only relevant `bible-detail\claude-*` sections.
 Read `todo-tree\00-overview.md` at session start and the relevant TODO section
