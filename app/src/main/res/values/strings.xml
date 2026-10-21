@@ -301,6 +301,7 @@
     <string name="network_deep_measuring">Measuring stream · %1$d bytes received</string>
     <string name="network_deep_complete">Deep stream check complete</string>
     <string name="network_deep_failed">Deep stream check could not complete</string>
+    <string name="network_deep_stalled">Stream stalled during the check</string>
     <string name="network_deep_cancelled">Deep stream check cancelled; playback is available</string>
     <string name="network_export_report">Export report</string>
     <string name="network_copied">Redacted network report copied</string>

@@ -6,6 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MainNavigationPolicyTest {
+    @Test fun accountSwitchLoginDoesNotOpenImeBeforeBackCanReturnToHome() {
+        assertFalse(shouldAutoShowLoginKeyboard(isTelevision = true, switchingAccount = true))
+        assertTrue(shouldAutoShowLoginKeyboard(isTelevision = true, switchingAccount = false))
+        assertFalse(shouldAutoShowLoginKeyboard(isTelevision = false, switchingAccount = false))
+    }
     @Test fun openCategoryAndQuerySurviveShellStateRestoration() {
         val beforeRotation = ShellBrowseState(categoryId = "201", query = "No Length")
         val restored = ShellBrowseState.restore(beforeRotation.savedFields())

@@ -177,6 +177,13 @@ class NetworkDiagnosisTest {
         assertTrue(measured.contains("provider_server_errors"))
     }
 
+    @Test fun deepStreamStallFindingIncludesDurationAndBytePosition() {
+        val finding = NetworkDiagnosis.diagnose(wifi, ProbeResults(
+            streamStalls = 1, streamStallDurationSeconds = 8, streamBytesAtStallMb = 0.262144
+        )).single { it.id == "stream_stalls" }
+        assertEquals("The stream stopped sending data for 8 s after 0.26 MB.", finding.evidence)
+    }
+
     @Test fun captivePortalSuppressesRelatedDnsSymptomAndRanksFirst() {
         val findings = NetworkDiagnosis.diagnose(wifi.copy(captivePortal = true),
             recent = RecentEventSummary(dnsFailureCount = 1), probes = ProbeResults(failedSamples = 2))

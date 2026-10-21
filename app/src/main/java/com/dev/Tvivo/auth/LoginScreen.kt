@@ -64,6 +64,7 @@ import com.dev.Tvivo.data.AppError
 @Composable
 fun LoginScreen(
     onAuthenticated: (AuthenticatedAccount) -> Unit,
+    showKeyboardOnOpen: Boolean = true,
     viewModel: LoginViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -90,7 +91,7 @@ fun LoginScreen(
         runCatching { serverFocus.requestFocus() }
         // A TV remote needs an explicit invitation to type. On a handset, opening the
         // keyboard before the user taps a field obscures the form for no benefit.
-        if (isTelevision) keyboard?.show()
+        if (isTelevision && showKeyboardOnOpen) keyboard?.show()
     }
 
     // On a handset, Back after typing must not leave an invisible text-field focus owner

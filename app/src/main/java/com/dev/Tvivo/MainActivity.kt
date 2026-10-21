@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+internal fun shouldAutoShowLoginKeyboard(isTelevision: Boolean, switchingAccount: Boolean): Boolean =
+    isTelevision && !switchingAccount
+
 /**
  * The one place a movie or channel URL is built and handed to the player.
  *
@@ -417,6 +420,8 @@ private fun TvivoApp() {
         )
 
         Route.Login -> LoginScreen(
+            showKeyboardOnOpen = shouldAutoShowLoginKeyboard(
+                isTelevision = LocalIsTelevision.current, switchingAccount = switchingAccount != null),
             onAuthenticated = { authenticated ->
                 // Re-read the account: after a sign-out or a switch, the strip on Home
                 // would otherwise still describe the previous subscription.

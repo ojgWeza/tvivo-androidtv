@@ -186,7 +186,10 @@ fun NetworkDiagnosticsScreen(accountPartition: String, credentials: Credentials)
                 DeepStreamPhase.CONNECTING -> stringResource(R.string.network_deep_connecting)
                 DeepStreamPhase.MEASURING -> stringResource(R.string.network_deep_measuring, state.measurement?.bytes ?: 0)
                 DeepStreamPhase.COMPLETE -> stringResource(R.string.network_deep_complete)
-                DeepStreamPhase.FAILED -> stringResource(R.string.network_deep_failed)
+                DeepStreamPhase.FAILED -> stringResource(
+                    if ((state.measurement?.stalls ?: 0) > 0) R.string.network_deep_stalled
+                    else R.string.network_deep_failed
+                )
                 DeepStreamPhase.CANCELLED -> stringResource(R.string.network_deep_cancelled)
             }
             Text(label, color = AppColors.Dim, style = TvType.body, modifier = Modifier.testTag("networkDeepProgress"))
