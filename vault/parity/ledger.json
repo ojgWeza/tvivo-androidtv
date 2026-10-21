@@ -464,6 +464,22 @@
         "app/src/main/java/com/dev/Tvivo/ui/browse/ContentGrid.kt",
         ".codex-android-qa-exec-report.md#tv-rail-focus-fix--device-verify"
       ]
+    },
+    {
+      "id": "A-TV-BACK-FOCUS",
+      "title": "TV Back return restores a focused landing target",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "HAS"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/ui/home/HomeScreen.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/browse/CatalogLandingScreen.kt",
+        ".codex-android-qa-exec-report.md#tv-rail-final-device-verify"
+      ]
     }
   ]
 }

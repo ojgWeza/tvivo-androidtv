@@ -234,6 +234,26 @@ fun HomeScreen(
         if (index >= 0) listState.scrollToItem(index + 1)
         else onPendingFocusConsumed()
     }
+    LaunchedEffect(accountId, shelves.map { it.id }, pendingFocusCardKey, snapshot?.isFirstRun) {
+        if (!television || pendingFocusCardKey != null || snapshot?.isFirstRun != false) return@LaunchedEffect
+        val targetShelfId = lastFocusedShelfId?.takeIf { id -> shelves.any { it.id == id } }
+            ?: firstNonEmptyShelfId
+        if (targetShelfId != null) {
+            val rowIndex = shelfRowIndexes[targetShelfId] ?: return@LaunchedEffect
+            listState.scrollToItem(rowIndex)
+            repeat(60) {
+                if (shelfFocusRegistry.request(targetShelfId)) return@LaunchedEffect
+                androidx.compose.runtime.withFrameNanos {}
+            }
+        }
+        if (shellFocus != null) {
+            repeat(60) {
+                runCatching { shellFocus.topBar.requestFocus() }
+                if (shellFocus.topBarFocused) return@LaunchedEffect
+                androidx.compose.runtime.withFrameNanos {}
+            }
+        }
+    }
 
     LandingScaffold(
         state = listState,

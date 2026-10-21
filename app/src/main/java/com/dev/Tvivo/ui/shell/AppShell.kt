@@ -62,7 +62,9 @@ import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 
-data class ShellFocus(val topBar: FocusRequester, val firstContent: FocusRequester)
+class ShellFocus(val topBar: FocusRequester, val firstContent: FocusRequester) {
+    var topBarFocused by mutableStateOf(false)
+}
 val LocalShellFocus = staticCompositionLocalOf<ShellFocus?> { null }
 
 @Composable
@@ -99,6 +101,7 @@ fun AppShell(
                     TabButton(tab, selected, onSelect,
                         underlineSelected = true,
                         modifier = if (tab == selected) Modifier.focusRequester(shellFocus.topBar)
+                            .onFocusChanged { shellFocus.topBarFocused = it.isFocused }
                             else Modifier)
                 }
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))

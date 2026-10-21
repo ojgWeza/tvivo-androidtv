@@ -333,17 +333,26 @@ fun CatalogLandingScreen(
         if (!restoreLandingCard || !pinnedLoaded) return@LaunchedEffect
         val shelfId = lastFocusedShelfId?.takeIf { it in nonEmptyRowKeys }
             ?: nonEmptyRowKeys.firstOrNull()
-        val rowIndex = shelfId?.let(rowIndexes::getValue) ?: return@LaunchedEffect
-        listState.scrollToItem(if (rowIndex == 1) 0 else rowIndex)
-        repeat(60) {
-            androidx.compose.runtime.withFrameNanos {}
-            if (shelfFocusRegistry.request(shelfId)) {
-                restoreLandingCard = false
-                return@LaunchedEffect
+        if (shelfId != null) {
+            val rowIndex = rowIndexes.getValue(shelfId)
+            listState.scrollToItem(if (rowIndex == 1) 0 else rowIndex)
+            repeat(60) {
+                if (shelfFocusRegistry.request(shelfId)) {
+                    restoreLandingCard = false
+                    return@LaunchedEffect
+                }
+                androidx.compose.runtime.withFrameNanos {}
             }
         }
-        requesters[rowKeys[rowIndex - 1]]?.let { row ->
-            if (runCatching { row.requestFocus() }.isSuccess) restoreLandingCard = false
+        if (shellFocus != null) {
+            repeat(60) {
+                runCatching { shellFocus.topBar.requestFocus() }
+                if (shellFocus.topBarFocused) {
+                    restoreLandingCard = false
+                    return@LaunchedEffect
+                }
+                androidx.compose.runtime.withFrameNanos {}
+            }
         }
     }
 

@@ -88,6 +88,7 @@ fun ShelfRow(
     }
     val state = rememberLazyListState()
     var lastFocusedKey by rememberSaveable(focusIdentity) { mutableStateOf<String?>(null) }
+    var focusedCardKey by remember(focusIdentity) { mutableStateOf<String?>(null) }
     val itemRequester = remember { FocusRequester() }
     val headerRequester = seeAllRequester ?: remember { FocusRequester() }
     val headerVisibility = rememberShelfHeaderVisibility(screenHeadingRequester)
@@ -140,9 +141,10 @@ fun ShelfRow(
             val targetKey = shelf.cards[targetIndex].key
             lastFocusedKey = targetKey
             state.scrollToItem(targetIndex)
-            repeat(5) {
+            repeat(60) {
                 withFrameNanos {}
-                if (runCatching { itemRequester.requestFocus() }.isSuccess) return@register true
+                runCatching { itemRequester.requestFocus() }
+                if (focusedCardKey == targetKey) return@register true
             }
             false
         }
@@ -292,8 +294,9 @@ fun ShelfRow(
                         .onFocusChanged {
                             if (it.isFocused) {
                                 lastFocusedKey = card.key
+                                focusedCardKey = card.key
                                 scope.launch { headerVisibility.revealShelf() }
-                            }
+                            } else if (focusedCardKey == card.key) focusedCardKey = null
                         }
                         .focusProperties {
                             if (!television || !showSeeAll) aboveRequester?.let { up = it }
