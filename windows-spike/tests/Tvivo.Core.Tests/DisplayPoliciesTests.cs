@@ -6,6 +6,21 @@ namespace Tvivo.Core.Tests;
 public sealed class DisplayPoliciesTests
 {
     [Theory]
+    [InlineData(StreamKind.Movie, null, false, true)]
+    [InlineData(StreamKind.Episode, null, false, true)]
+    [InlineData(StreamKind.Series, null, false, false)]
+    [InlineData(StreamKind.Live, null, false, false)]
+    [InlineData(StreamKind.Movie, 1400000000L, false, false)]
+    [InlineData(StreamKind.Episode, null, true, false)]
+    public void File_size_probe_policy_limits_kind_and_rechecks_missing(StreamKind kind, long? sizeBytes,
+        bool checkedRecently, bool expected)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var checkedAt = checkedRecently ? now.AddDays(-6) : (DateTimeOffset?)null;
+        Assert.Equal(expected, FileSizeProbePolicy.ShouldProbe(kind, sizeBytes, checkedAt, now));
+    }
+
+    [Theory]
     [InlineData(StreamKind.Movie, true)]
     [InlineData(StreamKind.Episode, true)]
     [InlineData(StreamKind.Series, false)]

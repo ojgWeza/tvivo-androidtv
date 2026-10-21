@@ -104,6 +104,7 @@ public partial class App : Application
         services.AddSingleton<IEpgProvider>(sp => (IEpgProvider)sp.GetRequiredService<ICatalogProvider>());
         services.AddSingleton<EpgCoordinator>();
         services.AddSingleton<SqliteCatalogRepository>();
+        services.AddSingleton<IFileSizeProbe>(_ => new HttpFileSizeProbe(log: LaunchDiagnostics.Write));
         services.AddSingleton<SpotlightSettingsService>();
         services.AddSingleton<CatalogRefreshService>();
         services.AddSingleton<ICredentialStore, DpapiCredentialStore>();

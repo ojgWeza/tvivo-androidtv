@@ -56,6 +56,9 @@ public sealed partial class MainWindow : Window
     private readonly AccountPage _accountPage;
     private readonly CatalogLandingPage _catalogLandingPage;
     private readonly SqliteCatalogRepository _catalogRepository;
+    private readonly IFileSizeProbe _fileSizeProbe;
+    private CancellationTokenSource? _fileSizeProbeCts;
+    private readonly HashSet<string> _fileSizeProbedThisSession = new(StringComparer.Ordinal);
     private readonly PlaybackHandoff _playbackHandoff = new(TimeSpan.FromMilliseconds(350));
     private ShellPage? _currentPage;
     private ShellPage _playerReturnPage = ShellPage.Catalog;
@@ -277,6 +280,7 @@ public sealed partial class MainWindow : Window
         _catalogLandingPage = new CatalogLandingPage();
         _homePage.UseArtworkPipeline(_catalogLandingPage);
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
+        _fileSizeProbe = App.Services.GetRequiredService<IFileSizeProbe>();
         InitializeComponent();
         SleepTimerStateChanged += MainWindow_SleepTimerStateChanged;
         _sleepTimerNoticeTimer.Tick += SleepTimerNoticeTimer_Tick;
@@ -1756,6 +1760,7 @@ public sealed partial class MainWindow : Window
 
     private async void CatalogLandingPage_ChannelSelected(object? sender, ChannelSelectedEventArgs args)
     {
+        CancelFileSizeProbe();
         var selectedChannel = args.Channel;
         var focusBefore = FocusDescriptor(FocusManager.GetFocusedElement(WindowRoot.XamlRoot));
         LaunchDiagnostics.Write($"event=selection.source via={args.Via} input={args.Input} key={args.Key} device={args.Device} focusBefore={focusBefore}");
@@ -2308,6 +2313,8 @@ public sealed partial class MainWindow : Window
         };
         if (episode.SizeBytes is { } bytes)
             metadata["size_bytes"] = bytes.ToString(CultureInfo.InvariantCulture);
+        else if (_catalogRepository.GetEpisodeFileSize(account, episode.Id).SizeBytes is { } savedBytes)
+            metadata["size_bytes"] = savedBytes.ToString(CultureInfo.InvariantCulture);
         return new Channel(account.AccountId, episode.Id, seriesId, displayName, displayName,
             SeriesArtworkPolicy.InheritEpisode(null, _currentSeriesArtwork), null,
             episode.EpisodeNumber, episode.Source,
@@ -2316,6 +2323,7 @@ public sealed partial class MainWindow : Window
 
     private bool OpenSeriesEpisode(Channel episode, bool preserveCompact = false, bool autoplayNext = false)
     {
+        CancelFileSizeProbe();
         if (autoplayNext && ShouldStopBeforeStartingNextItem()) return false;
         var startedAt = Stopwatch.GetTimestamp();
         LaunchDiagnostics.Write("event=episode.open.start ms=0");
@@ -3441,6 +3449,7 @@ public sealed partial class MainWindow : Window
                 : resumePosition > 0 ? resumePosition : null;
             _activePlaybackSessionGeneration = generation;
             _resumeReady = true;
+            StartFileSizeProbeForCurrentItem(generation);
         }
         if (result == PlaybackAttemptResult.FirstFrame)
             SetPauseButtonState(_playbackIntent == PlaybackUserIntent.Paused ? "Play" : "Pause");
@@ -3517,6 +3526,7 @@ public sealed partial class MainWindow : Window
 
     private void StopPlaybackForNavigation()
     {
+        CancelFileSizeProbe();
         CancelPlayerSelectionResolution();
         CancelRecentlyLeftCooldown();
         CancelSleepTimer("navigation");
@@ -3764,6 +3774,96 @@ public sealed partial class MainWindow : Window
         if (metadata is not null && _catalogLandingPage.Account is { } account)
             _catalogRepository.SaveMetadata(account, type, channel.Id, metadata);
         _catalogLandingPage.NotifyMetadataChanged(_catalogLandingPage.Account?.AccountId ?? channel.ProviderAccountId, type, channel.Id);
+    }
+
+    private void StartFileSizeProbeForCurrentItem(long generation)
+    {
+        if (_nowPlayingChannel is not { } channel || _currentSource?.DirectUri is not { } mediaUri ||
+            channel.Source.Kind is not (StreamKind.Movie or StreamKind.Episode)) return;
+        var account = channel.Source.Kind == StreamKind.Episode
+            ? _currentSeriesAccount ?? _catalogLandingPage.Account
+            : _catalogLandingPage.Account;
+        if (account is null) return;
+        var type = channel.Source.Kind;
+        var key = $"{account.AccountId}|{type}|{channel.Id}";
+        if (!_fileSizeProbedThisSession.Add(key)) return;
+
+        CancelFileSizeProbe();
+        var cancellation = new CancellationTokenSource();
+        _fileSizeProbeCts = cancellation;
+        _ = Task.Run(() => ProbeCurrentFileSizeAsync(channel, account, type, mediaUri, generation, cancellation));
+    }
+
+    private async Task ProbeCurrentFileSizeAsync(Channel channel, ProviderAccount account, StreamKind kind,
+        Uri mediaUri, long generation, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            while (!_engine.IsPlaying)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (generation != Volatile.Read(ref _playbackSessionGeneration) || _isClosing) return;
+                await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
+            }
+            long? knownSize;
+            DateTimeOffset? checkedAt;
+            if (kind == StreamKind.Movie)
+            {
+                var metadata = _catalogRepository.GetMetadata(account, CatalogItemType.Movie, channel.Id);
+                knownSize = metadata?.SizeBytes ?? FileSizeFormatter.ParseBytes(channel.Metadata.GetValueOrDefault("size_bytes"));
+                checkedAt = metadata?.SizeCheckedAt;
+            }
+            else
+            {
+                (knownSize, checkedAt) = _catalogRepository.GetEpisodeFileSize(account, channel.Id);
+                knownSize ??= FileSizeFormatter.ParseBytes(channel.Metadata.GetValueOrDefault("size_bytes"));
+            }
+            if (!FileSizeProbePolicy.ShouldProbe(kind, knownSize, checkedAt, DateTimeOffset.UtcNow)) return;
+
+            var size = await _fileSizeProbe.ProbeAsync(mediaUri, cancellation.Token).ConfigureAwait(false);
+            if (cancellation.IsCancellationRequested) return;
+            var probedAt = DateTimeOffset.UtcNow;
+            if (kind == StreamKind.Movie)
+                _catalogRepository.SaveMovieFileSize(account, channel.Id, size, probedAt);
+            else
+                _catalogRepository.SaveEpisodeFileSize(account, channel.Id, size, probedAt);
+
+            WindowRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                if (cancellation.IsCancellationRequested || _isClosing || generation != Volatile.Read(ref _playbackSessionGeneration) ||
+                    _nowPlayingChannel?.Id != channel.Id || _nowPlayingChannel?.Source.Kind != kind) return;
+                var formattedSize = size?.ToString(CultureInfo.InvariantCulture);
+                foreach (var target in _playerEntries.Select(entry => entry.Channel).Append(channel)
+                             .Where(target => target.Id == channel.Id))
+                {
+                    if (target.Metadata is not IDictionary<string, string> values) continue;
+                    if (formattedSize is not null) values["size_bytes"] = formattedSize;
+                    else values.Remove("size_bytes");
+                }
+                SetPlayerMetadata(_currentSeriesMetadata, kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Series);
+                foreach (var entry in _playerEntries.Where(entry => entry.Channel.Id == channel.Id))
+                    entry.RefreshFileSize();
+                if (kind == StreamKind.Movie)
+                    _catalogLandingPage.NotifyMetadataChanged(account.AccountId, CatalogItemType.Movie, channel.Id);
+            });
+        }
+        catch
+        {
+            // File size is optional metadata; probe failures never surface in playback UI.
+        }
+        finally
+        {
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _fileSizeProbeCts, null, cancellation), cancellation))
+                cancellation.Dispose();
+        }
+    }
+
+    private void CancelFileSizeProbe()
+    {
+        var cancellation = Interlocked.Exchange(ref _fileSizeProbeCts, null);
+        if (cancellation is null) return;
+        cancellation.Cancel();
+        cancellation.Dispose();
     }
 
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
@@ -6222,6 +6322,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        CancelFileSizeProbe();
         if (!_closeRequestLogged) LogCloseRequested(_pendingNativeCloseVia ?? "unknown");
         _ = Task.Run(async () =>
         {
@@ -6442,6 +6543,12 @@ public sealed partial class MainWindow : Window
             OnPropertyChanged(nameof(ProgressValue));
             OnPropertyChanged(nameof(ProgressAutomationName));
             OnPropertyChanged(nameof(IsFinished));
+        }
+
+        public void RefreshFileSize()
+        {
+            OnPropertyChanged(nameof(FileSizeText));
+            OnPropertyChanged(nameof(FileSizeVisibility));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

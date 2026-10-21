@@ -28,7 +28,7 @@ public sealed record PlaybackProgressPresentation(bool IsVisible, double Value, 
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 18;
+    private const int SchemaVersion = 19;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -47,7 +47,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != 17 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != 17 && version != 18 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -122,6 +122,12 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 17)
                 MigrateFileSizeCheckTime(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 18)
+                MigrateEpisodeFileSize(connection);
+        }
         using var refreshState = connection.CreateCommand();
         refreshState.CommandText = "CREATE TABLE IF NOT EXISTS catalog_refresh_state(account_id TEXT NOT NULL,type TEXT NOT NULL,last_success_utc_ms INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
         refreshState.ExecuteNonQuery();
@@ -146,6 +152,38 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, "ALTER TABLE items ADD COLUMN size_checked_at INTEGER; PRAGMA user_version=18;");
         transaction.Commit();
+    }
+
+    private static void MigrateEpisodeFileSize(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "ALTER TABLE media_progress ADD COLUMN size_bytes INTEGER; ALTER TABLE media_progress ADD COLUMN size_checked_at INTEGER; PRAGMA user_version=19;");
+        transaction.Commit();
+    }
+
+    public void SaveEpisodeFileSize(ProviderAccount account, string episodeId, long? sizeBytes, DateTimeOffset checkedAt)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO media_progress(account_id,kind,item_id,resume_ms,updated_at,size_bytes,size_checked_at) VALUES($account,'episode',$id,0,$checked,$size,$checked) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET size_bytes=excluded.size_bytes,size_checked_at=excluded.size_checked_at";
+        command.Parameters.AddWithValue("$size", (object?)sizeBytes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$checked", checkedAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$id", episodeId);
+        command.ExecuteNonQuery();
+    }
+
+    public (long? SizeBytes, DateTimeOffset? CheckedAt) GetEpisodeFileSize(ProviderAccount account, string episodeId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT size_bytes,size_checked_at FROM media_progress WHERE account_id=$account AND kind='episode' AND item_id=$id";
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$id", episodeId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return (null, null);
+        return (reader.IsDBNull(0) ? null : reader.GetInt64(0),
+            reader.IsDBNull(1) ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(1)));
     }
 
     private static void MigrateFavorites(SqliteConnection connection)
@@ -182,6 +220,18 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.Parameters.AddWithValue("$checkedAt", (metadata.SizeCheckedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$id", itemId);
+        command.ExecuteNonQuery();
+    }
+
+    public void SaveMovieFileSize(ProviderAccount account, string itemId, long? sizeBytes, DateTimeOffset checkedAt)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE items SET size_bytes=$size,size_checked_at=$checked WHERE account_id=$account AND type='Movie' AND id=$id";
+        command.Parameters.AddWithValue("$size", (object?)sizeBytes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$checked", checkedAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$account", account.AccountId);
         command.Parameters.AddWithValue("$id", itemId);
         command.ExecuteNonQuery();
     }

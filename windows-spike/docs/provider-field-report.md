@@ -6,7 +6,7 @@ Collected 2026-10-21 by a read-only probe: one listing/info request at a time, n
 - Movies list: 49,043 items, 0 with any size-like field (size, filesize, file_size, size_bytes).
 - get_vod_info (5 sampled movies): fields include bitrate, duration, duration_secs, audio, video; no size field.
 - get_series_info (3 sampled series, 69 episodes): episode info has bitrate, duration, duration_secs, audio, video; no size field.
-- Conclusion: this provider sends no file sizes for movies or episodes. Tvivo shows a size only when one exists, so none appears. The only way to get one is the optional "check the provider" probe (HEAD / Range request), not yet built.
+- Conclusion: this provider sends no file sizes for movies or episodes; sizes are now learned by an automatic Range probe on open.
 
 ## Artwork
 - Movies: 49,043 items; stream_icon http 47,954, https 477, empty 612 (1.2%).
