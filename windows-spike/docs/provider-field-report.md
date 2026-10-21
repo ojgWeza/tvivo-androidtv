@@ -1,5 +1,15 @@
-# Provider field report
+# Provider field report (redacted, counts only)
 
-Status: Not collected.
+Collected 2026-10-21 by a read-only probe: one listing/info request at a time, no streams. No credentials, hosts, URLs or titles recorded.
 
-The session could write only inside the repository workspace, so it could not create the requested probe project under `D:\Scratch`. Outbound sockets are blocked in this environment, so provider API requests could not run. No account or database data was read, and no provider aggregates are available.
+## File size
+- Movies list: 49,043 items, 0 with any size-like field (size, filesize, file_size, size_bytes).
+- get_vod_info (5 sampled movies): fields include bitrate, duration, duration_secs, audio, video; no size field.
+- get_series_info (3 sampled series, 69 episodes): episode info has bitrate, duration, duration_secs, audio, video; no size field.
+- Conclusion: this provider sends no file sizes for movies or episodes. Tvivo shows a size only when one exists, so none appears. The only way to get one is the optional "check the provider" probe (HEAD / Range request), not yet built.
+
+## Artwork
+- Movies: 49,043 items; stream_icon http 47,954, https 477, empty 612 (1.2%).
+- Series: 14,276 items; cover http 8,714, https 4,537, empty 1,024 (7.2%), one value containing a space.
+- Series backdrop_path is an array or null; a usable first entry on about 6,100 items.
+- Conclusion: almost all artwork is delivered as absolute URLs. Items with no image are the provider sending an empty value (about 1.2% of movies, 7.2% of series). The InvalidArtworkUri log event fires when the stored URL is empty, so it reflects those provider gaps, not a parsing bug. Only one series cover has an illegal space.
