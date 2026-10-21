@@ -120,7 +120,8 @@ internal fun browseSortStateKey(accountKey: String, profileId: String, contentTy
 class BrowseViewModel(
     application: Application,
     private val savedState: SavedStateHandle,
-    val contentType: ContentType
+    val contentType: ContentType,
+    private val initialCategoryId: String = VirtualFolder.RECENTLY_ADDED.id
 ) : AndroidViewModel(application) {
 
     private val db = AppDatabase.get(application)
@@ -247,16 +248,14 @@ class BrowseViewModel(
                         it.copy(
                             categories = categories,
                             isLoadingCategories = false,
-                            selectedCategoryId = it.selectedCategoryId
-                                ?: VirtualFolder.RECENTLY_ADDED.id
-                                ?: categories.firstOrNull()?.categoryId
+                            selectedCategoryId = selectedBrowseCategory(it.selectedCategoryId, initialCategoryId)
                         )
                     }
                     // The rail opens on the first row, and the first row is now a
                     // virtual folder — so that is what the grid must be showing, or the
                     // highlight and the content disagree on entry.
                     if (selectedCategory.value == null) {
-                        val first = virtuals.firstOrNull { it.categoryId == VirtualFolder.RECENTLY_ADDED.id }?.categoryId
+                        val first = virtuals.firstOrNull { it.categoryId == initialCategoryId }?.categoryId
                             ?: categories.firstOrNull()?.categoryId
                         first?.let { selectCategory(it) }
                     }

@@ -34,4 +34,15 @@ class CategoryPickerStateTest {
         assertFalse(categoryPickerCanSelect(openBeforeRotation, modeSettled = false))
         assertTrue(categoryPickerCanSelect(openBeforeRotation, modeSettled = true))
     }
+
+    @Test fun tvBrowseRestoresSelectionAndBackWalksGridRailPreviousTab() {
+        assertEquals(VirtualFolder.ALL.id,
+            selectedBrowseCategory(null, VirtualFolder.ALL.id))
+        assertEquals("provider-category",
+            selectedBrowseCategory("provider-category", VirtualFolder.ALL.id))
+        assertEquals(TvBrowseBackAction.FocusRail, tvBrowseBackAction(true))
+        assertEquals(TvBrowseBackAction.ReturnToPreviousTab, tvBrowseBackAction(false))
+        assertEquals(TvBrowseContentTarget.Recovery, tvBrowseContentTarget(0))
+        assertEquals(TvBrowseContentTarget.Grid, tvBrowseContentTarget(1))
+    }
 }

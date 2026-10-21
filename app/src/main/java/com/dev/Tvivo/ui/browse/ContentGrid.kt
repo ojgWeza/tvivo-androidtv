@@ -89,6 +89,7 @@ fun ContentGrid(
     onFocused: (BrowseItem) -> Unit,
     progressFor: suspend (BrowseItem) -> Float? = { null },
     onLeadingLeft: (() -> Unit)? = null,
+    onGridFocused: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
@@ -202,6 +203,7 @@ fun ContentGrid(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(gridFocusRequester)
+            .onFocusChanged { if (it.hasFocus) onGridFocused() }
             .focusProperties {
                 enter = {
                     runCatching {

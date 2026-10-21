@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Popup
 import androidx.compose.material3.DropdownMenu
@@ -73,6 +74,7 @@ fun CategoryRail(
     filter: String,
     onFilterChanged: (String) -> Unit,
     onSelect: (CategoryEntity) -> Unit,
+    onEnterGrid: ((CategoryEntity) -> Unit)? = null,
     /** Where RIGHT goes. Without this, Compose's 2D focus search picks the header's
      *  Refresh — it is also to the right, and further from the rail than the first card
      *  only in a way the search does not weigh. The rail must reach the grid. */
@@ -87,6 +89,7 @@ fun CategoryRail(
     fullScreen: Boolean = false,
     overlayDrawer: Boolean = false,
     confineFocus: Boolean = false,
+    onRailFocused: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filterFocusRequester = remember { FocusRequester() }
@@ -157,6 +160,7 @@ fun CategoryRail(
             modifier = Modifier
                 .fillMaxHeight()
                 .focusRequester(railFocusRequester)
+                .onFocusChanged { if (it.hasFocus) onRailFocused() }
                 .focusProperties {
                     enter = { runCatching {
                         if (listState.layoutInfo.visibleItemsInfo.any { info ->
@@ -182,8 +186,9 @@ fun CategoryRail(
                     selected = category.categoryId == selectedCategoryId,
                     onSelect = {
                         DiagnosticLog.info("Browse", "category selected", "categoryId=${category.categoryId}")
-                        onSelect(category)
+                        if (onEnterGrid == null) onSelect(category) else onEnterGrid(category)
                     },
+                    onEnterGrid = onEnterGrid?.let { enter -> { enter(category) } },
                     gridFocusRequester = gridFocusRequester,
                     gridAvailable = gridAvailable,
                     confineFocus = confineFocus,
@@ -279,6 +284,7 @@ private fun RailRow(
     count: Int?,
     selected: Boolean,
     onSelect: () -> Unit,
+    onEnterGrid: (() -> Unit)? = null,
     gridFocusRequester: FocusRequester,
     gridAvailable: Boolean,
     confineFocus: Boolean,
@@ -302,6 +308,14 @@ private fun RailRow(
         modifier = Modifier
             .then(if (selectedRowRequester != null) Modifier.focusRequester(selectedRowRequester) else Modifier)
             .fillMaxWidth()
+            .onPreviewKeyEvent { event ->
+                val native = event.nativeKeyEvent
+                if (onEnterGrid != null && native.action == android.view.KeyEvent.ACTION_DOWN &&
+                    native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    onEnterGrid()
+                    true
+                } else false
+            }
             // The override belongs on the focused node itself: declared on the parent
             // focus group it is not consulted, and the 2D search picks the header's
             // Refresh instead — also to the right, and nothing weighs it as further.

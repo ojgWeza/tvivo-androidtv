@@ -288,6 +288,7 @@ private fun TvivoApp() {
     var savedTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
     var searchSeeAllReturn by rememberSaveable { mutableStateOf(false) }
     var detailOriginTab by rememberSaveable { mutableStateOf(ShellTab.MyTvivo) }
+    var topLevelHistory by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var shellBrowse by rememberSaveable(stateSaver = shellBrowseSaver) {
         mutableStateOf(ShellBrowseState())
     }
@@ -388,6 +389,7 @@ private fun TvivoApp() {
                 when (ShellNavigation.backFromTopLevel(current.tab)) {
                     ShellNavigation.BackAction.ShowExitConfirmation -> homeExitRequest++
                     ShellNavigation.BackAction.ReturnToMyTvivo -> {
+                        if (isTelevision) topLevelHistory = arrayListOf()
                         savedTab = ShellTab.MyTvivo
                         route = Route.Main(current.credentials, ShellTab.MyTvivo)
                     }
@@ -431,6 +433,7 @@ private fun TvivoApp() {
                 pendingHomeFocusKey = null
                 pendingSearchFocusKey = null
                 shellBrowse = ShellBrowseState()
+                topLevelHistory = arrayListOf()
                 lastOpened = null
                 route = Route.Main(authenticated.credentials, ShellTab.MyTvivo)
             }
@@ -444,6 +447,8 @@ private fun TvivoApp() {
             val accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) }
             fun select(tab: ShellTab) {
                 searchSeeAllReturn = false
+                if (tab != current.tab)
+                    topLevelHistory = ArrayList(topLevelHistory).apply { add(current.tab.name) }
                 savedTab = tab
                 shellBrowse = shellBrowse.copy(categoryId = null)
                 route = Route.Main(current.credentials, tab)
@@ -528,6 +533,7 @@ private fun TvivoApp() {
                                         shelf.id.startsWith("__my_favorites_") -> VirtualFolder.FAVOURITES.id
                                         else -> null
                                     })
+                                    topLevelHistory = ArrayList(topLevelHistory).apply { add(current.tab.name) }
                                     savedTab = when (shelf.type) {
                                         ContentType.MOVIES -> ShellTab.Movies
                                         ContentType.SERIES -> ShellTab.Series
@@ -563,6 +569,7 @@ private fun TvivoApp() {
                                 pendingHomeFocusKey = null
                                 pendingSearchFocusKey = null
                                 shellBrowse = ShellBrowseState()
+                                topLevelHistory = arrayListOf()
                                 route = Route.Login
                             },
                             onSwitchAccount = {
@@ -595,7 +602,16 @@ private fun TvivoApp() {
                                 onShellSortStateChanged = { shellSortChoice = it },
                                 pendingFocusCardKey = pendingCatalogFocusKey,
                                 onPendingFocusConsumed = { pendingCatalogFocusKey = null },
-                                onReturnToLanding = { shellBrowse = shellBrowse.copy(categoryId = null) },
+                                onReturnToLanding = {
+                                    if (isTelevision) {
+                                        val destination = topLevelHistory.lastOrNull()
+                                            ?.let { name -> ShellTab.entries.firstOrNull { it.name == name } }
+                                            ?: ShellTab.MyTvivo
+                                        topLevelHistory = ArrayList(topLevelHistory.dropLast(1))
+                                        savedTab = destination
+                                        route = Route.Main(current.credentials, destination)
+                                    } else shellBrowse = shellBrowse.copy(categoryId = null)
+                                },
                                 onOpenDetail = { item, shelfId ->
                                     pendingCatalogFocusKey = ShelfRestoreKey.of(
                                         shelfId, "${type.name}:${item.id}")

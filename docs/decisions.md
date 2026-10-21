@@ -1982,3 +1982,22 @@ Known-runtime EOF after the stream drains now reaches the ended UI and clamps
 resume saves to runtime; an early EOF leaves the item unwatched. Live buffering
 gets one reconnect even before first progress. Open category and Search query
 live in shell saveable state so the compact/expanded layout swap retains them.
+
+## Android TV browse rail and recovery (2026-10-21)
+
+The TV category picker and shelf landing added an intermediate page and left focus
+restoration split between the landing and opened grid. TV content tabs now mount
+the existing category rail beside the paged grid, starting on All and retaining
+each type's selection and last card through the browse view model. Category changes
+remount the grid by category ID so scroll and focus state from the prior category
+cannot be reused. Right or OK on a rail row selects it and enters the grid; Back
+returns through the selected rail row to the previous top-level tab. Phone and
+tablet keep the shelf landing and picker flow.
+The TV shell strip keeps the six destinations; browse Sort and Refresh sit in
+the rail/header, while Theme remains in Settings.
+
+When the TV grid has no cards, its loading, error, empty, and filter-miss states
+keep an attached focusable action in the content pane. Refresh category uses the
+existing manual refresh path, which bypasses the category TTL. Focus targets must
+follow the rendered grid or recovery action; direct requests are guarded and
+retried after layout. Device D-pad validation is still required.

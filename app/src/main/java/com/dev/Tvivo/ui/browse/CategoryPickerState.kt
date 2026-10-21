@@ -23,3 +23,16 @@ internal fun categoryPickerIsOpenAfter(action: CategoryPickerAction): Boolean = 
 /** A mode breakpoint remounts the rail; don't accept a carried activation during that frame. */
 internal fun categoryPickerCanSelect(isOpen: Boolean, modeSettled: Boolean): Boolean =
     isOpen && modeSettled
+
+internal enum class TvBrowseBackAction { FocusRail, ReturnToPreviousTab }
+
+internal fun tvBrowseBackAction(gridHasFocus: Boolean): TvBrowseBackAction =
+    if (gridHasFocus) TvBrowseBackAction.FocusRail else TvBrowseBackAction.ReturnToPreviousTab
+
+internal fun selectedBrowseCategory(restoredId: String?, defaultId: String): String =
+    restoredId ?: defaultId
+
+internal enum class TvBrowseContentTarget { Grid, Recovery }
+
+internal fun tvBrowseContentTarget(cardCount: Int): TvBrowseContentTarget =
+    if (cardCount > 0) TvBrowseContentTarget.Grid else TvBrowseContentTarget.Recovery

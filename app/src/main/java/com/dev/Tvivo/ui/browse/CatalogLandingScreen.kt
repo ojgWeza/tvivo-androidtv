@@ -109,6 +109,17 @@ fun CatalogLandingScreen(
     onOpenDetailFromGrid: (BrowseItem) -> Unit = { item -> onOpenDetail(item, "") },
     onPlayFromGrid: (BrowseItem, Long) -> Unit = { item, position -> onPlay(item, position, "") }
 ) {
+    if (LocalIsTelevision.current) {
+        BrowseScreen(
+            contentType = contentType,
+            accountId = accountId,
+            initialCategoryId = initialCategoryId,
+            onBackToLanding = onReturnToLanding,
+            onOpenDetail = onOpenDetailFromGrid,
+            onPlay = onPlayFromGrid
+        )
+        return
+    }
     val openCategoriesDescription = stringResource(R.string.categories_open_accessibility)
     val contentTypeLabel = stringResource(contentType.labelResource)
     val application = LocalContext.current.applicationContext as android.app.Application

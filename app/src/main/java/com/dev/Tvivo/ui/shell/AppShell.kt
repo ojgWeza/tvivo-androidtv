@@ -104,11 +104,6 @@ fun AppShell(
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                 ShellActionButton(stringResource(com.dev.Tvivo.R.string.nav_search), Icons.Default.Search,
                     enabled = true, onClick = { onSelect(ShellTab.Search) })
-                ShellSortButton(sortChoice, sortEnabled, openedCategory, onSortSelected)
-                ShellActionButton(stringResource(com.dev.Tvivo.R.string.common_refresh), Icons.Default.Refresh,
-                    enabled = refreshEnabled, onClick = onRefresh)
-                ShellActionButton(stringResource(com.dev.Tvivo.R.string.theme), "◐",
-                    enabled = true, onClick = onTheme)
                 ShellActionButton(stringResource(com.dev.Tvivo.R.string.nav_settings), Icons.Default.Settings,
                     enabled = true, onClick = { onSelect(ShellTab.Settings) })
             }

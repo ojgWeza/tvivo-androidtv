@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -104,13 +105,16 @@ fun BrowseScreen(
     onPlay: (BrowseItem, Long) -> Unit
 ) {
     val application = LocalContext.current.applicationContext as android.app.Application
+    val television = LocalIsTelevision.current
+    val tvBrowse = television && !landingMode
     // Keyed by content type: Live and Movies are separate screens with separate
     // categories, selection and focus, and must not share one instance.
     val viewModel: BrowseViewModel = viewModel(
         key = "browse:${accountId ?: "stored"}:${contentType.name}",
         factory = viewModelFactory {
             initializer {
-                BrowseViewModel(application, createSavedStateHandle(), contentType)
+                BrowseViewModel(application, createSavedStateHandle(), contentType,
+                    if (tvBrowse) VirtualFolder.ALL.id else VirtualFolder.RECENTLY_ADDED.id)
             }
         }
     )
@@ -121,7 +125,10 @@ fun BrowseScreen(
     var categoryApplied by remember(initialCategoryId) { mutableStateOf(false) }
     LaunchedEffect(initialCategoryId, state.visibleCategories) {
         if (!categoryApplied && initialCategoryId != null &&
-            state.visibleCategories.any { it.categoryId == initialCategoryId }) {
+            (state.visibleCategories.any { it.categoryId == initialCategoryId } ||
+                (tvBrowse && (state.virtualCategories + state.categories)
+                    .any { it.categoryId == initialCategoryId }))) {
+            if (tvBrowse && state.categoryFilter.isNotBlank()) viewModel.onCategoryFilterChanged("")
             if (state.selectedCategoryId != initialCategoryId)
                 viewModel.selectCategory(initialCategoryId, forceRecordVisit = landingMode)
             if (!initialItemFilter.isNullOrBlank() && state.itemFilter.isBlank()) {
@@ -135,7 +142,7 @@ fun BrowseScreen(
     var contextMenuItem by remember { mutableStateOf<BrowseItem?>(null) }
     var resumePromptItem by remember { mutableStateOf<Pair<BrowseItem, Long>?>(null) }
     val scope = rememberCoroutineScope()
-    val compactPhone = !LocalIsTelevision.current &&
+    val compactPhone = !television &&
         LocalWindowSizeClass.current == WindowSizeClass.Compact
     val categoryPickerMode = CategoryPickerMode.forEnvironment(
         LocalIsTelevision.current, LocalWindowSizeClass.current
@@ -152,6 +159,9 @@ fun BrowseScreen(
     val categoriesFocusRequester = remember { FocusRequester() }
     val gridFocusRequester = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
+    val recoveryFocusRequester = remember { FocusRequester() }
+    var focusInGrid by remember { mutableStateOf(false) }
+    var recoveryFocused by remember { mutableStateOf(false) }
     // Retain picker position when adaptive mode moves the rail between the page and drawer.
     val categoryListState = rememberLazyListState()
     val itemFilterFocusRequester = remember { FocusRequester() }
@@ -175,6 +185,19 @@ fun BrowseScreen(
             androidx.compose.runtime.withFrameNanos {}
             runCatching { categoriesFocusRequester.requestFocus() }
         }
+    }
+    BackHandler(enabled = tvBrowse && !state.isItemFilterOpen && contextMenuItem == null && resumePromptItem == null) {
+        if (tvBrowseBackAction(focusInGrid) == TvBrowseBackAction.FocusRail) {
+            scope.launch {
+                repeat(6) {
+                    androidx.compose.runtime.withFrameNanos {}
+                    if (runCatching { railFocusRequester.requestFocus() }.isSuccess) {
+                        focusInGrid = false
+                        return@launch
+                    }
+                }
+            }
+        } else onBackToLanding()
     }
     LaunchedEffect(categoryPanelOpen, categoryPickerMode) {
         if (categoryPanelOpen) {
@@ -211,11 +234,42 @@ fun BrowseScreen(
     LaunchedEffect(state.visibleCategories.isNotEmpty(), returningToItem, railAsPanel, items.itemCount) {
         if (focusPlaced || returningToItem) return@LaunchedEffect
         if (state.visibleCategories.isNotEmpty()) {
-            runCatching {
-                if (landingMode && items.itemCount > 0) gridFocusRequester.requestFocus()
-                else if (railAsPanel) categoriesFocusRequester.requestFocus()
-                else railFocusRequester.requestFocus()
-            }.onSuccess { focusPlaced = true }
+            repeat(6) {
+                androidx.compose.runtime.withFrameNanos {}
+                val result = runCatching {
+                    if (landingMode && items.itemCount > 0) gridFocusRequester.requestFocus()
+                    else if (railAsPanel) categoriesFocusRequester.requestFocus()
+                    else railFocusRequester.requestFocus()
+                }
+                if (result.isSuccess) {
+                    focusPlaced = true
+                    return@LaunchedEffect
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(tvBrowse, state.selectedCategoryId, items.itemCount, items.loadState.refresh, returningToItem) {
+        if (!tvBrowse || returningToItem || items.itemCount > 0 || state.selectedCategoryId == null) return@LaunchedEffect
+        delay(250)
+        if (items.itemCount > 0) return@LaunchedEffect
+        repeat(6) {
+            androidx.compose.runtime.withFrameNanos {}
+            if (runCatching { recoveryFocusRequester.requestFocus() }.isSuccess) {
+                focusInGrid = true
+                recoveryFocused = true
+                return@LaunchedEffect
+            }
+        }
+    }
+    LaunchedEffect(tvBrowse, items.itemCount, recoveryFocused) {
+        if (!tvBrowse || !recoveryFocused || items.itemCount == 0) return@LaunchedEffect
+        repeat(6) {
+            androidx.compose.runtime.withFrameNanos {}
+            if (runCatching { gridFocusRequester.requestFocus() }.isSuccess) {
+                recoveryFocused = false
+                return@LaunchedEffect
+            }
         }
     }
 
@@ -278,7 +332,7 @@ fun BrowseScreen(
             filter = state.categoryFilter,
             onFilterChanged = viewModel::onCategoryFilterChanged,
             onSelect = {
-                if (!categoryPickerCanSelect(categoryPanelOpen, pickerModeSettled)) return@CategoryRail
+                if (!tvBrowse && !categoryPickerCanSelect(categoryPanelOpen, pickerModeSettled)) return@CategoryRail
                 viewModel.selectCategory(it.categoryId)
                 if (railAsPanel) {
                     categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
@@ -291,14 +345,31 @@ fun BrowseScreen(
                     }
                 }
             },
-            gridFocusRequester = gridFocusRequester,
+            onEnterGrid = if (tvBrowse) ({ category ->
+                if (state.selectedCategoryId != category.categoryId)
+                    viewModel.selectCategory(category.categoryId)
+                scope.launch {
+                    repeat(12) {
+                        androidx.compose.runtime.withFrameNanos {}
+                        val target = if (tvBrowseContentTarget(items.itemCount) == TvBrowseContentTarget.Grid)
+                            gridFocusRequester else recoveryFocusRequester
+                        if (runCatching { target.requestFocus() }.isSuccess) {
+                            focusInGrid = true
+                            return@launch
+                        }
+                    }
+                }
+            }) else null,
+            gridFocusRequester = if (tvBrowse && tvBrowseContentTarget(items.itemCount) == TvBrowseContentTarget.Recovery)
+                recoveryFocusRequester else gridFocusRequester,
             railFocusRequester = railFocusRequester,
             listState = categoryListState,
-            gridAvailable = items.itemCount > 0 && (!compactPhone || !categoryPanelOpen),
+            gridAvailable = (items.itemCount > 0 || tvBrowse) && (!compactPhone || !categoryPanelOpen),
             categorySort = effectiveCategorySort,
             onCategorySortChanged = updateCategorySort,
             fullScreen = railAsPanel && categoryPanelOpen && categoryPickerMode == CategoryPickerMode.FullScreen,
-            confineFocus = railAsPanel && categoryPanelOpen
+            confineFocus = railAsPanel && categoryPanelOpen,
+            onRailFocused = { focusInGrid = false; recoveryFocused = false }
         )
 
         // The rail has a fixed 280 dp width. `fillMaxSize()` here measured the content
@@ -349,6 +420,7 @@ fun BrowseScreen(
                 isItemFilterOpen = state.isItemFilterOpen,
                 filteredCount = state.filteredCount,
                 totalCount = state.counts[state.selectedCategoryId],
+                showSelectedCount = tvBrowse,
                 onItemFilterChanged = viewModel::onItemFilterChanged,
                 onItemFilterOpenChanged = viewModel::setItemFilterOpen,
                 gridFocusRequester = gridFocusRequester,
@@ -362,37 +434,43 @@ fun BrowseScreen(
                 sort = sort,
                 onSortChanged = onSortChanged,
                 sortFocusRequester = sortFocusRequester,
-                showSort = showSort && !LocalIsTelevision.current,
+                showSort = showSort && !television,
                 railAvailable = !railAsPanel || categoryPanelOpen
             )
 
             when {
+                items.itemCount == 0 &&
+                    state.itemFilter.isNotBlank() &&
+                    items.loadState.refresh !is androidx.paging.LoadState.Loading ->
+                    NoFilterMatchState(
+                        query = state.itemFilter,
+                        onClear = { viewModel.onItemFilterChanged("") },
+                        onRefresh = if (tvBrowse) viewModel::refreshSelected else null,
+                        recoveryFocusRequester = recoveryFocusRequester,
+                        onFocused = { focusInGrid = true; recoveryFocused = true }
+                    )
+
                 // Offline is fully browsable: a dead network must fail at play time, not
                 // throw a full-screen error over data the app already has.
-                state.error != null && items.itemCount == 0 -> ErrorState(state.error!!)
+                state.error != null && items.itemCount == 0 -> ErrorState(state.error!!,
+                    if (tvBrowse) viewModel::refreshSelected else null,
+                    recoveryFocusRequester, onFocused = { focusInGrid = true; recoveryFocused = true })
 
                 // Phase 5 — the first load of a cold category. Without this the screen
                 // is blank while the query runs, which reads as an empty category that
                 // then suddenly fills.
                 items.itemCount == 0 &&
                     items.loadState.refresh is androidx.paging.LoadState.Loading ->
-                    LoadingState()
-
-                // A filter that matches nothing is not an empty category, and
-                // offering `Refresh` for it would be answering a question nobody asked.
-                items.itemCount == 0 &&
-                    state.itemFilter.isNotBlank() &&
-                    items.loadState.refresh !is androidx.paging.LoadState.Loading ->
-                    NoFilterMatchState(
-                        query = state.itemFilter,
-                        onClear = { viewModel.onItemFilterChanged("") }
-                    )
+                    LoadingState(if (tvBrowse) viewModel::refreshSelected else null,
+                        recoveryFocusRequester, onFocused = { focusInGrid = true; recoveryFocused = true })
 
                 items.itemCount == 0 &&
                     items.loadState.refresh !is androidx.paging.LoadState.Loading ->
-                    EmptyState(onRefresh = viewModel::refreshSelected)
+                    EmptyState(onRefresh = viewModel::refreshSelected,
+                        recoveryFocusRequester = if (tvBrowse) recoveryFocusRequester else null,
+                        onFocused = { focusInGrid = true; recoveryFocused = true })
 
-                else -> ContentGrid(
+                else -> androidx.compose.runtime.key(state.selectedCategoryId) { ContentGrid(
                     items = items,
                     pendingFocusItemId = viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
@@ -405,9 +483,20 @@ fun BrowseScreen(
                     },
                     onContextMenu = { contextMenuItem = it },
                     onFocused = { viewModel.pendingFocusItemId = it.id },
+                    onGridFocused = { focusInGrid = true; recoveryFocused = false },
                     progressFor = viewModel::progressFor,
-                    onLeadingLeft = if (landingMode) ({ runCatching { categoriesFocusRequester.requestFocus() } }) else null
-                )
+                    onLeadingLeft = if (landingMode) ({ runCatching { categoriesFocusRequester.requestFocus() } })
+                        else if (tvBrowse) ({
+                            runCatching { railFocusRequester.requestFocus() }.onFailure {
+                                scope.launch {
+                                    repeat(6) {
+                                        androidx.compose.runtime.withFrameNanos {}
+                                        if (runCatching { railFocusRequester.requestFocus() }.isSuccess) return@launch
+                                    }
+                                }
+                            }
+                        }) else null
+                ) }
             }
         }
     }
@@ -515,6 +604,7 @@ private fun Header(
     isItemFilterOpen: Boolean,
     filteredCount: Int?,
     totalCount: Int?,
+    showSelectedCount: Boolean,
     onItemFilterChanged: (String) -> Unit,
     onItemFilterOpenChanged: (Boolean) -> Unit,
     gridFocusRequester: FocusRequester,
@@ -588,6 +678,9 @@ private fun Header(
                 countLine?.takeIf { onToggleCategories == null }?.let {
                     Text(text = it, color = AppColors.Dim, style = TvType.label)
                 }
+                if (showSelectedCount && filteredCount == null) totalCount?.let {
+                    Text(text = it.toString(), color = AppColors.Dim, style = TvType.label)
+                }
             }
 
             Row(
@@ -645,10 +738,10 @@ private fun Header(
                     )
                 }
 
-                if (!LocalIsTelevision.current) HeaderIconButton(
+                HeaderIconButton(
                     icon = Icons.Default.Refresh,
                     contentDescription = refreshLabel,
-                    enabled = !isRefreshing,
+                    enabled = LocalIsTelevision.current || !isRefreshing,
                     onClick = onRefresh,
                     modifier = Modifier.focusRequester(refreshFocusRequester)
                 )
@@ -683,12 +776,20 @@ private fun Header(
 }
 
 @Composable
-private fun ErrorState(error: com.dev.Tvivo.data.AppError) {
+private fun ErrorState(
+    error: com.dev.Tvivo.data.AppError,
+    onRefresh: (() -> Unit)? = null,
+    recoveryFocusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
+) {
     val copy = ErrorCopy.of(error)
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = copy.message, color = AppColors.Ink, style = TvType.title)
-            copy.primaryAction?.let {
+            if (onRefresh != null) {
+                RecoveryAction(stringResource(R.string.browse_refresh_category), onRefresh,
+                    recoveryFocusRequester, onFocused)
+            } else copy.primaryAction?.let {
                 Text(
                     text = it,
                     color = AppColors.AccentText,
@@ -731,7 +832,7 @@ internal fun ItemFilterField(
     val focus = itemFilterFocusRequester
     val clearFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    val refreshAvailable = !LocalIsTelevision.current
+    val refreshAvailable = true
     val clearLabel = stringResource(R.string.browse_clear)
     LaunchedEffect(Unit) {
         repeat(5) {
@@ -816,17 +917,29 @@ internal fun ItemFilterField(
 private val FILTER_FIELD_WIDTH = 260.dp
 
 @Composable
-private fun LoadingState() {
+private fun LoadingState(
+    onRefresh: (() -> Unit)? = null,
+    recoveryFocusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
+) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // Text, not a spinner: there is no progress to report for a single Room query, and
-        // a spinner over a 200 ms wait is more distracting than a word.
-        Text(text = "Loading…", color = AppColors.Dim, style = TvType.title)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = "Loading…", color = AppColors.Dim, style = TvType.title)
+            if (onRefresh != null) RecoveryAction(stringResource(R.string.browse_refresh_category), onRefresh,
+                recoveryFocusRequester, onFocused)
+        }
     }
 }
 
 /** Distinct from [EmptyState]: the category has rows, this filter just does not match any. */
 @Composable
-private fun NoFilterMatchState(query: String, onClear: () -> Unit) {
+private fun NoFilterMatchState(
+    query: String,
+    onClear: () -> Unit,
+    onRefresh: (() -> Unit)? = null,
+    recoveryFocusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
+) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
@@ -834,30 +947,44 @@ private fun NoFilterMatchState(query: String, onClear: () -> Unit) {
                 color = AppColors.Ink,
                 style = TvType.title
             )
-            Text(
-                text = "Clear filter",
-                color = AppColors.AccentText,
-                style = TvType.body,
-                modifier = Modifier
-                    .tvFocusFrame()
-                    .tvClickable { onClear() }
-                    .padding(top = 16.dp)
-            )
+            RecoveryAction("Clear filter", onClear, recoveryFocusRequester, onFocused)
+            if (onRefresh != null) RecoveryAction(stringResource(R.string.browse_refresh_category), onRefresh)
         }
     }
 }
 
 @Composable
-private fun EmptyState(onRefresh: () -> Unit) {
+private fun EmptyState(
+    onRefresh: () -> Unit,
+    recoveryFocusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
+) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = "Nothing in this category", color = AppColors.Ink, style = TvType.title)
-            Text(
-                text = "Refresh",
-                color = AppColors.AccentText,
-                style = TvType.body,
-                modifier = Modifier.tvClickable { onRefresh() }.padding(top = 16.dp)
-            )
+            RecoveryAction(if (LocalIsTelevision.current) stringResource(R.string.browse_refresh_category) else "Refresh",
+                onRefresh, recoveryFocusRequester, onFocused)
         }
     }
+}
+
+@Composable
+private fun RecoveryAction(
+    label: String,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
+) {
+    Text(
+        text = label,
+        color = AppColors.AccentText,
+        style = TvType.body,
+        modifier = Modifier
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .tvFocusFrame()
+            .tvClickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag("browse-recovery-action")
+    )
 }
