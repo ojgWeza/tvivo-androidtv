@@ -9,6 +9,72 @@ namespace Tvivo.Infrastructure.Tests;
 
 public sealed class SqliteCatalogRepositoryTests
 {
+    [Fact]
+    public void Migration_repairs_legacy_absent_size_timestamps()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-catalog-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "catalog.sqlite");
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={path}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE items(size_bytes INTEGER,size_checked_at INTEGER); INSERT INTO items VALUES(NULL,123); CREATE TABLE media_progress(size_bytes INTEGER,size_checked_at INTEGER); INSERT INTO media_progress VALUES(NULL,456); PRAGMA user_version=19;";
+                command.ExecuteNonQuery();
+            }
+            using (var repo = new SqliteCatalogRepository(path))
+            using (var check = new SqliteConnection($"Data Source={path}"))
+            {
+                check.Open();
+                using var command2 = check.CreateCommand();
+                command2.CommandText = "SELECT size_checked_at FROM items";
+                Assert.Equal(DBNull.Value, command2.ExecuteScalar());
+                command2.CommandText = "SELECT size_checked_at FROM media_progress";
+                Assert.Equal(DBNull.Value, command2.ExecuteScalar());
+            }
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Exact_size_survives_null_metadata_and_estimate_round_trips()
+    {
+        var repo = Create(out var directory); var account = Account();
+        try
+        {
+            var movie = ChannelAdded(account, CatalogItemType.Movie, "movie", DateTimeOffset.UtcNow);
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[] { movie });
+            repo.SaveMovieFileSize(account, movie.Id, 650_000_000, DateTimeOffset.UtcNow);
+            repo.SaveMetadata(account, CatalogItemType.Movie, movie.Id,
+                new CatalogMetadata("2024", "8.0", EstimatedSizeBytes: 1_400_000_000));
+            var restored = repo.GetMetadata(account, CatalogItemType.Movie, movie.Id)!;
+            Assert.Equal(650_000_000, restored.SizeBytes);
+            Assert.Equal(1_400_000_000, restored.EstimatedSizeBytes);
+            Assert.Equal("650 MB", FileSizeFormatter.FormatPreferred(restored.SizeBytes, restored.EstimatedSizeBytes));
+            Assert.Equal("1400000000", Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items).Metadata["estimated_size_bytes"]);
+            repo.SaveMovieFileSize(account, movie.Id, null, DateTimeOffset.UtcNow);
+            Assert.Equal(650_000_000, repo.GetMovieFileSize(account, movie.Id));
+        }
+        finally { repo.Dispose(); SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Episode_estimate_and_exact_size_persist_separately()
+    {
+        var repo = Create(out var directory); var account = Account();
+        try
+        {
+            repo.SaveEpisodeEstimatedFileSize(account, "episode", 1_400_000_000);
+            repo.SaveEpisodeFileSize(account, "episode", 650_000_000, DateTimeOffset.UtcNow);
+            repo.SaveEpisodeFileSize(account, "episode", null, DateTimeOffset.UtcNow);
+            Assert.Equal(1_400_000_000, repo.GetEpisodeEstimatedFileSize(account, "episode"));
+            Assert.Equal(650_000_000, repo.GetEpisodeFileSize(account, "episode").SizeBytes);
+        }
+        finally { repo.Dispose(); SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
     private static ProviderAccount Account(string id = "account-a") => new(id, new("http", "fixture.invalid", 8080), "fixture");
     private static ChannelGroup Group(ProviderAccount a, string id, string name) => new(a.AccountId, id, name, name);
     private static Channel ChannelFor(ProviderAccount a, string id, string group, string title) => new(a.AccountId, id, group, title, title, null, null, null, new(id, StreamKind.Live, "ts"), new Dictionary<string,string>());
@@ -399,7 +465,7 @@ public sealed class SqliteCatalogRepositoryTests
 
             var restoredMetadata = repo.GetMetadata(account, CatalogItemType.Movie, movie.Id)!;
             Assert.Equal(metadata with { SizeCheckedAt = restoredMetadata.SizeCheckedAt }, restoredMetadata);
-            Assert.NotNull(restoredMetadata.SizeCheckedAt);
+            Assert.Null(restoredMetadata.SizeCheckedAt);
             var cachedChannel = Assert.Single(repo.GetChannels(account, CatalogItemType.Movie).Items);
             Assert.Equal("A cached plot.", cachedChannel.Metadata["plot"]);
             Assert.Equal("2024", cachedChannel.Metadata["year"]);
@@ -702,7 +768,7 @@ public sealed class SqliteCatalogRepositoryTests
                     Assert.False(reader.Read());
                 }
                 verify.CommandText = "PRAGMA user_version;";
-                Assert.Equal(19, Convert.ToInt32(verify.ExecuteScalar()));
+                Assert.Equal(20, Convert.ToInt32(verify.ExecuteScalar()));
             }
         }
         finally
@@ -735,7 +801,7 @@ public sealed class SqliteCatalogRepositoryTests
             migrated.Open();
             using var verify = migrated.CreateCommand();
             verify.CommandText = "PRAGMA user_version;";
-            Assert.Equal(19, Convert.ToInt32(verify.ExecuteScalar()));
+            Assert.Equal(20, Convert.ToInt32(verify.ExecuteScalar()));
         }
         finally { Directory.Delete(directory, true); }
     }
@@ -772,7 +838,7 @@ public sealed class SqliteCatalogRepositoryTests
                 migrated.Open();
                 using var verify = migrated.CreateCommand();
                 verify.CommandText = "PRAGMA user_version;";
-                Assert.Equal(19, Convert.ToInt32(verify.ExecuteScalar()));
+                Assert.Equal(20, Convert.ToInt32(verify.ExecuteScalar()));
                 verify.CommandText = "SELECT COUNT(*) FROM media_progress WHERE account_id='account-a' AND series_id='show';";
                 Assert.Equal(1, Convert.ToInt32(verify.ExecuteScalar()));
                 verify.CommandText = "SELECT finished,resume_ms FROM media_progress WHERE account_id='account-b' AND item_id='finished-id';";
@@ -990,7 +1056,7 @@ public sealed class SqliteCatalogRepositoryTests
             {
                 connection.Open();
                 using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-                Assert.Equal(19, Convert.ToInt32(version.ExecuteScalar()));
+                Assert.Equal(20, Convert.ToInt32(version.ExecuteScalar()));
             }
             repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Series, "show", DateTimeOffset.UtcNow) });
             repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[] { ChannelAdded(account, CatalogItemType.Movie, "movie", DateTimeOffset.UtcNow) });
@@ -1177,7 +1243,7 @@ public sealed class SqliteCatalogRepositoryTests
             legacyReader.Open();
             using var command = legacyReader.CreateCommand();
             command.CommandText = "PRAGMA user_version";
-            Assert.Equal(19, Convert.ToInt32(command.ExecuteScalar()));
+            Assert.Equal(20, Convert.ToInt32(command.ExecuteScalar()));
             command.CommandText = "SELECT favourite,resume_ms,visit_count FROM items WHERE account_id='account-a' AND type='Movie' AND id='movie'";
             using (var oldRow = command.ExecuteReader())
             {

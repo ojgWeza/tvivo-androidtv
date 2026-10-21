@@ -6,6 +6,34 @@ namespace Tvivo.Core.Tests;
 public sealed class DisplayPoliciesTests
 {
     [Theory]
+    [InlineData(StreamKind.Movie, null, true)]
+    [InlineData(StreamKind.Episode, null, true)]
+    [InlineData(StreamKind.Movie, 1L, true)]
+    [InlineData(StreamKind.Movie, 1_400_000_000L, false)]
+    [InlineData(StreamKind.Live, null, false)]
+    public void Open_probe_ignores_background_recheck_interval(StreamKind kind, long? exact, bool expected) =>
+        Assert.Equal(expected, FileSizeProbePolicy.ShouldProbeOnOpen(kind, exact));
+
+    [Fact]
+    public void Exact_size_precedes_approximation()
+    {
+        Assert.Equal("~1.4 GB", FileSizeFormatter.FormatPreferred(null, 1_400_000_000));
+        Assert.Equal("650 MB", FileSizeFormatter.FormatPreferred(650_000_000, 1_400_000_000));
+        Assert.Equal("Approximate file size: 1.4 GB", FileSizeFormatter.AutomationSize(null, 1_400_000_000));
+    }
+
+    [Theory]
+    [InlineData("8000", "00:30:00", 1_800_000_000L)]
+    [InlineData("8000", "1800", 1_800_000_000L)]
+    [InlineData("127", "1800", null)]
+    [InlineData("80001", "1800", null)]
+    [InlineData("8000", "59", null)]
+    [InlineData("8000", "08:00:01", null)]
+    [InlineData("8000 kbps", "1800", null)]
+    public void Estimate_requires_credible_total_bitrate_and_duration(string rate, string duration, long? expected) =>
+        Assert.Equal(expected, FileSizeEstimatePolicy.Estimate(rate, duration));
+
+    [Theory]
     [InlineData(StreamKind.Movie, null, false, true)]
     [InlineData(StreamKind.Episode, null, false, true)]
     [InlineData(StreamKind.Series, null, false, false)]

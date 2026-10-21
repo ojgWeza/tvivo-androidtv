@@ -30,4 +30,12 @@ public static class FileSizeFormatter
             : Math.Max(1, (int)Math.Round(bytes.Value / 1_000_000d, MidpointRounding.AwayFromZero))
                 .ToString(CultureInfo.InvariantCulture) + " MB";
     }
+
+    public static string? FormatPreferred(long? exactBytes, long? estimatedBytes) =>
+        Format(exactBytes) is { } exact ? exact :
+        Format(estimatedBytes) is { } estimate ? $"~{estimate}" : null;
+
+    public static string? AutomationSize(long? exactBytes, long? estimatedBytes) =>
+        Format(exactBytes) is { } exact ? $"File size: {exact}" :
+        Format(estimatedBytes) is { } estimate ? $"Approximate file size: {estimate}" : null;
 }

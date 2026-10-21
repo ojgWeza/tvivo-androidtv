@@ -36,6 +36,7 @@ public partial class App : Application
     public App()
     {
         LaunchDiagnostics.Write("App constructor entered");
+        LaunchDiagnostics.Write($"event=app.version version={typeof(App).Assembly.GetName().Version}");
         PerfToggles.LogStartup(LaunchDiagnostics.Write);
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;

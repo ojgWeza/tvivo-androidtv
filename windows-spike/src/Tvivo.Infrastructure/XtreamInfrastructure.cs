@@ -316,7 +316,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
             var number = JsonValue.Int(item, "episode_num") ?? episodes.Count + 1;
             var title = JsonValue.String(item, "title") ?? $"Episode {number}";
             var extension = JsonValue.String(item, "container_extension")?.Trim().TrimStart('.');
-            var durationValue = JsonValue.String(item, "duration");
+            var info = GetInfoObject(item);
+            var durationValue = FirstNonEmpty(JsonValue.String(info, "duration"), JsonValue.String(item, "duration"));
             TimeSpan? duration = long.TryParse(durationValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) &&
                 seconds >= 0 && seconds <= TimeSpan.MaxValue.TotalSeconds
                 ? TimeSpan.FromSeconds(seconds)
@@ -324,7 +325,7 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
             var directUri = new Uri(StreamUrlBuilder.Series(connection.Endpoint, connection.Username, connection.Password, id, extension));
             episodes.Add(new SeriesEpisode(id, title, seasonId, seasonName, seasonNumber, number,
                 new StreamSource(id, StreamKind.Episode, extension, directUri, duration),
-                ReadSizeBytes(item, GetInfoObject(item))));
+                ReadSizeBytes(item, info), EstimateSize(info, item)));
         }
         return episodes;
     }
@@ -338,7 +339,19 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         JsonValue.String(info, "year"), JsonValue.String(info, "rating"), JsonValue.String(info, "genre"),
         FirstNonEmpty(JsonValue.String(info, "plot"), JsonValue.String(info, "description")),
         FirstNonEmpty(JsonValue.String(info, "cast"), JsonValue.String(info, "actors")),
-        includeSize ? ReadSizeBytes(info, root) : null);
+        includeSize ? ReadSizeBytes(info, root) : null, null,
+        includeSize ? EstimateSize(info, root) : null);
+
+    private static long? EstimateSize(JsonElement info, JsonElement root)
+    {
+        var duration = FirstNonEmpty(JsonValue.String(info, "duration"), JsonValue.String(root, "duration"));
+        var fallback = duration is null
+            ? FirstNonEmpty(JsonValue.String(info, "duration_secs"), JsonValue.String(root, "duration_secs"))
+            : null;
+        return FileSizeEstimatePolicy.Estimate(
+            FirstNonEmpty(JsonValue.String(info, "bitrate"), JsonValue.String(root, "bitrate")),
+            duration, fallback);
+    }
 
     private static long? ReadSizeBytes(params JsonElement[] nodes)
     {
@@ -457,6 +470,8 @@ public sealed class XtreamCatalogProvider : ICatalogProvider, ISeriesCatalogProv
         var metadata = new Dictionary<string, string>();
         if (type == CatalogItemType.Movie && ReadSizeBytes(value, GetInfoObject(value)) is { } sizeBytes)
             metadata["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
+        if (type == CatalogItemType.Movie && EstimateSize(GetInfoObject(value), value) is { } estimate)
+            metadata["estimated_size_bytes"] = estimate.ToString(CultureInfo.InvariantCulture);
         if (type == CatalogItemType.Live && JsonValue.String(value, "epg_channel_id")?.Trim() is { Length: > 0 } epgChannelId)
             metadata["epg_channel_id"] = epgChannelId;
         return new Channel(accountId, id, groupId, name, name.Trim(), icon, added, order,

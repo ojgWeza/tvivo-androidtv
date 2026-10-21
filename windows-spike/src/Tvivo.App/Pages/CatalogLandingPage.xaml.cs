@@ -6096,8 +6096,15 @@ public sealed partial class CatalogLandingPage : UserControl
             Channel.Metadata.GetValueOrDefault("genre"),
             FileSizeText,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        public string? FileSizeText => FileSizeDisplayPolicy.ShouldShow(Channel?.Source.Kind) && FileSizeFormatter.Format(_hoverMetadata?.SizeBytes ??
-            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes"))) is { } size
+        public string DetailsAutomationName => string.Join(" · ", new[]
+        {
+            DetailsLine,
+            FileSizeFormatter.AutomationSize(FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes")) ?? _hoverMetadata?.SizeBytes,
+                FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("estimated_size_bytes")) ?? _hoverMetadata?.EstimatedSizeBytes),
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        public string? FileSizeText => FileSizeDisplayPolicy.ShouldShow(Channel?.Source.Kind) && FileSizeFormatter.FormatPreferred(
+            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes")) ?? _hoverMetadata?.SizeBytes,
+            FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("estimated_size_bytes")) ?? _hoverMetadata?.EstimatedSizeBytes) is { } size
                 ? $"File size: {size}" : null;
         private string? HoverPlot => _hoverMetadata is not null
             ? _hoverMetadata.Plot
@@ -6119,6 +6126,8 @@ public sealed partial class CatalogLandingPage : UserControl
             Add("cast", metadata.Cast);
             if (metadata.SizeBytes is { } sizeBytes)
                 values["size_bytes"] = sizeBytes.ToString(CultureInfo.InvariantCulture);
+            if (metadata.EstimatedSizeBytes is { } estimate)
+                values["estimated_size_bytes"] = estimate.ToString(CultureInfo.InvariantCulture);
             Channel = Channel with { Metadata = values };
             SetHoverMetadata(metadata);
 
@@ -6132,6 +6141,8 @@ public sealed partial class CatalogLandingPage : UserControl
         public void SetHoverMetadata(CatalogMetadata? metadata)
         {
             _hoverMetadata = metadata;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsAutomationName)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightSummary)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightDetails)));
         }

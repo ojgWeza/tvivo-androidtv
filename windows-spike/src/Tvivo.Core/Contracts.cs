@@ -84,12 +84,13 @@ public sealed record StreamSource(
 public enum StreamKind { Live, Movie, Series, Episode }
 
 public sealed record SeriesEpisode(string Id, string Title, string SeasonId, string SeasonName, int SeasonNumber,
-    int EpisodeNumber, StreamSource Source, long? SizeBytes = null);
+    int EpisodeNumber, StreamSource Source, long? SizeBytes = null, long? EstimatedSizeBytes = null);
 
 public sealed record SeriesSeason(string Id, string Name, int Number, IReadOnlyList<SeriesEpisode> Episodes);
 
 public sealed record CatalogMetadata(string? Year = null, string? Rating = null, string? Genre = null,
-    string? Plot = null, string? Cast = null, long? SizeBytes = null, DateTimeOffset? SizeCheckedAt = null);
+    string? Plot = null, string? Cast = null, long? SizeBytes = null, DateTimeOffset? SizeCheckedAt = null,
+    long? EstimatedSizeBytes = null);
 
 public static class RatingDisplayFormatter
 {

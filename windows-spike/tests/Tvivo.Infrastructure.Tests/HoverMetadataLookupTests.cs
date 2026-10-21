@@ -10,6 +10,18 @@ public sealed class HoverMetadataLookupTests
     private static readonly ProviderAccount Account = new("account-a", new ProviderEndpoint("http", "example.invalid", 0), "user");
 
     [Fact]
+    public async Task Cached_estimate_is_available_without_provider_request()
+    {
+        var store = new MetadataStore();
+        store.Save(Account, CatalogItemType.Movie, "movie-1",
+            new CatalogMetadata(Plot: "Summary", EstimatedSizeBytes: 1_400_000_000));
+        var provider = new FakeProvider();
+        var metadata = await store.Create(provider).GetCachedAsync(Account, CatalogItemType.Movie, "movie-1");
+        Assert.Equal("~1.4 GB", FileSizeFormatter.FormatPreferred(metadata?.SizeBytes, metadata?.EstimatedSizeBytes));
+        Assert.Equal(0, provider.MovieCalls);
+    }
+
+    [Fact]
     public async Task CachedMetadataIncludingEmptyMetadataMakesNoProviderCall()
     {
         var store = new MetadataStore();

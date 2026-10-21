@@ -834,7 +834,7 @@
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel VerticalAlignment="Center" Spacing="2">
                                                     <TextBlock Text="{Binding Title}" FontSize="16" Foreground="{Binding ForegroundBrush}" TextWrapping="Wrap" />
-                                                    <TextBlock Text="{Binding FileSizeText}" FontSize="16"
+                                                    <TextBlock Text="{Binding FileSizeText}" FontSize="16" AutomationProperties.Name="{Binding FileSizeAutomationName}"
                                                                Visibility="{Binding FileSizeVisibility}"
                                                                Foreground="{ThemeResource AppMutedTextBrush}" />
                                                 </StackPanel>

@@ -87,6 +87,25 @@ public sealed class InfrastructureTests
             .Episodes).SizeBytes);
     }
 
+    [Fact]
+    public async Task Movie_and_episode_estimates_prefer_info_duration_to_conflicting_seconds()
+    {
+        var provider = new XtreamCatalogProvider(new HttpClient(new FixtureHandler((request, _) =>
+        {
+            var query = request.RequestUri!.Query;
+            if (!query.Contains("action=", StringComparison.Ordinal)) return JsonResponse("auth_success.json");
+            if (query.Contains("get_vod_info", StringComparison.Ordinal))
+                return JsonBody("""{"info":{"bitrate":"8000","duration":"00:30:00","duration_secs":"45"}}""");
+            return JsonBody("""{"info":{"name":"Series"},"episodes":{"1":[{"id":"episode-1","title":"Pilot","duration":"200","info":{"bitrate":"8000","duration":"00:30:00","duration_secs":"45"}}]}}""");
+        })));
+        var account = Assert.IsType<ProviderAccount>((await provider.AuthenticateAsync(
+            new ProviderConnection(Endpoint(), "u", "p"))).Account);
+        Assert.Equal(1_800_000_000, (await provider.GetMovieInfoAsync(account, "movie")).Metadata.EstimatedSizeBytes);
+        var episode = Assert.Single(Assert.Single((await provider.GetSeriesInfoAsync(account, "series")).Seasons).Episodes);
+        Assert.Equal(1_800_000_000, episode.EstimatedSizeBytes);
+        Assert.Equal(TimeSpan.FromMinutes(30), episode.Source.Duration);
+    }
+
     [Theory]
     [InlineData("size", "1400000000")]
     [InlineData("filesize", "1400000000")]

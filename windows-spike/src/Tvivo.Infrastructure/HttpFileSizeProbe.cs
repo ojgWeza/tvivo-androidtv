@@ -7,13 +7,14 @@ namespace Tvivo.Infrastructure;
 
 public interface IFileSizeProbe
 {
-    Task<long?> ProbeAsync(Uri mediaUri, CancellationToken cancellationToken = default);
+    Task<long?> ProbeAsync(Uri mediaUri, CancellationToken cancellationToken = default, long attemptId = 0,
+        Action<string, string>? outcome = null);
 }
 
 public sealed class HttpFileSizeProbe : IFileSizeProbe, IDisposable
 {
     private static readonly SemaphoreSlim GlobalGate = new(1, 1);
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
     private readonly HttpClient _client;
     private readonly Action<string>? _log;
 
@@ -27,26 +28,41 @@ public sealed class HttpFileSizeProbe : IFileSizeProbe, IDisposable
         _log = log;
     }
 
-    public async Task<long?> ProbeAsync(Uri mediaUri, CancellationToken cancellationToken = default)
+    public async Task<long?> ProbeAsync(Uri mediaUri, CancellationToken cancellationToken = default, long attemptId = 0,
+        Action<string, string>? outcome = null)
     {
         var started = Stopwatch.GetTimestamp();
         var result = "none";
-        var reason = "no_size";
+        var reason = "invalid_header";
         var entered = false;
         try
         {
-            await GlobalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            entered = true;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(ProbeTimeout);
+            await GlobalGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+            entered = true;
+            try
+            {
+                using var head = new HttpRequestMessage(HttpMethod.Head, mediaUri);
+                using var response = await _client.SendAsync(head, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+                    .ConfigureAwait(false);
+                var size = FileSizeProbePolicy.ParseTotalBytes(response.Headers, response.Content.Headers, response.StatusCode);
+                if (size is not null)
+                {
+                    result = "found";
+                    reason = "head_length";
+                    return size;
+                }
+            }
+            catch (HttpRequestException) { /* A rejected HEAD can still allow a ranged GET. */ }
             using var request = new HttpRequestMessage(HttpMethod.Get, mediaUri);
             request.Headers.Range = new RangeHeaderValue(0, 0);
-            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+            using var ranged = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
                 .ConfigureAwait(false);
-            var size = FileSizeProbePolicy.ParseTotalBytes(response.Headers, response.Content.Headers, response.StatusCode);
-            result = size.HasValue ? "found" : "none";
-            reason = size.HasValue ? "headers" : response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable ? "range_rejected" : "no_size";
-            return size;
+            var rangedSize = FileSizeProbePolicy.ParseTotalBytes(ranged.Headers, ranged.Content.Headers, ranged.StatusCode);
+            result = rangedSize.HasValue ? "found" : ranged.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent ? "none" : "failed";
+            reason = rangedSize.HasValue ? "range_total" : result == "none" ? "invalid_header" : "http_status";
+            return rangedSize;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -69,15 +85,16 @@ public sealed class HttpFileSizeProbe : IFileSizeProbe, IDisposable
         catch (Exception)
         {
             result = "failed";
-            reason = "unexpected";
+            reason = "network";
             return null;
         }
         finally
         {
             if (entered) GlobalGate.Release();
+            outcome?.Invoke(result, reason);
             try
             {
-                _log?.Invoke($"event=filesize.probe result={result} reasonCategory={reason} ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0}");
+                _log?.Invoke($"event=filesize.http attempt={attemptId} result={result} reasonCategory={reason} ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0}");
             }
             catch { /* Diagnostics must not turn an optional probe into a playback failure. */ }
         }

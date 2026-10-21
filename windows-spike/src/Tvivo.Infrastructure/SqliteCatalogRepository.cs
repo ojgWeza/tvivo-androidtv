@@ -28,7 +28,7 @@ public sealed record PlaybackProgressPresentation(bool IsVisible, double Value, 
 
 public sealed class SqliteCatalogRepository : IDisposable
 {
-    private const int SchemaVersion = 19;
+    private const int SchemaVersion = 20;
     private static readonly Regex EmptyBrackets = new(@"[\(\[][\s\-:|]*[\)\]]", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     private readonly string _connectionString;
@@ -47,7 +47,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = Convert.ToInt32(command.ExecuteScalar());
-        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != 17 && version != 18 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
+        if (version != 0 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 && version != 14 && version != 15 && version != 16 && version != 17 && version != 18 && version != 19 && version != SchemaVersion) throw new InvalidOperationException($"Catalog database schema {version} is unsupported; expected schema {SchemaVersion}.");
         if (version == 0)
         {
             command.CommandText = """
@@ -128,6 +128,12 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 18)
                 MigrateEpisodeFileSize(connection);
         }
+        using (var currentVersion = connection.CreateCommand())
+        {
+            currentVersion.CommandText = "PRAGMA user_version";
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) == 19)
+                MigrateEstimatedFileSize(connection);
+        }
         using var refreshState = connection.CreateCommand();
         refreshState.CommandText = "CREATE TABLE IF NOT EXISTS catalog_refresh_state(account_id TEXT NOT NULL,type TEXT NOT NULL,last_success_utc_ms INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
         refreshState.ExecuteNonQuery();
@@ -161,11 +167,18 @@ public sealed class SqliteCatalogRepository : IDisposable
         transaction.Commit();
     }
 
+    private static void MigrateEstimatedFileSize(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction, "ALTER TABLE items ADD COLUMN estimated_size_bytes INTEGER; ALTER TABLE media_progress ADD COLUMN estimated_size_bytes INTEGER; UPDATE items SET size_checked_at=NULL WHERE size_bytes IS NULL; UPDATE media_progress SET size_checked_at=NULL WHERE size_bytes IS NULL; PRAGMA user_version=20;");
+        transaction.Commit();
+    }
+
     public void SaveEpisodeFileSize(ProviderAccount account, string episodeId, long? sizeBytes, DateTimeOffset checkedAt)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO media_progress(account_id,kind,item_id,resume_ms,updated_at,size_bytes,size_checked_at) VALUES($account,'episode',$id,0,$checked,$size,$checked) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET size_bytes=excluded.size_bytes,size_checked_at=excluded.size_checked_at";
+        command.CommandText = "INSERT INTO media_progress(account_id,kind,item_id,resume_ms,updated_at,size_bytes,size_checked_at) VALUES($account,'episode',$id,0,$checked,$size,$checked) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET size_bytes=COALESCE(excluded.size_bytes,media_progress.size_bytes),size_checked_at=excluded.size_checked_at";
         command.Parameters.AddWithValue("$size", (object?)sizeBytes ?? DBNull.Value);
         command.Parameters.AddWithValue("$checked", checkedAt.ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$account", account.AccountId);
@@ -184,6 +197,30 @@ public sealed class SqliteCatalogRepository : IDisposable
         if (!reader.Read()) return (null, null);
         return (reader.IsDBNull(0) ? null : reader.GetInt64(0),
             reader.IsDBNull(1) ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(1)));
+    }
+
+    public long? GetEpisodeEstimatedFileSize(ProviderAccount account, string episodeId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT estimated_size_bytes FROM media_progress WHERE account_id=$account AND kind='episode' AND item_id=$id";
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$id", episodeId);
+        var value = command.ExecuteScalar();
+        return value is long bytes ? bytes : null;
+    }
+
+    public void SaveEpisodeEstimatedFileSize(ProviderAccount account, string episodeId, long? bytes)
+    {
+        if (bytes is not > 0) return;
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO media_progress(account_id,kind,item_id,resume_ms,updated_at,estimated_size_bytes) VALUES($account,'episode',$id,0,$now,$size) ON CONFLICT(account_id,kind,item_id) DO UPDATE SET estimated_size_bytes=excluded.estimated_size_bytes";
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$id", episodeId);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$size", bytes.Value);
+        command.ExecuteNonQuery();
     }
 
     private static void MigrateFavorites(SqliteConnection connection)
@@ -210,13 +247,14 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE items SET year=$year,rating=$rating,genre=$genre,plot=$plot,[cast]=$cast,size_bytes=COALESCE($size,size_bytes),size_checked_at=$checkedAt,metadata_fetched=1 WHERE account_id=$a AND type=$type AND id=$id";
+        command.CommandText = "UPDATE items SET year=$year,rating=$rating,genre=$genre,plot=$plot,[cast]=$cast,size_bytes=COALESCE($size,size_bytes),estimated_size_bytes=COALESCE($estimate,estimated_size_bytes),size_checked_at=CASE WHEN $size IS NOT NULL THEN $checkedAt ELSE size_checked_at END,metadata_fetched=1 WHERE account_id=$a AND type=$type AND id=$id";
         command.Parameters.AddWithValue("$year", (object?)metadata.Year ?? DBNull.Value);
         command.Parameters.AddWithValue("$rating", (object?)metadata.Rating ?? DBNull.Value);
         command.Parameters.AddWithValue("$genre", (object?)metadata.Genre ?? DBNull.Value);
         command.Parameters.AddWithValue("$plot", (object?)metadata.Plot ?? DBNull.Value);
         command.Parameters.AddWithValue("$cast", (object?)metadata.Cast ?? DBNull.Value);
         command.Parameters.AddWithValue("$size", (object?)metadata.SizeBytes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$estimate", (object?)metadata.EstimatedSizeBytes ?? DBNull.Value);
         command.Parameters.AddWithValue("$checkedAt", (metadata.SizeCheckedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
@@ -228,7 +266,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE items SET size_bytes=$size,size_checked_at=$checked WHERE account_id=$account AND type='Movie' AND id=$id";
+        command.CommandText = "UPDATE items SET size_bytes=COALESCE($size,size_bytes),size_checked_at=$checked WHERE account_id=$account AND type='Movie' AND id=$id";
         command.Parameters.AddWithValue("$size", (object?)sizeBytes ?? DBNull.Value);
         command.Parameters.AddWithValue("$checked", checkedAt.ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$account", account.AccountId);
@@ -236,11 +274,21 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public long? GetMovieFileSize(ProviderAccount account, string itemId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT size_bytes FROM items WHERE account_id=$account AND type='Movie' AND id=$id";
+        command.Parameters.AddWithValue("$account", account.AccountId);
+        command.Parameters.AddWithValue("$id", itemId);
+        return command.ExecuteScalar() is long bytes ? bytes : null;
+    }
+
     public CatalogMetadata? GetMetadata(ProviderAccount account, CatalogItemType type, string itemId)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT year,rating,genre,plot,[cast],metadata_fetched,size_bytes,size_checked_at FROM items WHERE account_id=$a AND type=$type AND id=$id";
+        command.CommandText = "SELECT year,rating,genre,plot,[cast],metadata_fetched,size_bytes,size_checked_at,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND id=$id";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$id", itemId);
@@ -248,7 +296,8 @@ public sealed class SqliteCatalogRepository : IDisposable
         if (!reader.Read() || reader.GetInt32(5) == 0) return null;
         return new CatalogMetadata(ReadNullable(reader, 0), ReadNullable(reader, 1), ReadNullable(reader, 2),
             ReadNullable(reader, 3), ReadNullable(reader, 4), reader.IsDBNull(6) ? null : reader.GetInt64(6),
-            reader.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(7)));
+            reader.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(7)),
+            reader.IsDBNull(8) ? null : reader.GetInt64(8));
     }
 
     private static string? ReadNullable(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
@@ -402,9 +451,10 @@ public sealed class SqliteCatalogRepository : IDisposable
             Execute(connection, transaction, "INSERT INTO categories(account_id,type,id,name,position) VALUES($a,$type,$id,$name,$pos)", ("$a", account.AccountId), ("$type", typeName), ("$id", groups[i].Id), ("$name", groups[i].Name), ("$pos", groups[i].SortOrder ?? i));
         foreach (var channel in channels)
         {
-            Execute(connection, transaction, "INSERT INTO items(account_id,type,id,category_id,title,title_sort,artwork,extension,added_at,first_indexed_at,size_bytes) VALUES($a,$type,$id,$cat,$title,$sort,$art,$ext,$added,$now,$size) ON CONFLICT(account_id,type,id) DO UPDATE SET category_id=excluded.category_id,title=excluded.title,title_sort=excluded.title_sort,artwork=excluded.artwork,extension=excluded.extension,added_at=excluded.added_at,size_bytes=COALESCE(excluded.size_bytes,items.size_bytes)",
+            Execute(connection, transaction, "INSERT INTO items(account_id,type,id,category_id,title,title_sort,artwork,extension,added_at,first_indexed_at,size_bytes,estimated_size_bytes) VALUES($a,$type,$id,$cat,$title,$sort,$art,$ext,$added,$now,$size,$estimate) ON CONFLICT(account_id,type,id) DO UPDATE SET category_id=excluded.category_id,title=excluded.title,title_sort=excluded.title_sort,artwork=excluded.artwork,extension=excluded.extension,added_at=excluded.added_at,size_bytes=COALESCE(excluded.size_bytes,items.size_bytes),estimated_size_bytes=COALESCE(excluded.estimated_size_bytes,items.estimated_size_bytes)",
                 ("$a", account.AccountId), ("$type", typeName), ("$id", channel.Id), ("$cat", channel.GroupId ?? string.Empty), ("$title", CleanTitle(channel.Name)), ("$sort", SortTitle(channel.Name)), ("$art", channel.LogoUri?.ToString()), ("$ext", channel.Source.ContainerExtension ?? DefaultExtension(type)), ("$added", channel.AddedAt?.ToUnixTimeMilliseconds() ?? 0), ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
-                ("$size", (object?)FileSizeFormatter.ParseBytes(channel.Metadata.GetValueOrDefault("size_bytes")) ?? DBNull.Value));
+                ("$size", (object?)FileSizeFormatter.ParseBytes(channel.Metadata.GetValueOrDefault("size_bytes")) ?? DBNull.Value),
+                ("$estimate", (object?)FileSizeFormatter.ParseBytes(channel.Metadata.GetValueOrDefault("estimated_size_bytes")) ?? DBNull.Value));
             Execute(connection, transaction, "INSERT INTO incoming_item_ids(id) VALUES($id)", ("$id", channel.Id));
         }
         Execute(connection, transaction, "DELETE FROM items WHERE account_id=$a AND type=$type AND id NOT IN (SELECT id FROM incoming_item_ids)",
@@ -532,7 +582,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes FROM items WHERE account_id=$a AND type=$type AND id=$id LIMIT 1";
+        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND id=$id LIMIT 1";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$id", id);
@@ -565,7 +615,7 @@ public sealed class SqliteCatalogRepository : IDisposable
             _ when mostVisited => "visit_count DESC,last_tuned_at DESC,title_sort COLLATE NOCASE,title COLLATE NOCASE,id",
             _ => "title COLLATE NOCASE,id",
         };
-        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes FROM items WHERE {where} ORDER BY {ordering} LIMIT $limit OFFSET $offset";
+        using var command = sqliteConnection.CreateCommand(); command.CommandText = $"SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE {where} ORDER BY {ordering} LIMIT $limit OFFSET $offset";
         AddBrowseParameters(command, account, type, groupId, filter); command.Parameters.AddWithValue("$limit", Math.Max(1, limit)); command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader(); var rows = new List<Channel>();
         while (reader.Read())
@@ -645,14 +695,14 @@ public sealed class SqliteCatalogRepository : IDisposable
         };
         command.CommandText = $"""
             WITH ranked AS (
-                SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast], size_bytes,
+                SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast], size_bytes, estimated_size_bytes,
                        COUNT(*) OVER (PARTITION BY category_id) AS total_count,
                        MAX(added_at) OVER (PARTITION BY category_id) AS latest_added_at,
                        ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY {ordering}) AS row_number
                 FROM items
                 WHERE account_id=$a AND type=$type{categoryClause} AND {titleFilterClause}
             )
-            SELECT id, category_id, title, artwork, extension, added_at, total_count, latest_added_at, year, rating, genre, plot, [cast], size_bytes, row_number
+            SELECT id, category_id, title, artwork, extension, added_at, total_count, latest_added_at, year, rating, genre, plot, [cast], size_bytes, estimated_size_bytes, row_number
             FROM ranked
             WHERE row_number <= $limit
             ORDER BY category_id, row_number;
@@ -748,7 +798,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         if (capped == 0) return Array.Empty<Channel>();
         using var database = Open();
         using var command = database.CreateCommand();
-        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes FROM items WHERE account_id=$a AND type=$type AND category_id=$category ORDER BY MAX(added_at,COALESCE(first_indexed_at,0)) DESC,id ASC LIMIT $limit";
+        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND category_id=$category ORDER BY MAX(added_at,COALESCE(first_indexed_at,0)) DESC,id ASC LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$category", categoryId);
@@ -805,7 +855,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                 ORDER BY SUM(visit_count) DESC, category_id LIMIT 2
             ), eligible AS (
                 SELECT i.id, i.category_id, i.title, i.artwork, i.extension, i.added_at, i.year,
-                       i.rating, i.genre, i.plot, i.[cast], i.size_bytes,
+                       i.rating, i.genre, i.plot, i.[cast], i.size_bytes, i.estimated_size_bytes,
                        CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END AS effective_added,
                        ROW_NUMBER() OVER (PARTITION BY i.category_id ORDER BY
                            CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END DESC, i.id) AS item_rank
@@ -823,7 +873,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                 FROM eligible GROUP BY category_id ORDER BY newest DESC, category_id LIMIT $categoryLimit
             )
             SELECT e.id,e.category_id,e.title,e.artwork,e.extension,e.added_at,
-                   e.year,e.rating,e.genre,e.plot,e.[cast],e.effective_added,e.item_rank,e.size_bytes
+                   e.year,e.rating,e.genre,e.plot,e.[cast],e.effective_added,e.item_rank,e.size_bytes,e.estimated_size_bytes
             FROM eligible e JOIN selected_categories c ON c.category_id=e.category_id
             WHERE e.item_rank <= $itemsPerCategory
             ORDER BY e.effective_added DESC,e.category_id,e.id;
@@ -914,7 +964,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var database = Open();
         using var command = database.CreateCommand();
-        command.CommandText = "SELECT type,id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes FROM items WHERE account_id=$a AND type IN ('Live','Movie','Series') ORDER BY type,id";
+        command.CommandText = "SELECT type,id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type IN ('Live','Movie','Series') ORDER BY type,id";
         command.Parameters.AddWithValue("$a", account.AccountId);
         using var reader = command.ExecuteReader();
         var selected = new PriorityQueue<Channel, double>();
@@ -1160,7 +1210,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         var addedAt = useRecentlyAddedSortKey
             ? "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END)"
             : "added_at";
-        command.CommandText = $"SELECT id,category_id,title,artwork,extension,{addedAt},year,rating,genre,plot,[cast],size_bytes FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        command.CommandText = $"SELECT id,category_id,title,artwork,extension,{addedAt},year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
@@ -1184,7 +1234,7 @@ public sealed class SqliteCatalogRepository : IDisposable
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT items.type,items.id,items.category_id,items.title,items.artwork,items.extension,items.added_at,items.year,items.rating,items.genre,items.plot,items.[cast],items.size_bytes FROM items WHERE items.account_id=$a AND items.type IN ('Live','Movie','Series') AND {predicate} AND ($filter IS NULL OR items.title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        command.CommandText = $"SELECT items.type,items.id,items.category_id,items.title,items.artwork,items.extension,items.added_at,items.year,items.rating,items.genre,items.plot,items.[cast],items.size_bytes,items.estimated_size_bytes FROM items WHERE items.account_id=$a AND items.type IN ('Live','Movie','Series') AND {predicate} AND ($filter IS NULL OR items.title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
         command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);
@@ -1213,6 +1263,8 @@ public sealed class SqliteCatalogRepository : IDisposable
             if (!reader.IsDBNull(start + index)) metadata[key] = reader.GetString(start + index);
         var size = reader.GetOrdinal("size_bytes");
         if (!reader.IsDBNull(size)) metadata["size_bytes"] = reader.GetInt64(size).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var estimated = reader.GetOrdinal("estimated_size_bytes");
+        if (!reader.IsDBNull(estimated)) metadata["estimated_size_bytes"] = reader.GetInt64(estimated).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return metadata;
     }
     private static StreamSource StreamSourceFor(ProviderConnection? connection, CatalogItemType type, string id, string? extension)

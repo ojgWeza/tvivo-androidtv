@@ -124,7 +124,7 @@
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
                                            FontSize="12"
                                            TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{Binding DetailsLine}"
+                                <TextBlock Text="{Binding DetailsLine}" AutomationProperties.Name="{Binding DetailsAutomationName}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
                                            FontSize="11"
                                            TextTrimming="CharacterEllipsis" />

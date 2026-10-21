@@ -29,26 +29,29 @@ public static class FileSizeProbePolicy
     public const long MinimumBytes = 1_000_000;
     public const long MaximumBytes = 200L * 1_000_000_000;
 
+    public static bool ShouldProbeOnOpen(StreamKind kind, long? exactBytes) =>
+        (kind is StreamKind.Movie or StreamKind.Episode) &&
+        exactBytes is not (>= MinimumBytes and <= MaximumBytes);
+
     public static bool ShouldProbe(StreamKind kind, long? sizeBytes, DateTimeOffset? checkedAt, DateTimeOffset now) =>
-        kind is StreamKind.Movie or StreamKind.Episode &&
+        (kind is StreamKind.Movie or StreamKind.Episode) &&
         FileSizeAvailabilityPolicy.ShouldCheck(sizeBytes, checkedAt, now);
 
     public static long? ParseTotalBytes(System.Net.Http.Headers.HttpResponseHeaders headers,
         System.Net.Http.Headers.HttpContentHeaders contentHeaders, System.Net.HttpStatusCode statusCode)
     {
-        if (contentHeaders.TryGetValues("Content-Range", out var values) || headers.TryGetValues("Content-Range", out values))
+        if (headers.TransferEncodingChunked == true ||
+            (headers.TryGetValues("Transfer-Encoding", out var transfers) &&
+             transfers.Any(value => value.Contains("chunked", StringComparison.OrdinalIgnoreCase)))) return null;
+        if (statusCode == System.Net.HttpStatusCode.PartialContent)
         {
-            var range = values.FirstOrDefault();
-            var slash = range?.LastIndexOf('/') ?? -1;
-            if (range is not null && range.StartsWith("bytes 0-0/", StringComparison.OrdinalIgnoreCase) &&
-                slash >= 0 && long.TryParse(range[(slash + 1)..], out var total) && IsPlausible(total))
-                return total;
+            var range = contentHeaders.ContentRange;
+            if (range is null || !range.HasLength || range.From != 0 || range.To != 0 ||
+                contentHeaders.ContentLength is > 1) return null;
+            return IsPlausible(range.Length!.Value) ? range.Length : null;
         }
-
-        if (statusCode != System.Net.HttpStatusCode.OK ||
-            contentHeaders.ContentLength is not > 0 ||
-            (headers.TryGetValues("Transfer-Encoding", out var transferValues) &&
-             transferValues.Any(value => value.Contains("chunked", StringComparison.OrdinalIgnoreCase))))
+        if (statusCode != System.Net.HttpStatusCode.OK || contentHeaders.ContentRange is not null ||
+            contentHeaders.ContentLength is not > 0)
             return null;
         return IsPlausible(contentHeaders.ContentLength.Value) ? contentHeaders.ContentLength.Value : null;
     }
