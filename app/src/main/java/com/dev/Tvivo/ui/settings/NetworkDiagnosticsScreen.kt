@@ -109,6 +109,8 @@ fun NetworkDiagnosticsScreen(accountPartition: String, credentials: Credentials)
         val deep = deepMeasurement
         val probes = if (deep == null) base else base.copy(providerStatus = deep.httpStatus ?: base.providerStatus,
             streamThroughputMbps = deep.throughputMbps, streamStalls = deep.stalls,
+            streamStallDurationSeconds = deep.stallDurationMs?.let { (it + 500) / 1_000 },
+            streamBytesAtStallMb = deep.bytesAtStall?.div(1_000_000.0),
             streamRetries = deep.retries, streamBitrateMbps = deep.streamBitrateMbps)
         NetworkDiagnosis.diagnose(snapshot, probes, recent)
     }

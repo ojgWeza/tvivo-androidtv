@@ -56,6 +56,8 @@ data class ProbeResults(
     val streamThroughputMbps: Double? = null,
     val streamBitrateMbps: Double? = null,
     val streamStalls: Int? = null,
+    val streamStallDurationSeconds: Long? = null,
+    val streamBytesAtStallMb: Double? = null,
     val streamRetries: Int? = null
 )
 
@@ -268,8 +270,12 @@ object NetworkDiagnosis {
                 "A short sample can vary, and a stall can also come from the source or device.")
         }
         if ((probes.streamStalls ?: 0) > 0) {
+            val stallText = if (probes.streamStallDurationSeconds != null && probes.streamBytesAtStallMb != null)
+                "The stream stopped sending data for ${probes.streamStallDurationSeconds} s after %.2f MB."
+                    .format(java.util.Locale.ROOT, probes.streamBytesAtStallMb)
+            else "${probes.streamStalls} playback stall(s) were measured during the brief stream check."
             add("stream_stalls", FindingSeverity.WARNING, "The test stream paused while loading",
-                "${probes.streamStalls} playback stall(s) were measured during the brief stream check.",
+                stallText,
                 listOf("pause_downloads", "try_ethernet", "retry_once"),
                 "One short test cannot identify whether the network, source, or device caused the stall.")
         }

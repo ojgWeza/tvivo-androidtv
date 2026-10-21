@@ -39,6 +39,8 @@ data class DeepStreamMeasurement(
     val contentLengthBytes: Long? = null,
     val streamBitrateMbps: Double? = null,
     val stalls: Int = 0,
+    val stallDurationMs: Long? = null,
+    val bytesAtStall: Long? = null,
     val retries: Int = 0,
     val failure: DeepStreamFailure? = null
 ) {
@@ -103,57 +105,101 @@ private suspend fun readDeepStream(url: String, onBytes: suspend (Long) -> Unit)
     val cancellation = currentCoroutineContext().job.invokeOnCompletion(onCancelling = true) { cause ->
         if (cause is CancellationException) conn.disconnect()
     }
-    var connectedSuccessfully = false
+    var connectedAt: Long? = null
     var input: java.io.InputStream? = null
+    var status: Int? = null
+    var contentLength: Long? = null
     try {
         conn.connectTimeout = 8_000
         conn.readTimeout = 2_500
         conn.instanceFollowRedirects = false
         conn.setRequestProperty("User-Agent", "Tvivo network diagnostics")
         conn.connect()
-        connectedSuccessfully = true
         val connected = System.nanoTime()
-        val status = conn.responseCode
-        val contentLength = conn.contentLengthLong.takeIf { it > 0L }
-        if (status !in 200..299) return@withContext DeepStreamMeasurement(
-            httpStatus = status, connectMs = (connected - start) / 1_000_000,
+        connectedAt = connected
+        val responseStatus = conn.responseCode
+        status = responseStatus
+        contentLength = conn.contentLengthLong.takeIf { it > 0L }
+        if (responseStatus !in 200..299) return@withContext DeepStreamMeasurement(
+            httpStatus = responseStatus, connectMs = (connected - start) / 1_000_000,
             contentLengthBytes = contentLength, failure = null
         )
-        var bytes = 0L
-        var stalls = 0
-        var firstByte: Long? = null
-        var lastProgress = System.nanoTime()
-        val deadline = connected + DeepStreamCheckRunner.SAMPLE_MS * 1_000_000
         val stream = conn.inputStream
         input = stream
-        while (System.nanoTime() < deadline) {
-            currentCoroutineContext().ensureActive()
-            val count = try { stream.read(ByteArray(32 * 1024)) } catch (failure: java.net.SocketTimeoutException) {
-                stalls++
-                continue
-            }
-            if (count < 0) break
-            if (count > 0) {
-                val now = System.nanoTime()
-                if (firstByte == null) firstByte = (now - start) / 1_000_000
-                if (now - lastProgress > 1_000_000_000L) stalls++
-                lastProgress = now
-                bytes += count
-                onBytes(bytes)
-            }
-        }
-        val duration = max(1L, (System.nanoTime() - connected) / 1_000_000)
-        DeepStreamMeasurement(httpStatus = status, connectMs = (connected - start) / 1_000_000,
-            firstByteMs = firstByte, durationMs = duration, bytes = bytes, contentLengthBytes = contentLength, stalls = stalls)
+        measureDeepStreamBody(responseStatus, start, connected, contentLength, stream, onBytes)
     } catch (failure: java.net.SocketTimeoutException) {
-        DeepStreamMeasurement(connectMs = (System.nanoTime() - start) / 1_000_000,
-            failure = if (connectedSuccessfully) DeepStreamFailure.READ_TIMEOUT else DeepStreamFailure.CONNECT_TIMEOUT)
+        val connected = connectedAt
+        val timeoutDurationMs = connected?.let { max(1L, (System.nanoTime() - it) / 1_000_000) }
+        DeepStreamMeasurement(httpStatus = status,
+            connectMs = connected?.let { (it - start) / 1_000_000 }, durationMs = timeoutDurationMs ?: 0L,
+            stalls = if (connected != null) 1 else 0, stallDurationMs = timeoutDurationMs,
+            bytesAtStall = if (connected != null) 0L else null,
+            failure = if (connected != null) DeepStreamFailure.READ_TIMEOUT else DeepStreamFailure.CONNECT_TIMEOUT)
     } catch (failure: Exception) {
         if (failure is CancellationException) throw failure
-        DeepStreamMeasurement(failure = DeepStreamFailure.NETWORK)
+        DeepStreamMeasurement(httpStatus = status,
+            connectMs = connectedAt?.let { (it - start) / 1_000_000 },
+            failure = DeepStreamFailure.NETWORK)
     } finally {
         cancellation.dispose()
         runCatching { input?.close() }
         conn.disconnect()
     }
+}
+
+internal suspend fun measureDeepStreamBody(
+    status: Int,
+    startedAtNanos: Long,
+    connectedAtNanos: Long,
+    contentLengthBytes: Long?,
+    stream: java.io.InputStream,
+    onBytes: suspend (Long) -> Unit
+): DeepStreamMeasurement {
+    var bytes = 0L
+    var stalls = 0
+    var stallDurationMs: Long? = null
+    var bytesAtStall: Long? = null
+    var firstByteMs: Long? = null
+    var lastProgress = System.nanoTime()
+    var failure: DeepStreamFailure? = null
+    val deadline = connectedAtNanos + DeepStreamCheckRunner.SAMPLE_MS * 1_000_000
+    try {
+        while (System.nanoTime() < deadline) {
+            currentCoroutineContext().ensureActive()
+            val count = try { stream.read(ByteArray(32 * 1024)) } catch (timeout: java.net.SocketTimeoutException) {
+                stalls++
+                stallDurationMs = (System.nanoTime() - lastProgress) / 1_000_000
+                bytesAtStall = bytes
+                failure = DeepStreamFailure.READ_TIMEOUT
+                break
+            }
+            if (count < 0) break
+            if (count > 0) {
+                val now = System.nanoTime()
+                if (firstByteMs == null) firstByteMs = (now - startedAtNanos) / 1_000_000
+                if (now - lastProgress > 1_000_000_000L) {
+                    stalls++
+                    stallDurationMs = (now - lastProgress) / 1_000_000
+                    bytesAtStall = bytes
+                }
+                lastProgress = now
+                bytes += count
+                onBytes(bytes)
+            }
+        }
+    } catch (exception: Exception) {
+        if (exception is CancellationException) throw exception
+        val elapsedSinceProgressMs = (System.nanoTime() - lastProgress) / 1_000_000
+        if (bytes > 0L && stalls == 0) {
+            stalls++
+            stallDurationMs = elapsedSinceProgressMs
+            bytesAtStall = bytes
+        }
+        failure = DeepStreamFailure.NETWORK
+    }
+    val now = System.nanoTime()
+    return DeepStreamMeasurement(httpStatus = status, connectMs = (connectedAtNanos - startedAtNanos) / 1_000_000,
+        firstByteMs = firstByteMs, durationMs = max(1L, (now - connectedAtNanos) / 1_000_000),
+        bytes = bytes, contentLengthBytes = contentLengthBytes, stalls = stalls,
+        stallDurationMs = stallDurationMs, bytesAtStall = bytesAtStall, failure = failure)
 }
