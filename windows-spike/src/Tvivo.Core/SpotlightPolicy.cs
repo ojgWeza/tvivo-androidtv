@@ -87,7 +87,7 @@ public static class SpotlightFolderSelectionPolicy
 }
 
 public sealed record SpotlightCandidate(CatalogItemType Type, string ItemId, string CategoryId,
-    string NormalizedTitle, string? Year, DateTimeOffset? AddedAt)
+    string NormalizedTitle, string? Year, DateTimeOffset? AddedAt, bool HasArtwork = false)
 {
     public static SpotlightCandidate FromChannel(Channel channel) => new(
         channel.Source.Kind switch
@@ -97,7 +97,9 @@ public sealed record SpotlightCandidate(CatalogItemType Type, string ItemId, str
             _ => CatalogItemType.Live,
         },
         channel.Id, channel.GroupId ?? string.Empty, SpotlightSelector.Normalize(channel.DisplayName),
-        channel.Metadata.TryGetValue("year", out var year) ? year : null, channel.AddedAt);
+        channel.Metadata.TryGetValue("year", out var year) ? year : null, channel.AddedAt,
+        channel.LogoUri is { IsAbsoluteUri: true } artwork &&
+            (artwork.Scheme == Uri.UriSchemeHttp || artwork.Scheme == Uri.UriSchemeHttps));
 }
 
 public enum SpotlightEmptyReason { NoEligibleCandidates, NoSelectedFolderCandidates }
@@ -215,6 +217,19 @@ public static class SpotlightSelector
         .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
 
     private static List<SpotlightCandidate> Rank(IReadOnlyList<SpotlightCandidate> candidates, string account,
+        SpotlightPageKind page, DateOnly date, SpotlightContentSettings config, int count)
+    {
+        var withArtwork = candidates.Where(item => item.HasArtwork).ToArray();
+        var withoutArtwork = candidates.Where(item => !item.HasArtwork).ToArray();
+        if (withArtwork.Length >= count)
+            return RankPool(withArtwork, account, page, date, config, count);
+        var preferred = RankPool(withArtwork, account, page, date, config, withArtwork.Length);
+        var fallback = RankPool(withoutArtwork, account, page, date, config,
+            Math.Min(withoutArtwork.Length, count - preferred.Count));
+        return preferred.Concat(fallback).ToList();
+    }
+
+    private static List<SpotlightCandidate> RankPool(IReadOnlyList<SpotlightCandidate> candidates, string account,
         SpotlightPageKind page, DateOnly date, SpotlightContentSettings config, int count)
     {
         if (candidates.Count <= count) return candidates.ToList();

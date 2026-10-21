@@ -6,6 +6,14 @@ namespace Tvivo.Core.Tests;
 public sealed class DisplayPoliciesTests
 {
     [Theory]
+    [InlineData(StreamKind.Movie, true)]
+    [InlineData(StreamKind.Episode, true)]
+    [InlineData(StreamKind.Series, false)]
+    [InlineData(StreamKind.Live, false)]
+    public void File_size_is_displayed_only_for_movies_and_episodes(StreamKind kind, bool expected) =>
+        Assert.Equal(expected, FileSizeDisplayPolicy.ShouldShow(kind));
+
+    [Theory]
     [InlineData(false, true, true, false)]
     [InlineData(true, false, true, false)]
     [InlineData(true, true, false, false)]

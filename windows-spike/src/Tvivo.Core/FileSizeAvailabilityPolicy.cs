@@ -2,6 +2,11 @@ namespace Tvivo.Core;
 
 public enum FileSizeAvailability { NeverChecked, CheckedAbsent, Known }
 
+public static class FileSizeDisplayPolicy
+{
+    public static bool ShouldShow(StreamKind? kind) => kind is StreamKind.Movie or StreamKind.Episode;
+}
+
 public static class FileSizeAvailabilityPolicy
 {
     public static readonly TimeSpan RecheckInterval = TimeSpan.FromDays(7);

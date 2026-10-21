@@ -7,8 +7,8 @@ public sealed class SpotlightSelectorTests
 {
     private static readonly DateOnly Day = new(2026, 10, 16);
     private static SpotlightCandidate Item(CatalogItemType type, string id, string category = "a", string? year = null,
-        int? ageDays = null) => new(type, id, category, SpotlightSelector.Normalize(id), year,
-        ageDays is null ? null : DateTimeOffset.UtcNow.AddDays(-ageDays.Value));
+        int? ageDays = null, bool hasArtwork = false) => new(type, id, category, SpotlightSelector.Normalize(id), year,
+        ageDays is null ? null : DateTimeOffset.UtcNow.AddDays(-ageDays.Value), hasArtwork);
     private static SpotlightSettings Settings(SpotlightSourceMode mode = SpotlightSourceMode.RecentlyAdded,
         params string[] folders) => new(new(mode, folders), new(mode, folders));
 
@@ -59,6 +59,48 @@ public sealed class SpotlightSelectorTests
         Assert.NotEqual(first.Items.Select(i => i.ItemId), nextDay.Items.Select(i => i.ItemId));
         Assert.All(SpotlightSelector.Select(SpotlightPageKind.Series, "opaque-a", Day, settings, movies, series).Items,
             item => Assert.Equal(CatalogItemType.Series, item.Type));
+    }
+
+    [Fact]
+    public void Spotlight_prefers_artwork_and_fills_remaining_slots_without_artwork()
+    {
+        var settings = Settings();
+        var allWithArtwork = Enumerable.Range(0, 12)
+            .Select(i => Item(CatalogItemType.Movie, $"art{i}", hasArtwork: true)).ToArray();
+        var allWithoutArtwork = Enumerable.Range(0, 12)
+            .Select(i => Item(CatalogItemType.Movie, $"plain{i}")).ToArray();
+        var mixed = Enumerable.Range(0, 3).Select(i => Item(CatalogItemType.Movie, $"art{i}", hasArtwork: true))
+            .Concat(Enumerable.Range(0, 12).Select(i => Item(CatalogItemType.Movie, $"plain{i}"))).ToArray();
+
+        var artOnly = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, allWithArtwork, []).Items;
+        var plainOnly = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, allWithoutArtwork, []).Items;
+        var mixedResult = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, mixed, []).Items;
+
+        Assert.Equal(8, artOnly.Count);
+        Assert.All(artOnly, item => Assert.True(item.HasArtwork));
+        Assert.Equal(8, plainOnly.Count);
+        Assert.All(plainOnly, item => Assert.False(item.HasArtwork));
+        Assert.Equal(8, mixedResult.Count);
+        Assert.Equal(3, mixedResult.Count(item => item.HasArtwork));
+        Assert.Equal(5, mixedResult.Count(item => !item.HasArtwork));
+        Assert.Equal(3, mixedResult.Take(3).Count(item => item.HasArtwork));
+    }
+
+    [Fact]
+    public void Artwork_preference_keeps_rotation_deterministic_and_day_scoped()
+    {
+        var settings = Settings();
+        var candidates = Enumerable.Range(0, 30)
+            .Select(i => Item(CatalogItemType.Movie, $"art{i}", hasArtwork: true))
+            .Concat(Enumerable.Range(0, 30).Select(i => Item(CatalogItemType.Movie, $"plain{i}"))).ToArray();
+
+        var first = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, candidates, []);
+        var repeated = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day, settings, candidates, []);
+        var nextDay = SpotlightSelector.Select(SpotlightPageKind.Movies, "key", Day.AddDays(1), settings, candidates, []);
+
+        Assert.Equal(first.Items.Select(item => item.ItemId), repeated.Items.Select(item => item.ItemId));
+        Assert.All(first.Items.Concat(nextDay.Items), item => Assert.True(item.HasArtwork));
+        Assert.NotEqual(first.Items.Select(item => item.ItemId), nextDay.Items.Select(item => item.ItemId));
     }
 
     [Fact]

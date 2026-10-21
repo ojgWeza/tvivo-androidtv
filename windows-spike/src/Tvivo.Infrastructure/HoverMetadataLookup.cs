@@ -65,8 +65,8 @@ public sealed class HoverMetadataLookup
             SetFailureCooldown(key);
             return null;
         }
-        if (cached is not null && !FileSizeAvailabilityPolicy.ShouldCheck(
-                cached.SizeBytes, cached.SizeCheckedAt, _clock.GetUtcNow()))
+        if (cached is not null && (type != CatalogItemType.Movie || !FileSizeAvailabilityPolicy.ShouldCheck(
+                cached.SizeBytes, cached.SizeCheckedAt, _clock.GetUtcNow())))
         {
             _log?.Invoke($"event=hover.metadata source=cache type={type}");
             return cached;
@@ -78,8 +78,8 @@ public sealed class HoverMetadataLookup
         try
         {
             cached = await GetCachedAsync(account, type, itemId, cancellationToken).ConfigureAwait(false);
-            if (cached is not null && !FileSizeAvailabilityPolicy.ShouldCheck(
-                    cached.SizeBytes, cached.SizeCheckedAt, _clock.GetUtcNow()))
+            if (cached is not null && (type != CatalogItemType.Movie || !FileSizeAvailabilityPolicy.ShouldCheck(
+                    cached.SizeBytes, cached.SizeCheckedAt, _clock.GetUtcNow())))
             {
                 _log?.Invoke($"event=hover.metadata source=cache type={type}");
                 return cached;

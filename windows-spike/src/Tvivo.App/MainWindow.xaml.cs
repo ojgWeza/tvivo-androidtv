@@ -3769,8 +3769,10 @@ public sealed partial class MainWindow : Window
     private void SetPlayerMetadata(CatalogMetadata? metadata, CatalogItemType? type = null)
     {
         var hasAbout = type is CatalogItemType.Movie or CatalogItemType.Series;
-        var sizeBytes = FileSizeFormatter.ParseBytes(_nowPlayingChannel?.Metadata.GetValueOrDefault("size_bytes"));
-        if (_nowPlayingChannel?.Source.Kind != StreamKind.Episode)
+        var sizeBytes = FileSizeDisplayPolicy.ShouldShow(_nowPlayingChannel?.Source.Kind)
+            ? FileSizeFormatter.ParseBytes(_nowPlayingChannel.Metadata.GetValueOrDefault("size_bytes"))
+            : null;
+        if (_nowPlayingChannel?.Source.Kind == StreamKind.Movie)
             sizeBytes ??= metadata?.SizeBytes;
         var size = FileSizeFormatter.Format(sizeBytes);
         var hasDescription = !string.IsNullOrWhiteSpace(metadata?.Plot) || !string.IsNullOrWhiteSpace(metadata?.Cast);
@@ -6371,8 +6373,8 @@ public sealed partial class MainWindow : Window
 
         public Channel Channel { get; } = channel;
         public string Title => Channel.DisplayName;
-        public string? FileSizeText => FileSizeFormatter.Format(FileSizeFormatter.ParseBytes(
-            Channel.Metadata.GetValueOrDefault("size_bytes"))) is { } size ? $"File size: {size}" : null;
+        public string? FileSizeText => FileSizeDisplayPolicy.ShouldShow(Channel.Source.Kind) && FileSizeFormatter.Format(
+            FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("size_bytes"))) is { } size ? $"File size: {size}" : null;
         public Visibility FileSizeVisibility => FileSizeText is null ? Visibility.Collapsed : Visibility.Visible;
         public Visibility FavoriteVisibility => FavoriteTargetResolver.ShowsPerItemFavorite(Channel)
             ? Visibility.Visible
