@@ -114,6 +114,7 @@ fun ShelfRow(
     val openAllLabel = stringResource(com.dev.Tvivo.R.string.shelf_open_all, shelfTitle)
     val seeAllLabel = stringResource(com.dev.Tvivo.R.string.shelf_see_all, shelfTitle)
     val showSeeAll = (decision as? ShelfDecision.Cards)?.showSeeAll == true
+    val focusTargetKey = lastFocusedKey ?: shelf.cards.firstOrNull()?.key
     LaunchedEffect(restoreKey) {
         val index = shelf.cards.indexOfFirst { ShelfRestoreKey.of(shelf.id, it.key) == restoreKey }
         if (index < 0) {
@@ -134,9 +135,9 @@ fun ShelfRow(
     }
     DisposableEffect(shelf.id, focusIdentity, shelf.cards, focusRegistry, television, showSeeAll) {
         if (focusRegistry != null) focusRegistry.register(focusIdentity) {
-            val targetKey = lastFocusedKey ?: shelf.cards.firstOrNull()?.key ?: return@register false
-            val targetIndex = shelf.cards.indexOfFirst { it.key == targetKey }
-            if (targetIndex < 0) return@register false
+            val targetIndex = shelf.cards.indexOfFirst { it.key == lastFocusedKey }
+                .takeIf { it >= 0 } ?: shelf.cards.indices.firstOrNull() ?: return@register false
+            val targetKey = shelf.cards[targetIndex].key
             lastFocusedKey = targetKey
             state.scrollToItem(targetIndex)
             repeat(5) {
@@ -185,8 +186,9 @@ fun ShelfRow(
                         when (native.keyCode) {
                             KeyEvent.KEYCODE_DPAD_UP -> onVerticalNavigate?.invoke(ShelfVerticalDirection.Up) == true
                             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                                val targetIndex = shelf.cards.indexOfFirst { it.key == lastFocusedKey }
+                                val targetIndex = shelf.cards.indexOfFirst { it.key == focusTargetKey }
                                     .takeIf { it >= 0 } ?: 0
+                                shelf.cards.getOrNull(targetIndex)?.let { lastFocusedKey = it.key }
                                 scope.launch {
                                     state.animateScrollToItem(targetIndex)
                                     repeat(5) {
@@ -286,7 +288,7 @@ fun ShelfRow(
                 ShelfCard(
                     card = card,
                     modifier = Modifier
-                        .then(if (card.key == lastFocusedKey) Modifier.focusRequester(itemRequester) else Modifier)
+                        .then(if (card.key == focusTargetKey) Modifier.focusRequester(itemRequester) else Modifier)
                         .onFocusChanged {
                             if (it.isFocused) {
                                 lastFocusedKey = card.key

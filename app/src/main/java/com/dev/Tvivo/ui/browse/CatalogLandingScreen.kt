@@ -132,6 +132,7 @@ fun CatalogLandingScreen(
     var lastFocusedShelfId by rememberSaveable(accountId, contentType) { mutableStateOf<String?>(null) }
     var lastFocusWasSeeAll by rememberSaveable(accountId, contentType) { mutableStateOf(false) }
     var restoreSeeAll by remember { mutableStateOf(false) }
+    var restoreLandingCard by remember { mutableStateOf(false) }
     var pinned by remember(accountId, contentType) { mutableStateOf<List<HomeShelf>>(emptyList()) }
     var pinnedLoaded by remember(accountId, contentType) { mutableStateOf(false) }
     var metrics by remember { mutableStateOf<Map<String, LandingCategoryMetrics>>(emptyMap()) }
@@ -227,7 +228,8 @@ fun CatalogLandingScreen(
                 onOpenedCategoryChanged(null)
                 openItemFilter = null
                 landingReload++
-                restoreSeeAll = lastFocusWasSeeAll
+                restoreSeeAll = lastFocusWasSeeAll && !television
+                restoreLandingCard = television
                 onReturnToLanding()
             },
             onOpenDetail = onOpenDetailFromGrid,
@@ -314,6 +316,23 @@ fun CatalogLandingScreen(
         }
         requesters[rowKey]?.let { row ->
             if (runCatching { row.requestFocus() }.isSuccess) restoreSeeAll = false
+        }
+    }
+    LaunchedEffect(restoreLandingCard, rowIds, pinnedLoaded) {
+        if (!restoreLandingCard || !pinnedLoaded) return@LaunchedEffect
+        val shelfId = lastFocusedShelfId?.takeIf { it in nonEmptyRowKeys }
+            ?: nonEmptyRowKeys.firstOrNull()
+        val rowIndex = shelfId?.let(rowIndexes::getValue) ?: return@LaunchedEffect
+        listState.scrollToItem(if (rowIndex == 1) 0 else rowIndex)
+        repeat(60) {
+            androidx.compose.runtime.withFrameNanos {}
+            if (shelfFocusRegistry.request(shelfId)) {
+                restoreLandingCard = false
+                return@LaunchedEffect
+            }
+        }
+        requesters[rowKeys[rowIndex - 1]]?.let { row ->
+            if (runCatching { row.requestFocus() }.isSuccess) restoreLandingCard = false
         }
     }
 
