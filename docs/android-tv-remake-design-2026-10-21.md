@@ -94,3 +94,7 @@ After each slice, record its Android/TV parity status and evidence in `vault/par
 3. **TV player presentation:** validate immersive-by-default with a side panel on the owner's real TV before polishing animations or adding controls.
 4. **Provider totals/EPG:** some responses provide no reliable total or guide. Unknown stays unknown, and guide controls remain hidden without real data.
 5. **Performance and focus:** a persistent rail beside a paged 45,000-row library must keep item-ID focus and cached first-page latency under measurement; never trade correct focus for an unmeasured render cache.
+
+## 8. Owner decisions (2026-10-21)
+
+- **Live OK plays directly** (no detail page). Channel details/info are reached afterwards from a button in the enhanced TV player (Details / Info). Applies to Live on TV; Movies and Series keep their detail page unless the owner extends it (series need the episode picker). Slice 8 (Live queue) implements this; slice 6 must expose the Details button.
