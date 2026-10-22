@@ -36,6 +36,7 @@ import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
 
 internal enum class TvSearchLanguage { ENGLISH, ARABIC }
+private const val TV_SEARCH_COLUMNS = 14
 internal data class TvSearchKey(val label: String, val action: TvSearchAction)
 internal enum class TvSearchAction { Character, Space, Backspace, Clear, SwitchLanguage, Done }
 
@@ -49,7 +50,7 @@ internal fun tvSearchKeys(language: TvSearchLanguage): List<TvSearchKey> {
         add(TvSearchKey("⌫", TvSearchAction.Backspace))
         add(TvSearchKey("Clear", TvSearchAction.Clear))
         add(TvSearchKey(if (language == TvSearchLanguage.ENGLISH) "عربي" else "English", TvSearchAction.SwitchLanguage))
-        add(TvSearchKey("Done / Results", TvSearchAction.Done))
+        add(TvSearchKey("Done", TvSearchAction.Done))
     }
 }
 
@@ -114,7 +115,9 @@ internal fun TvSearchKeyboard(
     var language by remember { mutableStateOf(TvSearchLanguage.ENGLISH) }
     var focusedIndex by remember { mutableIntStateOf(0) }
     val keys = tvSearchKeys(language)
-    val requesters = remember(language) { List(keys.size) { FocusRequester() } }
+    val requesters = remember(language, firstKeyFocus) {
+        List(keys.size) { index -> if (index == 0) firstKeyFocus else FocusRequester() }
+    }
     val recentFocus = remember { FocusRequester() }
     LaunchedEffect(language) {
         repeat(4) {
@@ -123,7 +126,7 @@ internal fun TvSearchKeyboard(
             delay(24)
         }
     }
-    Column(Modifier.fillMaxWidth().focusProperties { down = resultsFocus }) {
+    Column(Modifier.fillMaxWidth()) {
         Text(query.ifBlank { "Search the saved catalog" }, color = AppColors.Ink, style = TvType.title,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("tv-search-query"))
         if (recentSearches.isNotEmpty()) {
@@ -140,19 +143,19 @@ internal fun TvSearchKeyboard(
                         .padding(horizontal = 8.dp, vertical = 6.dp))
             }
         }
-        keys.chunked(5).forEachIndexed { row, rowKeys ->
+        keys.chunked(TV_SEARCH_COLUMNS).forEachIndexed { row, rowKeys ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 rowKeys.forEachIndexed { column, key ->
-                    val index = row * 5 + column
+                    val index = row * TV_SEARCH_COLUMNS + column
                     val requester = requesters[index]
                     val links = remember(keys.size, index) {
-                        listOf(-1 to tvSearchTarget(index, keys.size, 5, -1, 0),
-                            1 to tvSearchTarget(index, keys.size, 5, 1, 0),
-                            -2 to tvSearchTarget(index, keys.size, 5, 0, -1),
-                            2 to tvSearchTarget(index, keys.size, 5, 0, 1))
+                        listOf(-1 to tvSearchTarget(index, keys.size, TV_SEARCH_COLUMNS, -1, 0),
+                            1 to tvSearchTarget(index, keys.size, TV_SEARCH_COLUMNS, 1, 0),
+                            -2 to tvSearchTarget(index, keys.size, TV_SEARCH_COLUMNS, 0, -1),
+                            2 to tvSearchTarget(index, keys.size, TV_SEARCH_COLUMNS, 0, 1))
                     }
                     Text(key.label, color = AppColors.Ink, style = TvType.label,
-                        modifier = Modifier.weight(1f).width(1.dp).heightIn(min = 48.dp)
+                        modifier = Modifier.weight(1f).width(1.dp).heightIn(min = 40.dp)
                             .background(AppColors.Elevated, RoundedCornerShape(8.dp))
                             .then(if (focusedIndex == index) Modifier.border(2.dp, AppColors.Accent, RoundedCornerShape(8.dp)) else Modifier)
                             .focusRequester(requester)
@@ -162,7 +165,7 @@ internal fun TvSearchKeyboard(
                                 up = if (row == 0) {
                                     if (recentSearches.isNotEmpty()) recentFocus else FocusRequester.Cancel
                                 } else requesters[links.first { it.first == -2 }.second]
-                                down = if (row == (keys.lastIndex / 5)) resultsFocus else requesters[links.first { it.first == 2 }.second]
+                                down = if (row == (keys.lastIndex / TV_SEARCH_COLUMNS)) resultsFocus else requesters[links.first { it.first == 2 }.second]
                             }
                             .onFocusChanged { if (it.isFocused) { focusedIndex = index; onKeyboardFocused() } }
                             .tvFocusFrame().tvClickable {

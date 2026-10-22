@@ -505,13 +505,13 @@
       "status": {
         "android": "HAS",
         "winui": "N-A",
-        "tv": "PARTIAL"
+        "tv": "HAS"
       },
       "links": [
         "docs/android-tv-remake-design-2026-10-21.md#3-search-that-belongs-to-the-tv",
         "app/src/main/java/com/dev/Tvivo/ui/shell/TvSearchKeyboard.kt",
         "app/src/test/java/com/dev/Tvivo/ui/shell/TvSearchKeyboardTest.kt",
-        "device verification pending"
+        ".codex-android-qa-exec-report.md#tv-search--sync-device-verify"
       ]
     },
     {
@@ -522,14 +522,13 @@
       "status": {
         "android": "HAS",
         "winui": "N-A",
-        "tv": "PARTIAL"
+        "tv": "HAS"
       },
       "links": [
         "docs/android-tv-remake-design-2026-10-21.md#4-catalog-progress-and-empty-state-truth",
         "app/src/main/java/com/dev/Tvivo/ui/browse/BrowseViewModel.kt",
         "app/src/test/java/com/dev/Tvivo/ui/browse/BrowseCatalogStateTest.kt",
-        ".codex-android-qa-exec-report.md#catalog-syncempty-state-truth",
-        "device verification pending"
+        ".codex-android-qa-exec-report.md#tv-search--sync-device-verify"
       ]
     }
   ]

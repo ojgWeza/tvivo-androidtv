@@ -28,4 +28,10 @@ class TvSearchKeyboardTest {
         assertEquals(5, tvSearchTarget(0, 41, 5, 0, 1))
         assertEquals(40, tvSearchTarget(40, 41, 5, 0, 1))
     }
+
+    @Test fun `wide TV layout keeps vertical columns and its last key visible`() {
+        val keyCount = tvSearchKeys(TvSearchLanguage.ENGLISH).size
+        assertEquals(14, tvSearchTarget(0, keyCount, 14, 0, 1))
+        assertEquals(40, tvSearchTarget(40, keyCount, 14, 0, 1))
+    }
 }
