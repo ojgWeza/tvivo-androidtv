@@ -496,6 +496,23 @@
         "app/src/test/java/com/dev/Tvivo/ui/browse/CategoryPickerStateTest.kt",
         ".codex-android-qa-exec-report.md#tv-focus-model-rewrite--device-verify"
       ]
+    },
+    {
+      "id": "A-TV-SEARCH-KEYBOARD",
+      "title": "TV-owned D-pad search keyboard with account-scoped recents",
+      "type": "ux-perk",
+      "origin": "android-tv",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/android-tv-remake-design-2026-10-21.md#3-search-that-belongs-to-the-tv",
+        "app/src/main/java/com/dev/Tvivo/ui/shell/TvSearchKeyboard.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/shell/TvSearchKeyboardTest.kt",
+        "device verification pending"
+      ]
     }
   ]
 }

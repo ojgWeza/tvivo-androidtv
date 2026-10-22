@@ -367,7 +367,8 @@ fun ContentGrid(
 internal fun SearchContentCard(
     card: HomeCard,
     onActivate: (HomeCard) -> Unit,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {}
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         StreamCard(
@@ -379,7 +380,7 @@ internal fun SearchContentCard(
             focusRequester = focusRequester,
             onActivate = { onActivate(card) },
             onLongPress = { onActivate(card) },
-            onFocused = {},
+            onFocused = onFocused,
             progressFor = { card.progress }
         )
     }

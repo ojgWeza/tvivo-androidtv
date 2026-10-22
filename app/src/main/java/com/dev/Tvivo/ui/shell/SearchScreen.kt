@@ -52,14 +52,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
 import com.dev.Tvivo.ui.home.ContentType
-import com.dev.Tvivo.ui.SearchBackAction
-import com.dev.Tvivo.ui.searchBackAction
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import com.dev.Tvivo.R
 import com.dev.Tvivo.ui.browse.SearchContentCard
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import kotlinx.coroutines.delay
+import com.dev.Tvivo.ui.SearchBackAction
+import com.dev.Tvivo.ui.searchBackAction
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -79,16 +79,35 @@ fun SearchScreen(
     var searching by remember { mutableStateOf(false) }
     var searchLoaded by remember(accountId) { mutableStateOf(false) }
     var searchFieldFocused by remember { mutableStateOf(false) }
+    var resultsFocused by remember { mutableStateOf(false) }
+    var returnToKeyboard by remember { mutableStateOf(false) }
+    var recentSearches by remember(accountId) { mutableStateOf(RecentSearchStore(context, accountId).read()) }
     val fieldFocus = LocalShellFocus.current?.firstContent ?: remember { FocusRequester() }
+    val tvKeyboardFocus = remember { FocusRequester() }
+    val resultsFocus = remember { FocusRequester() }
     val clearFocus = remember { FocusRequester() }
     val restoreFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    // Back with text clears it while Search stays open. Empty Back reaches the shell's
-    // existing handler and returns to My Tvivo.
-    BackHandler(enabled = searchBackAction(query) == SearchBackAction.Clear) { onQueryChanged("") }
-    LaunchedEffect(accountId, pendingFocusCardKey, query.isEmpty()) {
-        if (pendingFocusCardKey == null) runCatching { fieldFocus.requestFocus() }
+    val television = LocalIsTelevision.current
+    BackHandler(enabled = television && resultsFocused) {
+        resultsFocused = false
+        returnToKeyboard = true
+    }
+    LaunchedEffect(returnToKeyboard) {
+        if (!returnToKeyboard) return@LaunchedEffect
+        repeat(5) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (runCatching { tvKeyboardFocus.requestFocus() }.isSuccess) {
+                returnToKeyboard = false
+                return@LaunchedEffect
+            }
+        }
+        returnToKeyboard = false
+    }
+    BackHandler(enabled = !television && searchBackAction(query) == SearchBackAction.Clear) { onQueryChanged("") }
+    LaunchedEffect(accountId, pendingFocusCardKey, television) {
+        if (pendingFocusCardKey == null && !television) runCatching { fieldFocus.requestFocus() }
     }
     LaunchedEffect(accountId, query) {
         if (query.isBlank()) {
@@ -106,7 +125,6 @@ fun SearchScreen(
     }
     val visibleShelves = shelves.filter { typeFilter == null || it.type == typeFilter }
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    val television = LocalIsTelevision.current
     val columns = searchGridColumnCount(television, LocalConfiguration.current.screenWidthDp)
     LaunchedEffect(pendingFocusCardKey, visibleShelves, searchLoaded) {
         var offset = 0
@@ -138,6 +156,23 @@ fun SearchScreen(
     val screenPadding = if (television) 48.dp else 24.dp
     Column(Modifier.fillMaxSize().background(AppColors.Bg).padding(screenPadding)) {
         Text(stringResource(R.string.search_title), color = AppColors.Ink, style = TvType.headline)
+        if (television) {
+            TvSearchKeyboard(
+                query = query,
+                onQueryChanged = { onQueryChanged(it); if (it.isNotEmpty()) onPendingFocusConsumed() },
+                recentSearches = recentSearches,
+                onRecentSelected = { onQueryChanged(it); recentSearches = RecentSearchStore(context, accountId).add(it) },
+                onClearRecents = { recentSearches = RecentSearchStore(context, accountId).clear() },
+                onDone = {
+                    if (query.isNotBlank()) recentSearches = RecentSearchStore(context, accountId).add(query)
+                    resultsFocused = true
+                    runCatching { resultsFocus.requestFocus() }
+                },
+                firstKeyFocus = tvKeyboardFocus,
+                resultsFocus = resultsFocus,
+                onKeyboardFocused = { resultsFocused = false },
+            )
+        } else {
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         BasicTextField(
             value = query,
@@ -170,6 +205,7 @@ fun SearchScreen(
                     .testTag("search-clear"))
         }
         }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(null, ContentType.MOVIES, ContentType.SERIES, ContentType.LIVE).forEach { type ->
                 val label = stringResource(when (type) {
@@ -180,7 +216,8 @@ fun SearchScreen(
                 })
                 Text(label, color = if (typeFilter == type) AppColors.AccentText else AppColors.Ink,
                     style = TvType.label,
-                    modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame().tvClickable { typeFilter = type }
+                    modifier = Modifier.then(if (television && type == null) Modifier.focusRequester(resultsFocus).onFocusChanged { resultsFocused = it.isFocused } else Modifier)
+                        .heightIn(min = 48.dp).tvFocusFrame().tvClickable { typeFilter = type }
                         .padding(horizontal = 10.dp, vertical = 12.dp))
             }
         }
@@ -238,7 +275,8 @@ fun SearchScreen(
                         keyboardController?.hide()
                         onOpen(selected)
                     },
-                        focusRequester = restoreFocus.takeIf { card.key == pendingFocusCardKey })
+                        focusRequester = restoreFocus.takeIf { card.key == pendingFocusCardKey },
+                        onFocused = { if (television) resultsFocused = true })
                 }
             }
         }
