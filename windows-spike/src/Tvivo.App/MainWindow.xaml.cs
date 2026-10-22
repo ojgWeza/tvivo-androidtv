@@ -97,6 +97,9 @@ public sealed partial class MainWindow : Window
     private PlaybackMode _episodePlaybackMode = PlaybackMode.Next;
     private PlaybackMode _moviePlaybackMode = PlaybackMode.Shuffle;
     private MinimizeToMiniMode _minimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying;
+    private CinemaEscapeSetting _cinemaEscapeSetting = CinemaEscapeSetting.NormalPlayer;
+    private SleepTimerItemChangeSetting _sleepTimerItemChangeSetting = SleepTimerItemChangeSetting.Clear;
+    private string? _activePlaybackIdentity;
     private int _playbackAttempts = PlaybackRetryPolicy.DefaultAttempts;
     private WindowMiniGeometry _windowMiniGeometry = WindowMiniGeometry.Default;
     private WindowMiniGeometry _windowMiniGeometryAtEntry;
@@ -294,6 +297,8 @@ public sealed partial class MainWindow : Window
         _moviePlaybackMode = playbackOptions.MovieMode;
         _minimizeToMiniMode = playbackOptions.MinimizeToMiniMode;
         _playbackAttempts = playbackOptions.PlaybackAttempts;
+        _cinemaEscapeSetting = playbackOptions.CinemaEscape;
+        _sleepTimerItemChangeSetting = playbackOptions.SleepTimerOnItemChange;
         SyncPlaybackModeToggles(_episodePlaybackMode);
         AudioSubtitlesFlyout.Opened += AudioSubtitlesFlyout_Opened;
         AudioSubtitlesFlyout.Closed += AudioSubtitlesFlyout_Closed;
@@ -346,7 +351,11 @@ public sealed partial class MainWindow : Window
         _accountPage.SetPlaybackEngine(useVlc ? "LibVLC" : "Native");
         _accountPage.SetPlaybackAttempts(_playbackAttempts);
         _accountPage.SetMinimizeToMiniMode(_minimizeToMiniMode);
+        _accountPage.SetCinemaEscape(_cinemaEscapeSetting);
+        _accountPage.SetSleepTimerItemChange(_sleepTimerItemChangeSetting);
         _accountPage.MinimizeToMiniModeChanged += AccountPage_MinimizeToMiniModeChanged;
+        _accountPage.CinemaEscapeChanged += AccountPage_CinemaEscapeChanged;
+        _accountPage.SleepTimerItemChangeChanged += AccountPage_SleepTimerItemChangeChanged;
         _accountPage.PlaybackAttemptsChanged += AccountPage_PlaybackAttemptsChanged;
         _accountPage.PlaybackEngineChanged += AccountPage_PlaybackEngineChanged;
         ApplyPlaybackEngineVisuals();
@@ -465,6 +474,17 @@ public sealed partial class MainWindow : Window
 
         if (_isCinemaMode && _currentPage == ShellPage.Player)
             ShowCinemaControls();
+
+        if (args.Key == Windows.System.VirtualKey.Escape && _isCinemaMode && _currentPage == ShellPage.Player)
+        {
+            var action = EscapeKeyPolicy.GetAction(PlayerPresentation.Cinema, _cinemaEscapeSetting);
+            if (action == EscapeKeyAction.ExitCinemaToMiniPlayer && !ReferenceEquals(_engine, _nativeEngine) && _currentSource is not null)
+                EnterWindowMiniPlayer(explicitCinemaButton: true);
+            else
+                SetCinemaMode(false);
+            args.Handled = true;
+            return;
+        }
 
         if (_windowState.IsWindowMini && args.Key == Windows.System.VirtualKey.Escape)
         {
@@ -885,7 +905,8 @@ public sealed partial class MainWindow : Window
             var path = GetPlaybackOptionsPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, new PlaybackModePreferences(
-                _episodePlaybackMode, _moviePlaybackMode, _minimizeToMiniMode, _playbackAttempts).ToJson());
+                _episodePlaybackMode, _moviePlaybackMode, _minimizeToMiniMode, _playbackAttempts,
+                _cinemaEscapeSetting, _sleepTimerItemChangeSetting).ToJson());
         }
         catch (Exception exception)
         {
@@ -902,6 +923,18 @@ public sealed partial class MainWindow : Window
     private void AccountPage_PlaybackAttemptsChanged(object? sender, int attempts)
     {
         _playbackAttempts = PlaybackRetryPolicy.ClampAttempts(attempts);
+        WritePlaybackOptions();
+    }
+
+    private void AccountPage_CinemaEscapeChanged(object? sender, CinemaEscapeSetting setting)
+    {
+        _cinemaEscapeSetting = setting;
+        WritePlaybackOptions();
+    }
+
+    private void AccountPage_SleepTimerItemChangeChanged(object? sender, SleepTimerItemChangeSetting setting)
+    {
+        _sleepTimerItemChangeSetting = setting;
         WritePlaybackOptions();
     }
 
@@ -3157,6 +3190,15 @@ public sealed partial class MainWindow : Window
     {
         if ((isRecovery || entryKind == PlayerResetEntryKind.AutoplayNext) && ShouldStopBeforeStartingNextItem())
             return;
+        var itemKey = PlaybackItemKey(source);
+        var playbackIdentity = PlaybackSourceIdentity(source);
+        var isDifferentItemStart = !isRecovery && !engineFallbackAttempt &&
+            (entryKind is PlayerResetEntryKind.NewItem or PlayerResetEntryKind.AutoplayNext) &&
+            _activePlaybackIdentity is not null && !StringComparer.Ordinal.Equals(_activePlaybackIdentity, playbackIdentity);
+        if (isDifferentItemStart && SleepTimerItemChangePolicy.ShouldClear(_sleepTimerPolicy.Mode, _sleepTimerItemChangeSetting))
+            CancelSleepTimer("item-change-policy");
+        if (!isRecovery && !engineFallbackAttempt && entryKind != PlayerResetEntryKind.Retry)
+            _activePlaybackIdentity = playbackIdentity;
         if (_sleepTimerEnded && !isRecovery && entryKind is not (PlayerResetEntryKind.Retry or PlayerResetEntryKind.AutoplayNext))
         {
             _sleepTimerEnded = false;
@@ -3183,7 +3225,6 @@ public sealed partial class MainWindow : Window
             SetPlaybackStatus("Starting playback…");
         }
         var retryClock = new Stopwatch();
-        var itemKey = PlaybackItemKey(source);
         var resumeOnStartForFallback = _resumePositionOnStart;
         if (!engineFallbackAttempt)
         {
@@ -3771,6 +3812,8 @@ public sealed partial class MainWindow : Window
 
     // The key never leaves memory (the stream path can carry provider credentials) and is never logged.
     private static string PlaybackItemKey(StreamSource source) => $"{source.Kind}|{source.DirectUri?.AbsolutePath}";
+    private static string PlaybackSourceIdentity(StreamSource source) =>
+        $"{source.Kind}|{source.StreamId}|{source.ContainerExtension}|{source.DirectUri?.AbsoluteUri}";
 
     // Switches the engine for the current item only; unlike the settings toggle it does not touch the saved preference.
     private void SwitchEngineForPlayback(IPlaybackEngine target)
@@ -6380,6 +6423,8 @@ public sealed partial class MainWindow : Window
         _nativeEngine.PlaybackFailed -= NativeEngine_PlaybackFailed;
         _catalogLandingPage.RefreshStateChanged -= CatalogLandingPage_RefreshStateChanged;
         _accountPage.MinimizeToMiniModeChanged -= AccountPage_MinimizeToMiniModeChanged;
+        _accountPage.CinemaEscapeChanged -= AccountPage_CinemaEscapeChanged;
+        _accountPage.SleepTimerItemChangeChanged -= AccountPage_SleepTimerItemChangeChanged;
         _windowState.WindowMiniGeometryChanged -= WindowState_WindowMiniGeometryChanged;
         _windowState.Dispose();
         StopPlayerEpgUpdates();

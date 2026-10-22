@@ -218,6 +218,31 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Shelf_previews_stably_prefer_http_artwork_without_reordering_full_grid()
+    {
+        using var repo = Create(out var dir); var account = Account();
+        try
+        {
+            var items = new[]
+            {
+                ChannelFor(account, "a-no-art", "g", "A no art"),
+                ChannelFor(account, "b-http", "g", "B http") with { LogoUri = new Uri("http://art.example/poster") },
+                ChannelFor(account, "c-invalid", "g", "C invalid") with { LogoUri = new Uri("ftp://art.example/poster") },
+                ChannelFor(account, "d-https", "g", "D https") with { LogoUri = new Uri("https://art.example/poster") },
+            };
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, new[] { Group(account, "g", "Movies") }, items);
+
+            Assert.Equal(new[] { "b-http", "d-https", "a-no-art", "c-invalid" },
+                repo.GetArtworkFirstPreview(account, null, CatalogItemType.Movie, 4).Select(item => item.Id));
+            Assert.Equal(new[] { "b-http", "d-https", "a-no-art", "c-invalid" },
+                repo.GetChannelsGroupedByCategory(account, null, CatalogItemType.Movie, limit: 4)["g"].Items.Select(item => item.Id));
+            Assert.Equal(new[] { "a-no-art", "b-http", "c-invalid", "d-https" },
+                repo.GetChannels(account, CatalogItemType.Movie, "g", limit: 4).Items.Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Catalog_queries_are_isolated_by_item_type()
     {
         using var repo = Create(out var dir); var account = Account();

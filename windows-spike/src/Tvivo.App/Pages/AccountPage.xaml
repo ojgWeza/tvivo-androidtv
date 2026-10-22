@@ -155,6 +155,20 @@
                         </ComboBox>
                         <TextBlock x:Name="MinimizeToMiniDescription" Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="When LibVLC is playing or paused, minimizing keeps the video in a small always-on-top window." />
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="When I press Esc in cinema mode" />
+                        <ComboBox x:Name="CinemaEscapeSelector" MinHeight="44" MinWidth="300" FontSize="16"
+                                  SelectionChanged="CinemaEscapeSelector_SelectionChanged"
+                                  AutomationProperties.Name="When I press Esc in cinema mode">
+                            <ComboBoxItem Content="Go to normal player" Tag="NormalPlayer" />
+                            <ComboBoxItem Content="Go to mini player" Tag="MiniPlayer" />
+                        </ComboBox>
+                        <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Sleep timer when I start another movie or episode" />
+                        <ComboBox x:Name="SleepTimerItemChangeSelector" MinHeight="44" MinWidth="300" FontSize="16"
+                                  SelectionChanged="SleepTimerItemChangeSelector_SelectionChanged"
+                                  AutomationProperties.Name="Sleep timer when I start another movie or episode">
+                            <ComboBoxItem Content="Clear it" Tag="Clear" />
+                            <ComboBoxItem Content="Keep it" Tag="Keep" />
+                        </ComboBox>
                     </StackPanel>
                 </Border>
             </StackPanel>

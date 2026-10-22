@@ -2048,18 +2048,19 @@ public sealed partial class CatalogLandingPage : UserControl
         AddActivityShelf(account, shelves, "__favorites", "Favorites", type,
             _repository.GetFavorites(account, type, _connection, int.MaxValue, filter));
 
-        var allChannels = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: ShelfPreviewSize);
-        if (allChannels.Items.Count > 0)
+        var allChannels = _repository.GetArtworkFirstPreview(account, _connection, type, ShelfPreviewSize, filter);
+        if (allChannels.Count > 0)
         {
+            var allPage = _repository.GetChannels(account, _connection, type, filter: filter, offset: 0, limit: 1);
             shelves.Add(CreateShelf(account,
                 "__recent",
                 AllItemsShelfTitle(type),
-                CountLabel(allChannels.TotalCount, noun),
-                allChannels.Items.Select(channel => ToCard(channel, type)).ToArray(),
+                CountLabel(allPage.TotalCount, noun),
+                allChannels.Select(channel => ToCard(channel, type)).ToArray(),
                 type,
                 null,
                 false,
-                allChannels.LatestAddedAt));
+                allPage.LatestAddedAt));
         }
 
         categoryDescriptors ??= _repository.GetCategoryShelfDescriptors(account, type, filter);

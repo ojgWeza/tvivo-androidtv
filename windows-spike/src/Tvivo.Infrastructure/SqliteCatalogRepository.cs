@@ -592,6 +592,11 @@ public sealed class SqliteCatalogRepository : IDisposable
         return ids;
     }
 
+    /// <summary>Returns a title-ordered shelf preview with usable artwork stably preferred.</summary>
+    public IReadOnlyList<Channel> GetArtworkFirstPreview(ProviderAccount account, ProviderConnection? connection,
+        CatalogItemType type, int limit = 12, string? filter = null) =>
+        GetOrderedItems(account, type, connection, "1=1", "title COLLATE NOCASE,id", limit, filter, artworkFirst: true);
+
     public IReadOnlySet<string> GetFinishedMovieIds(ProviderAccount account, string categoryId)
     {
         using var connection = Open();
@@ -725,7 +730,9 @@ public sealed class SqliteCatalogRepository : IDisposable
                 SELECT id, category_id, title, artwork, extension, added_at, year, rating, genre, plot, [cast], size_bytes, estimated_size_bytes,
                        COUNT(*) OVER (PARTITION BY category_id) AS total_count,
                        MAX(added_at) OVER (PARTITION BY category_id) AS latest_added_at,
-                       ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY {ordering}) AS row_number
+                       ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY
+                           CASE WHEN lower(artwork) LIKE 'http://%' OR lower(artwork) LIKE 'https://%' THEN 0 ELSE 1 END,
+                           {ordering}) AS row_number
                 FROM items
                 WHERE account_id=$a AND type=$type{categoryClause} AND {titleFilterClause}
             )
@@ -789,7 +796,7 @@ public sealed class SqliteCatalogRepository : IDisposable
             var candidates = GetOrderedItems(account, type, connection,
                 "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
                 "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC, id ASC",
-                fetchLimit, filter, useRecentlyAddedSortKey: true);
+                fetchLimit, filter, useRecentlyAddedSortKey: true, artworkFirst: true);
             foreach (var item in candidates)
             {
                 if (!seen.Add(DuplicateTitleKey(item))) continue;
@@ -811,7 +818,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         var pool = GetOrderedItems(account, type, connection,
             "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
             "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC,id ASC",
-            Math.Min(800, capped * 4), useRecentlyAddedSortKey: true);
+            Math.Min(800, capped * 4), useRecentlyAddedSortKey: true, artworkFirst: true);
         return pool.GroupBy(DuplicateTitleKey, StringComparer.Ordinal).Select(group => group.First()).Take(capped).ToArray();
     }
 
@@ -825,7 +832,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         if (capped == 0) return Array.Empty<Channel>();
         using var database = Open();
         using var command = database.CreateCommand();
-        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND category_id=$category ORDER BY MAX(added_at,COALESCE(first_indexed_at,0)) DESC,id ASC LIMIT $limit";
+        command.CommandText = "SELECT id,category_id,title,artwork,extension,added_at,year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND category_id=$category ORDER BY CASE WHEN lower(artwork) LIKE 'http://%' OR lower(artwork) LIKE 'https://%' THEN 0 ELSE 1 END,MAX(added_at,COALESCE(first_indexed_at,0)) DESC,id ASC LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$category", categoryId);
@@ -885,6 +892,7 @@ public sealed class SqliteCatalogRepository : IDisposable
                        i.rating, i.genre, i.plot, i.[cast], i.size_bytes, i.estimated_size_bytes,
                        CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END AS effective_added,
                        ROW_NUMBER() OVER (PARTITION BY i.category_id ORDER BY
+                           CASE WHEN lower(i.artwork) LIKE 'http://%' OR lower(i.artwork) LIKE 'https://%' THEN 0 ELSE 1 END,
                            CASE WHEN i.added_at > 0 THEN i.added_at ELSE COALESCE(i.first_indexed_at, 0) END DESC, i.id) AS item_rank
                 FROM items i
                 WHERE i.account_id=$a AND i.type=$type AND i.visit_count=0 AND i.favourite=0 AND i.resume_ms=0
@@ -942,26 +950,26 @@ public sealed class SqliteCatalogRepository : IDisposable
             .ToArray();
 
     public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItems(account, type, connection, "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)", "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, id ASC", limit, filter);
+        => GetOrderedItems(account, type, connection, "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)", "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, id ASC", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetRecentlyPlayed(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItems(account, type, connection, "visit_count > 0", "last_tuned_at DESC, id ASC", limit, filter);
+        => GetOrderedItems(account, type, connection, "visit_count > 0", "last_tuned_at DESC, id ASC", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetRecentlyPlayed(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItemsAcrossTypes(account, connection, "items.visit_count > 0", "items.last_tuned_at DESC, items.type, items.id", limit, filter);
+        => GetOrderedItemsAcrossTypes(account, connection, "items.visit_count > 0", "items.last_tuned_at DESC, items.type, items.id", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetFavorites(ProviderAccount account, ProviderConnection? connection = null, int limit = 100, string? filter = null)
         => GetOrderedItemsAcrossTypes(account, connection,
             "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)",
-            "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, items.type, items.id", limit, filter);
+            "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, items.type, items.id", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit, filter);
+        => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, ProviderConnection? connection = null, int limit = 50)
         => GetOrderedItemsAcrossTypes(account, connection,
             "items.resume_ms > 0 AND items.type IN ('Movie','Series')",
-            "items.resume_updated_at DESC, items.type, items.id", limit, null);
+            "items.resume_updated_at DESC, items.type, items.id", limit, null, artworkFirst: true);
 
     // Where an episode should start: its own saved position, never the series-wide one (which
     // belongs to whichever episode was played last). Finished or never-played episodes start at 0.
@@ -1230,14 +1238,15 @@ public sealed class SqliteCatalogRepository : IDisposable
             existing?.DurationMs, finished);
     }
 
-    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter = null, bool useRecentlyAddedSortKey = false)
+    private IReadOnlyList<Channel> GetOrderedItems(ProviderAccount account, CatalogItemType type, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter = null, bool useRecentlyAddedSortKey = false, bool artworkFirst = false)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
         var addedAt = useRecentlyAddedSortKey
             ? "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END)"
             : "added_at";
-        command.CommandText = $"SELECT id,category_id,title,artwork,extension,{addedAt},year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        var artworkOrdering = artworkFirst ? "CASE WHEN lower(artwork) LIKE 'http://%' OR lower(artwork) LIKE 'https://%' THEN 0 ELSE 1 END," : string.Empty;
+        command.CommandText = $"SELECT id,category_id,title,artwork,extension,{addedAt},year,rating,genre,plot,[cast],size_bytes,estimated_size_bytes FROM items WHERE account_id=$a AND type=$type AND {predicate} AND ($filter IS NULL OR title LIKE $pattern ESCAPE '\\') ORDER BY {artworkOrdering}{ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
@@ -1257,11 +1266,12 @@ public sealed class SqliteCatalogRepository : IDisposable
         return rows;
     }
 
-    private IReadOnlyList<Channel> GetOrderedItemsAcrossTypes(ProviderAccount account, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter)
+    private IReadOnlyList<Channel> GetOrderedItemsAcrossTypes(ProviderAccount account, ProviderConnection? providerConnection, string predicate, string ordering, int limit, string? filter, bool artworkFirst = false)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT items.type,items.id,items.category_id,items.title,items.artwork,items.extension,items.added_at,items.year,items.rating,items.genre,items.plot,items.[cast],items.size_bytes,items.estimated_size_bytes FROM items WHERE items.account_id=$a AND items.type IN ('Live','Movie','Series') AND {predicate} AND ($filter IS NULL OR items.title LIKE $pattern ESCAPE '\\') ORDER BY {ordering} LIMIT $limit";
+        var artworkOrdering = artworkFirst ? "CASE WHEN lower(items.artwork) LIKE 'http://%' OR lower(items.artwork) LIKE 'https://%' THEN 0 ELSE 1 END," : string.Empty;
+        command.CommandText = $"SELECT items.type,items.id,items.category_id,items.title,items.artwork,items.extension,items.added_at,items.year,items.rating,items.genre,items.plot,items.[cast],items.size_bytes,items.estimated_size_bytes FROM items WHERE items.account_id=$a AND items.type IN ('Live','Movie','Series') AND {predicate} AND ($filter IS NULL OR items.title LIKE $pattern ESCAPE '\\') ORDER BY {artworkOrdering}{ordering} LIMIT $limit";
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
         command.Parameters.AddWithValue("$filter", string.IsNullOrWhiteSpace(filter) ? DBNull.Value : filter);

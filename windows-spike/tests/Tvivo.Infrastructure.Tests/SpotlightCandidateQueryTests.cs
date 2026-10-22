@@ -19,10 +19,15 @@ public sealed class SpotlightCandidateQueryTests
             var movies = Enumerable.Range(0, 30).Select(index => new Channel(account.AccountId, $"m{index:00}",
                 index % 2 == 0 ? "a" : "b", $"Movie {index:00}", $"Movie {index:00}", null,
                 DateTimeOffset.UnixEpoch.AddDays(index + 1), null, new($"m{index:00}", StreamKind.Movie, "mkv"),
-                new Dictionary<string, string>())).ToArray();
+                new Dictionary<string, string>()) with
+                {
+                    LogoUri = index is 0 or 4 ? new Uri("https://art.example/poster") : null,
+                }).ToArray();
             repository.ReplaceSnapshot(account, CatalogItemType.Movie, groups, movies);
             Assert.Equal(7, repository.GetSpotlightRecentlyAddedCandidates(account, CatalogItemType.Movie, limit: 7).Count);
             Assert.Equal(5, repository.GetSpotlightCategoryCandidates(account, CatalogItemType.Movie, "a", limit: 5).Count);
+            Assert.Equal(new[] { "m04", "m00" }, repository.GetSpotlightCategoryCandidates(account,
+                CatalogItemType.Movie, "a", limit: 2).Take(2).Select(channel => channel.Id));
             Assert.Empty(repository.GetSpotlightCategoryCandidates(account, CatalogItemType.Movie, "deleted"));
             Assert.Throws<ArgumentOutOfRangeException>(() => repository.GetSpotlightRecentlyAddedCandidates(account, CatalogItemType.Live));
         }

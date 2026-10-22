@@ -48,7 +48,9 @@ public sealed record PlaybackModePreferences(
     PlaybackMode EpisodeMode,
     PlaybackMode MovieMode,
     MinimizeToMiniMode MinimizeToMiniMode = MinimizeToMiniMode.MiniPlayerWhilePlaying,
-    int PlaybackAttempts = PlaybackRetryPolicy.DefaultAttempts)
+    int PlaybackAttempts = PlaybackRetryPolicy.DefaultAttempts,
+    CinemaEscapeSetting CinemaEscape = CinemaEscapeSetting.NormalPlayer,
+    SleepTimerItemChangeSetting SleepTimerOnItemChange = SleepTimerItemChangeSetting.Clear)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -68,7 +70,9 @@ public sealed record PlaybackModePreferences(
             ReadMode(root, "EpisodeMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "EpisodeAutoplayNext"), isMovie: false),
             ReadMode(root, "MovieMode") ?? PlaybackModeLogic.FromLegacyAutoplay(ReadBoolean(root, "MovieAutoplayNext"), isMovie: true),
             ReadMinimizeMode(root),
-            PlaybackRetryPolicy.ClampAttempts(ReadInteger(root, nameof(PlaybackAttempts)) ?? PlaybackRetryPolicy.DefaultAttempts));
+            PlaybackRetryPolicy.ClampAttempts(ReadInteger(root, nameof(PlaybackAttempts)) ?? PlaybackRetryPolicy.DefaultAttempts),
+            ReadEnum(root, nameof(CinemaEscape), CinemaEscapeSetting.NormalPlayer),
+            ReadEnum(root, nameof(SleepTimerOnItemChange), SleepTimerItemChangeSetting.Clear));
     }
 
     public string ToJson() => JsonSerializer.Serialize(this with
@@ -98,6 +102,10 @@ public sealed record PlaybackModePreferences(
             ? MinimizeToMiniMode.AlwaysMinimizeNormally
             : MinimizeToMiniMode.MiniPlayerWhilePlaying;
     }
+
+    private static T ReadEnum<T>(JsonElement root, string name, T fallback) where T : struct, Enum =>
+        TryGetProperty(root, name, out var value) && value.ValueKind == JsonValueKind.String &&
+        Enum.TryParse<T>(value.GetString(), true, out var parsed) && Enum.IsDefined(parsed) ? parsed : fallback;
 
     private static bool? ReadBoolean(JsonElement root, string name) =>
         TryGetProperty(root, name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False

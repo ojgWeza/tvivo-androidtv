@@ -43,11 +43,37 @@ public sealed partial class AccountPage : UserControl
     public event EventHandler<string>? PlaybackEngineChanged;
     public event EventHandler<int>? PlaybackAttemptsChanged;
     public event EventHandler<MinimizeToMiniMode>? MinimizeToMiniModeChanged;
+    public event EventHandler<CinemaEscapeSetting>? CinemaEscapeChanged;
+    public event EventHandler<SleepTimerItemChangeSetting>? SleepTimerItemChangeChanged;
 
     private bool _suppressEngineChanged;
     private bool _suppressPlaybackAttemptsChanged;
     private bool _suppressMinimizeToMiniModeChanged;
+    private bool _suppressNewPlayerSettings;
     private bool _suppressCatalogRefreshPolicyChanged;
+
+    public void SetCinemaEscape(CinemaEscapeSetting setting) => SetNewPlayerSetting(CinemaEscapeSelector, setting.ToString());
+    public void SetSleepTimerItemChange(SleepTimerItemChangeSetting setting) => SetNewPlayerSetting(SleepTimerItemChangeSelector, setting.ToString());
+
+    private void SetNewPlayerSetting(ComboBox selector, string value)
+    {
+        _suppressNewPlayerSettings = true;
+        selector.SelectedItem = selector.Items.OfType<ComboBoxItem>()
+            .First(item => string.Equals(item.Tag as string, value, StringComparison.Ordinal));
+        _suppressNewPlayerSettings = false;
+    }
+
+    private void CinemaEscapeSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!_suppressNewPlayerSettings && CinemaEscapeSelector.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            Enum.TryParse<CinemaEscapeSetting>(tag, out var setting)) CinemaEscapeChanged?.Invoke(this, setting);
+    }
+
+    private void SleepTimerItemChangeSelector_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!_suppressNewPlayerSettings && SleepTimerItemChangeSelector.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            Enum.TryParse<SleepTimerItemChangeSetting>(tag, out var setting)) SleepTimerItemChangeChanged?.Invoke(this, setting);
+    }
 
     private sealed class SpotlightSourceControls
     {

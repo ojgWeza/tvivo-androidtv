@@ -160,4 +160,14 @@ public sealed class PlaybackModeTests
 
         Assert.Equal(MinimizeToMiniMode.MiniPlayerWhilePlayingOrPaused, preferences.MinimizeToMiniMode);
     }
+
+    [Fact]
+    public void New_player_settings_default_and_round_trip()
+    {
+        Assert.Equal(CinemaEscapeSetting.NormalPlayer, PlaybackModePreferences.FromJson("{}").CinemaEscape);
+        Assert.Equal(SleepTimerItemChangeSetting.Clear, PlaybackModePreferences.FromJson("{}").SleepTimerOnItemChange);
+        var configured = new PlaybackModePreferences(PlaybackMode.Next, PlaybackMode.Shuffle,
+            CinemaEscape: CinemaEscapeSetting.MiniPlayer, SleepTimerOnItemChange: SleepTimerItemChangeSetting.Keep);
+        Assert.Equal(configured, PlaybackModePreferences.FromJson(configured.ToJson()));
+    }
 }
