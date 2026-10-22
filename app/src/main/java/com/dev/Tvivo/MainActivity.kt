@@ -23,6 +23,9 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -85,6 +88,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private lateinit var initialThemeMode: ThemeMode
+    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val appearance = PlayerPreferencesStore(applicationContext)
@@ -124,7 +128,7 @@ class MainActivity : ComponentActivity() {
             }
             TvivoTheme(mode = themeMode) {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
                     colors = SurfaceDefaults.colors(containerColor = AppColors.Bg)
                 ) {
                     TvivoApp()

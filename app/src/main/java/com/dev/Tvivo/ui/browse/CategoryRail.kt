@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Popup
@@ -179,6 +181,7 @@ fun CategoryRail(
                 }
                 RailRow(
                     name = localizedName,
+                    categoryId = category.categoryId,
                     count = counts[category.categoryId],
                     selected = category.categoryId == selectedCategoryId,
                     onSelect = {
@@ -266,6 +269,7 @@ private fun CategoryFilterField(
             .fillMaxWidth()
             .then(modifier)
             .focusRequester(focusRequester)
+            .testTag("category-rail-filter")
             .focusProperties {
                 right = FocusLinkPolicy.targetIfRendered(sortFocusRequester, isRendered = true)
                     ?: FocusRequester.Default
@@ -278,6 +282,7 @@ private fun CategoryFilterField(
 @OptIn(ExperimentalComposeUiApi::class)
 private fun RailRow(
     name: String,
+    categoryId: String,
     count: Int?,
     selected: Boolean,
     onSelect: () -> Unit,
@@ -329,6 +334,8 @@ private fun RailRow(
                 if (it.isFocused && selected) onSelectedRowFocused()
             }
             .tvClickable { onSelect() }
+            .semantics { contentDescription = name }
+            .testTag("category-rail-row-$categoryId")
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

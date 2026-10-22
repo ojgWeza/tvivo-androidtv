@@ -308,7 +308,7 @@ fun PlayerOverlay(
 
     BoxWithConstraints(
         Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }
-            .then(if (television && !visible) Modifier.focusRequester(hiddenFocus).focusable() else Modifier)
+            .then(if (television && !visible) Modifier.focusRequester(hiddenFocus).focusable().testTag("player-hidden-focus") else Modifier)
             .pointerInput(visible) {
             detectTapGestures(
                 onTap = { onToggleOverlay() },

@@ -4,6 +4,7 @@
 .kotlin/
 build/
 /build
+/app/build/outputs/roborazzi/
 /captures
 .externalNativeBuild
 .cxx

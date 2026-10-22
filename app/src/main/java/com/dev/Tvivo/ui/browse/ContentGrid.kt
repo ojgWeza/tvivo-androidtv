@@ -39,6 +39,8 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -414,6 +416,7 @@ private fun StreamCard(
                 .fillMaxWidth()
                 .aspectRatio(cardShape.aspectRatio())
                 .testTag("catalog-item-${item?.id ?: "placeholder"}")
+                .then(if (item != null) Modifier.semantics { contentDescription = item.title } else Modifier)
                 .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                 .background(AppColors.Elevated)
                 // The shared focus frame is static: no scale or lazy-row clipping risk.

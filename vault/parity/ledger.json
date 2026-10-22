@@ -583,6 +583,25 @@
         "app/src/main/java/com/dev/Tvivo/ui/player/PlayerOverlay.kt",
         ".codex-android-qa-exec-report.md#tv-player-slice-b-device-verify"
       ]
+    },
+    {
+      "id": "A-JVM-UI-TESTS",
+      "title": "JVM Robolectric D-pad focus and Roborazzi screenshot coverage",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "N-A"
+      },
+      "links": [
+        "docs/jvm-ui-testing.md",
+        "app/src/test/java/com/dev/Tvivo/ui/browse/BrowseDpadComposeTest.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/browse/BrowseSnapshotTest.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/shell/TvSearchKeyboardComposeTest.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/player/PlayerOverlayComposeTest.kt",
+        "app/build/outputs/roborazzi"
+      ]
     }
   ]
 }

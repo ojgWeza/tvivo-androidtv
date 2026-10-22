@@ -26,6 +26,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
@@ -110,9 +112,10 @@ internal fun TvSearchKeyboard(
     onDone: () -> Unit,
     firstKeyFocus: FocusRequester,
     resultsFocus: FocusRequester,
-    onKeyboardFocused: () -> Unit
+    onKeyboardFocused: () -> Unit,
+    initialLanguage: TvSearchLanguage = TvSearchLanguage.ENGLISH
 ) {
-    var language by remember { mutableStateOf(TvSearchLanguage.ENGLISH) }
+    var language by remember(initialLanguage) { mutableStateOf(initialLanguage) }
     var focusedIndex by remember { mutableIntStateOf(0) }
     val keys = tvSearchKeys(language)
     val requesters = remember(language, firstKeyFocus) {
@@ -175,7 +178,7 @@ internal fun TvSearchKeyboard(
                                     TvSearchAction.SwitchLanguage -> { language = if (language == TvSearchLanguage.ENGLISH) TvSearchLanguage.ARABIC else TvSearchLanguage.ENGLISH; focusedIndex = 0 }
                                     TvSearchAction.Done -> onDone()
                                 }
-                            }.testTag("tv-search-key-$index"),
+                            }.semantics { contentDescription = key.label }.testTag("tv-search-key-$index"),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
