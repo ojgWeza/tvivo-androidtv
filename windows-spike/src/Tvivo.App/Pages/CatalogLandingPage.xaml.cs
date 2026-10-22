@@ -2278,7 +2278,7 @@ public sealed partial class CatalogLandingPage : UserControl
             subtitleOverride ?? SubtitleFor(type),
             channel.LogoUri?.ToString(),
             190,
-            type == CatalogItemType.Live ? 190 : 280,
+            type == CatalogItemType.Live ? 190 : 310,
             channel,
             qualityBadge ?? categoryQuality,
             type,
@@ -4604,7 +4604,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         // A fast jump can run before the virtualizing panel has realized its destination containers.
         var headerHeight = SpotlightPanel.Visibility == Visibility.Visible ? SpotlightPanel.ActualHeight + 30 : 0;
-        var shelfHeight = _activeMode == CatalogMode.LiveTv ? 280d : 370d;
+        var shelfHeight = _activeMode == CatalogMode.LiveTv ? 280d : 400d;
         var estimatedIndex = Math.Clamp((int)(Math.Max(0, viewer.VerticalOffset - headerHeight) / shelfHeight),
             0, Math.Max(0, ShelvesItems.Items.Count - 1));
         first = estimatedIndex;
@@ -5837,7 +5837,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         public Visibility PreviewVisibility => Cards.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         public Visibility SkeletonVisibility => Cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
-        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 280;
+        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 310;
         public double SkeletonRowHeight => SkeletonHeight + 36;
         public IReadOnlyList<ShelfSkeletonTile> SkeletonTiles => ShelfSkeletonTiles.For(Type);
         public Visibility NewSinceLastVisitVisibility => HasNewItems && Cards.Count > 0
@@ -5892,7 +5892,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public ShelfPreviewState PreviewState => _previewState;
         public Visibility PreviewVisibility => PreviewState == ShelfPreviewState.Cards ? Visibility.Visible : Visibility.Collapsed;
         public Visibility SkeletonVisibility => PreviewState == ShelfPreviewState.Skeleton ? Visibility.Visible : Visibility.Collapsed;
-        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 280;
+        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 310;
         public double SkeletonRowHeight => SkeletonHeight + 36;
         public IReadOnlyList<ShelfSkeletonTile> SkeletonTiles => ShelfSkeletonTiles.For(Type);
         public Visibility NewSinceLastVisitVisibility => HasNewItems && Cards.Count > 0
@@ -6112,7 +6112,7 @@ public sealed partial class CatalogLandingPage : UserControl
         public string? FileSizeText => FileSizeDisplayPolicy.ShouldShow(Channel?.Source.Kind) && FileSizeFormatter.FormatPreferred(
             FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("size_bytes")) ?? _hoverMetadata?.SizeBytes,
             FileSizeFormatter.ParseBytes(Channel?.Metadata.GetValueOrDefault("estimated_size_bytes")) ?? _hoverMetadata?.EstimatedSizeBytes) is { } size
-                ? $"File size: {size}" : null;
+                ? $"File\u00A0size:\u00A0{size}" : null;
         private string? HoverPlot => _hoverMetadata is not null
             ? _hoverMetadata.Plot
             : Channel?.Metadata.GetValueOrDefault("plot");

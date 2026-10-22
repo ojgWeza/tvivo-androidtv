@@ -363,17 +363,21 @@
                                             <VisualState.Setters>
                                                 <Setter Target="BackgroundElement.Background" Value="Transparent" />
                                                 <Setter Target="BackgroundElement.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
-                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppAccentSoftBrush}" />
+                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppTextBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
                                                 <Setter Target="BackgroundElement.Background" Value="Transparent" />
                                                 <Setter Target="BackgroundElement.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
-                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppAccentBrush}" />
+                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppTextBrush}" />
                                             </VisualState.Setters>
                                         </VisualState>
-                                        <VisualState x:Name="Disabled" />
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource AppMutedTextBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
                                 <Border x:Name="BackgroundElement"

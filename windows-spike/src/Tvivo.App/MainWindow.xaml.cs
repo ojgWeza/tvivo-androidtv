@@ -3999,7 +3999,7 @@ public sealed partial class MainWindow : Window
         if (metadata is null)
         {
             PlayerMetadataLine.Visibility = size is null ? Visibility.Collapsed : Visibility.Visible;
-            PlayerMetadataLine.Text = size is null ? string.Empty : $"File size: {size}";
+            PlayerMetadataLine.Text = size is null ? string.Empty : $"File\u00A0size:\u00A0{size}";
             PlayerAboutText.Text = "Loading details…";
             return;
         }
@@ -4008,7 +4008,7 @@ public sealed partial class MainWindow : Window
             metadata.Year,
             CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
             metadata.Genre,
-            size is null ? null : $"File size: {size}",
+            size is null ? null : $"File\u00A0size:\u00A0{size}",
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
         if (!string.IsNullOrWhiteSpace(metadata.Plot)) about.Add(metadata.Plot);
@@ -6530,7 +6530,7 @@ public sealed partial class MainWindow : Window
         public string Title => Channel.DisplayName;
         public string? FileSizeText => FileSizeDisplayPolicy.ShouldShow(Channel.Source.Kind) && FileSizeFormatter.FormatPreferred(
             FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("size_bytes")),
-            FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("estimated_size_bytes"))) is { } size ? $"File size: {size}" : null;
+            FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("estimated_size_bytes"))) is { } size ? $"File\u00A0size:\u00A0{size}" : null;
         public string? FileSizeAutomationName => FileSizeFormatter.AutomationSize(
             FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("size_bytes")),
             FileSizeFormatter.ParseBytes(Channel.Metadata.GetValueOrDefault("estimated_size_bytes")));

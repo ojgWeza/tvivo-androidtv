@@ -49,8 +49,16 @@
     <!-- Debug-only opt-in telemetry (TVIVO_SENTRY_DSN); Release/MSI builds never reference it. -->
     <PackageReference Include="Sentry" Version="5.*" Condition="'$(Configuration)' == 'Debug'" />
     <!-- Debug-only, opt-in UI test harness (needs env SCOUT=1); Release never references it. -->
-    <ProjectReference Include="..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj" Condition="'$(Configuration)' == 'Debug' And Exists('..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj')" />
+    <ProjectReference Include="..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj" Condition="'$(UseScout)' == 'true'" />
   </ItemGroup>
+
+  <!-- Scout is on by default in Debug when its folder exists; build with -p:UseScout=false when Scout's sources are mid-edit. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug' And '$(UseScout)' == '' And Exists('..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj')">
+    <UseScout>true</UseScout>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(UseScout)' == 'true'">
+    <DefineConstants>$(DefineConstants);TVIVO_SCOUT</DefineConstants>
+  </PropertyGroup>
 
   <!-- The Windows SDK PRI targets generate the app PRI but their publish hook does not
        reach the .NET 9 unpackaged publish item list. Add that generated output there. -->

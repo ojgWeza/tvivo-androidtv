@@ -108,17 +108,20 @@
                                 </Image.RenderTransform>
                             </Image>
                         </Grid>
-                        <Border VerticalAlignment="Bottom" Padding="10,36,10,10">
+                        <Border VerticalAlignment="Bottom" Padding="10,44,10,10">
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                                     <GradientStop Color="#00071114" Offset="0" />
-                                    <GradientStop Color="#F0071114" Offset="1" />
+                                    <GradientStop Color="#D9000000" Offset="1" />
                                 </LinearGradientBrush>
                             </Border.Background>
                             <StackPanel Spacing="2">
                                 <TextBlock Text="{Binding Title}"
                                            Foreground="{ThemeResource AppOnMediaTextBrush}"
+                                           FontSize="16"
                                            FontWeight="SemiBold"
+                                           TextWrapping="Wrap"
+                                           MaxLines="2"
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding Subtitle}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
