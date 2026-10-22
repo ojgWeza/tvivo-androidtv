@@ -578,6 +578,33 @@ public sealed class SqliteCatalogRepository : IDisposable
         CatalogItemSortOrder? sortOrder = null)
         => GetChannels(account, null, type, groupId, filter, offset, limit, mostVisited, sortOrder);
 
+    public IReadOnlyList<string> GetCategoryChannelIds(ProviderAccount account, CatalogItemType type, string categoryId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id FROM items WHERE account_id=$a AND type=$type AND category_id=$cat ORDER BY title COLLATE NOCASE,id";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$type", TypeName(type));
+        command.Parameters.AddWithValue("$cat", categoryId);
+        using var reader = command.ExecuteReader();
+        var ids = new List<string>();
+        while (reader.Read()) ids.Add(reader.GetString(0));
+        return ids;
+    }
+
+    public IReadOnlySet<string> GetFinishedMovieIds(ProviderAccount account, string categoryId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT i.id FROM items i JOIN media_progress p ON p.account_id=i.account_id AND p.kind='movie' AND p.item_id=i.id WHERE i.account_id=$a AND i.type='Movie' AND i.category_id=$cat AND p.finished=1";
+        command.Parameters.AddWithValue("$a", account.AccountId);
+        command.Parameters.AddWithValue("$cat", categoryId);
+        using var reader = command.ExecuteReader();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read()) ids.Add(reader.GetString(0));
+        return ids;
+    }
+
     public Channel? GetChannel(ProviderAccount account, ProviderConnection? providerConnection, CatalogItemType type, string id)
     {
         using var connection = Open();

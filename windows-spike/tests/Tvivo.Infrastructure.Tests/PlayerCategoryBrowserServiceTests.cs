@@ -40,8 +40,12 @@ public sealed class PlayerCategoryBrowserServiceTests
             }
 
             var service = new PlayerCategoryBrowserService(repository, null);
-            Assert.Equal(new[] { "full" }, service.GetFolders(account, CatalogItemType.Movie).Select(folder => folder.Group.Id));
-            Assert.Equal(100_000, Assert.Single(service.GetFolders(account, CatalogItemType.Movie)).TotalCount);
+            Assert.Equal(new[] { "empty", "full" }, service.GetFolders(account, CatalogItemType.Movie).Select(folder => folder.Group.Id));
+            Assert.Equal(100_000, service.GetFolders(account, CatalogItemType.Movie)[1].TotalCount);
+            Assert.Equal(0, service.GetFolders(account, CatalogItemType.Movie)[0].TotalCount);
+            Assert.Equal("item-000000", repository.GetCategoryChannelIds(account, CatalogItemType.Movie, "full")[0]);
+            repository.SaveProgress(account, "movie", "item-000000", null, 0, null, finished: true);
+            Assert.Equal(new[] { "item-000000" }, repository.GetFinishedMovieIds(account, "full"));
             var first = service.GetFolderPage(account, CatalogItemType.Movie, "full", 0, 50);
             var middle = service.GetFolderPage(account, CatalogItemType.Movie, "full", 50_000, 50);
             var last = service.GetFolderPage(account, CatalogItemType.Movie, "full", 99_950, 50);

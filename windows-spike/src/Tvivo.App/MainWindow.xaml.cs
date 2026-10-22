@@ -305,6 +305,7 @@ public sealed partial class MainWindow : Window
         _epgCoordinator.EpgUpdated += EpgCoordinator_EpgUpdated;
         _playerEpgTimer.Tick += PlayerEpgTimer_Tick;
         PlayerRelatedList.ItemsSource = _playerEntries;
+        PlayerCategoryList.ItemsSource = _categoryRows;
         Title = "Tvivo";
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Tvivo.ico");
         if (System.IO.File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
@@ -1891,6 +1892,12 @@ public sealed partial class MainWindow : Window
         SetPlayerList(_playerSiblings, selectedChannel);
         UpdateEpisodeNavigationButtons();
         ShowPage(ShellPage.Player);
+        _categoryState?.Exit();
+        _categoryFolders = Array.Empty<CatalogCategoryShelfDescriptor>();
+        _movieQueueIds = Array.Empty<string>();
+        _movieQueueFinishedIds = new HashSet<string>(StringComparer.Ordinal);
+        _movieQueueCategoryId = null;
+        StartPlayerCategoryBrowser(selectedChannel.Source.Kind);
         if (selectedChannel.Source.DirectUri is null)
         {
             var resolveStartedAt = Stopwatch.GetTimestamp();
@@ -1984,22 +1991,19 @@ public sealed partial class MainWindow : Window
 
     private async Task LoadMovieCategorySiblingsAsync(Channel selected, long selectionGeneration)
     {
-        var fallbackTitle = PlayerSideTitleResolver.ForMovie(selected.Metadata.GetValueOrDefault("genre"));
-        await LoadPlayerCategoryTitleAsync(selected, selectionGeneration, fallbackTitle);
+        var account = _catalogLandingPage.Account;
+        if (account is null || selected.GroupId is null) return;
+        var (ids, finishedIds) = await Task.Run(() =>
+            (_catalogRepository.GetCategoryChannelIds(account, CatalogItemType.Movie, selected.GroupId),
+             _catalogRepository.GetFinishedMovieIds(account, selected.GroupId)));
         if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
             _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
             return;
 
-        var channels = await _catalogLandingPage.GetFullCategoryChannelsForAsync(selected);
-        if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
-            _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
-            return;
-
-        _playerSiblings = channels
-            .Where(channel => channel.Source.Kind == StreamKind.Movie)
-            .Append(selected)
-            .DistinctBy(channel => channel.Id)
-            .ToArray();
+        _movieQueueIds = ids.Contains(selected.Id, StringComparer.Ordinal) ? ids : ids.Append(selected.Id).ToArray();
+        _movieQueueFinishedIds = finishedIds;
+        _movieQueueCategoryId = selected.GroupId;
+        _playerSiblings = new[] { selected };
         SetPlayerList(_playerSiblings, selected);
         UpdateEpisodeNavigationButtons();
     }
@@ -2013,7 +2017,8 @@ public sealed partial class MainWindow : Window
         PlayerSideTitle.Text = !string.IsNullOrWhiteSpace(categoryName) ? categoryName : fallbackTitle;
     }
 
-    private async Task OpenSeriesAsync(Channel series, long selectionGeneration)
+    private async Task OpenSeriesAsync(Channel series, long selectionGeneration,
+        bool browseOnly = false, long categoryGeneration = 0)
     {
         var startedAt = Stopwatch.GetTimestamp();
         LaunchDiagnostics.Write("event=series.open.start ms=0");
@@ -2070,6 +2075,22 @@ public sealed partial class MainWindow : Window
             if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration))
             {
                 LogSeriesOpenExit(startedAt, series, "stale-generation");
+                return;
+            }
+
+            if (browseOnly)
+            {
+                if (_categoryState?.PageGeneration != categoryGeneration ||
+                    _categoryState.SelectedItemId != series.Id || _catalogLandingPage.Account?.AccountId != account.AccountId)
+                    return;
+                _categorySelectedSeries = series;
+                _categorySeriesDetails = details;
+                _categoryState.EnterSeriesEpisodes();
+                _categoryLoading = false;
+                ConfigureSeasonSelector(details.Seasons);
+                PlayerSeasonComboBox.SelectedItem = details.Seasons.FirstOrDefault();
+                RenderPlayerCategoryRows();
+                FocusPlayerCategoryIndex(0);
                 return;
             }
 
@@ -2391,6 +2412,7 @@ public sealed partial class MainWindow : Window
                 ? selectedSeason.Episodes.Select(item => ToEpisodeChannel(account, _currentSeriesId, item)).ToArray()
                 : _playerSiblings;
             SetPlayerList(visibleEpisodes, episode);
+            StartPlayerCategoryBrowser(StreamKind.Episode);
             _nextEpisodeAutoPlaySuppressed = false;
             _nextEpisodeAdvanceStarted = false;
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
@@ -2484,6 +2506,15 @@ public sealed partial class MainWindow : Window
     {
         if (_nowPlayingChannel is not { } current || current.Source.Kind is not (StreamKind.Movie or StreamKind.Episode))
             return null;
+        if (current.Source.Kind == StreamKind.Movie && _movieQueueIds.Count > 0)
+        {
+            var movieIndex = -1;
+            for (var queueIndex = 0; queueIndex < _movieQueueIds.Count; queueIndex++)
+                if (_movieQueueIds[queueIndex] == current.Id) { movieIndex = queueIndex; break; }
+            var next = movieIndex + offset;
+            return movieIndex >= 0 && next >= 0 && next < _movieQueueIds.Count
+                ? ResolveMovieQueueChannel(_movieQueueIds[next]) : null;
+        }
         var entries = _playerEntries
             .Where(entry => entry.Channel.Source.Kind == current.Source.Kind)
             .Select(entry => entry.Channel)
@@ -2505,7 +2536,17 @@ public sealed partial class MainWindow : Window
         if (current.Source.Kind == StreamKind.Movie && !_playerMovieProgressReady)
             return null;
         if (_preparedNextForItemId == current.Id && _preparedNextWasShuffle)
-            return _playerEntries.FirstOrDefault(entry => entry.Channel.Id == _preparedNextItemId)?.Channel;
+            return (current.Source.Kind == StreamKind.Movie ? ResolveMovieQueueChannel(_preparedNextItemId) : null) ??
+                _playerEntries.FirstOrDefault(entry => entry.Channel.Id == _preparedNextItemId)?.Channel;
+
+        if (current.Source.Kind == StreamKind.Movie && _movieQueueIds.Count > 0)
+        {
+            _preparedNextForItemId = current.Id;
+            _preparedNextWasShuffle = true;
+            _preparedNextItemId = _nextPlaybackSelector.SelectNext(_movieQueueIds, current.Id,
+                _movieQueueFinishedIds, shuffle: true);
+            return ResolveMovieQueueChannel(_preparedNextItemId);
+        }
 
         var entries = _playerEntries
             .Where(entry => entry.Channel.Source.Kind == current.Source.Kind)
@@ -2525,6 +2566,13 @@ public sealed partial class MainWindow : Window
         _preparedNextForItemId = null;
         _preparedNextWasShuffle = false;
     }
+
+    private IReadOnlyList<string> _movieQueueIds = Array.Empty<string>();
+    private IReadOnlySet<string> _movieQueueFinishedIds = new HashSet<string>(StringComparer.Ordinal);
+    private string? _movieQueueCategoryId;
+
+    private Channel? ResolveMovieQueueChannel(string? id) => id is not null && _catalogLandingPage.Account is { } account
+        ? _catalogRepository.GetChannel(account, _catalogLandingPage.Connection, CatalogItemType.Movie, id) : null;
 
     private void PreviousEpisode_Click(object sender, RoutedEventArgs args) => PlayAdjacentEpisode(-1);
 
@@ -2712,6 +2760,19 @@ public sealed partial class MainWindow : Window
     private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         if (PlayerSeasonComboBox.SelectedItem is not SeriesSeason season || _nowPlayingChannel is null) return;
+        if (_categoryState?.ViewMode == PlayerCategoryViewMode.SeriesEpisodes && _categorySeriesDetails is not null)
+        {
+            RenderPlayerCategoryRows();
+            if (_currentSeriesId is { } playingSeriesId && playingSeriesId == _categorySelectedSeries?.Id &&
+                _nowPlayingChannel.Source.Kind == StreamKind.Episode &&
+                _currentSeriesAccount is { } playingAccount)
+            {
+                var playingEpisodes = season.Episodes.Select(episode => ToEpisodeChannel(playingAccount, playingSeriesId, episode)).ToArray();
+                SetPlayerList(playingEpisodes, _nowPlayingChannel);
+                UpdateEpisodeNavigationButtons();
+            }
+            return;
+        }
         var account = _currentSeriesAccount ?? _catalogLandingPage.Account;
         if (account is null || _currentSeriesId is null) return;
         var episodes = season.Episodes.Select(episode => ToEpisodeChannel(account, _currentSeriesId, episode)).ToArray();
@@ -3588,6 +3649,12 @@ public sealed partial class MainWindow : Window
         _currentSeriesMetadata = null;
         _playerSeriesSeasons = Array.Empty<SeriesSeason>();
         _playerSiblings = Array.Empty<Channel>();
+        _movieQueueIds = Array.Empty<string>();
+        _movieQueueFinishedIds = new HashSet<string>(StringComparer.Ordinal);
+        _movieQueueCategoryId = null;
+        _categoryState?.Exit();
+        _categoryRows.Clear();
+        _categoryFolders = Array.Empty<CatalogCategoryShelfDescriptor>();
         NextEpisodePrompt.Visibility = Visibility.Collapsed;
         PreviousEpisodeButton.Visibility = Visibility.Collapsed;
         NextEpisodeButton.Visibility = Visibility.Collapsed;
@@ -5339,6 +5406,12 @@ public sealed partial class MainWindow : Window
         }
 
         _nowPlayingChannel = channel;
+        if (channel.Source.Kind == StreamKind.Movie && channel.GroupId != _movieQueueCategoryId)
+        {
+            _movieQueueIds = Array.Empty<string>();
+            _movieQueueFinishedIds = new HashSet<string>(StringComparer.Ordinal);
+            _movieQueueCategoryId = null;
+        }
         _resumePositionOnStart = null;
         _currentSource = channel.Source;
         UpdatePlaylistOptionControls(channel.Source.Kind);
@@ -5352,6 +5425,11 @@ public sealed partial class MainWindow : Window
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         _playbackCompletionShown = false;
         SetCurrentPlayerEntry(channel);
+        if (channel.Source.Kind == StreamKind.Movie)
+        {
+            StartPlayerCategoryBrowser(StreamKind.Movie);
+            RebuildCategoryRows();
+        }
         _ = LoadPlayerMetadataAsync(channel,
             channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live);
         _ = StartPlaybackAsync(channel.Source, preserveCompact,

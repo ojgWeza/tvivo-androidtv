@@ -17,7 +17,7 @@ public sealed class PlayerCategoryBrowserService
     public IReadOnlyList<CatalogCategoryShelfDescriptor> GetFolders(ProviderAccount account, CatalogItemType type)
     {
         Validate(account, type);
-        return _repository.GetCategoryShelfDescriptors(account, type);
+        return _repository.GetCategoryShelfDescriptors(account, type, includeEmptyCategories: true);
     }
 
     public CatalogPage GetFolderPage(ProviderAccount account, CatalogItemType type, string categoryId, int offset, int limit)
