@@ -190,7 +190,7 @@ fun CatalogLandingScreen(
         if (shellRefreshRevision > 0) viewModel.refreshType()
     }
 
-    LaunchedEffect(accountId, contentType, state.categories.size, state.catalogSyncState, landingReload) {
+    LaunchedEffect(accountId, contentType, state.categories.size, state.librarySync, landingReload) {
         pinned = repository.landingPinned(contentType)
         metrics = repository.landingMetrics(contentType)
         pinnedLoaded = true
@@ -299,7 +299,7 @@ fun CatalogLandingScreen(
     val pendingRestoreShelfId = pendingFocusCardKey?.substringBefore('|')
     val cardRestoreKey = pendingFocusCardKey?.substringAfter('|')
         ?.takeUnless { lastFocusWasSeeAll }
-    LaunchedEffect(pendingFocusCardKey, lastFocusedShelfId, rowIds, pinnedLoaded, state.catalogSyncState) {
+    LaunchedEffect(pendingFocusCardKey, lastFocusedShelfId, rowIds, pinnedLoaded, state.librarySync) {
         if (pendingFocusCardKey == null) return@LaunchedEffect
         if (cardRestoreKey.isNullOrEmpty() || pendingRestoreShelfId == null) {
             onPendingFocusConsumed()
@@ -307,7 +307,7 @@ fun CatalogLandingScreen(
         }
         val index = rowIds.indexOf(pendingRestoreShelfId)
         if (index >= 0) listState.scrollToItem(index + 1)
-        else if (pinnedLoaded && state.catalogSyncState != "indexing") onPendingFocusConsumed()
+        else if (pinnedLoaded && state.librarySync !is LibrarySyncState.Updating) onPendingFocusConsumed()
     }
     LaunchedEffect(restoreSeeAll, rowIds) {
         if (!restoreSeeAll) return@LaunchedEffect
@@ -410,9 +410,8 @@ fun CatalogLandingScreen(
                 ) {
                     Column {
                         Text(contentTypeLabel, color = AppColors.Ink, style = TvType.headline)
-                        if (state.catalogSyncState == "indexing" || state.isRefreshing) {
-                            Text(stringResource(R.string.browse_refreshing_library, contentTypeLabel), color = AppColors.Dim,
-                                style = TvType.label)
+                        librarySyncMessage(state.librarySync, contentType)?.let {
+                            Text(it, color = AppColors.Dim, style = TvType.label)
                         }
                         state.refreshConfirmation?.takeIf { showRefreshFeedback }?.let {
                             Text(it, color = AppColors.Dim, style = TvType.label)
@@ -440,7 +439,7 @@ fun CatalogLandingScreen(
                                 }.padding(horizontal = 10.dp))
                         if (!television) HeaderIconButton(Icons.Default.Refresh, stringResource(R.string.common_refresh),
                             onClick = viewModel::refreshType,
-                            enabled = !state.isRefreshing && state.catalogSyncState != "indexing",
+                            enabled = !state.isRefreshing && state.librarySync !is LibrarySyncState.Updating,
                             modifier = Modifier.focusRequester(landingRefreshFocus).testTag("landing-refresh"))
                     }
                 }

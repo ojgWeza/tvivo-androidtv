@@ -20,6 +20,7 @@ import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.local.dao.CategoryCount
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
@@ -43,10 +44,59 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+sealed interface LibrarySyncState {
+    data object Idle : LibrarySyncState
+    data class Updating(val processed: Int, val knownTotal: Int?) : LibrarySyncState
+    data class Complete(val count: Int) : LibrarySyncState
+    data object Partial : LibrarySyncState
+    data object Failed : LibrarySyncState
+}
+
+internal fun librarySyncState(row: CatalogSyncEntity?, accountId: String, typeKey: String): LibrarySyncState {
+    if (row == null || row.accountId != accountId || row.contentType != typeKey) return LibrarySyncState.Idle
+    return when (row.state) {
+        CatalogSyncer.STATE_INDEXING -> LibrarySyncState.Updating(row.done, row.total.takeIf { it > 0 })
+        CatalogSyncer.STATE_COMPLETE -> LibrarySyncState.Complete(row.done)
+        CatalogSyncer.STATE_PARTIAL -> LibrarySyncState.Partial
+        CatalogSyncer.STATE_FAILED -> LibrarySyncState.Failed
+        else -> LibrarySyncState.Idle
+    }
+}
+
+sealed interface CategoryFetchState {
+    data object Idle : CategoryFetchState
+    data class FirstFetchPending(val accountId: String, val categoryId: String, val requestId: Long) : CategoryFetchState
+    data class CachedRows(val accountId: String, val categoryId: String, val requestId: Long,
+                          val rowCount: Int, val refreshing: Boolean, val error: AppError? = null) : CategoryFetchState
+    data class ConfirmedEmpty(val accountId: String, val categoryId: String, val requestId: Long) : CategoryFetchState
+    data class Failed(val accountId: String, val categoryId: String, val requestId: Long,
+                      val error: AppError) : CategoryFetchState
+}
+
+internal fun CategoryFetchState.matches(accountId: String?, categoryId: String?): Boolean = when (this) {
+    is CategoryFetchState.FirstFetchPending -> this.accountId == accountId && this.categoryId == categoryId
+    is CategoryFetchState.CachedRows -> this.accountId == accountId && this.categoryId == categoryId
+    is CategoryFetchState.ConfirmedEmpty -> this.accountId == accountId && this.categoryId == categoryId
+    is CategoryFetchState.Failed -> this.accountId == accountId && this.categoryId == categoryId
+    CategoryFetchState.Idle -> false
+}
+
+internal fun CategoryFetchState.requestId(): Long = when (this) {
+    is CategoryFetchState.FirstFetchPending -> requestId
+    is CategoryFetchState.CachedRows -> requestId
+    is CategoryFetchState.ConfirmedEmpty -> requestId
+    is CategoryFetchState.Failed -> requestId
+    CategoryFetchState.Idle -> -1
+}
+
+internal fun CategoryFetchState.matchesRequest(accountId: String, categoryId: String, requestId: Long) =
+    matches(accountId, categoryId) && this.requestId() == requestId
 
 data class BrowseUiState(
     val categories: List<CategoryEntity> = emptyList(),
@@ -59,8 +109,8 @@ data class BrowseUiState(
      *  visually identical to a broken button. */
     val refreshConfirmation: String? = null,
     /** Full-catalog progress. Cached rows remain browsable while the sync advances. */
-    val catalogSyncState: String? = null,
-    val catalogSyncDone: Int = 0,
+    val librarySync: LibrarySyncState = LibrarySyncState.Idle,
+    val selectedCategory: CategoryFetchState = CategoryFetchState.Idle,
 
     /** D-13. Filters the **rail**, in memory — the category list is ~120 rows. */
     val categoryFilter: String = "",
@@ -189,6 +239,7 @@ class BrowseViewModel(
     private var source: CatalogSource? = null
     private var playbackState: PlaybackStateRepository? = null
     private var catalogSyncer: CatalogSyncer? = null
+    private var categoryRequestId = 0L
 
     var accountId: String? = null
         private set
@@ -222,6 +273,7 @@ class BrowseViewModel(
                 else -> CatalogSource.vod(VodRepository(db, credentials, id))
             }
             source = catalog
+            restoredCategory?.let { selectCategory(it) }
             val playback = PlaybackStateRepository(db, id)
             playbackState = playback
             val syncer = CatalogSyncer(db, credentials, id)
@@ -229,11 +281,8 @@ class BrowseViewModel(
 
             viewModelScope.launch {
                 syncer.observeProgress(typeKey).collect { progress ->
-                    _state.update {
-                        it.copy(
-                            catalogSyncState = progress?.state,
-                            catalogSyncDone = progress?.done ?: 0
-                        )
+                    if (accountId == id) _state.update {
+                        it.copy(librarySync = librarySyncState(progress, id, typeKey))
                     }
                 }
             }
@@ -284,7 +333,28 @@ class BrowseViewModel(
             viewModelScope.launch {
                 catalog.countsByCategory().collect { counts ->
                     _state.update { s ->
-                        s.copy(counts = s.counts + counts.associate { it.categoryId to it.count })
+                        val updated = counts.associate { it.categoryId to it.count }
+                        val selected = s.selectedCategory
+                        val currentCount = updated[s.selectedCategoryId] ?: 0
+                        val categoryState = when {
+                            !selected.matches(id, s.selectedCategoryId) -> selected
+                            currentCount > 0 && selected is CategoryFetchState.FirstFetchPending ->
+                                CategoryFetchState.CachedRows(id, selected.categoryId, selected.requestId,
+                                    currentCount, refreshing = true)
+                            currentCount > 0 && selected is CategoryFetchState.CachedRows ->
+                                selected.copy(rowCount = currentCount)
+                            currentCount > 0 && selected is CategoryFetchState.ConfirmedEmpty ->
+                                CategoryFetchState.CachedRows(id, selected.categoryId, selected.requestId,
+                                    currentCount, refreshing = false)
+                            else -> selected
+                        }
+                        // The grouped query omits categories whose count fell to zero.
+                        // Retaining old real-category keys would leave a stale count in
+                        // the rail after a successful empty refresh.
+                        val virtualCounts = s.counts.filterKeys { key ->
+                            key != null && VirtualFolder.isVirtual(key)
+                        }
+                        s.copy(counts = virtualCounts + updated, selectedCategory = categoryState)
                     }
                 }
             }
@@ -465,6 +535,8 @@ class BrowseViewModel(
 
     fun selectCategory(categoryId: String, forceRecordVisit: Boolean = false) {
         val previous = selectedCategory.value
+        val id = accountId ?: return
+        val requestId = ++categoryRequestId
         if (previous != categoryId) pendingFocusItemId = null
         selectedCategory.value = categoryId
         accountId?.let { savedState["browse_category_$it"] = categoryId }
@@ -473,15 +545,57 @@ class BrowseViewModel(
         debouncedItemFilter.value = ""
         accountId?.let { savedState["browse_filter_$it"] = "" }
         _state.update { it.copy(itemFilter = "", filteredCount = null) }
-        _state.update { it.copy(selectedCategoryId = categoryId, error = null) }
+        _state.update { s ->
+            val cached = s.counts[categoryId] ?: 0
+            s.copy(selectedCategoryId = categoryId, error = null, isRefreshing = false,
+                selectedCategory = when {
+                    VirtualFolder.isVirtual(categoryId) -> CategoryFetchState.Idle
+                    cached > 0 -> CategoryFetchState.CachedRows(id, categoryId, requestId, cached, refreshing = true)
+                    else -> CategoryFetchState.FirstFetchPending(id, categoryId, requestId)
+                })
+        }
         // A virtual folder has no panel category behind it: `__continue` is not an id
         // the panel would recognise, and asking it to refresh one is a guaranteed error
         // toast over a folder that is already showing the right rows.
         if (VirtualFolder.isVirtual(categoryId)) return
         viewModelScope.launch {
             if (previous != categoryId || forceRecordVisit) recordCategoryOpened(categoryId)
-            source?.refreshCategory(categoryId, false)
-                ?.onFailure { t -> _state.update { it.copy(error = t.toAppError()) } }
+            fetchCategory(id, categoryId, requestId, force = false, manual = false)
+        }
+    }
+
+    private suspend fun fetchCategory(id: String, categoryId: String, requestId: Long,
+                                      force: Boolean, manual: Boolean) {
+        val catalog = source ?: return
+        val result = catalog.refreshCategory(categoryId, force)
+        // A previous category or account can finish after selection changes. It may update
+        // its own Room rows, but it must never replace the current selection's outcome.
+        if (accountId != id || selectedCategory.value != categoryId ||
+            !_state.value.selectedCategory.matchesRequest(id, categoryId, requestId)) return
+        result.onSuccess {
+            val count = catalog.countsByCategory().first()
+                .firstOrNull { it.categoryId == categoryId }?.count ?: 0
+            if (accountId != id || selectedCategory.value != categoryId ||
+                !_state.value.selectedCategory.matchesRequest(id, categoryId, requestId)) return
+            _state.update { s ->
+                s.copy(selectedCategory = if (count > 0)
+                    CategoryFetchState.CachedRows(id, categoryId, requestId, count, refreshing = false)
+                else CategoryFetchState.ConfirmedEmpty(id, categoryId, requestId),
+                    isRefreshing = if (manual) false else s.isRefreshing,
+                    refreshConfirmation = if (manual) com.dev.Tvivo.ui.settings.AppLanguage
+                        .wrap(getApplication<Application>()).getString(com.dev.Tvivo.R.string.browse_category_refreshed)
+                    else s.refreshConfirmation)
+            }
+        }.onFailure { t ->
+            val error = t.toAppError()
+            _state.update { s ->
+                val cached = s.counts[categoryId] ?: 0
+                s.copy(selectedCategory = if (cached > 0)
+                    CategoryFetchState.CachedRows(id, categoryId, requestId, cached,
+                        refreshing = false, error = error)
+                else CategoryFetchState.Failed(id, categoryId, requestId, error),
+                    error = error, isRefreshing = if (manual) false else s.isRefreshing)
+            }
         }
     }
 
@@ -521,25 +635,22 @@ class BrowseViewModel(
             return
         }
         if (_state.value.isRefreshing) return
-        _state.update { it.copy(isRefreshing = true, error = null, refreshConfirmation = null) }
+        val id = accountId ?: return
+        val requestId = ++categoryRequestId
+        _state.update { s ->
+            val cached = s.counts[categoryId] ?: 0
+            s.copy(isRefreshing = true, error = null, refreshConfirmation = null,
+                selectedCategory = if (cached > 0)
+                    CategoryFetchState.CachedRows(id, categoryId, requestId, cached, refreshing = true)
+                else CategoryFetchState.FirstFetchPending(id, categoryId, requestId))
+        }
         viewModelScope.launch {
-            val result = source?.refreshCategory(categoryId, true)
-            result
-                ?.onSuccess {
-                    _state.update {
-                        it.copy(isRefreshing = false, refreshConfirmation =
-                            com.dev.Tvivo.ui.settings.AppLanguage.wrap(getApplication<Application>()).getString(com.dev.Tvivo.R.string.browse_category_refreshed))
-                    }
-                }
-                ?.onFailure { t ->
-                    _state.update { it.copy(isRefreshing = false, error = t.toAppError()) }
-                }
-                ?: _state.update { it.copy(isRefreshing = false, error = AppError.Unreachable) }
+            fetchCategory(id, categoryId, requestId, force = true, manual = true)
         }
     }
 
     fun refreshType() {
-        if (_state.value.isRefreshing || _state.value.catalogSyncState == "indexing") return
+        if (_state.value.isRefreshing || _state.value.librarySync is LibrarySyncState.Updating) return
         _state.update { it.copy(isRefreshing = true, error = null, refreshConfirmation = null) }
         viewModelScope.launch {
             val result = when (contentType) {

@@ -77,13 +77,57 @@ import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
 import com.dev.Tvivo.ui.adaptive.WindowSizeClass
 import com.dev.Tvivo.ui.shell.LocalShellFocus
-import com.dev.Tvivo.sync.CatalogSyncer
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
+
+internal enum class BrowseEmptyPresentation { Rows, Loading, FilterMiss, Empty, Error }
+
+@Composable
+internal fun librarySyncMessage(state: LibrarySyncState, contentType: ContentType): String? {
+    val library = stringResource(contentType.labelResource)
+    val itemName = stringResource(when (contentType) {
+        ContentType.MOVIES -> R.string.browse_count_titles
+        ContentType.SERIES -> R.string.browse_count_shows
+        ContentType.LIVE -> R.string.browse_count_channels
+    })
+    return when (state) {
+        is LibrarySyncState.Updating -> if (state.knownTotal != null)
+            stringResource(R.string.browse_library_updating_known, library,
+                state.processed, state.knownTotal, itemName)
+        else stringResource(R.string.browse_library_updating_unknown, library,
+            state.processed, itemName)
+        is LibrarySyncState.Complete -> stringResource(R.string.browse_library_complete,
+            library, state.count, itemName)
+        else -> null
+    }
+}
+
+internal fun browseEmptyPresentation(
+    category: CategoryFetchState,
+    accountId: String?,
+    categoryId: String?,
+    librarySync: LibrarySyncState,
+    hasRows: Boolean,
+    pagingLoading: Boolean,
+    filtered: Boolean,
+    virtual: Boolean
+): BrowseEmptyPresentation = when {
+    hasRows -> BrowseEmptyPresentation.Rows
+    pagingLoading -> BrowseEmptyPresentation.Loading
+    !virtual && !category.matches(accountId, categoryId) -> BrowseEmptyPresentation.Loading
+    !virtual && category is CategoryFetchState.Failed -> BrowseEmptyPresentation.Error
+    !virtual && category is CategoryFetchState.FirstFetchPending -> BrowseEmptyPresentation.Loading
+    !virtual && category is CategoryFetchState.CachedRows && category.refreshing -> BrowseEmptyPresentation.Loading
+    !virtual && category is CategoryFetchState.CachedRows && category.error != null -> BrowseEmptyPresentation.Error
+    librarySync is LibrarySyncState.Updating -> BrowseEmptyPresentation.Loading
+    filtered -> BrowseEmptyPresentation.FilterMiss
+    virtual || category is CategoryFetchState.ConfirmedEmpty -> BrowseEmptyPresentation.Empty
+    else -> BrowseEmptyPresentation.Loading
+}
 
 @Composable
 fun BrowseScreen(
@@ -376,8 +420,8 @@ fun BrowseScreen(
                     .orEmpty(),
                 isRefreshing = state.isRefreshing,
                 confirmation = state.refreshConfirmation,
-                syncState = state.catalogSyncState,
-                syncDone = state.catalogSyncDone,
+                librarySync = state.librarySync,
+                contentType = contentType,
                 error = state.error,
                 hasCachedItems = items.itemCount > 0,
                 onRefresh = viewModel::refreshSelected,
@@ -406,12 +450,19 @@ fun BrowseScreen(
                 railAvailable = !railAsPanel || categoryPanelOpen
             )
 
-            when {
-                items.itemCount == 0 &&
-                    state.itemFilter.isNotBlank() &&
-                    items.loadState.refresh !is androidx.paging.LoadState.Loading ->
+            val emptyPresentation = browseEmptyPresentation(
+                category = state.selectedCategory,
+                accountId = viewModel.accountId,
+                categoryId = state.selectedCategoryId,
+                librarySync = state.librarySync,
+                hasRows = items.itemCount > 0,
+                pagingLoading = items.loadState.refresh is androidx.paging.LoadState.Loading,
+                filtered = state.itemFilter.isNotBlank(),
+                virtual = state.selectedCategoryId?.let(VirtualFolder::isVirtual) == true
+            )
+            when (emptyPresentation) {
+                BrowseEmptyPresentation.FilterMiss ->
                     NoFilterMatchState(
-                        query = state.itemFilter,
                         onClear = { viewModel.onItemFilterChanged("") },
                         onRefresh = if (tvBrowse) viewModel::refreshSelected else null,
                         recoveryFocusRequester = recoveryFocusRequester,
@@ -420,25 +471,25 @@ fun BrowseScreen(
 
                 // Offline is fully browsable: a dead network must fail at play time, not
                 // throw a full-screen error over data the app already has.
-                state.error != null && items.itemCount == 0 -> ErrorState(state.error!!,
-                    if (tvBrowse) viewModel::refreshSelected else null,
+                BrowseEmptyPresentation.Error -> ErrorState(
+                    (state.selectedCategory as? CategoryFetchState.Failed)?.error
+                        ?: state.error ?: AppError.Unreachable,
+                    viewModel::refreshSelected,
                     recoveryFocusRequester, onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
                 // Phase 5 — the first load of a cold category. Without this the screen
                 // is blank while the query runs, which reads as an empty category that
                 // then suddenly fills.
-                items.itemCount == 0 &&
-                    items.loadState.refresh is androidx.paging.LoadState.Loading ->
-                    LoadingState(if (tvBrowse) viewModel::refreshSelected else null,
+                BrowseEmptyPresentation.Loading ->
+                    LoadingState(viewModel::refreshSelected,
                         recoveryFocusRequester, onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
-                items.itemCount == 0 &&
-                    items.loadState.refresh !is androidx.paging.LoadState.Loading ->
+                BrowseEmptyPresentation.Empty ->
                     EmptyState(onRefresh = viewModel::refreshSelected,
                         recoveryFocusRequester = if (tvBrowse) recoveryFocusRequester else null,
                         onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
-                else -> androidx.compose.runtime.key(state.selectedCategoryId) { ContentGrid(
+                BrowseEmptyPresentation.Rows -> androidx.compose.runtime.key(state.selectedCategoryId) { ContentGrid(
                     items = items,
                     pendingFocusItemId = if (tvBrowse) detailReturnItemId else viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
@@ -566,8 +617,8 @@ private fun Header(
     title: String,
     isRefreshing: Boolean,
     confirmation: String?,
-    syncState: String?,
-    syncDone: Int,
+    librarySync: LibrarySyncState,
+    contentType: ContentType,
     error: AppError?,
     hasCachedItems: Boolean,
     onRefresh: () -> Unit,
@@ -598,7 +649,7 @@ private fun Header(
         LocalWindowSizeClass.current == WindowSizeClass.Compact -> 16.dp
         else -> 24.dp
     }
-    val statusMessage = browseStatusMessage(error, syncState, hasCachedItems)
+    val statusMessage = browseStatusMessage(error, librarySync, hasCachedItems)
     val largeText = LocalConfiguration.current.fontScale >= 1.6f
     Column(modifier = Modifier.fillMaxWidth()) {
         if (onToggleCategories != null && filteredCount != null && totalCount != null) {
@@ -720,15 +771,16 @@ private fun Header(
             }
         }
 
-        if (syncState == "indexing") Text("Indexing $syncDone…", color = AppColors.Dim,
-            style = TvType.label, modifier = Modifier.padding(horizontal = horizontalMargin))
+        val libraryMessage = librarySyncMessage(librarySync, contentType)
+        libraryMessage?.let { Text(it, color = AppColors.Dim, style = TvType.label,
+            modifier = Modifier.padding(horizontal = horizontalMargin)) }
         confirmation?.let { Text(it, color = AppColors.Dim, style = TvType.label,
             modifier = Modifier.padding(horizontal = horizontalMargin)) }
         statusMessage?.let { Text(stringResource(when {
                 error == AppError.RateLimited -> R.string.browse_cached_rate_limited
                 error == AppError.ServiceUnavailable -> R.string.browse_cached_service_unavailable
                 error != null -> R.string.browse_cached_offline
-                syncState == CatalogSyncer.STATE_PARTIAL -> R.string.browse_catalog_partial
+                librarySync is LibrarySyncState.Partial -> R.string.browse_catalog_partial
                 else -> R.string.browse_catalog_failed
             }), color = AppColors.Dim, style = TvType.label,
             modifier = Modifier.padding(horizontal = horizontalMargin)) }
@@ -773,12 +825,12 @@ private fun ErrorState(
     }
 }
 
-internal fun browseStatusMessage(error: AppError?, catalogSyncState: String?, hasCachedItems: Boolean): String? = when {
+internal fun browseStatusMessage(error: AppError?, librarySync: LibrarySyncState, hasCachedItems: Boolean): String? = when {
     error == AppError.RateLimited && hasCachedItems -> "Server busy — showing cached data. Try again shortly"
     error == AppError.ServiceUnavailable && hasCachedItems -> "Server unavailable — showing cached data"
     error != null && hasCachedItems -> "Offline — showing cached data"
-    catalogSyncState == CatalogSyncer.STATE_PARTIAL -> "Catalog incomplete — showing available categories"
-    catalogSyncState == CatalogSyncer.STATE_FAILED && hasCachedItems -> "Catalog update unavailable — showing cached data"
+    librarySync is LibrarySyncState.Partial -> "Catalog incomplete — showing available categories"
+    librarySync is LibrarySyncState.Failed && hasCachedItems -> "Catalog update unavailable — showing cached data"
     else -> null
 }
 
@@ -896,7 +948,7 @@ private fun LoadingState(
 ) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "Loading…", color = AppColors.Dim, style = TvType.title)
+            Text(text = stringResource(R.string.browse_category_loading), color = AppColors.Dim, style = TvType.title)
             if (onRefresh != null) RecoveryAction(stringResource(R.string.browse_refresh_category), onRefresh,
                 recoveryFocusRequester, onFocused)
         }
@@ -906,7 +958,6 @@ private fun LoadingState(
 /** Distinct from [EmptyState]: the category has rows, this filter just does not match any. */
 @Composable
 private fun NoFilterMatchState(
-    query: String,
     onClear: () -> Unit,
     onRefresh: (() -> Unit)? = null,
     recoveryFocusRequester: FocusRequester? = null,
@@ -915,11 +966,11 @@ private fun NoFilterMatchState(
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "Nothing here matches \"$query\"",
+                text = stringResource(R.string.browse_filter_empty),
                 color = AppColors.Ink,
                 style = TvType.title
             )
-            RecoveryAction("Clear filter", onClear, recoveryFocusRequester, onFocused)
+            RecoveryAction(stringResource(R.string.browse_filter_clear), onClear, recoveryFocusRequester, onFocused)
             if (onRefresh != null) RecoveryAction(stringResource(R.string.browse_refresh_category), onRefresh)
         }
     }
@@ -933,8 +984,8 @@ private fun EmptyState(
 ) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "Nothing in this category", color = AppColors.Ink, style = TvType.title)
-            RecoveryAction(if (LocalIsTelevision.current) stringResource(R.string.browse_refresh_category) else "Refresh",
+            Text(text = stringResource(R.string.browse_category_empty), color = AppColors.Ink, style = TvType.title)
+            RecoveryAction(stringResource(R.string.browse_refresh_category),
                 onRefresh, recoveryFocusRequester, onFocused)
         }
     }

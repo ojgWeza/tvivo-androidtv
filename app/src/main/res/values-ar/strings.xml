@@ -433,6 +433,16 @@
     <string name="browse_category_refreshed">تم تحديث الفئة</string>
     <string name="browse_category_refresh_failed">تعذر تحديث الفئة</string>
     <string name="browse_library_refreshed">تم تحديث مكتبة %1$s</string>
+    <string name="browse_library_updating_unknown">جارٍ تحديث مكتبة %1$s · تمت معالجة %2$d %3$s · الإجمالي غير معروف</string>
+    <string name="browse_library_updating_known">جارٍ تحديث مكتبة %1$s · تمت معالجة %2$d من %3$d %4$s</string>
+    <string name="browse_library_complete">تم تحديث مكتبة %1$s · %2$d %3$s</string>
+    <string name="browse_count_titles">عنوان</string>
+    <string name="browse_count_shows">مسلسل</string>
+    <string name="browse_count_channels">قناة</string>
+    <string name="browse_category_loading">جارٍ تحميل هذه الفئة</string>
+    <string name="browse_category_empty">لا توجد عناوين في هذه الفئة</string>
+    <string name="browse_filter_empty">لا توجد نتائج مطابقة لهذا المرشح</string>
+    <string name="browse_filter_clear">مسح المرشح</string>
     <string name="detail_view_episodes">عرض الحلقات</string>
     <string name="detail_resume">متابعة</string>
     <string name="detail_resume_minutes">متابعة · بقي %1$d دقيقة</string>

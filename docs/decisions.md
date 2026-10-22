@@ -2008,3 +2008,12 @@ requests its card by stable item ID after paging attaches it. Ordinary card
 focus does not mark a detail return. The 2026-10-22 API 34 TV run verified
 Movies, Series, Live, Box Office (678 items), detail Back, and 300 Down/300 Up
 without a focus crash; see `.codex-android-qa-exec-report.md`.
+
+The full-type catalog progress was previously shown as “Indexing N” over an opened
+category, and a zero Paging snapshot could claim that category was empty while
+its own fetch or the library update was still running. Browse now keeps typed
+library progress apart from the selected category request. An unfiltered real
+category is empty only after its own scoped fetch succeeds and a fresh Room count
+is zero; a changed account or selection cannot accept an earlier request result.
+Cached rows remain visible through refresh and error states. This rule applies
+to TV, phone, and tablet browse copy.
