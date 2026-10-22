@@ -48,8 +48,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
     <!-- Debug-only opt-in telemetry (TVIVO_SENTRY_DSN); Release/MSI builds never reference it. -->
     <PackageReference Include="Sentry" Version="5.*" Condition="'$(Configuration)' == 'Debug'" />
-    <!-- Debug-only, opt-in UI test harness (needs env SCOUT=1); Release never references it. -->
-    <ProjectReference Include="..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj" Condition="'$(Configuration)' == 'Debug' And Exists('..\..\..\..\Scout\src\Scout.Adapters.WinUI\Scout.Adapters.WinUI.csproj')" />
   </ItemGroup>
 
   <!-- The Windows SDK PRI targets generate the app PRI but their publish hook does not
@@ -68,3 +66,4 @@
   </Target>
 
 </Project>
+
