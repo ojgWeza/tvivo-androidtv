@@ -270,12 +270,6 @@
                                        AutomationProperties.LiveSetting="Polite" IsHitTestVisible="False" />
                         </Grid>
                     </Grid>
-                    <Border x:Name="SleepTimerStatusPanel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                            Margin="20,0,20,36" Padding="14,9" CornerRadius="8" Background="{ThemeResource AppPanelSurfaceBrush}"
-                            Visibility="Collapsed" IsHitTestVisible="False">
-                        <TextBlock x:Name="SleepTimerStatusText" Foreground="{ThemeResource AppTextBrush}"
-                                   FontSize="18" TextWrapping="Wrap" AutomationProperties.LiveSetting="Off" />
-                    </Border>
                     <Border x:Name="PlaybackStatusPanel" Grid.Row="0" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
                             MaxWidth="720" Margin="24,0,24,24" Visibility="Collapsed">
                         <Grid ColumnSpacing="8" VerticalAlignment="Center">
@@ -295,48 +289,18 @@
                     </Border>
                     <TextBlock x:Name="SleepTimerAnnouncementText" Grid.Row="0" Width="1" Height="1"
                                Opacity="0" IsHitTestVisible="False" AutomationProperties.LiveSetting="Polite" />
-                    <Border x:Name="SleepTimerWarningPanel" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            MaxWidth="680" Margin="24" Padding="24" CornerRadius="12"
-                            Background="{ThemeResource AppPanelSurfaceBrush}" Visibility="Collapsed">
-                        <StackPanel Spacing="16">
-                            <TextBlock x:Name="SleepTimerWarningText" Text="Playback will stop in 2 minutes"
-                                       FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap"
-                                       Foreground="{ThemeResource AppTextBrush}" AutomationProperties.LiveSetting="Polite" />
-                            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
-                                <Button x:Name="SleepTimerWarningExtendButton" Content="Add 15 minutes"
-                                        Style="{StaticResource AppPrimaryButtonStyle}" MinWidth="190" MinHeight="52" FontSize="18"
-                                        AutomationProperties.Name="Add 15 minutes to sleep timer"
-                                        Click="SleepTimerExtend_Click" />
-                                <Button x:Name="SleepTimerWarningCancelButton" Content="Turn off timer"
-                                        Style="{StaticResource AppQuietButtonStyle}" MinWidth="170" MinHeight="52" FontSize="18"
-                                        AutomationProperties.Name="Turn off sleep timer"
-                                        Click="SleepTimerCancel_Click" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="SleepTimerEndedOverlay" Grid.Row="0" Background="{ThemeResource AppPanelSurfaceBrush}" Visibility="Collapsed"
-                            Canvas.ZIndex="30">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="720"
-                                    Spacing="18" Padding="32">
-                            <TextBlock Text="Sleep timer ended" FontSize="34" FontWeight="SemiBold"
-                                       Foreground="{ThemeResource AppTextBrush}" TextAlignment="Center"
-                                       AutomationProperties.LiveSetting="Polite" />
-                            <TextBlock Text="Playback has stopped." FontSize="20"
-                                       Foreground="{ThemeResource AppMutedTextBrush}" TextAlignment="Center" />
-                            <StackPanel x:Name="SleepTimerEndedReplayActions" Orientation="Horizontal"
-                                        HorizontalAlignment="Center" Spacing="12">
-                                <Button x:Name="SleepTimerWatchAgainButton" Content="Watch again"
-                                        Style="{StaticResource AppPrimaryButtonStyle}" MinWidth="170" MinHeight="52" FontSize="18"
-                                        Click="SleepTimerWatchAgain_Click" />
-                                <Button x:Name="SleepTimerWatchChannelButton" Content="Watch this channel"
-                                        Style="{StaticResource AppQuietButtonStyle}" MinWidth="190" MinHeight="52" FontSize="18"
-                                        Click="SleepTimerWatchAgain_Click" />
-                            </StackPanel>
-                            <Button x:Name="SleepTimerBackButton" Content="Back to catalog"
-                                    Style="{StaticResource AppQuietButtonStyle}" HorizontalAlignment="Center"
-                                    MinWidth="190" MinHeight="52" FontSize="18" Click="SleepTimerBack_Click" />
-                        </StackPanel>
-                    </Border>
+                    <StackPanel x:Name="SleepTimerHint" Grid.Row="0" Orientation="Horizontal" Spacing="4"
+                                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="12,0,12,128"
+                                Background="{ThemeResource AppPanelSurfaceBrush}" Visibility="Collapsed">
+                        <TextBlock Text="Sleep timer ending soon" FontSize="18" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource AppTextBrush}" Margin="10,0,4,0" />
+                        <Button Content="Cancel" MinWidth="64" MinHeight="44" FontSize="18"
+                                Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerCancel_Click"
+                                AutomationProperties.Name="Turn off sleep timer" />
+                        <Button Content="+15 min" MinWidth="76" MinHeight="44" FontSize="18"
+                                Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerExtend_Click"
+                                AutomationProperties.Name="Add 15 minutes to sleep timer" />
+                    </StackPanel>
                     <Border x:Name="NextEpisodePrompt" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Bottom"
                             Margin="20" Padding="18,12" CornerRadius="10" Background="{ThemeResource AppPanelSurfaceBrush}"
                             Visibility="Collapsed">
@@ -410,9 +374,6 @@
                                 <TextBlock x:Name="CompactTitleText" VerticalAlignment="Center" Foreground="{ThemeResource AppOnMediaTextBrush}"
                                            TextTrimming="CharacterEllipsis" AutomationProperties.Name="Mini player title"
                                            AutomationProperties.AutomationId="CompactTitleText" />
-                                <TextBlock x:Name="CompactSleepTimerStatusText" Grid.Column="1" VerticalAlignment="Center"
-                                           Foreground="{ThemeResource AppOnMediaMutedBrush}" FontSize="12"
-                                           TextTrimming="CharacterEllipsis" AutomationProperties.Name="Sleep timer status" />
                                 <Button x:Name="CompactSleepTimerButton" Grid.Column="2" Content="&#xE823;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
                                         Style="{StaticResource AppIconButtonStyle}" MinWidth="44" MinHeight="44"
@@ -514,30 +475,19 @@
                                 </Grid>
                             </Grid>
                         </Border>
+                        <StackPanel x:Name="CompactSleepTimerHint" Grid.Row="1" Orientation="Horizontal" Spacing="2"
+                                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="4,0,4,4"
+                                    Background="{ThemeResource AppPanelSurfaceBrush}" Visibility="Collapsed">
+                            <TextBlock Text="Timer ending soon" FontSize="18" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource AppTextBrush}" Margin="6,0,2,0" />
+                            <Button Content="Cancel" MinWidth="60" MinHeight="44" FontSize="18"
+                                    Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerCancel_Click"
+                                    AutomationProperties.Name="Turn off sleep timer" />
+                            <Button Content="+15 min" MinWidth="72" MinHeight="44" FontSize="18"
+                                    Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerExtend_Click"
+                                    AutomationProperties.Name="Add 15 minutes to sleep timer" />
+                        </StackPanel>
                         </Grid>
-                        <Border x:Name="CompactSleepTimerPanel" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                MaxWidth="340" Padding="14" CornerRadius="8" Background="{ThemeResource AppPanelSurfaceBrush}"
-                                Visibility="Collapsed" IsHitTestVisible="True">
-                            <StackPanel Spacing="8">
-                                <StackPanel x:Name="CompactSleepTimerWarningActions" Spacing="8" Visibility="Collapsed">
-                                    <TextBlock Text="Playback stops in 2 minutes" FontSize="16" FontWeight="SemiBold"
-                                               Foreground="{ThemeResource AppTextBrush}" TextWrapping="Wrap"
-                                               AutomationProperties.LiveSetting="Polite" />
-                                    <Button Content="Add 15 minutes" MinHeight="44" FontSize="16"
-                                            Style="{StaticResource AppPrimaryButtonStyle}" Click="SleepTimerExtend_Click"
-                                            AutomationProperties.Name="Add 15 minutes to sleep timer" />
-                                    <Button Content="Turn off timer" MinHeight="44" FontSize="16"
-                                            Style="{StaticResource AppQuietButtonStyle}" Click="SleepTimerCancel_Click"
-                                            AutomationProperties.Name="Turn off sleep timer" />
-                                </StackPanel>
-                                <StackPanel x:Name="CompactSleepTimerEndedActions" Spacing="8" Visibility="Collapsed">
-                                    <TextBlock Text="Sleep timer ended" FontSize="16" FontWeight="SemiBold"
-                                               Foreground="{ThemeResource AppTextBrush}" AutomationProperties.LiveSetting="Polite" />
-                                    <Button Content="Back to catalog" MinHeight="44" FontSize="16"
-                                            Style="{StaticResource AppPrimaryButtonStyle}" Click="CompactSleepTimerBack_Click" />
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
                         <local:CompactResizeZone x:Name="CompactResizeEdgeLeft" HorizontalAlignment="Left" VerticalAlignment="Stretch" Width="7"
                                                  Edges="Left" CursorShape="SizeWestEast" Background="Transparent"
                                                  PointerEntered="CompactResizeZone_PointerEntered" PointerExited="CompactResizeZone_PointerExited"
@@ -698,57 +648,46 @@
                                 <Flyout x:Name="SleepTimerFlyout" Placement="Top" Closed="SleepTimerFlyout_Closed">
                                     <Flyout.FlyoutPresenterStyle>
                                         <Style TargetType="FlyoutPresenter">
-                                            <Setter Property="Padding" Value="8" />
-                                            <Setter Property="MinWidth" Value="300" />
+                                            <Setter Property="Padding" Value="6" />
+                                            <Setter Property="MinWidth" Value="210" />
                                             <Setter Property="CornerRadius" Value="8" />
                                         </Style>
                                     </Flyout.FlyoutPresenterStyle>
                                     <Grid>
-                                    <StackPanel x:Name="SleepTimerChoicesPanel" Spacing="6" MaxWidth="360">
-                                        <TextBlock Text="Sleep timer" FontSize="20" FontWeight="SemiBold"
-                                                   Foreground="{ThemeResource AppTextBrush}" Margin="8,4" />
-                                        <Button Content="Off" Tag="0" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="15 minutes" Tag="15" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="30 minutes" Tag="30" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="45 minutes" Tag="45" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="60 minutes" Tag="60" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="90 minutes" Tag="90" Click="SleepTimerPreset_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button x:Name="SleepTimerEndOfItemButton" Content="At the end of this movie"
+                                    <StackPanel x:Name="SleepTimerChoicesPanel" Spacing="2" Width="210">
+                                        <TextBlock x:Name="SleepTimerFlyoutStatusText" FontSize="16"
+                                                   Foreground="{ThemeResource AppMutedTextBrush}" Margin="8,2"
+                                                   Visibility="Collapsed" AutomationProperties.LiveSetting="Off" />
+                                        <Button Content="15 min" Tag="15" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="15 minutes" />
+                                        <Button Content="30 min" Tag="30" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="30 minutes" />
+                                        <Button Content="45 min" Tag="45" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="45 minutes" />
+                                        <Button Content="1 h" Tag="60" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour" />
+                                        <Button Content="1.5 h" Tag="90" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour 30 minutes" />
+                                        <Button Content="2 h" Tag="120" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="2 hours" />
+                                        <Button x:Name="SleepTimerEndOfItemButton" Content="End of this item"
                                                 Click="SleepTimerEndOfItem_Click" Style="{StaticResource AppQuietButtonStyle}"
-                                                MinHeight="44" FontSize="18" />
-                                        <Button Content="Choose minutes…" Click="SleepTimerChooseMinutes_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
+                                                HorizontalAlignment="Stretch" MinHeight="44" FontSize="18" />
+                                        <Button Content="Off" Tag="0" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Turn off sleep timer" />
+                                        <Button Content="Custom…" Click="SleepTimerChooseMinutes_Click" HorizontalAlignment="Stretch"
+                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Custom sleep timer duration" />
                                     </StackPanel>
-                                    <StackPanel x:Name="SleepTimerArmedPanel" Spacing="6" MaxWidth="360" Visibility="Collapsed">
-                                        <TextBlock x:Name="SleepTimerFlyoutStatusText" FontSize="18" TextWrapping="Wrap"
-                                                   Foreground="{ThemeResource AppTextBrush}" Margin="8,4" />
-                                        <Button Content="Add 15 minutes" Click="SleepTimerExtend_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18"
-                                                AutomationProperties.Name="Add 15 minutes to sleep timer" />
-                                        <Button Content="Change timer" Click="SleepTimerChange_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        <Button Content="Turn off timer" Click="SleepTimerCancel_Click"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18"
-                                                AutomationProperties.Name="Turn off sleep timer" />
-                                    </StackPanel>
-                                    <StackPanel x:Name="SleepTimerCustomPanel" Spacing="10" MaxWidth="360" Visibility="Collapsed">
-                                        <TextBlock Text="Choose minutes" FontSize="20" FontWeight="SemiBold"
-                                                   Foreground="{ThemeResource AppTextBrush}" />
+                                    <StackPanel x:Name="SleepTimerCustomPanel" Spacing="6" Width="210" Visibility="Collapsed">
+                                        <TextBlock Text="Custom duration" FontSize="18" FontWeight="SemiBold"
+                                                   Foreground="{ThemeResource AppTextBrush}" Margin="8,2" />
                                         <NumberBox x:Name="SleepTimerMinutesNumberBox" Header="Minutes" Value="30"
                                                    Minimum="5" Maximum="240" SmallChange="5" SpinButtonPlacementMode="Inline"
                                                    AutomationProperties.Name="Minutes, from 5 to 240 in steps of 5" />
-                                        <TextBlock Text="Choose 5 to 240 minutes in steps of 5."
-                                                   Foreground="{ThemeResource AppMutedTextBrush}" TextWrapping="Wrap" />
-                                        <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
-                                            <Button Content="Start timer" Click="SleepTimerCustomStart_Click"
-                                                    Style="{StaticResource AppPrimaryButtonStyle}" MinHeight="44" FontSize="18" />
-                                            <Button Content="Cancel" Click="SleepTimerCustomCancel_Click"
+                                        <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                                            <Button Content="Set" Click="SleepTimerCustomStart_Click"
+                                                    Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
+                                            <Button Content="Back" Click="SleepTimerCustomCancel_Click"
                                                     Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
                                         </StackPanel>
                                     </StackPanel>

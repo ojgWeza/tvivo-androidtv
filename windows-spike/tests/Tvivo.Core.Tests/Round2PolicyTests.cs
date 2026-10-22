@@ -71,11 +71,12 @@ public sealed class Round2PolicyTests
         Assert.False(timer.Tick(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(6)).StopPlayback);
 
         timer.StartDuration(TimeSpan.Zero, TimeSpan.FromMinutes(5));
-        Assert.True(timer.Tick(TimeSpan.FromMinutes(3)).ShowWarning);
-        timer.Extend(TimeSpan.FromMinutes(3));
+        Assert.False(timer.Tick(TimeSpan.FromMinutes(3)).ShowHint);
+        Assert.True(timer.Tick(TimeSpan.FromMinutes(4)).ShowHint);
+        timer.Extend(TimeSpan.FromMinutes(4));
         Assert.Equal(TimeSpan.FromMinutes(20), timer.Deadline);
-        Assert.False(timer.Tick(TimeSpan.FromMinutes(3)).ShowWarning);
-        Assert.True(timer.Tick(TimeSpan.FromMinutes(18)).ShowWarning);
+        Assert.False(timer.Tick(TimeSpan.FromMinutes(4)).ShowHint);
+        Assert.True(timer.Tick(TimeSpan.FromMinutes(19)).ShowHint);
 
         Assert.False(timer.TryStartEndOfCurrentItem("live", isLive: true));
         Assert.Equal(SleepTimerMode.Duration, timer.Mode);

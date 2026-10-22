@@ -90,6 +90,9 @@ public partial class App : Application
             ((MainWindow)_window).PrepareForActivation();
             LaunchDiagnostics.Write("MainWindow constructed; startup window state applied; activating");
             _window.Activate();
+#if DEBUG
+            Scout.Adapters.WinUI.ProbeHost.Start(_window);
+#endif
             LaunchDiagnostics.Write("MainWindow activated");
         }
         catch (Exception exception)

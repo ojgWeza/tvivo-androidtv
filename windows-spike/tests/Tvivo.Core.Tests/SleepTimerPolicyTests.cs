@@ -11,6 +11,7 @@ public sealed class SleepTimerPolicyTests
     [InlineData(45)]
     [InlineData(60)]
     [InlineData(90)]
+    [InlineData(120)]
     public void Presets_start_a_duration_timer(int minutes)
     {
         var policy = new SleepTimerPolicy();
@@ -68,21 +69,21 @@ public sealed class SleepTimerPolicyTests
     }
 
     [Fact]
-    public void Warning_is_shown_once_at_the_exact_two_minute_boundary()
+    public void Hint_is_shown_once_at_the_exact_five_minute_boundary()
     {
         var policy = StartedForTenMinutes();
 
-        var beforeBoundary = policy.Tick(TimeSpan.FromMinutes(8) - TimeSpan.FromTicks(1));
-        Assert.False(beforeBoundary.ShowWarning);
+        var beforeBoundary = policy.Tick(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        Assert.False(beforeBoundary.ShowHint);
         Assert.Equal(SleepTimerState.Armed, beforeBoundary.State);
 
-        var atBoundary = policy.Tick(TimeSpan.FromMinutes(8));
-        Assert.True(atBoundary.ShowWarning);
-        Assert.Equal(SleepTimerState.Warning, atBoundary.State);
+        var atBoundary = policy.Tick(TimeSpan.FromMinutes(5));
+        Assert.True(atBoundary.ShowHint);
+        Assert.Equal(SleepTimerState.Armed, atBoundary.State);
 
-        var repeated = policy.Tick(TimeSpan.FromMinutes(8) + TimeSpan.FromSeconds(1));
-        Assert.False(repeated.ShowWarning);
-        Assert.Equal(SleepTimerState.Warning, repeated.State);
+        var repeated = policy.Tick(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        Assert.False(repeated.ShowHint);
+        Assert.Equal(SleepTimerState.Armed, repeated.State);
     }
 
     [Fact]
@@ -96,37 +97,36 @@ public sealed class SleepTimerPolicyTests
 
         var duplicate = policy.Tick(TimeSpan.FromMinutes(10));
         Assert.False(duplicate.StopPlayback);
-        Assert.False(duplicate.ShowWarning);
+        Assert.False(duplicate.ShowHint);
         Assert.Equal(SleepTimerState.Ended, duplicate.State);
     }
 
     [Fact]
-    public void Large_resume_time_jump_past_deadline_stops_immediately_without_catch_up_fade()
+    public void Large_resume_time_jump_past_deadline_stops_immediately_without_hint()
     {
         var policy = StartedForTenMinutes();
 
         var afterResume = policy.Tick(TimeSpan.FromHours(4));
 
         Assert.True(afterResume.StopPlayback);
-        Assert.False(afterResume.ShowWarning);
-        Assert.Equal(0, afterResume.FadeFraction);
+        Assert.False(afterResume.ShowHint);
         Assert.Equal(SleepTimerState.Ended, policy.State);
     }
 
     [Fact]
-    public void Extension_adds_fifteen_minutes_to_the_existing_deadline_and_dismisses_warning()
+    public void Extension_adds_fifteen_minutes_to_the_existing_deadline_and_dismisses_hint()
     {
         var policy = StartedForTenMinutes();
         var oldDeadline = policy.Deadline;
-        Assert.True(policy.Tick(TimeSpan.FromMinutes(8)).ShowWarning);
+        Assert.True(policy.Tick(TimeSpan.FromMinutes(5)).ShowHint);
 
-        var extended = policy.Extend(TimeSpan.FromMinutes(8));
+        var extended = policy.Extend(TimeSpan.FromMinutes(5));
 
         Assert.Equal(SleepTimerState.Armed, extended.State);
-        Assert.False(extended.ShowWarning);
+        Assert.False(extended.ShowHint);
         Assert.Equal(oldDeadline + TimeSpan.FromMinutes(15), policy.Deadline);
-        Assert.False(policy.Tick(TimeSpan.FromMinutes(8) + TimeSpan.FromTicks(1)).ShowWarning);
-        Assert.True(policy.Tick(TimeSpan.FromMinutes(23)).ShowWarning);
+        Assert.False(policy.Tick(TimeSpan.FromMinutes(5) + TimeSpan.FromTicks(1)).ShowHint);
+        Assert.True(policy.Tick(TimeSpan.FromMinutes(20)).ShowHint);
     }
 
     [Fact]
@@ -252,29 +252,36 @@ public sealed class SleepTimerPolicyTests
         Assert.False(policy.FinalFailure().StopPlayback);
     }
 
-    [Fact]
-    public void Fade_fraction_is_pure_clamped_progress_over_the_final_five_seconds()
+    [Theory]
+    [InlineData(3, 1)]
+    [InlineData(5, 1)]
+    [InlineData(9, 1)]
+    [InlineData(10, 5)]
+    [InlineData(15, 5)]
+    [InlineData(180, 5)]
+    public void Hint_window_depends_on_initial_duration(int durationMinutes, int leadMinutes)
     {
-        var policy = StartedForTenMinutes();
-        var deadline = policy.Deadline!.Value;
-
-        Assert.Equal(0, policy.GetFadeFraction(deadline - TimeSpan.FromSeconds(6)));
-        Assert.Equal(0, policy.GetFadeFraction(deadline - TimeSpan.FromSeconds(5)));
-        Assert.Equal(0.5, policy.GetFadeFraction(deadline - TimeSpan.FromMilliseconds(2500)), 6);
-        Assert.Equal(1, policy.GetFadeFraction(deadline));
-        Assert.Equal(1, policy.GetFadeFraction(deadline + TimeSpan.FromSeconds(1)));
-        Assert.Equal(SleepTimerState.Armed, policy.State); // Computing the fraction does not transition state.
+        var duration = TimeSpan.FromMinutes(durationMinutes);
+        var lead = TimeSpan.FromMinutes(leadMinutes);
+        Assert.False(SleepTimerPolicy.ShouldShowHint(duration, lead + TimeSpan.FromTicks(1)));
+        Assert.True(SleepTimerPolicy.ShouldShowHint(duration, lead));
+        Assert.True(SleepTimerPolicy.ShouldShowHint(duration, TimeSpan.FromTicks(1)));
+        Assert.False(SleepTimerPolicy.ShouldShowHint(duration, TimeSpan.Zero));
     }
 
     [Fact]
-    public void Tick_enters_fading_only_during_last_five_seconds()
+    public void Five_minute_timer_hints_only_in_its_last_minute_and_manual_replay_resets_end()
     {
-        var policy = StartedForTenMinutes();
-
-        Assert.Equal(SleepTimerState.Warning, policy.Tick(TimeSpan.FromMinutes(9) + TimeSpan.FromSeconds(54)).State);
-        var fading = policy.Tick(TimeSpan.FromMinutes(9) + TimeSpan.FromSeconds(55));
-        Assert.Equal(SleepTimerState.Fading, fading.State);
-        Assert.Equal(0, fading.FadeFraction);
+        var policy = new SleepTimerPolicy();
+        policy.StartCustom(TimeSpan.Zero, 5);
+        Assert.False(policy.Tick(TimeSpan.FromMinutes(3)).ShowHint);
+        Assert.False(policy.Tick(TimeSpan.FromMinutes(4) - TimeSpan.FromTicks(1)).ShowHint);
+        Assert.True(policy.Tick(TimeSpan.FromMinutes(4)).ShowHint);
+        Assert.False(policy.Tick(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(1)).ShowHint);
+        Assert.True(policy.Tick(TimeSpan.FromMinutes(5)).StopPlayback);
+        policy.ResetAfterManualReplay();
+        Assert.Equal(SleepTimerState.Off, policy.State);
+        Assert.False(policy.Tick(TimeSpan.FromMinutes(6)).StopPlayback);
     }
 
     [Theory]
