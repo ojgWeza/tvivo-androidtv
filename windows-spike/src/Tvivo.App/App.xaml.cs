@@ -91,7 +91,7 @@ public partial class App : Application
             LaunchDiagnostics.Write("MainWindow constructed; startup window state applied; activating");
             _window.Activate();
 #if DEBUG
-            // Scout.Adapters.WinUI.ProbeHost.Start(_window);
+            Scout.Adapters.WinUI.ProbeHost.Start(_window);
 #endif
             LaunchDiagnostics.Write("MainWindow activated");
         }
