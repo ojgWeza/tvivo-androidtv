@@ -70,6 +70,11 @@ public sealed class DisplayPoliciesTests
     [InlineData("Series", "Series - S02E03 Pilot", 1, "2. Pilot")]
     [InlineData("Series", "S01E01", 0, "1. Episode 1")]
     [InlineData("Series", "The original title", 2, "3. The original title")]
+    [InlineData("Series", "1", 0, "1. Episode 1")]
+    [InlineData("Series", "", 0, "1. Episode 1")]
+    [InlineData("Series", "1. Pilot", 0, "1. Pilot")]
+    [InlineData("Series", "E01 - Pilot", 0, "1. Pilot")]
+    [InlineData("Series", "Episode 1", 0, "1. Episode 1")]
     public void Episode_names_keep_provider_words_without_repeated_prefixes(
         string series, string provider, int index, string expected) =>
         Assert.Equal(expected, EpisodeDisplayNamePolicy.Format(series, 1, 1, provider, index));

@@ -1728,6 +1728,7 @@ public sealed partial class MainWindow : Window
         button.BorderBrush = selected
             ? ThemeBrush("AppAccentBrush")
             : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetItemStatus(button, selected ? "Selected" : string.Empty);
     }
 
     /// <summary>A brush from the dictionary of the theme this window is set to, for colours assigned in code.</summary>
@@ -2329,12 +2330,13 @@ public sealed partial class MainWindow : Window
         LaunchDiagnostics.Write($"event=series.open.exit ms={elapsed:0.000} reason={reason}{suffix} title=\"{seriesTitle}\" itemRef={itemRef}");
     }
 
-    private Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode)
+    private Channel ToEpisodeChannel(ProviderAccount account, string seriesId, SeriesEpisode episode,
+        string? seriesTitle = null, IReadOnlyList<SeriesSeason>? seasons = null)
     {
-        var season = _playerSeriesSeasons.FirstOrDefault(item => item.Id == episode.SeasonId);
+        var season = (seasons ?? _playerSeriesSeasons).FirstOrDefault(item => item.Id == episode.SeasonId);
         var index = season is null ? Math.Max(0, episode.EpisodeNumber - 1) :
             Math.Max(0, Array.FindIndex(season.Episodes.ToArray(), item => item.Id == episode.Id));
-        var displayName = EpisodeDisplayNamePolicy.Format(_currentSeriesTitle, episode.SeasonNumber,
+        var displayName = EpisodeDisplayNamePolicy.Format(seriesTitle ?? _currentSeriesTitle, episode.SeasonNumber,
             episode.EpisodeNumber, episode.Title, index);
         var metadata = new Dictionary<string, string>
         {
@@ -2748,21 +2750,19 @@ public sealed partial class MainWindow : Window
     private void ConfigureSeasonSelector(IReadOnlyList<SeriesSeason> seasons)
     {
         PlayerSeasonComboBox.ItemsSource = seasons;
-        var hasMultipleSeasons = seasons.Count > 1;
-        PlayerSeasonComboBox.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
-        PlayerSeasonLabel.Text = seasons.Count == 1 ? SeasonProgressLabel(seasons[0]) : string.Empty;
-        PlayerSeasonLabel.Visibility = seasons.Count == 1 ? Visibility.Visible : Visibility.Collapsed;
-        PlayerSeasonWatchedCount.Visibility = hasMultipleSeasons ? Visibility.Visible : Visibility.Collapsed;
-        PlayerSeasonWatchedCount.Text = hasMultipleSeasons && PlayerSeasonComboBox.SelectedItem is SeriesSeason selected
+        PlayerSeasonComboBox.Visibility = seasons.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        PlayerSeasonLabel.Visibility = Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Visibility = seasons.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        PlayerSeasonWatchedCount.Text = PlayerSeasonComboBox.SelectedItem is SeriesSeason selected
             ? SeasonWatchedCount(selected) : string.Empty;
     }
 
     private void PlayerSeasonComboBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         if (PlayerSeasonComboBox.SelectedItem is not SeriesSeason season || _nowPlayingChannel is null) return;
+        if (_nowPlayingChannel.Source.Kind == StreamKind.Episode) RenderPlayerCategoryRows();
         if (_categoryState?.ViewMode == PlayerCategoryViewMode.SeriesEpisodes && _categorySeriesDetails is not null)
         {
-            RenderPlayerCategoryRows();
             if (_currentSeriesId is { } playingSeriesId && playingSeriesId == _categorySelectedSeries?.Id &&
                 _nowPlayingChannel.Source.Kind == StreamKind.Episode &&
                 _currentSeriesAccount is { } playingAccount)
@@ -5428,7 +5428,7 @@ public sealed partial class MainWindow : Window
         if (channel.Source.Kind == StreamKind.Movie)
         {
             StartPlayerCategoryBrowser(StreamKind.Movie);
-            RebuildCategoryRows();
+            SyncCategoryRows();
         }
         _ = LoadPlayerMetadataAsync(channel,
             channel.Source.Kind == StreamKind.Movie ? CatalogItemType.Movie : CatalogItemType.Live);
@@ -6226,6 +6226,12 @@ public sealed partial class MainWindow : Window
         _playlistHidden = !_playlistHidden;
         LaunchDiagnostics.Write($"event=player.playlist hidden={_playlistHidden}");
         ApplyPlayerLayout();
+        if (!_playlistHidden && PlayerCategoryList.Visibility == Visibility.Visible)
+            _ = PlayerCategoryList.DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_categoryState?.ExpandedCategoryId is { } id) FocusPlayerCategoryHeader(id);
+                else FocusPlayerCategoryIndex(0);
+            });
     }
 
     private void ApplyPlayerLayout()

@@ -2277,7 +2277,7 @@ public sealed partial class CatalogLandingPage : UserControl
             subtitleOverride ?? SubtitleFor(type),
             channel.LogoUri?.ToString(),
             190,
-            type == CatalogItemType.Live ? 138 : 250,
+            type == CatalogItemType.Live ? 190 : 280,
             channel,
             qualityBadge ?? categoryQuality,
             type,
@@ -4072,7 +4072,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _artworkLoads[image] = load;
         var scale = Math.Clamp(image.XamlRoot?.RasterizationScale ?? 1, 1, 2);
         var decodeWidth = homeCard is not null ? 320 : isSpotlightCard ? (int)Math.Ceiling(190 * scale) : 380;
-        var decodeHeight = homeCard is not null ? 450 : isSpotlightCard ? (int)Math.Ceiling(285 * scale) : card?.Height == 138 ? 276 : 500;
+        var decodeHeight = homeCard is not null ? 450 : isSpotlightCard ? (int)Math.Ceiling(285 * scale) : card?.Height == 190 ? 380 : 560;
         var cacheKey = $"{uri.AbsoluteUri}|{decodeWidth}x{decodeHeight}";
         if (TryGetCachedArtworkBitmap(cacheKey, out var cachedBitmap))
         {
@@ -4603,7 +4603,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
         // A fast jump can run before the virtualizing panel has realized its destination containers.
         var headerHeight = SpotlightPanel.Visibility == Visibility.Visible ? SpotlightPanel.ActualHeight + 30 : 0;
-        var shelfHeight = _activeMode == CatalogMode.LiveTv ? 230d : 340d;
+        var shelfHeight = _activeMode == CatalogMode.LiveTv ? 280d : 370d;
         var estimatedIndex = Math.Clamp((int)(Math.Max(0, viewer.VerticalOffset - headerHeight) / shelfHeight),
             0, Math.Max(0, ShelvesItems.Items.Count - 1));
         first = estimatedIndex;
@@ -5836,12 +5836,14 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         public Visibility PreviewVisibility => Cards.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         public Visibility SkeletonVisibility => Cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
-        public double SkeletonHeight => Type == CatalogItemType.Live ? 138 : 250;
+        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 280;
         public double SkeletonRowHeight => SkeletonHeight + 36;
         public IReadOnlyList<ShelfSkeletonTile> SkeletonTiles => ShelfSkeletonTiles.For(Type);
         public Visibility NewSinceLastVisitVisibility => HasNewItems && Cards.Count > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
+        public string AccessibleHeaderName => $"{Title}, {CountLabel}";
+        public string AccessibleCountName => $"Open full category listing, {CountLabel}";
 
         // The shelf row is named from ToString() for screen readers; the record's default dumps every field.
         public override string ToString() => $"{Title}, {CountLabel}";
@@ -5889,12 +5891,14 @@ public sealed partial class CatalogLandingPage : UserControl
         public ShelfPreviewState PreviewState => _previewState;
         public Visibility PreviewVisibility => PreviewState == ShelfPreviewState.Cards ? Visibility.Visible : Visibility.Collapsed;
         public Visibility SkeletonVisibility => PreviewState == ShelfPreviewState.Skeleton ? Visibility.Visible : Visibility.Collapsed;
-        public double SkeletonHeight => Type == CatalogItemType.Live ? 138 : 250;
+        public double SkeletonHeight => Type == CatalogItemType.Live ? 190 : 280;
         public double SkeletonRowHeight => SkeletonHeight + 36;
         public IReadOnlyList<ShelfSkeletonTile> SkeletonTiles => ShelfSkeletonTiles.For(Type);
         public Visibility NewSinceLastVisitVisibility => HasNewItems && Cards.Count > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
+        public string AccessibleHeaderName => $"{Title}, {CountLabel}";
+        public string AccessibleCountName => $"Open full category listing, {CountLabel}";
 
         public void Update(CatalogShelf shelf)
         {
@@ -5902,6 +5906,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 throw new InvalidOperationException("A shelf row cannot change identity.");
             Set(ref _title, shelf.Title, nameof(Title));
             Set(ref _countLabel, shelf.CountLabel, nameof(CountLabel));
+            OnPropertyChanged(nameof(AccessibleHeaderName));
+            OnPropertyChanged(nameof(AccessibleCountName));
             Set(ref _groupId, shelf.GroupId, nameof(GroupId));
             Set(ref _opensPagedGrid, shelf.OpensPagedGrid, nameof(OpensPagedGrid));
             Set(ref _latestAddedAt, shelf.LatestAddedAt, nameof(LatestAddedAt));
@@ -5965,9 +5971,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private static class ShelfSkeletonTiles
     {
         private static readonly IReadOnlyList<ShelfSkeletonTile> Poster = Enumerable.Range(0, ShelfPreviewSize)
-            .Select(_ => new ShelfSkeletonTile(190, 250)).ToArray();
+            .Select(_ => new ShelfSkeletonTile(190, 280)).ToArray();
         private static readonly IReadOnlyList<ShelfSkeletonTile> Channel = Enumerable.Range(0, ShelfPreviewSize)
-            .Select(_ => new ShelfSkeletonTile(190, 138)).ToArray();
+            .Select(_ => new ShelfSkeletonTile(190, 190)).ToArray();
         public static IReadOnlyList<ShelfSkeletonTile> For(CatalogItemType type) =>
             type == CatalogItemType.Live ? Channel : Poster;
     }

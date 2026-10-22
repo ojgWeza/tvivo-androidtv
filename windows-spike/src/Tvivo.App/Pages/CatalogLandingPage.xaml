@@ -122,16 +122,17 @@
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding Subtitle}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
-                                           FontSize="12"
+                                           FontSize="16"
+                                           TextWrapping="Wrap" MaxLines="2"
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding DetailsLine}" AutomationProperties.Name="{Binding DetailsAutomationName}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
-                                           FontSize="11"
+                                           FontSize="16" MaxLines="2" TextWrapping="Wrap"
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding TimeLeft}"
                                            Visibility="{Binding ContinueProgressVisibility}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
-                                           FontSize="11"
+                                           FontSize="16"
                                            TextTrimming="CharacterEllipsis" />
                                 <StackPanel Visibility="{Binding EpgVisibility}"
                                             Spacing="1"
@@ -139,7 +140,7 @@
                                     <TextBlock Text="{Binding NowText}"
                                                Visibility="{Binding NowVisibility}"
                                                Foreground="{ThemeResource AppOnMediaTextBrush}"
-                                               FontSize="11"
+                                               FontSize="16" MaxLines="2" TextWrapping="Wrap"
                                                TextTrimming="CharacterEllipsis" />
                                     <ProgressBar Value="{Binding ProgressValue}"
                                                  Maximum="100"
@@ -152,7 +153,7 @@
                                     <TextBlock Text="{Binding NextText}"
                                                Visibility="{Binding NextVisibility}"
                                                Foreground="{ThemeResource AppOnMediaMutedBrush}"
-                                               FontSize="11"
+                                               FontSize="16" MaxLines="2" TextWrapping="Wrap"
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                             </StackPanel>
@@ -175,7 +176,7 @@
                                 Visibility="{Binding QualityBadgeVisibility}">
                             <TextBlock Text="{Binding QualityBadge}"
                                        Foreground="{ThemeResource AppCanvasBrush}"
-                                       FontSize="10" FontWeight="Bold" />
+                                       FontSize="16" FontWeight="Bold" />
                         </Border>
                     </Grid>
                 </Border>
@@ -506,7 +507,8 @@
                                                 </Grid.ColumnDefinitions>
                                                 <Button Style="{StaticResource AppShelfTitleButtonStyle}"
                                                         Click="ShelfTitle_Click"
-                                                        Tag="{Binding}">
+                                                        Tag="{Binding}"
+                                                        AutomationProperties.Name="{Binding AccessibleHeaderName}">
                                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                                         <TextBlock Text="{Binding Title}" />
                                                         <Border Padding="6,2" CornerRadius="7"
@@ -514,7 +516,7 @@
                                                                 VerticalAlignment="Center"
                                                                 Visibility="{Binding NewSinceLastVisitVisibility}"
                                                                 AutomationProperties.Name="New since last visit">
-                                                            <TextBlock Text="NEW" FontSize="10" FontWeight="Bold"
+                                                            <TextBlock Text="NEW" FontSize="16" FontWeight="Bold"
                                                                        Foreground="{ThemeResource AppCanvasBrush}" />
                                                         </Border>
                                                     </StackPanel>
@@ -528,7 +530,8 @@
                                                         Foreground="{ThemeResource AppMutedTextBrush}"
                                                         VerticalAlignment="Center"
                                                         Click="ShelfCount_Click"
-                                                        AutomationProperties.Name="Open full category listing" />
+                                                        MinHeight="44"
+                                                        AutomationProperties.Name="{Binding AccessibleCountName}" />
                                             </Grid>
                                             <ItemsControl ItemsSource="{Binding SkeletonTiles}"
                                                           ItemTemplate="{StaticResource ShelfSkeletonTemplate}"
@@ -582,7 +585,7 @@
                     <StackPanel x:Name="ScrollNavPanel"
                                 Grid.Row="1"
                                 Spacing="2"
-                                Width="40"
+                                Width="48"
                                 Padding="2,6"
                                 CornerRadius="20"
                                 Background="{ThemeResource AppScrollPillBrush}"
@@ -591,16 +594,16 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
                                 Margin="0,0,-44,0">
-                        <Button Content="&#xE74A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                        <Button Content="&#xE74A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollTop_Click"
                                 ToolTipService.ToolTip="Jump to top" AutomationProperties.Name="Jump to top" />
-                        <Button Content="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                        <Button Content="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageUp_Click"
                                 ToolTipService.ToolTip="Page up" AutomationProperties.Name="Page up" />
-                        <Button Content="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                        <Button Content="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageDown_Click"
                                 ToolTipService.ToolTip="Page down" AutomationProperties.Name="Page down" />
-                        <Button Content="&#xE74B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="36" Height="36" Padding="0"
+                        <Button Content="&#xE74B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollBottom_Click"
                                 ToolTipService.ToolTip="Jump to bottom" AutomationProperties.Name="Jump to bottom" />
                     </StackPanel>

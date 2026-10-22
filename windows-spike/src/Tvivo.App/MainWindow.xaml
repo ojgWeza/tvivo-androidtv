@@ -65,21 +65,25 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="32">
                     <Button x:Name="MyTvivoNavigation"
                             Content="For You"
+                            AutomationProperties.Name="For You"
                             Style="{StaticResource AppTopNavButtonStyle}"
                             Click="MyTvivoNavigation_Click"
                             ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="MoviesNavigation"
                             Content="Movies"
+                            AutomationProperties.Name="Movies"
                             Style="{StaticResource AppTopNavButtonStyle}"
                             Click="MoviesNavigation_Click"
                             ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="SeriesNavigation"
                             Content="Series"
+                            AutomationProperties.Name="Series"
                             Style="{StaticResource AppTopNavButtonStyle}"
                             Click="SeriesNavigation_Click"
                             ToolTipService.ToolTip="{x:Null}" />
                     <Button x:Name="LiveTvNavigation"
                             Content="Live TV"
+                            AutomationProperties.Name="Live TV"
                             Style="{StaticResource AppTopNavButtonStyle}"
                             Click="LiveTvNavigation_Click"
                             ToolTipService.ToolTip="{x:Null}" />
@@ -92,6 +96,7 @@
                                 Content="&#xE721;"
                                 FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 Style="{StaticResource AppIconButtonStyle}"
+                                Width="44" Height="44" MinWidth="44" MinHeight="44"
                                 Click="TopSearchButton_Click"
                                 AutomationProperties.Name="Search current catalog"
                                 ToolTipService.ToolTip="{x:Null}" />
@@ -149,6 +154,7 @@
                                 Content="&#xE8CB;"
                                 FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 Style="{StaticResource AppIconButtonStyle}"
+                                Width="44" Height="44" MinWidth="44" MinHeight="44"
                                 AutomationProperties.Name="Sort categories"
                                 ToolTipService.ToolTip="{x:Null}">
                             <Button.Flyout>
@@ -165,6 +171,7 @@
                                 Content="&#xE72C;"
                                 FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 Style="{StaticResource AppIconButtonStyle}"
+                                Width="44" Height="44" MinWidth="44" MinHeight="44"
                                 Visibility="Collapsed"
                                 Click="TopRefreshButton_Click"
                                 AutomationProperties.Name="Refresh catalog" />
@@ -173,6 +180,7 @@
                             Content="&#xE706;"
                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                             Style="{StaticResource AppIconButtonStyle}"
+                            Width="44" Height="44" MinWidth="44" MinHeight="44"
                             Click="ThemeToggleButton_Click"
                             AutomationProperties.Name="Switch to light theme"
                             ToolTipService.ToolTip="Switch to light theme" />
@@ -180,6 +188,7 @@
                             Content="&#xE713;"
                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                             Style="{StaticResource AppIconButtonStyle}"
+                            Width="44" Height="44" MinWidth="44" MinHeight="44"
                             Click="AccountNavigation_Click"
                             AutomationProperties.Name="Settings"
                             ToolTipService.ToolTip="{x:Null}" />
@@ -754,6 +763,7 @@
                                 <TextBlock x:Name="PlayerSeasonLabel" Visibility="Collapsed"
                                            Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" />
                                 <ComboBox x:Name="PlayerSeasonComboBox" Visibility="Collapsed"
+                                          MinHeight="44" FontSize="16"
                                           DisplayMemberPath="Name" SelectionChanged="PlayerSeasonComboBox_SelectionChanged"
                                           AutomationProperties.Name="Series season" />
                                 <TextBlock x:Name="PlayerSeasonWatchedCount" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
@@ -767,6 +777,8 @@
                             <TextBlock x:Name="PlayerCategoryNowPlayingLabel" Visibility="Collapsed" FontSize="18"
                                        Foreground="{ThemeResource AppTextBrush}" TextWrapping="Wrap" MaxLines="2"
                                        MinHeight="44" VerticalAlignment="Center" />
+                            <Border x:Name="PlayerCategoryOpenBrushSource" Visibility="Collapsed"
+                                    Background="{ThemeResource AppRaisedSurfaceBrush}" />
                             <ListView x:Name="PlayerCategoryList" Grid.Row="1" Visibility="Collapsed" Background="Transparent" BorderThickness="0"
                                       SelectionMode="None" IsItemClickEnabled="True" ItemClick="PlayerCategoryList_ItemClick"
                                       KeyDown="PlayerCategoryList_KeyDown" ContainerContentChanging="PlayerCategoryList_ContainerContentChanging">
@@ -775,14 +787,24 @@
                                         <Setter Property="MinHeight" Value="44" />
                                         <Setter Property="Padding" Value="0" />
                                         <Setter Property="Margin" Value="0,1" />
+                                        <Setter Property="UseSystemFocusVisuals" Value="True" />
+                                        <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource AppAccentBrush}" />
+                                        <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource AppTextBrush}" />
                                     </Style>
                                 </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid MinHeight="44" Padding="10,6" Background="Transparent">
-                                            <TextBlock Text="{Binding Label}" FontSize="18" Foreground="{ThemeResource AppTextBrush}"
-                                                       TextWrapping="Wrap" MaxLines="2" VerticalAlignment="Center" />
-                                        </Grid>
+                                        <Border MinHeight="44" Padding="10,6" CornerRadius="6"
+                                                Background="{Binding Background}" BorderBrush="{ThemeResource AppAccentBrush}"
+                                                BorderThickness="{Binding BorderThickness}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding Chevron}" FontSize="18" FontWeight="Bold"
+                                                           Foreground="{ThemeResource AppAccentSoftBrush}" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding Label}" FontSize="18" FontWeight="{Binding Weight}"
+                                                           Foreground="{ThemeResource AppTextBrush}"
+                                                           TextWrapping="Wrap" MaxLines="2" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>

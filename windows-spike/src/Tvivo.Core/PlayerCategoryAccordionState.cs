@@ -8,8 +8,8 @@ public readonly record struct PlayerCategoryTransition(string? HeaderToFocus);
 public sealed class PlayerCategoryAccordionState
 {
     public const int PageCapacity = 3;
-    private readonly Dictionary<int, IReadOnlyList<Channel>> _pages = new();
-    private readonly LinkedList<int> _pageOrder = new();
+    private readonly Dictionary<(string CategoryId, int Offset), IReadOnlyList<Channel>> _pages = new();
+    private readonly LinkedList<(string CategoryId, int Offset)> _pageOrder = new();
     private string? _accountId;
 
     public PlayerCategoryAccordionState(string? accountId, CatalogItemType contentType)
@@ -47,8 +47,47 @@ public sealed class PlayerCategoryAccordionState
             ? null : categoryId;
         SelectedItemId = null;
         ViewMode = PlayerCategoryViewMode.Categories;
-        InvalidatePages();
+        PageGeneration++;
         return new(categoryId);
+    }
+
+    public PlayerCategoryTransition OpenForPlaying(string? categoryId, string? itemId)
+    {
+        if (ViewMode != PlayerCategoryViewMode.Categories)
+        {
+            ViewMode = PlayerCategoryViewMode.Categories;
+            PageGeneration++;
+        }
+        if (string.IsNullOrWhiteSpace(categoryId))
+        {
+            if (ExpandedCategoryId is not null) PageGeneration++;
+            ExpandedCategoryId = null;
+            SelectedItemId = itemId;
+            return new(null);
+        }
+        if (!string.Equals(ExpandedCategoryId, categoryId, StringComparison.Ordinal))
+        {
+            ExpandedCategoryId = categoryId;
+            PageGeneration++;
+        }
+        SelectedItemId = itemId;
+        return new(categoryId);
+    }
+
+    public PlayerCategoryTransition SelectCategory(string categoryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(categoryId);
+        if (!string.Equals(ExpandedCategoryId, categoryId, StringComparison.Ordinal))
+            return Toggle(categoryId);
+        return new(categoryId);
+    }
+
+    public IReadOnlyList<string> OrderedCategoryIds(IEnumerable<string> providerOrder)
+    {
+        var ids = providerOrder.ToArray();
+        return ExpandedCategoryId is { } open && ids.Contains(open, StringComparer.Ordinal)
+            ? new[] { open }.Concat(ids.Where(id => !string.Equals(id, open, StringComparison.Ordinal))).ToArray()
+            : ids;
     }
 
     public void SelectItem(string itemId)
@@ -63,13 +102,13 @@ public sealed class PlayerCategoryAccordionState
         if (ContentType != CatalogItemType.Series || SelectedItemId is null)
             throw new InvalidOperationException("Select a series before opening its episodes.");
         ViewMode = PlayerCategoryViewMode.SeriesEpisodes;
-        InvalidatePages();
+        PageGeneration++;
     }
 
     public PlayerCategoryTransition ReturnToCategories()
     {
         ViewMode = PlayerCategoryViewMode.Categories;
-        InvalidatePages();
+        PageGeneration++;
         return new(ExpandedCategoryId);
     }
 
@@ -84,14 +123,15 @@ public sealed class PlayerCategoryAccordionState
 
     public bool TryAcceptPage(long generation, string categoryId, int offset, IReadOnlyList<Channel> items)
     {
-        if (generation != PageGeneration || ViewMode != PlayerCategoryViewMode.Categories ||
+        if (generation != PageGeneration ||
             !string.Equals(ExpandedCategoryId, categoryId, StringComparison.Ordinal)) return false;
         ArgumentNullException.ThrowIfNull(items);
         if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
         if (items.Count > 100) throw new ArgumentOutOfRangeException(nameof(items));
-        if (_pages.ContainsKey(offset)) _pageOrder.Remove(offset);
-        _pages[offset] = items.ToArray();
-        _pageOrder.AddLast(offset);
+        var key = (categoryId, offset);
+        if (_pages.ContainsKey(key)) _pageOrder.Remove(key);
+        _pages[key] = items.ToArray();
+        _pageOrder.AddLast(key);
         if (_pages.Count > PageCapacity)
         {
             var oldest = _pageOrder.First!.Value;
@@ -101,11 +141,12 @@ public sealed class PlayerCategoryAccordionState
         return true;
     }
 
-    public bool TryGetPage(int offset, out IReadOnlyList<Channel>? items)
+    public bool TryGetPage(string categoryId, int offset, out IReadOnlyList<Channel>? items)
     {
-        if (!_pages.TryGetValue(offset, out items)) return false;
-        _pageOrder.Remove(offset);
-        _pageOrder.AddLast(offset);
+        var key = (categoryId, offset);
+        if (!_pages.TryGetValue(key, out items)) return false;
+        _pageOrder.Remove(key);
+        _pageOrder.AddLast(key);
         return true;
     }
 

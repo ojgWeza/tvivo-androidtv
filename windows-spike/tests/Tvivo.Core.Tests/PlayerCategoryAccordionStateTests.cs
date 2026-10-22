@@ -49,14 +49,42 @@ public sealed class PlayerCategoryAccordionStateTests
         var generation = state.PageGeneration;
         foreach (var offset in new[] { 0, 50, 100 })
             Assert.True(state.TryAcceptPage(generation, "folder", offset, Array.Empty<Channel>()));
-        Assert.True(state.TryGetPage(0, out _));
+        Assert.True(state.TryGetPage("folder", 0, out _));
         Assert.True(state.TryAcceptPage(generation, "folder", 150, Array.Empty<Channel>()));
         Assert.Equal(3, state.CachedPageCount);
-        Assert.False(state.TryGetPage(50, out _));
-        Assert.True(state.TryGetPage(0, out _));
+        Assert.False(state.TryGetPage("folder", 50, out _));
+        Assert.True(state.TryGetPage("folder", 0, out _));
         state.Toggle("folder");
-        Assert.Equal(0, state.CachedPageCount);
+        Assert.Equal(3, state.CachedPageCount);
         Assert.False(state.TryAcceptPage(generation, "folder", 200, Array.Empty<Channel>()));
+        state.Toggle("folder");
+        Assert.True(state.TryGetPage("folder", 0, out _));
+    }
+
+    [Fact]
+    public void Playing_folder_opens_first_and_repeated_selection_keeps_generation_and_focus()
+    {
+        var state = new PlayerCategoryAccordionState("a", CatalogItemType.Movie);
+        Assert.Equal("middle", state.OpenForPlaying("middle", "film").HeaderToFocus);
+        Assert.Equal(new[] { "middle", "first", "last" },
+            state.OrderedCategoryIds(new[] { "first", "middle", "last" }));
+        var generation = state.PageGeneration;
+        Assert.Equal("middle", state.OpenForPlaying("middle", "film").HeaderToFocus);
+        Assert.Equal(generation, state.PageGeneration);
+        Assert.Equal("middle", state.SelectCategory("middle").HeaderToFocus);
+        Assert.Equal(generation, state.PageGeneration);
+        Assert.Equal("film", state.SelectedItemId);
+        Assert.Equal("middle", state.Toggle("middle").HeaderToFocus);
+        Assert.Equal(new[] { "first", "middle", "last" },
+            state.OrderedCategoryIds(new[] { "first", "middle", "last" }));
+    }
+
+    [Fact]
+    public void Unknown_playing_folder_does_not_open_any_folder()
+    {
+        var state = new PlayerCategoryAccordionState("a", CatalogItemType.Series);
+        Assert.Null(state.OpenForPlaying(null, "episode").HeaderToFocus);
+        Assert.Null(state.ExpandedCategoryId);
     }
 
     [Fact]
