@@ -549,6 +549,24 @@
         "shared-core/src/test/kotlin/com/dev/Tvivo/ui/player/PlayerOverlayLogicTest.kt",
         ".codex-android-qa-exec-report.md#tv-player-slice-a"
       ]
+    },
+    {
+      "id": "A-TV-PLAYER-SLICE-B",
+      "title": "TV playback speed and aspect, episode queue list, and Live channel number navigation",
+      "type": "ux-perk",
+      "origin": "android-tv",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/android-tv-remake-design-2026-10-21.md#5-tv-player",
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerActivity.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerOverlay.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/ui/player/PlayerOverlayLogicTest.kt",
+        ".codex-android-qa-exec-report.md#tv-player-slice-b"
+      ]
     }
   ]
 }

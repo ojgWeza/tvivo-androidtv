@@ -35,6 +35,17 @@
     <string name="player_channels_empty">لا توجد قنوات محفوظة لهذه الفئة.</string>
     <string name="player_channel_switch_failed">تعذّر تغيير القناة. جارٍ الرجوع إلى القناة السابقة.</string>
     <string name="player_last_channel">القناة السابقة</string>
+    <string name="player_episodes">الحلقات</string>
+    <string name="player_previous_episode">الحلقة السابقة</string>
+    <string name="player_episode_watched">شوهدت</string>
+    <string name="player_episode_progress">تمت مشاهدة %1$s</string>
+    <string name="player_speed_value">السرعة: %1$s×</string>
+    <string name="player_aspect_value">العرض: %1$s</string>
+    <string name="player_aspect_fit">احتواء</string>
+    <string name="player_aspect_fill">ملء</string>
+    <string name="player_aspect_zoom">تكبير</string>
+    <string name="player_info_seekability">التقديم والإرجاع: %1$s</string>
+    <string name="player_info_seekable">متاحان</string>
     <string name="player_start_over">البدء من جديد</string>
     <string name="player_audio">المسارات الصوتية</string>
     <string name="player_subtitles">مسارات الترجمة</string>

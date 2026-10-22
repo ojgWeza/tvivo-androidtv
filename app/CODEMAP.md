@@ -69,6 +69,7 @@
 Broken at runtime, or a route renamed on one side only.
 
 - `countFiltered` — called from `browse/BrowseViewModel.kt`
+- `toString` — called from `player/PlayerOverlay.kt`
 
 ## 3. Route defined but never called from the frontend
 

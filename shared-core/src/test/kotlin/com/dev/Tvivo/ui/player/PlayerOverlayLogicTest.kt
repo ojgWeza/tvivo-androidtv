@@ -82,6 +82,8 @@ class PlayerOverlayLogicTest {
         assertEquals(HiddenPlayerKeyAction.Channels, HiddenPlayerKeyMap.action(21, true, false))
         assertEquals(HiddenPlayerKeyAction.NextChannel, HiddenPlayerKeyMap.action(19, true, false))
         assertEquals(HiddenPlayerKeyAction.PreviousChannel, HiddenPlayerKeyMap.action(20, true, false))
+        assertEquals(HiddenPlayerKeyAction.LastChannel, HiddenPlayerKeyMap.action(88, true, false))
+        assertEquals(HiddenPlayerKeyAction.None, HiddenPlayerKeyMap.action(88, false, true))
         assertEquals(HiddenPlayerKeyAction.SeekBack, HiddenPlayerKeyMap.action(21, false, true))
         assertEquals(HiddenPlayerKeyAction.SeekForward, HiddenPlayerKeyMap.action(22, false, true))
         assertEquals(HiddenPlayerKeyAction.Reveal, HiddenPlayerKeyMap.action(22, false, false))
@@ -94,5 +96,27 @@ class PlayerOverlayLogicTest {
         assertEquals(1, PlayerOverlayLogic.nextFocusRow(3, down = false, hasOtherBottomControl = false))
         assertEquals(3_000L, PlayerOverlayLogic.autoHideWaitMs(5_000L, 8_000L))
         assertEquals(0L, PlayerOverlayLogic.autoHideWaitMs(8_000L, 8_000L))
+    }
+
+    @Test fun channelNumberUsesCategoryPositionAndTimesOut() {
+        val channels = listOf(LiveChannel("99", "One", "ts"), LiveChannel("17", "Two", "ts"))
+        val one = ChannelNumberBuffer().append(1, 100)
+        assertEquals(null, one.confirmed(1_000))
+        assertEquals(1, one.confirmed(1_350))
+        assertEquals("17", LiveChannelNavigation.numbered(channels, 2)?.id)
+        assertEquals(null, LiveChannelNavigation.numbered(channels, 17))
+        assertEquals("12", one.append(2, 500).digits)
+        assertEquals("2", one.append(2, 2_000).digits)
+    }
+
+    @Test fun speedAspectAndEpisodeAdjacencyWrapOrStopAtEnds() {
+        assertEquals(1.25f, PlaybackSpeed.next(1f))
+        assertEquals(0.75f, PlaybackSpeed.next(2f))
+        assertEquals(VideoAspect.Fill, VideoAspect.Fit.next())
+        assertEquals(VideoAspect.Fit, VideoAspect.Zoom.next())
+        assertEquals(null, EpisodeAdjacency.previous(0, 3))
+        assertEquals(0, EpisodeAdjacency.previous(1, 3))
+        assertEquals(2, EpisodeAdjacency.next(1, 3))
+        assertEquals(null, EpisodeAdjacency.next(2, 3))
     }
 }

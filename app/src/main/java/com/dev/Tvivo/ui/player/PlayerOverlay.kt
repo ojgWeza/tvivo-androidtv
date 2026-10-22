@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.safeDrawing
@@ -97,7 +98,10 @@ import kotlinx.coroutines.coroutineScope
 
 data class TrackChoice(val label: String, val selected: Boolean)
 
-enum class PlayerPopup { Audio, Subtitles, Timer, Warning, Channels, Jump }
+enum class PlayerPopup { Audio, Subtitles, Timer, Warning, Channels, Episodes, Jump, Speed, Aspect }
+
+data class EpisodeListRow(val index: Int, val id: String, val title: String,
+    val watched: Boolean = false, val progressMs: Long = 0L)
 
 data class PlayerOverlayState(
     val title: String,
@@ -141,6 +145,17 @@ fun PlayerOverlay(
     onAudio: (Int) -> Unit,
     onSubtitle: (Int) -> Unit,
     onNext: () -> Unit,
+    onPrevious: () -> Unit = {},
+    hasPreviousEpisode: Boolean = false,
+    episodes: List<EpisodeListRow> = emptyList(),
+    currentEpisodeId: String? = null,
+    episodesOpen: Boolean = false,
+    onEpisodesOpenChange: (Boolean) -> Unit = {},
+    onEpisodeSelect: (Int) -> Unit = {},
+    playbackSpeed: Float = 1f,
+    onSpeedChange: (Float) -> Unit = {},
+    videoAspect: VideoAspect = VideoAspect.Fit,
+    onAspectChange: (VideoAspect) -> Unit = {},
     onStartOver: () -> Unit,
     channels: List<LiveChannel> = emptyList(),
     currentChannelId: String? = null,
@@ -150,6 +165,7 @@ fun PlayerOverlay(
     onAdjacentChannel: (Int) -> Unit = {},
     onLastChannel: () -> Unit = {},
     hasLastChannel: Boolean = false,
+    channelNumber: String = "",
     onInput: () -> Unit = {},
     onSeekKey: (Int, KeyEvent) -> Unit = { _, _ -> },
     onRetry: () -> Unit = {},
@@ -168,6 +184,11 @@ fun PlayerOverlay(
     val controls = PlayerOverlayLogic.controls(state.isLive, state.seekable,
         state.audio.size, state.subtitles.size, state.hasNext, state.hasResume, state.durationMs)
     val television = LocalIsTelevision.current
+    var speedOpen by remember { mutableStateOf(false) }
+    var aspectOpen by remember { mutableStateOf(false) }
+    val episodesFocus = remember { FocusRequester() }
+    val speedFocus = remember { FocusRequester() }
+    val aspectFocus = remember { FocusRequester() }
     var jumpOpen by remember { mutableStateOf(false) }
     val backFocus = remember { FocusRequester() }
     val hiddenFocus = remember { FocusRequester() }
@@ -189,7 +210,7 @@ fun PlayerOverlay(
                 androidx.compose.runtime.withFrameNanos { }
                 runCatching { hiddenFocus.requestFocus() }
             }
-        } else if (visible) {
+        } else if (visible && !channelsOpen && !episodesOpen && !speedOpen && !aspectOpen && !jumpOpen) {
             androidx.compose.runtime.withFrameNanos { }
             val requester = if (television && detailsOpen) cinemaFocus else when (state.playbackState) {
                 "retry" -> retryFocus
@@ -217,8 +238,19 @@ fun PlayerOverlay(
     }
     LaunchedEffect(dismissMenus) {
         if (television && dismissMenus > 0 && visible) {
+            val restore = when {
+                episodesOpen -> episodesFocus
+                channelsOpen -> bottomFocus
+                speedOpen -> speedFocus
+                aspectOpen -> aspectFocus
+                else -> detailsFocus
+            }
             androidx.compose.runtime.withFrameNanos { }
-            runCatching { detailsFocus.requestFocus() }
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { restore.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { restore.requestFocus() }
+            }
         }
     }
     LaunchedEffect(state.sleepTimer.isEnded) {
@@ -250,6 +282,18 @@ fun PlayerOverlay(
         }
     }
     LaunchedEffect(channelsOpen) { onMenuOpenChanged(PlayerPopup.Channels, channelsOpen) }
+    LaunchedEffect(episodesOpen) { onMenuOpenChanged(PlayerPopup.Episodes, episodesOpen) }
+    LaunchedEffect(speedOpen) { onMenuOpenChanged(PlayerPopup.Speed, speedOpen) }
+    LaunchedEffect(aspectOpen) { onMenuOpenChanged(PlayerPopup.Aspect, aspectOpen) }
+    LaunchedEffect(episodesOpen) {
+        if (television && !episodesOpen && visible && episodes.isNotEmpty()) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { episodesFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { episodesFocus.requestFocus() }
+            }
+        }
+    }
     LaunchedEffect(channelsOpen) {
         if (television && !channelsOpen && visible && state.isLive && channels.isNotEmpty()) {
             androidx.compose.runtime.withFrameNanos { }
@@ -257,7 +301,10 @@ fun PlayerOverlay(
         }
     }
     LaunchedEffect(jumpOpen) { onMenuOpenChanged(PlayerPopup.Jump, jumpOpen) }
-    LaunchedEffect(dismissMenus) { if (dismissMenus > 0) { onChannelsOpenChange(false); jumpOpen = false } }
+    LaunchedEffect(dismissMenus) { if (dismissMenus > 0) {
+        onChannelsOpenChange(false); onEpisodesOpenChange(false)
+        jumpOpen = false; speedOpen = false; aspectOpen = false
+    } }
 
     BoxWithConstraints(
         Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }
@@ -281,6 +328,10 @@ fun PlayerOverlay(
             }
         }
     ) {
+        if (television && state.isLive && channelNumber.isNotEmpty()) Text(
+            channelNumber, color = AppColors.MediaText, style = type.title,
+            modifier = Modifier.align(Alignment.Center).background(AppColors.MediaBase.copy(alpha = 0.9f), RoundedCornerShape(12.dp)).padding(24.dp)
+        )
         if (state.sleepTimer.isActive && !visible) {
             val remaining = SleepTimerUiPolicy.remainingLabel(state.sleepTimer.remainingMs)
             val label = when {
@@ -347,7 +398,7 @@ fun PlayerOverlay(
                             (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN)) {
                             val hasOtherBottomControl = controls.scrubber || controls.startOver ||
                                 controls.audio || controls.subtitles || controls.next ||
-                                (state.isLive && channels.isNotEmpty())
+                                (state.isLive && channels.isNotEmpty()) || television
                             val next = PlayerOverlayLogic.nextFocusRow(focusRow,
                                 key == KeyEvent.KEYCODE_DPAD_DOWN, hasOtherBottomControl)
                             if (next != focusRow) {
@@ -461,6 +512,10 @@ fun PlayerOverlay(
                         onKey = { onSeekKey(1, it) },
                         onHeld = { onSeek(it) }
                     )
+                    if (television && !state.isLive && hasPreviousEpisode) OverlayButton(
+                        IconKind.Rewind, stringResource(R.string.player_previous_episode),
+                        Modifier.testTag("player_previous"), onPrevious
+                    )
                 }
                 }
 
@@ -561,6 +616,53 @@ fun PlayerOverlay(
                             Modifier.focusRequester(timerFocus).onFocusChanged { if (it.isFocused) focusRow = 3 }
                                 .testTag("player_timer"), dismissMenus, onMenuOpenChanged
                         )
+                        if (television && !state.isLive && episodes.isNotEmpty()) TextButton(
+                            onClick = { onEpisodesOpenChange(true) },
+                            modifier = Modifier.height(48.dp).focusRequester(episodesFocus).tvFocusFrame().testTag("player_episodes")) {
+                            Text(stringResource(R.string.player_episodes), color = AppColors.MediaText)
+                        }
+                        if (television && !state.isLive) {
+                            Box {
+                                TextButton(onClick = { speedOpen = true }, modifier = Modifier.height(48.dp)
+                                    .focusRequester(speedFocus)
+                                    .then(if (!controls.scrubber && !controls.startOver && !controls.audio &&
+                                        !controls.subtitles && !controls.next) Modifier.focusRequester(bottomFocus) else Modifier)
+                                    .tvFocusFrame().testTag("player_speed")) {
+                                    Text(stringResource(R.string.player_speed_value, playbackSpeed.toString()), color = AppColors.MediaText)
+                                }
+                                DropdownMenu(expanded = speedOpen, onDismissRequest = { speedOpen = false }) {
+                                    PlaybackSpeed.values.forEach { speed ->
+                                        DropdownMenuItem(text = { Text("${speed}×${if (speed == playbackSpeed) " ✓" else ""}") },
+                                            onClick = { onSpeedChange(speed); speedOpen = false })
+                                    }
+                                }
+                            }
+                        }
+                        if (television) {
+                            Box {
+                                TextButton(onClick = { aspectOpen = true }, modifier = Modifier.height(48.dp)
+                                    .focusRequester(aspectFocus)
+                                    .then(if (state.isLive && channels.isEmpty() && !controls.audio && !controls.subtitles)
+                                        Modifier.focusRequester(bottomFocus) else Modifier)
+                                    .tvFocusFrame().testTag("player_aspect")) {
+                                    Text(stringResource(R.string.player_aspect_value, stringResource(when (videoAspect) {
+                                        VideoAspect.Fit -> R.string.player_aspect_fit
+                                        VideoAspect.Fill -> R.string.player_aspect_fill
+                                        VideoAspect.Zoom -> R.string.player_aspect_zoom
+                                    })), color = AppColors.MediaText)
+                                }
+                                DropdownMenu(expanded = aspectOpen, onDismissRequest = { aspectOpen = false }) {
+                                    VideoAspect.entries.forEach { aspect ->
+                                        DropdownMenuItem(text = { Text(stringResource(when (aspect) {
+                                            VideoAspect.Fit -> R.string.player_aspect_fit
+                                            VideoAspect.Fill -> R.string.player_aspect_fill
+                                            VideoAspect.Zoom -> R.string.player_aspect_zoom
+                                        }) + if (aspect == videoAspect) " ✓" else "") },
+                                            onClick = { onAspectChange(aspect); aspectOpen = false })
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 }
@@ -584,25 +686,64 @@ fun PlayerOverlay(
                     color = AppColors.Ink, style = type.body, modifier = Modifier.padding(16.dp))
                 else LazyColumn(Modifier.heightIn(max = if (television) 380.dp else 540.dp), state = channelListState) {
                     items(channels, key = { it.id }) { channel ->
+                        val number = channels.indexOf(channel) + 1
                         TextButton(onClick = { onChannelsOpenChange(false); onChannelSelect(channel.id) },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                                 .then(if (channel.id == focusId) Modifier.focusRequester(firstChannelFocus) else Modifier)
                                 .tvFocusFrame()) {
-                            Text(if (channel.id == currentChannelId) "✓ ${channel.title}" else channel.title,
+                            Text("$number · ${if (channel.id == currentChannelId) "✓ " else ""}${channel.title}",
                                 color = AppColors.Ink, style = type.label)
                         }
                     }
                 }
             }
-            if (television) Dialog(onDismissRequest = { onChannelsOpenChange(false) }) {
-                Column(Modifier.width(480.dp).background(AppColors.Elevated, RoundedCornerShape(16.dp)).padding(16.dp)) {
-                    Text(stringResource(R.string.player_channels), color = AppColors.Ink, style = type.title)
-                    list()
+            if (television) Dialog(onDismissRequest = { onChannelsOpenChange(false) },
+                properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f))) {
+                    Column(Modifier.align(Alignment.CenterStart).width(480.dp).fillMaxHeight()
+                        .background(AppColors.Elevated).padding(16.dp)) {
+                        Text(stringResource(R.string.player_channels), color = AppColors.Ink, style = type.title)
+                        list()
+                    }
                 }
             } else ModalBottomSheet(onDismissRequest = { onChannelsOpenChange(false) }) {
                 Text(stringResource(R.string.player_channels), color = AppColors.Ink, style = type.title,
                     modifier = Modifier.padding(16.dp))
                 list()
+            }
+        }
+        if (television && episodesOpen && episodes.isNotEmpty()) {
+            val currentIndex = episodes.indexOfFirst { it.id == currentEpisodeId }.coerceAtLeast(0)
+            val focusEpisodeId = episodes[currentIndex].id
+            val firstEpisodeFocus = remember { FocusRequester() }
+            val episodeListState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex)
+            LaunchedEffect(episodesOpen, currentEpisodeId) {
+                androidx.compose.runtime.withFrameNanos { }
+                if (!runCatching { firstEpisodeFocus.requestFocus() }.isSuccess) {
+                    androidx.compose.runtime.withFrameNanos { }
+                    runCatching { firstEpisodeFocus.requestFocus() }
+                }
+            }
+            Dialog(onDismissRequest = { onEpisodesOpenChange(false) }) {
+                Column(Modifier.width(560.dp).background(AppColors.Elevated, RoundedCornerShape(16.dp)).padding(16.dp)) {
+                    Text(stringResource(R.string.player_episodes), color = AppColors.Ink, style = type.title)
+                    LazyColumn(Modifier.heightIn(max = 380.dp), state = episodeListState) {
+                        items(episodes, key = { it.id }) { episode ->
+                            val marker = when {
+                                episode.watched -> stringResource(R.string.player_episode_watched)
+                                episode.progressMs > 0L -> stringResource(R.string.player_episode_progress, formatPlayerTime(episode.progressMs))
+                                else -> ""
+                            }
+                            TextButton(onClick = { onEpisodesOpenChange(false); onEpisodeSelect(episode.index) },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .then(if (episode.id == focusEpisodeId) Modifier.focusRequester(firstEpisodeFocus) else Modifier)
+                                    .tvFocusFrame()) {
+                                Text("${if (episode.id == currentEpisodeId) "▶ " else ""}${episode.title}  $marker",
+                                    color = AppColors.Ink, style = type.label)
+                            }
+                        }
+                    }
+                }
             }
         }
         if (television && detailsOpen && !state.sleepTimer.isEnded) {
@@ -625,6 +766,9 @@ fun PlayerOverlay(
                 Text(stringResource(R.string.player_info_audio, state.audio.firstOrNull { it.selected }?.label ?: unknown), color = AppColors.MediaText, style = type.body)
                 Text(stringResource(R.string.player_info_subtitles, state.subtitles.firstOrNull { it.selected }?.label ?: stringResource(R.string.player_track_off)), color = AppColors.MediaText, style = type.body)
                 Text(stringResource(R.string.player_info_connection, state.playbackState), color = AppColors.MediaText, style = type.body)
+                Text(stringResource(R.string.player_info_seekability,
+                    stringResource(if (state.seekable) R.string.player_info_seekable else R.string.player_seek_unavailable)),
+                    color = AppColors.MediaText, style = type.body)
             }
         }
         if (state.sleepTimer.isWarning && !state.sleepTimer.isEnded && !warningDismissed) {

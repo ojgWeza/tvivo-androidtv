@@ -192,6 +192,17 @@
     <string name="player_channels_empty">No channels are saved for this category.</string>
     <string name="player_channel_switch_failed">Could not switch channels. Returning to the previous channel.</string>
     <string name="player_last_channel">Last channel</string>
+    <string name="player_episodes">Episodes</string>
+    <string name="player_previous_episode">Previous episode</string>
+    <string name="player_episode_watched">Watched</string>
+    <string name="player_episode_progress">%1$s watched</string>
+    <string name="player_speed_value">Speed: %1$s×</string>
+    <string name="player_aspect_value">Aspect: %1$s</string>
+    <string name="player_aspect_fit">Fit</string>
+    <string name="player_aspect_fill">Fill</string>
+    <string name="player_aspect_zoom">Zoom</string>
+    <string name="player_info_seekability">Seeking: %1$s</string>
+    <string name="player_info_seekable">Available</string>
     <string name="player_seek_position">%1$s of %2$s</string>
     <string name="player_audio_selected">Audio: %1$s</string>
     <string name="player_subtitles_selected">Subtitles: %1$s</string>

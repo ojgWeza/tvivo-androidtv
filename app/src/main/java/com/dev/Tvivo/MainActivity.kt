@@ -833,6 +833,7 @@ private fun TvivoApp() {
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_TITLES, ArrayList(queue.map {
                                 "S${it.seasonNumber} · E${it.episodeNum}: ${it.title}"
                             }))
+                            .putExtra(PlayerActivity.EXTRA_EPISODE_SEASONS, queue.map { it.seasonNumber }.toIntArray())
                             // SeriesInfoParser prefers `duration`: provider `duration_secs` can be unreliable.
                             .putExtra(PlayerActivity.EXTRA_EPISODE_DURATIONS, queue.map {
                                 it.durationSecs?.takeIf { seconds -> seconds > 0 }?.toLong()?.times(1000L) ?: 0L

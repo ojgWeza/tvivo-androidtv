@@ -27,6 +27,10 @@ enum class PlayerBackAction { DismissMenu, StopPlayer }
 data class LiveChannel(val id: String, val title: String, val extension: String?)
 
 object LiveChannelNavigation {
+    /** A remote number is the one-based position shown in the current category. */
+    fun numbered(channels: List<LiveChannel>, number: Int): LiveChannel? =
+        channels.getOrNull(number - 1)
+
     fun adjacent(channels: List<LiveChannel>, currentId: String?, direction: Int): LiveChannel? {
         if (direction == 0 || channels.isEmpty()) return null
         val index = channels.indexOfFirst { it.id == currentId }
@@ -38,12 +42,38 @@ object LiveChannelNavigation {
         channels.firstOrNull { it.id == lastId && it.id != currentId }
 }
 
+data class ChannelNumberBuffer(val digits: String = "", val lastInputMs: Long = 0L) {
+    fun append(digit: Int, nowMs: Long): ChannelNumberBuffer {
+        if (digit !in 0..9) return this
+        val prefix = if (nowMs - lastInputMs in 0..1_500 && digits.length < 4) digits else ""
+        return ChannelNumberBuffer(prefix + digit, nowMs)
+    }
+
+    fun confirmed(nowMs: Long): Int? = digits.toIntOrNull()?.takeIf {
+        it > 0 && nowMs - lastInputMs >= 1_200
+    }
+}
+
+enum class VideoAspect { Fit, Fill, Zoom;
+    fun next() = entries[(ordinal + 1) % entries.size]
+}
+
+object PlaybackSpeed {
+    val values = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+    fun next(current: Float): Float = values[(values.indexOf(current).takeIf { it >= 0 } ?: 1).let { (it + 1) % values.size }]
+}
+
+object EpisodeAdjacency {
+    fun previous(index: Int, count: Int): Int? = (index - 1).takeIf { it in 0 until count }
+    fun next(index: Int, count: Int): Int? = (index + 1).takeIf { index >= 0 && it in 0 until count }
+}
+
 object PlayerBackPolicy {
     fun action(menuOpen: Boolean, television: Boolean = false) =
         if (menuOpen) PlayerBackAction.DismissMenu else PlayerBackAction.StopPlayer
 }
 
-enum class HiddenPlayerKeyAction { Reveal, SeekBack, SeekForward, PreviousChannel, NextChannel, Channels, None }
+enum class HiddenPlayerKeyAction { Reveal, SeekBack, SeekForward, PreviousChannel, NextChannel, Channels, LastChannel, None }
 
 object HiddenPlayerKeyMap {
     fun action(keyCode: Int, live: Boolean, seekable: Boolean): HiddenPlayerKeyAction = when (keyCode) {
@@ -52,6 +82,7 @@ object HiddenPlayerKeyMap {
         21 -> if (live) HiddenPlayerKeyAction.Channels else if (seekable) HiddenPlayerKeyAction.SeekBack else HiddenPlayerKeyAction.Reveal
         19 -> if (live) HiddenPlayerKeyAction.NextChannel else HiddenPlayerKeyAction.Reveal
         20 -> if (live) HiddenPlayerKeyAction.PreviousChannel else HiddenPlayerKeyAction.Reveal
+        88 -> if (live) HiddenPlayerKeyAction.LastChannel else HiddenPlayerKeyAction.None // MEDIA_PREVIOUS
         else -> HiddenPlayerKeyAction.None
     }
 }

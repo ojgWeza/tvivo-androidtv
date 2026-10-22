@@ -34,6 +34,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.session.MediaController
@@ -41,6 +42,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.core.content.ContextCompat
 import com.dev.Tvivo.playback.HeldSeekAccelerator
 import com.dev.Tvivo.playback.PlaybackCommands
@@ -118,6 +120,12 @@ class PlayerActivity : ComponentActivity() {
     private var liveCredentials: Credentials? = null
     private var lastChannelId by mutableStateOf<String?>(null)
     private var channelsOpen by mutableStateOf(false)
+    private var episodesOpen by mutableStateOf(false)
+    private var episodeRows by mutableStateOf(emptyList<EpisodeListRow>())
+    private var numberBuffer by mutableStateOf(ChannelNumberBuffer())
+    private var numberJob: Job? = null
+    private var videoAspect by mutableStateOf(VideoAspect.Fit)
+    private var playbackSpeed by mutableStateOf(1f)
     private var detailsOpen by mutableStateOf(false)
     private var favouriteJob: Job? = null
     private var channelSwitchPending = false
@@ -256,6 +264,17 @@ class PlayerActivity : ComponentActivity() {
                         onAudio = { selectTrack(C.TRACK_TYPE_AUDIO, it) },
                         onSubtitle = { selectTrack(C.TRACK_TYPE_TEXT, it) },
                         onNext = { playNextEpisode() },
+                        onPrevious = { playPreviousEpisode() },
+                        hasPreviousEpisode = contentType == "series" && intent.getIntExtra(EXTRA_EPISODE_INDEX, -1) > 0,
+                        episodes = episodeRows,
+                        currentEpisodeId = itemId,
+                        episodesOpen = episodesOpen,
+                        onEpisodesOpenChange = { episodesOpen = it; if (it) { loadEpisodeRows(); showControls() } },
+                        onEpisodeSelect = ::playEpisodeAt,
+                        playbackSpeed = playbackSpeed,
+                        onSpeedChange = ::applyPlaybackSpeed,
+                        videoAspect = videoAspect,
+                        onAspectChange = ::applyVideoAspect,
                         onStartOver = {
                             seekTo(0L)
                             player?.play()
@@ -269,6 +288,7 @@ class PlayerActivity : ComponentActivity() {
                         onAdjacentChannel = ::adjacentChannel,
                         onLastChannel = { LiveChannelNavigation.last(liveChannels, itemId, lastChannelId)?.let { switchChannel(it.id) } },
                         hasLastChannel = LiveChannelNavigation.last(liveChannels, itemId, lastChannelId) != null,
+                        channelNumber = numberBuffer.digits,
                         onInput = { rearmControls() },
                         onSeekKey = { direction, event -> seekOnKey(direction, event) },
                         onRetry = { player?.sendCustomCommand(PlaybackCommands.command(PlaybackCommands.RETRY), Bundle.EMPTY); showControls() },
@@ -295,6 +315,7 @@ class PlayerActivity : ComponentActivity() {
         root.addView(compose)
         setContentView(root)
         if (isLive) loadLiveChannels()
+        if (!isLive && contentType == "series") loadEpisodeRows()
         loadPlayerMetadata()
         ContextCompat.registerReceiver(this, pipActionReceiver, IntentFilter().apply {
             addAction(PipPlaybackAction.PLAY_PAUSE)
@@ -499,6 +520,7 @@ class PlayerActivity : ComponentActivity() {
         val credentials = liveCredentials ?: return
         val streamId = id.toIntOrNull() ?: return
         if (id == itemId) return
+        numberBuffer = ChannelNumberBuffer()
         val previousId = itemId
         val previousUrl = intent.getStringExtra(EXTRA_URL)
         val previousTitle = intent.getStringExtra(EXTRA_TITLE)
@@ -524,6 +546,7 @@ class PlayerActivity : ComponentActivity() {
             if (intent.getStringExtra(EXTRA_REQUEST_ID) != requestId) return@addListener
             val resultCode = runCatching { result.get().resultCode }.getOrNull()
             if (resultCode == SessionResult.RESULT_SUCCESS) {
+                applyVideoAspect(VideoAspect.Fit)
                 lastChannelId = previousId
                 itemId = id
                 overlayState = overlayState.copy(title = target.title, positionMs = 0L,
@@ -962,11 +985,49 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTelevisionDevice() && isLive && numberBuffer.digits.isNotEmpty() &&
+            event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+            event.keyCode !in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 &&
+            event.keyCode !in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9) {
+            val number = numberBuffer.digits.toIntOrNull()
+            numberJob?.cancel()
+            numberBuffer = ChannelNumberBuffer()
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+                number?.let { LiveChannelNavigation.numbered(liveChannels, it)?.id }?.let(::switchChannel)
+                return true
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) return true
+        }
         if (isTelevisionDevice() && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 handlePlayerBack()
             }
             return true
+        }
+        if (isTelevisionDevice() && isLive && openMenus.isEmpty() && !detailsOpen) {
+            val digit = when (event.keyCode) {
+                in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> event.keyCode - KeyEvent.KEYCODE_0
+                in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> event.keyCode - KeyEvent.KEYCODE_NUMPAD_0
+                else -> -1
+            }
+            if (digit >= 0) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    numberBuffer = numberBuffer.append(digit, android.os.SystemClock.elapsedRealtime())
+                    numberJob?.cancel()
+                    numberJob = lifecycleScope.launch {
+                        delay(1_250L)
+                        val number = numberBuffer.confirmed(android.os.SystemClock.elapsedRealtime())
+                        numberBuffer = ChannelNumberBuffer()
+                        number?.let { LiveChannelNavigation.numbered(liveChannels, it)?.id }?.let(::switchChannel)
+                    }
+                }
+                return true
+            }
+            if (HiddenPlayerKeyMap.action(event.keyCode, live = true, seekable = false) == HiddenPlayerKeyAction.LastChannel) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                    LiveChannelNavigation.last(liveChannels, itemId, lastChannelId)?.let { switchChannel(it.id) }
+                return true
+            }
         }
         if (isLive && openMenus.isEmpty() && !detailsOpen && event.keyCode in listOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
                 KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN)) {
@@ -1034,6 +1095,7 @@ class PlayerActivity : ComponentActivity() {
                     HiddenPlayerKeyAction.PreviousChannel -> { if (event.repeatCount == 0) adjacentChannel(-1); return true }
                     HiddenPlayerKeyAction.NextChannel -> { if (event.repeatCount == 0) adjacentChannel(1); return true }
                     HiddenPlayerKeyAction.Channels -> { channelsOpen = true; showControls(); return true }
+                    HiddenPlayerKeyAction.LastChannel -> { LiveChannelNavigation.last(liveChannels, itemId, lastChannelId)?.let { switchChannel(it.id) }; return true }
                     HiddenPlayerKeyAction.None -> Unit
                 }
             }
@@ -1062,15 +1124,25 @@ class PlayerActivity : ComponentActivity() {
         if (isLive || contentType != "series") return null
         val ids = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS) ?: return null
         val current = intent.getIntExtra(EXTRA_EPISODE_INDEX, -1)
-        return (current + 1).takeIf { current >= 0 && it in ids.indices }
+        return EpisodeAdjacency.next(current, ids.size)
     }
 
-    private fun playNextEpisode() {
-        val next = nextIndex() ?: return
+    private fun playNextEpisode() { nextIndex()?.let(::playEpisodeAt) }
+
+    private fun playPreviousEpisode() {
+        val count = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS)?.size ?: return
+        EpisodeAdjacency.previous(intent.getIntExtra(EXTRA_EPISODE_INDEX, -1), count)?.let(::playEpisodeAt)
+    }
+
+    private fun playEpisodeAt(next: Int) {
+        if (isLive || contentType != "series" || stopPending) return
         val ids = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS) ?: return
         val urls = intent.getStringArrayListExtra(EXTRA_EPISODE_URLS) ?: return
         val titles = intent.getStringArrayListExtra(EXTRA_EPISODE_TITLES) ?: return
-        if (next !in urls.indices || next !in titles.indices) return
+        if (next !in ids.indices || next !in urls.indices || next !in titles.indices || ids[next] == itemId) return
+        episodesOpen = false
+        applyPlaybackSpeed(1f)
+        applyVideoAspect(VideoAspect.Fit)
         intent.putExtra(EXTRA_URL, urls[next])
             .putExtra(EXTRA_TITLE, titles[next])
             .putExtra(EXTRA_ITEM_ID, ids[next])
@@ -1080,10 +1152,59 @@ class PlayerActivity : ComponentActivity() {
             .putExtra(EXTRA_RESUME_FROM_MS, 0L)
             .putExtra(EXTRA_REQUEST_ID, UUID.randomUUID().toString())
         itemId = ids[next]
-        overlayState = overlayState.copy(title = titles[next], hasResume = false, positionMs = 0L)
+        overlayState = overlayState.copy(title = titles[next], hasResume = false, positionMs = 0L,
+            resolution = null, audio = emptyList(), subtitles = emptyList())
         sendPlayRequest()
+        loadPlayerMetadata()
+        loadEpisodeRows()
         updatePipParams()
         showControls()
+    }
+
+    private fun loadEpisodeRows() {
+        if (!isTelevisionDevice() || contentType != "series") return
+        val ids = intent.getStringArrayListExtra(EXTRA_EPISODE_IDS).orEmpty()
+        val titles = intent.getStringArrayListExtra(EXTRA_EPISODE_TITLES).orEmpty()
+        val seasons = intent.getIntArrayExtra(EXTRA_EPISODE_SEASONS)
+        val currentSeason = seasons?.getOrNull(intent.getIntExtra(EXTRA_EPISODE_INDEX, -1))
+        val account = intent.getStringExtra(EXTRA_ACCOUNT_ID) ?: return
+        episodeRows = ids.mapIndexedNotNull { index, id ->
+            if (currentSeason != null && seasons?.getOrNull(index) != currentSeason) null
+            else EpisodeListRow(index, id, titles.getOrNull(index) ?: id)
+        }
+        lifecycleScope.launch {
+            val rows = withContext(Dispatchers.IO) {
+                val db = AppDatabase.get(applicationContext)
+                ids.chunked(200).flatMap { chunk ->
+                    val watched = db.watchedDao().forItems(account, "series", chunk).map { it.itemId }.toSet()
+                    val positions = db.resumeDao().forItems(account, "series", chunk).associateBy { it.itemId }
+                    chunk.map { id -> Triple(id, id in watched, positions[id]?.positionMs ?: 0L) }
+                }.associateBy { it.first }
+            }
+            if (contentType == "series" && intent.getStringExtra(EXTRA_ACCOUNT_ID) == account)
+                episodeRows = episodeRows.map { row ->
+                    val saved = rows[row.id]
+                    row.copy(watched = saved?.second == true, progressMs = saved?.third ?: 0L)
+                }
+        }
+    }
+
+    private fun applyPlaybackSpeed(speed: Float) {
+        if (!isTelevisionDevice() || isLive || speed !in PlaybackSpeed.values) return
+        playbackSpeed = speed
+        player?.playbackParameters = PlaybackParameters(speed)
+        rearmControls()
+    }
+
+    private fun applyVideoAspect(aspect: VideoAspect) {
+        if (!isTelevisionDevice()) return
+        videoAspect = aspect
+        playerView?.resizeMode = when (aspect) {
+            VideoAspect.Fit -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            VideoAspect.Fill -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            VideoAspect.Zoom -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        }
+        rearmControls()
     }
 
     private fun startPositionTicker() {
@@ -1184,10 +1305,11 @@ class PlayerActivity : ComponentActivity() {
         if (detailsOpen) {
             detailsOpen = false
             rearmControls()
-        } else if (PlayerBackPolicy.action(openMenus.isNotEmpty() || channelsOpen,
+        } else if (PlayerBackPolicy.action(openMenus.isNotEmpty() || channelsOpen || episodesOpen,
                 television = true) == PlayerBackAction.DismissMenu) {
             dismissMenus++
             channelsOpen = false
+            episodesOpen = false
             openMenus = emptySet()
             rearmControls()
         } else stopAndFinish(finishImmediately = true)
@@ -1207,6 +1329,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        numberJob?.cancel()
         positionTicker?.cancel()
         autoHideJob?.cancel(); feedbackJob?.cancel()
         // On API 26-32 the system close affordance has no custom close callback.
@@ -1305,6 +1428,7 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_EPISODE_IDS = "episode_ids"
         const val EXTRA_EPISODE_URLS = "episode_urls"
         const val EXTRA_EPISODE_TITLES = "episode_titles"
+        const val EXTRA_EPISODE_SEASONS = "episode_seasons"
         const val EXTRA_EPISODE_INDEX = "episode_index"
         const val EXTRA_REQUEST_ID = "request_id"
         const val EXTRA_REOPEN_SESSION = "reopen_session"
