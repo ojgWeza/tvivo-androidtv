@@ -244,13 +244,15 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Image x:Name="PlayerLoadingPoster" Width="120" Height="180" Stretch="UniformToFill"
                                    Visibility="Collapsed" IsHitTestVisible="False"
+                                   Opacity="0.45"
                                    AutomationProperties.Name="Movie poster" />
                             <TextBlock x:Name="PlayerLoadingPopcorn" Grid.Row="1" HorizontalAlignment="Center"
                                        FontFamily="Segoe UI Emoji" IsColorFontEnabled="True" FontSize="132"
-                                       Foreground="#FFFFFFFF" Text="🍿" IsHitTestVisible="False" />
+                                       Foreground="#FFFFFFFF" Text="🍿" IsHitTestVisible="False" Opacity="0.45" />
                             <TextBlock x:Name="PlayerLoadingText" Grid.Row="2" HorizontalAlignment="Center"
                                        Foreground="#FFFFFFFF" FontSize="24" Text="Loading..."
                                        AutomationProperties.Name="Loading" IsHitTestVisible="False" />
@@ -262,6 +264,10 @@
                                          IsIndeterminate="True" Visibility="Collapsed"
                                          Foreground="#FFFFFFFF" Background="#FF555555"
                                          AutomationProperties.Name="Preparing playback" />
+                            <TextBlock x:Name="PlayerLoadingStatusText" Grid.Row="5" MaxWidth="720"
+                                       HorizontalAlignment="Center" TextAlignment="Center"
+                                       Foreground="#FFFFFFFF" FontSize="18" TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite" IsHitTestVisible="False" />
                         </Grid>
                     </Grid>
                     <Border x:Name="SleepTimerStatusPanel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
@@ -271,8 +277,7 @@
                                    FontSize="18" TextWrapping="Wrap" AutomationProperties.LiveSetting="Off" />
                     </Border>
                     <Border x:Name="PlaybackStatusPanel" Grid.Row="0" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
-                            MaxWidth="720" Margin="24,0,24,24" Padding="14,8" CornerRadius="8"
-                            Background="{ThemeResource AppPanelSurfaceBrush}" Visibility="Collapsed">
+                            MaxWidth="720" Margin="24,0,24,24" Visibility="Collapsed">
                         <Grid ColumnSpacing="8" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

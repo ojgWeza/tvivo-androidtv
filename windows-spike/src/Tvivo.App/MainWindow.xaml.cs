@@ -2233,11 +2233,23 @@ public sealed partial class MainWindow : Window
 
     private void SetPlaybackStatus(string message)
     {
-        StatusText.Text = message;
-        AutomationProperties.SetName(StatusText, message);
-        PlaybackStatusPanel.Visibility = string.IsNullOrEmpty(message) && RetryPlaybackButton.Visibility != Visibility.Visible
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        var curtainVisible = PlayerVideoCurtain.Visibility == Visibility.Visible;
+        var statusTarget = curtainVisible ? PlayerLoadingStatusText : StatusText;
+        if (!StringComparer.Ordinal.Equals(statusTarget.Text, message))
+        {
+            statusTarget.Text = message;
+            AutomationProperties.SetName(statusTarget, message);
+        }
+
+        if (curtainVisible)
+            StatusText.Text = string.Empty;
+        else
+            PlayerLoadingStatusText.Text = string.Empty;
+
+        PlaybackStatusPanel.Visibility = RetryPlaybackButton.Visibility == Visibility.Visible ||
+            (!curtainVisible && !string.IsNullOrEmpty(message))
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     private void ClearPlaybackStatus()
@@ -2263,8 +2275,8 @@ public sealed partial class MainWindow : Window
         PlayerVideoCurtain.Visibility = Visibility.Visible;
         PauseButton.IsEnabled = false;
         SetPauseButtonState("Play");
-        SetPlaybackStatus(status);
         RetryPlaybackButton.Visibility = Visibility.Visible;
+        SetPlaybackStatus(status);
         LaunchDiagnostics.Write($"event=playback.final-failure stay=true reason={reason}");
         LaunchDiagnostics.Write($"event=player.final-failure reveal={PlayerResetPolicy.ShouldRevealAfterFinalFailure().ToString().ToLowerInvariant()}");
         if (_isCinemaMode)
@@ -3452,7 +3464,10 @@ public sealed partial class MainWindow : Window
                 LaunchDiagnostics.Write($"event=playback.resume.ok positionMs={_lastGoodPlaybackPositionMilliseconds}");
             }
             SetPlaybackSurfaceVisibility(true, allowCurtain: true);
+            var statusAfterCurtain = PlayerLoadingStatusText.Text;
             PlayerVideoCurtain.Visibility = Visibility.Collapsed;
+            if (!string.IsNullOrEmpty(statusAfterCurtain))
+                SetPlaybackStatus(statusAfterCurtain);
             LaunchDiagnostics.Write($"event=player.curtain-lowered generation={generation}");
             _pendingResumePosition = openAtResume ? null
                 : isRecovery && recoveryPositionMs is > 0
@@ -4649,7 +4664,7 @@ public sealed partial class MainWindow : Window
         {
             SaveResumePosition(force: true);
             _unverifiedPlaybackEndHandled = true;
-            StatusText.Text = "Playback ended before completion could be verified. Select Retry to resume.";
+            SetPlaybackStatus("Playback ended before completion could be verified. Select Retry to resume.");
             SetPauseButtonState("Retry");
         }
         if (sessionIsCurrent && !playbackFailed && !_playbackCompletionShown && ended && genuineEnd && _nowPlayingChannel is { } finishedChannel)
