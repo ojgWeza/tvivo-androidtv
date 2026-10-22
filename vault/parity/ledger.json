@@ -567,6 +567,22 @@
         "shared-core/src/test/kotlin/com/dev/Tvivo/ui/player/PlayerOverlayLogicTest.kt",
         ".codex-android-qa-exec-report.md#tv-player-slice-b"
       ]
+    },
+    {
+      "id": "A-TV-LIVE-ASPECT-CONTROLS",
+      "title": "TV Live overlay hides VOD-only speed and aspect controls",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "HAS"
+      },
+      "links": [
+        "docs/android-tv-remake-design-2026-10-21.md#5-tv-player",
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerOverlay.kt",
+        ".codex-android-qa-exec-report.md#tv-player-slice-b-device-verify"
+      ]
     }
   ]
 }

@@ -638,7 +638,7 @@ fun PlayerOverlay(
                                 }
                             }
                         }
-                        if (television) {
+                        if (television && !state.isLive) {
                             Box {
                                 TextButton(onClick = { aspectOpen = true }, modifier = Modifier.height(48.dp)
                                     .focusRequester(aspectFocus)
