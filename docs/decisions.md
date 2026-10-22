@@ -2017,3 +2017,11 @@ category is empty only after its own scoped fetch succeeds and a fresh Room coun
 is zero; a changed account or selection cannot accept an earlier request result.
 Cached rows remain visible through refresh and error states. This rule applies
 to TV, phone, and tablet browse copy.
+
+TV Live short OK now uses the existing direct `playItem` handoff from grid,
+My Tvivo and saved-catalog search; Movies and Series still open their detail
+routes. The extra Live detail stop came from sharing one activation route across
+content types. Keep this exception at the TV route boundary so phone/tablet
+activation and the service's single-stream handoff remain stable. In the TV
+player, hidden controls retain a focus target, and Back dismisses the current
+panel or popup before stopping playback. Device acceptance is still pending.

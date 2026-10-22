@@ -181,6 +181,14 @@
     <string name="player_minutes">Minutes</string>
     <string name="player_seconds">Seconds</string>
     <string name="player_channels">Channels</string>
+    <string name="player_details_info">Details / Info</string>
+    <string name="player_cinema">Cinema · video only</string>
+    <string name="player_info_unknown">Unknown</string>
+    <string name="player_info_format">Format: %1$s</string>
+    <string name="player_info_resolution">Resolution: %1$s</string>
+    <string name="player_info_audio">Audio: %1$s</string>
+    <string name="player_info_subtitles">Subtitles: %1$s</string>
+    <string name="player_info_connection">Connection: %1$s</string>
     <string name="player_channels_empty">No channels are saved for this category.</string>
     <string name="player_channel_switch_failed">Could not switch channels. Returning to the previous channel.</string>
     <string name="player_last_channel">Last channel</string>

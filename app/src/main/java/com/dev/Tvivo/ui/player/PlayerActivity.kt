@@ -58,6 +58,7 @@ import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.data.StreamUrlBuilder
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.ui.adaptive.AdaptiveEnvironment
 import com.dev.Tvivo.ui.ThemeMode
 import com.dev.Tvivo.playback.PlayerPreferencesStore
@@ -65,6 +66,7 @@ import com.dev.Tvivo.ui.theme.TvivoTheme
 import com.dev.Tvivo.ui.theme.DefaultAppColors
 import com.dev.Tvivo.ui.theme.LightAppColors
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.SideEffect
@@ -116,6 +118,8 @@ class PlayerActivity : ComponentActivity() {
     private var liveCredentials: Credentials? = null
     private var lastChannelId by mutableStateOf<String?>(null)
     private var channelsOpen by mutableStateOf(false)
+    private var detailsOpen by mutableStateOf(false)
+    private var favouriteJob: Job? = null
     private var channelSwitchPending = false
     private var visibility by mutableStateOf(OverlayVisibility())
     private var overlayState by mutableStateOf(PlayerOverlayState("Now playing", false))
@@ -156,6 +160,7 @@ class PlayerActivity : ComponentActivity() {
                 val ratio = (videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height)
                     .takeIf { it.isFinite() }?.coerceIn(0.5f, 2f) ?: 16f / 9f
                 videoAspectRatio = Rational((ratio * 1000).roundToInt().coerceAtLeast(1), 1000)
+                overlayState = overlayState.copy(resolution = "${videoSize.width} × ${videoSize.height}")
                 updatePipParams()
             }
         }
@@ -189,6 +194,7 @@ class PlayerActivity : ComponentActivity() {
         val resumeFromMs = intent.getLongExtra(EXTRA_RESUME_FROM_MS, 0L)
         itemId = intent.getStringExtra(EXTRA_ITEM_ID)
         contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
+        if (isTelevisionDevice()) visibility = OverlayVisibility(visible = false)
         Log.i("PlaybackResume", "activity create type=$contentType resume=$resumeFromMs " +
             "start=$pendingStart recreated=${savedInstanceState != null} reopen=$reopensSession")
         overlayState = PlayerOverlayState(
@@ -230,7 +236,10 @@ class PlayerActivity : ComponentActivity() {
                     PlayerOverlay(
                         state = overlayState,
                         visible = this@PlayerActivity.visibility.visible,
-                        onToggleOverlay = { if (this@PlayerActivity.visibility.visible) hideControls() else showControls() },
+                        onToggleOverlay = {
+                            if (detailsOpen) { detailsOpen = false; rearmControls() }
+                            else if (this@PlayerActivity.visibility.visible) hideControls() else showControls()
+                        },
                         onBack = { stopAndFinish(finishImmediately = true) },
                         onPlayPause = {
                             player?.let {
@@ -275,6 +284,9 @@ class PlayerActivity : ComponentActivity() {
                             if (this@PlayerActivity.visibility.visible) rearmControls()
                         },
                         onEndedWatch = ::watchEndedItem,
+                        detailsOpen = detailsOpen,
+                        onDetailsOpenChange = { detailsOpen = it; if (it) showControls() else rearmControls() },
+                        onFavourite = ::toggleFavourite,
                     )
                 } }
             }
@@ -283,6 +295,7 @@ class PlayerActivity : ComponentActivity() {
         root.addView(compose)
         setContentView(root)
         if (isLive) loadLiveChannels()
+        loadPlayerMetadata()
         ContextCompat.registerReceiver(this, pipActionReceiver, IntentFilter().apply {
             addAction(PipPlaybackAction.PLAY_PAUSE)
             addAction(PipPlaybackAction.CLOSE)
@@ -293,13 +306,12 @@ class PlayerActivity : ComponentActivity() {
         pipReceiverRegistered = true
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                openMenus = emptySet()
-                stopAndFinish(finishImmediately = true)
+                handlePlayerBack()
             }
         })
         connectController()
         updatePipParams()
-        if (pendingStart) showControls()
+        if (pendingStart && !isTelevisionDevice()) showControls()
         startPositionTicker()
     }
 
@@ -405,7 +417,7 @@ class PlayerActivity : ComponentActivity() {
             }
             verifyingSession = false
             activeSessionConfirmed = true
-            showControls()
+            if (!isTelevisionDevice()) showControls()
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -492,6 +504,7 @@ class PlayerActivity : ComponentActivity() {
         val previousTitle = intent.getStringExtra(EXTRA_TITLE)
         val previousRequest = intent.getStringExtra(EXTRA_REQUEST_ID)
         val requestId = UUID.randomUUID().toString()
+        val controlsWereVisible = visibility.visible
         channelSwitchPending = true
         statusRequest++
         intent.putExtra(EXTRA_URL, StreamUrlBuilder.live(credentials, streamId, target.extension ?: "ts"))
@@ -513,9 +526,11 @@ class PlayerActivity : ComponentActivity() {
             if (resultCode == SessionResult.RESULT_SUCCESS) {
                 lastChannelId = previousId
                 itemId = id
-                overlayState = overlayState.copy(title = target.title, positionMs = 0L)
+                overlayState = overlayState.copy(title = target.title, positionMs = 0L,
+                    resolution = null)
+                loadPlayerMetadata()
                 updateControls()
-                showControls()
+                if (!isTelevisionDevice() || controlsWereVisible) showControls()
             } else {
                 intent.putExtra(EXTRA_URL, previousUrl).putExtra(EXTRA_TITLE, previousTitle)
                     .putExtra(EXTRA_ITEM_ID, previousId)
@@ -727,17 +742,17 @@ class PlayerActivity : ComponentActivity() {
         autoHideJob?.cancel()
         autoHideJob = lifecycleScope.launch {
             delay(CONTROLS_TIMEOUT_MS)
-            while (visibility.visible) {
+            while (visibility.visible && !isTelevisionDevice()) {
                 val elapsed = if (lastDpadAtMs == Long.MIN_VALUE) Long.MAX_VALUE
                     else android.os.SystemClock.elapsedRealtime() - lastDpadAtMs
                 val waitMs = PlayerOverlayLogic.autoHideWaitMs(elapsed, DPAD_IDLE_MS)
                 if (waitMs > 0L) delay(waitMs)
                 else break
             }
-            if (openMenus.isEmpty() && !timerUiPinned && overlayState.playbackState != "retry" &&
-                overlayState.playbackState != "reconnecting" &&
-                overlayState.playbackState != "stopped" &&
-                !overlayState.sleepTimer.isWarning && !overlayState.sleepTimer.isEnded)
+            if (PlayerOverlayLogic.canAutoHide(isTelevisionDevice(), overlayState.isPlaying,
+                    openMenus.isNotEmpty() || detailsOpen, timerUiPinned,
+                    overlayState.playbackState, overlayState.sleepTimer.isWarning,
+                    overlayState.sleepTimer.isEnded))
                 visibility = visibility.onTimeout()
         }
     }
@@ -949,12 +964,11 @@ class PlayerActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (isTelevisionDevice() && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                openMenus = emptySet()
-                stopAndFinish(finishImmediately = true)
+                handlePlayerBack()
             }
             return true
         }
-        if (isLive && event.keyCode in listOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
+        if (isLive && openMenus.isEmpty() && !detailsOpen && event.keyCode in listOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
                 KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN)) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
                 adjacentChannel(if (event.keyCode == KeyEvent.KEYCODE_CHANNEL_UP || event.keyCode == KeyEvent.KEYCODE_PAGE_UP) 1 else -1)
@@ -1012,6 +1026,17 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         if (event != null && !visibility.visible) {
+            if (isTelevisionDevice()) {
+                when (HiddenPlayerKeyMap.action(keyCode, isLive, overlayState.seekable)) {
+                    HiddenPlayerKeyAction.Reveal -> { showControls(); return true }
+                    HiddenPlayerKeyAction.SeekBack -> { seekOnKey(-1, event); return true }
+                    HiddenPlayerKeyAction.SeekForward -> { seekOnKey(1, event); return true }
+                    HiddenPlayerKeyAction.PreviousChannel -> { if (event.repeatCount == 0) adjacentChannel(-1); return true }
+                    HiddenPlayerKeyAction.NextChannel -> { if (event.repeatCount == 0) adjacentChannel(1); return true }
+                    HiddenPlayerKeyAction.Channels -> { channelsOpen = true; showControls(); return true }
+                    HiddenPlayerKeyAction.None -> Unit
+                }
+            }
             if (isLive) when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> { if (event.repeatCount == 0) adjacentChannel(1); return true }
                 KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.repeatCount == 0) adjacentChannel(-1); return true }
@@ -1091,6 +1116,81 @@ class PlayerActivity : ComponentActivity() {
             stopAfterDismissedPip()
         }
         super.onStop()
+    }
+
+    private fun loadPlayerMetadata() {
+        val accountId = intent.getStringExtra(EXTRA_ACCOUNT_ID) ?: return
+        val currentId = itemId ?: return
+        val currentType = contentType ?: return
+        val extension = intent.getStringExtra(EXTRA_URL)?.substringBefore('?')?.substringAfterLast('.')
+            ?.takeIf { it.length in 2..5 && it.all(Char::isLetterOrDigit) }
+        overlayState = overlayState.copy(format = extension?.uppercase(), category = null,
+            plot = null, year = null, isFavourite = false)
+        favouriteJob?.cancel()
+        favouriteJob = lifecycleScope.launch {
+            PlaybackStateRepository(AppDatabase.get(applicationContext), accountId)
+                .isFavourite(currentType, currentId).collect { favourite ->
+                    if (itemId == currentId) overlayState = overlayState.copy(isFavourite = favourite)
+                }
+        }
+        lifecycleScope.launch {
+            val metadata = withContext(Dispatchers.IO) {
+                val db = AppDatabase.get(applicationContext)
+                val id = currentId.toIntOrNull() ?: return@withContext null
+                val categoryId: String?
+                val plot: String?
+                val year: String?
+                if (currentType == "live") {
+                    categoryId = db.liveDao().byId(accountId, id)?.categoryId
+                    plot = null
+                    year = null
+                } else if (currentType == "vod") {
+                    val item = db.vodDao().byId(accountId, id)
+                    categoryId = item?.categoryId
+                    plot = item?.plot
+                    year = item?.year
+                } else {
+                    categoryId = null
+                    plot = null
+                    year = null
+                }
+                val category = categoryId?.let {
+                    db.categoryDao().byIds(accountId, currentType, listOf(it)).firstOrNull()?.name
+                }
+                Triple(category, plot, year)
+            }
+            if (itemId == currentId && contentType == currentType && metadata != null)
+                overlayState = overlayState.copy(category = metadata.first,
+                    plot = metadata.second, year = metadata.third)
+        }
+    }
+
+    private fun toggleFavourite() {
+        val accountId = intent.getStringExtra(EXTRA_ACCOUNT_ID) ?: return
+        val currentId = itemId ?: return
+        val currentType = contentType ?: return
+        val makeFavourite = !overlayState.isFavourite
+        lifecycleScope.launch {
+            PlaybackStateRepository(AppDatabase.get(applicationContext), accountId)
+                .toggleFavourite(currentType, currentId, makeFavourite)
+        }
+    }
+
+    private fun handlePlayerBack() {
+        if (!isTelevisionDevice()) {
+            stopAndFinish(finishImmediately = true)
+            return
+        }
+        if (detailsOpen) {
+            detailsOpen = false
+            rearmControls()
+        } else if (PlayerBackPolicy.action(openMenus.isNotEmpty() || channelsOpen,
+                television = true) == PlayerBackAction.DismissMenu) {
+            dismissMenus++
+            channelsOpen = false
+            openMenus = emptySet()
+            rearmControls()
+        } else stopAndFinish(finishImmediately = true)
     }
 
     private fun stopAfterDismissedPip() {
@@ -1186,7 +1286,9 @@ class PlayerActivity : ComponentActivity() {
             sendPlayRequest()
         } else if (controllerFuture == null) connectController()
         if (isLive) loadLiveChannels()
-        showControls()
+        detailsOpen = false
+        loadPlayerMetadata()
+        if (isTelevisionDevice()) visibility = OverlayVisibility(visible = false) else showControls()
         updatePipParams()
     }
 

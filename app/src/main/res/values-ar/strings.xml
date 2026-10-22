@@ -24,6 +24,14 @@
     <string name="player_minutes">الدقائق</string>
     <string name="player_seconds">الثواني</string>
     <string name="player_channels">القنوات</string>
+    <string name="player_details_info">التفاصيل / معلومات</string>
+    <string name="player_cinema">وضع السينما · فيديو فقط</string>
+    <string name="player_info_unknown">غير معروف</string>
+    <string name="player_info_format">التنسيق: %1$s</string>
+    <string name="player_info_resolution">الدقة: %1$s</string>
+    <string name="player_info_audio">الصوت: %1$s</string>
+    <string name="player_info_subtitles">الترجمة: %1$s</string>
+    <string name="player_info_connection">الاتصال: %1$s</string>
     <string name="player_channels_empty">لا توجد قنوات محفوظة لهذه الفئة.</string>
     <string name="player_channel_switch_failed">تعذّر تغيير القناة. جارٍ الرجوع إلى القناة السابقة.</string>
     <string name="player_last_channel">القناة السابقة</string>

@@ -59,8 +59,32 @@ class PlayerOverlayLogicTest {
     @Test fun backDismissesMenuBeforeStoppingPlayback() {
         assertEquals(PlayerBackAction.DismissMenu, PlayerBackPolicy.action(menuOpen = true))
         assertEquals(PlayerBackAction.StopPlayer, PlayerBackPolicy.action(menuOpen = false))
-        assertEquals(PlayerBackAction.StopPlayer,
+        assertEquals(PlayerBackAction.DismissMenu,
             PlayerBackPolicy.action(menuOpen = true, television = true))
+    }
+
+    @Test fun televisionStartsImmersiveAndRevealsOnInput() {
+        val hidden = OverlayVisibility(visible = false)
+        assertEquals(false, hidden.visible)
+        assertEquals(true, hidden.onInput().visible)
+        assertEquals(false, hidden.onInput().onTimeout().visible)
+        assertEquals(PlayerBackAction.StopPlayer, PlayerBackPolicy.action(false, television = true))
+        assertEquals(true, PlayerOverlayLogic.canAutoHide(true, true, false, false, "playing", false, false))
+        assertEquals(false, PlayerOverlayLogic.canAutoHide(true, false, false, false, "playing", false, false))
+        assertEquals(false, PlayerOverlayLogic.canAutoHide(true, true, true, false, "playing", false, false))
+        assertEquals(false, PlayerOverlayLogic.canAutoHide(true, true, false, false, "retry", false, false))
+        assertEquals(true, PlayerOverlayLogic.canAutoHide(false, false, false, false, "playing", false, false))
+    }
+
+    @Test fun hiddenRemoteMapKeepsLiveAndVodCommandsDistinct() {
+        assertEquals(HiddenPlayerKeyAction.Reveal, HiddenPlayerKeyMap.action(23, true, false))
+        assertEquals(HiddenPlayerKeyAction.Reveal, HiddenPlayerKeyMap.action(22, true, false))
+        assertEquals(HiddenPlayerKeyAction.Channels, HiddenPlayerKeyMap.action(21, true, false))
+        assertEquals(HiddenPlayerKeyAction.NextChannel, HiddenPlayerKeyMap.action(19, true, false))
+        assertEquals(HiddenPlayerKeyAction.PreviousChannel, HiddenPlayerKeyMap.action(20, true, false))
+        assertEquals(HiddenPlayerKeyAction.SeekBack, HiddenPlayerKeyMap.action(21, false, true))
+        assertEquals(HiddenPlayerKeyAction.SeekForward, HiddenPlayerKeyMap.action(22, false, true))
+        assertEquals(HiddenPlayerKeyAction.Reveal, HiddenPlayerKeyMap.action(22, false, false))
     }
 
     @Test fun dpadCanReachTimerAndKeepsOverlayVisibleBriefly() {

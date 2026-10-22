@@ -40,10 +40,29 @@ object LiveChannelNavigation {
 
 object PlayerBackPolicy {
     fun action(menuOpen: Boolean, television: Boolean = false) =
-        if (menuOpen && !television) PlayerBackAction.DismissMenu else PlayerBackAction.StopPlayer
+        if (menuOpen) PlayerBackAction.DismissMenu else PlayerBackAction.StopPlayer
+}
+
+enum class HiddenPlayerKeyAction { Reveal, SeekBack, SeekForward, PreviousChannel, NextChannel, Channels, None }
+
+object HiddenPlayerKeyMap {
+    fun action(keyCode: Int, live: Boolean, seekable: Boolean): HiddenPlayerKeyAction = when (keyCode) {
+        23, 66 -> HiddenPlayerKeyAction.Reveal // DPAD_CENTER, ENTER
+        22 -> if (live) HiddenPlayerKeyAction.Reveal else if (seekable) HiddenPlayerKeyAction.SeekForward else HiddenPlayerKeyAction.Reveal
+        21 -> if (live) HiddenPlayerKeyAction.Channels else if (seekable) HiddenPlayerKeyAction.SeekBack else HiddenPlayerKeyAction.Reveal
+        19 -> if (live) HiddenPlayerKeyAction.NextChannel else HiddenPlayerKeyAction.Reveal
+        20 -> if (live) HiddenPlayerKeyAction.PreviousChannel else HiddenPlayerKeyAction.Reveal
+        else -> HiddenPlayerKeyAction.None
+    }
 }
 
 object PlayerOverlayLogic {
+    fun canAutoHide(television: Boolean, playing: Boolean, panelOrMenuOpen: Boolean,
+        timerPinned: Boolean, playbackState: String, warning: Boolean, ended: Boolean): Boolean =
+        !panelOrMenuOpen && !timerPinned && (!television || playing) &&
+            playbackState != "retry" && playbackState != "reconnecting" &&
+            playbackState != "stopped" && !warning && !ended
+
     fun autoHideWaitMs(elapsedSinceDpadMs: Long, dpadIdleMs: Long): Long =
         (dpadIdleMs - elapsedSinceDpadMs).coerceAtLeast(0L)
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -95,7 +97,7 @@ import kotlinx.coroutines.coroutineScope
 
 data class TrackChoice(val label: String, val selected: Boolean)
 
-enum class PlayerPopup { Audio, Subtitles, Timer, Warning, Channels }
+enum class PlayerPopup { Audio, Subtitles, Timer, Warning, Channels, Jump }
 
 data class PlayerOverlayState(
     val title: String,
@@ -117,6 +119,12 @@ data class PlayerOverlayState(
     val nextPrompt: Boolean = false,
     val nextTitle: String? = null,
     val sleepTimer: SleepTimerUiState = SleepTimerUiState(),
+    val isFavourite: Boolean = false,
+    val category: String? = null,
+    val plot: String? = null,
+    val year: String? = null,
+    val format: String? = null,
+    val resolution: String? = null,
 )
 
 /** The PlayerView stays behind this transparent Compose layer; this composable owns no player. */
@@ -151,6 +159,9 @@ fun PlayerOverlay(
     dismissMenus: Int = 0,
     onMenuOpenChanged: (PlayerPopup, Boolean) -> Unit = { _, _ -> },
     onEndedWatch: () -> Unit = {},
+    detailsOpen: Boolean = false,
+    onDetailsOpenChange: (Boolean) -> Unit = {},
+    onFavourite: () -> Unit = {},
 ) {
     val spacing = adaptiveSpacing()
     val type = adaptiveType()
@@ -159,6 +170,9 @@ fun PlayerOverlay(
     val television = LocalIsTelevision.current
     var jumpOpen by remember { mutableStateOf(false) }
     val backFocus = remember { FocusRequester() }
+    val hiddenFocus = remember { FocusRequester() }
+    val detailsFocus = remember { FocusRequester() }
+    val cinemaFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
     val bottomFocus = remember { FocusRequester() }
@@ -169,23 +183,61 @@ fun PlayerOverlay(
     var warningDismissed by remember { mutableStateOf(false) }
     var focusRow by remember { mutableStateOf(1) }
     LaunchedEffect(visible, state.playbackState) {
-        if (visible) {
+        if (television && !visible) {
             androidx.compose.runtime.withFrameNanos { }
-            runCatching {
-                (when (state.playbackState) {
-                    "retry" -> retryFocus
-                    "stopped" -> stoppedBackFocus
-                    "reconnecting" -> backFocus
-                    else -> playFocus
-                }).requestFocus()
+            if (!runCatching { hiddenFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { hiddenFocus.requestFocus() }
+            }
+        } else if (visible) {
+            androidx.compose.runtime.withFrameNanos { }
+            val requester = if (television && detailsOpen) cinemaFocus else when (state.playbackState) {
+                "retry" -> retryFocus
+                "stopped" -> stoppedBackFocus
+                "reconnecting" -> backFocus
+                else -> playFocus
+            }
+            if (!runCatching { requester.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { requester.requestFocus() }
             }
         }
     }
+    LaunchedEffect(detailsOpen) {
+        if (television && visible && detailsOpen) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { cinemaFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { cinemaFocus.requestFocus() }
+            }
+        } else if (television && visible) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { detailsFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(dismissMenus) {
+        if (television && dismissMenus > 0 && visible) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { detailsFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(state.sleepTimer.isEnded) {
-        if (state.sleepTimer.isEnded) runCatching { endedWatchFocus.requestFocus() }
+        if (state.sleepTimer.isEnded) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { endedWatchFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { endedWatchFocus.requestFocus() }
+            }
+        }
     }
     LaunchedEffect(state.sleepTimer.isWarning) {
-        if (state.sleepTimer.isWarning) runCatching { warningExtendFocus.requestFocus() }
+        if (state.sleepTimer.isWarning) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { warningExtendFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { warningExtendFocus.requestFocus() }
+            }
+        }
         else warningDismissed = false
     }
     LaunchedEffect(state.sleepTimer.isWarning, warningDismissed) {
@@ -198,10 +250,19 @@ fun PlayerOverlay(
         }
     }
     LaunchedEffect(channelsOpen) { onMenuOpenChanged(PlayerPopup.Channels, channelsOpen) }
+    LaunchedEffect(channelsOpen) {
+        if (television && !channelsOpen && visible && state.isLive && channels.isNotEmpty()) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { bottomFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(jumpOpen) { onMenuOpenChanged(PlayerPopup.Jump, jumpOpen) }
     LaunchedEffect(dismissMenus) { if (dismissMenus > 0) { onChannelsOpenChange(false); jumpOpen = false } }
 
     BoxWithConstraints(
-        Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.pointerInput(visible) {
+        Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }
+            .then(if (television && !visible) Modifier.focusRequester(hiddenFocus).focusable() else Modifier)
+            .pointerInput(visible) {
             detectTapGestures(
                 onTap = { onToggleOverlay() },
                 onDoubleTap = { offset ->
@@ -281,9 +342,12 @@ fun PlayerOverlay(
                     .onPreviewKeyEvent {
                         val native = it.nativeKeyEvent
                         val key = native.keyCode
-                        if (native.action == KeyEvent.ACTION_DOWN &&
+                        if (state.playbackState == "retry" || state.playbackState == "reconnecting") false
+                        else if (native.action == KeyEvent.ACTION_DOWN &&
                             (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN)) {
-                            val hasOtherBottomControl = controls.scrubber || controls.jumpToTime || controls.audio || controls.subtitles || controls.next || state.isLive
+                            val hasOtherBottomControl = controls.scrubber || controls.startOver ||
+                                controls.audio || controls.subtitles || controls.next ||
+                                (state.isLive && channels.isNotEmpty())
                             val next = PlayerOverlayLogic.nextFocusRow(focusRow,
                                 key == KeyEvent.KEYCODE_DPAD_DOWN, hasOtherBottomControl)
                             if (next != focusRow) {
@@ -311,6 +375,18 @@ fun PlayerOverlay(
                         state.title, color = AppColors.MediaText, style = type.title,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                     )
+                    if (television) {
+                        val favouriteLabel = stringResource(if (state.isFavourite)
+                            R.string.menu_remove_favourite else R.string.menu_add_favourite)
+                        TextButton(onClick = onFavourite, modifier = Modifier.tvFocusFrame()
+                            .semantics { contentDescription = favouriteLabel }.testTag("player_favourite")) {
+                            Text(if (state.isFavourite) "♥" else "♡", color = AppColors.MediaText)
+                        }
+                        TextButton(onClick = { onDetailsOpenChange(true) },
+                            modifier = Modifier.focusRequester(detailsFocus).tvFocusFrame().testTag("player_details")) {
+                            Text(stringResource(R.string.player_details_info), color = AppColors.MediaText)
+                        }
+                    }
                     if (state.sleepTimer.isActive) {
                         val remaining = SleepTimerUiPolicy.remainingLabel(state.sleepTimer.remainingMs)
                         val timerLabel = when {
@@ -529,6 +605,28 @@ fun PlayerOverlay(
                 list()
             }
         }
+        if (television && detailsOpen && !state.sleepTimer.isEnded) {
+            Column(Modifier.align(Alignment.CenterEnd).fillMaxWidth(0.34f)
+                .fillMaxHeight().background(AppColors.MediaBase.copy(alpha = 0.94f))
+                .padding(24.dp).verticalScroll(rememberScrollState())) {
+                TextButton(onClick = { onDetailsOpenChange(false) },
+                    modifier = Modifier.focusRequester(cinemaFocus).tvFocusFrame().testTag("player_cinema")) {
+                    Text(stringResource(R.string.player_cinema), color = AppColors.MediaText)
+                }
+                Text(state.title, color = AppColors.MediaText, style = type.title)
+                state.category?.let { Text(it, color = AppColors.MediaText, style = type.body) }
+                state.year?.let { Text(it, color = AppColors.MediaText, style = type.body) }
+                state.plot?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.MediaText, style = type.body) }
+                Text(if (state.isLive) stringResource(R.string.player_live) else "${formatPlayerTime(state.positionMs)} / ${state.durationMs.takeIf { it > 0L }?.let(::formatPlayerTime) ?: "--:--"}",
+                    color = AppColors.MediaText, style = type.body)
+                val unknown = stringResource(R.string.player_info_unknown)
+                Text(stringResource(R.string.player_info_format, state.format ?: unknown), color = AppColors.MediaText, style = type.body)
+                Text(stringResource(R.string.player_info_resolution, state.resolution ?: unknown), color = AppColors.MediaText, style = type.body)
+                Text(stringResource(R.string.player_info_audio, state.audio.firstOrNull { it.selected }?.label ?: unknown), color = AppColors.MediaText, style = type.body)
+                Text(stringResource(R.string.player_info_subtitles, state.subtitles.firstOrNull { it.selected }?.label ?: stringResource(R.string.player_track_off)), color = AppColors.MediaText, style = type.body)
+                Text(stringResource(R.string.player_info_connection, state.playbackState), color = AppColors.MediaText, style = type.body)
+            }
+        }
         if (state.sleepTimer.isWarning && !state.sleepTimer.isEnded && !warningDismissed) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { warningDismissed = true; onTimerMenuPinned(false) },
@@ -714,8 +812,16 @@ private fun SleepTimerMenu(
     var expanded by remember { mutableStateOf(false) }
     var customOpen by remember { mutableStateOf(false) }
     var customMinutes by remember { mutableStateOf(30) }
+    var hadOpened by remember { mutableStateOf(false) }
+    val buttonFocus = remember { FocusRequester() }
+    val television = LocalIsTelevision.current
     LaunchedEffect(expanded, customOpen) {
         onMenuOpenChanged(PlayerPopup.Timer, expanded || customOpen)
+        if (expanded || customOpen) hadOpened = true
+        else if (hadOpened && television) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { buttonFocus.requestFocus() }
+        }
     }
     LaunchedEffect(dismissMenus) {
         if (dismissMenus > 0 && (expanded || customOpen)) {
@@ -725,13 +831,21 @@ private fun SleepTimerMenu(
         }
     }
     val customFocus = remember { FocusRequester() }
-    LaunchedEffect(customOpen) { if (customOpen) runCatching { customFocus.requestFocus() } }
+    LaunchedEffect(customOpen) {
+        if (customOpen) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (!runCatching { customFocus.requestFocus() }.isSuccess) {
+                androidx.compose.runtime.withFrameNanos { }
+                runCatching { customFocus.requestFocus() }
+            }
+        }
+    }
     val type = adaptiveType()
     Box {
         OverlayButton(
             IconKind.Timer,
             stringResource(R.string.sleep_timer_button),
-            modifier,
+            modifier.focusRequester(buttonFocus),
             onClick = { expanded = true; onPinned(true) },
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false; onPinned(false) }) {
@@ -802,8 +916,18 @@ private fun TrackMenu(
     onMenuOpenChanged: (PlayerPopup, Boolean) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var hadOpened by remember { mutableStateOf(false) }
+    val buttonFocus = remember { FocusRequester() }
+    val television = LocalIsTelevision.current
     LaunchedEffect(dismissMenus) { if (dismissMenus > 0 && expanded) expanded = false }
     LaunchedEffect(expanded) { onMenuOpenChanged(popup, expanded) }
+    LaunchedEffect(expanded) {
+        if (expanded) hadOpened = true
+        else if (hadOpened && television) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { buttonFocus.requestFocus() }
+        }
+    }
     val type = adaptiveType()
     Box {
         val selectedTrack = choices.firstOrNull { it.selected }?.label ?: stringResource(R.string.player_track_off)
@@ -811,7 +935,7 @@ private fun TrackMenu(
             if (icon == IconKind.Audio) R.string.player_audio_selected else R.string.player_subtitles_selected,
             selectedTrack
         )
-        OverlayButton(icon, selectedLabel, modifier, onClick = { expanded = true })
+        OverlayButton(icon, selectedLabel, modifier.focusRequester(buttonFocus), onClick = { expanded = true })
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 choices.forEachIndexed { index, choice ->
                     DropdownMenuItem(

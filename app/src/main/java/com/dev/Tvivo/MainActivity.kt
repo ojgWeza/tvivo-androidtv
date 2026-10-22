@@ -458,6 +458,11 @@ private fun TvivoApp() {
                 if (current.tab == ShellTab.MyTvivo && shelfId != null)
                     pendingHomeFocusKey = ShelfRestoreKey.of(shelfId, card.key)
                 if (current.tab == ShellTab.Search) pendingSearchFocusKey = card.key
+                if (isTelevision && card.type == ContentType.LIVE) {
+                    playItem(context, current.credentials, accountId, true, card.item.id,
+                        card.item.title, card.item.extension, 0L, card.item.knownDurationMs)
+                    return
+                }
                 route = if (card.type == ContentType.SERIES) {
                     Route.SeriesDetail(current.credentials, card.item.id)
                 } else Route.ItemDetail(current.credentials, card.type, card.item.id)
@@ -616,14 +621,20 @@ private fun TvivoApp() {
                                     pendingCatalogFocusKey = ShelfRestoreKey.of(
                                         shelfId, "${type.name}:${item.id}")
                                     detailOriginTab = current.tab
-                                    route = if (type == ContentType.SERIES) {
+                                    if (isTelevision && type == ContentType.LIVE) {
+                                        playItem(context, current.credentials, accountId, true,
+                                            item.id, item.title, item.extension, 0L, item.knownDurationMs)
+                                    } else route = if (type == ContentType.SERIES) {
                                         Route.SeriesDetail(current.credentials, item.id)
                                     } else Route.ItemDetail(current.credentials, type, item.id)
                                 },
                                 onOpenDetailFromGrid = { item ->
                                     pendingCatalogFocusKey = null
                                     detailOriginTab = current.tab
-                                    route = if (type == ContentType.SERIES) {
+                                    if (isTelevision && type == ContentType.LIVE) {
+                                        playItem(context, current.credentials, accountId, true,
+                                            item.id, item.title, item.extension, 0L, item.knownDurationMs)
+                                    } else route = if (type == ContentType.SERIES) {
                                         Route.SeriesDetail(current.credentials, item.id)
                                     } else Route.ItemDetail(current.credentials, type, item.id)
                                 },

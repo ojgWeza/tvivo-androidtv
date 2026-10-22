@@ -530,6 +530,25 @@
         "app/src/test/java/com/dev/Tvivo/ui/browse/BrowseCatalogStateTest.kt",
         ".codex-android-qa-exec-report.md#tv-search--sync-device-verify"
       ]
+    },
+    {
+      "id": "A-TV-PLAYER-SLICE-A",
+      "title": "TV Live card direct playback and immersive player controls with details panel",
+      "type": "ux-perk",
+      "origin": "android-tv",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/android-tv-remake-design-2026-10-21.md#5-tv-player",
+        "app/src/main/java/com/dev/Tvivo/MainActivity.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerActivity.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerOverlay.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/ui/player/PlayerOverlayLogicTest.kt",
+        ".codex-android-qa-exec-report.md#tv-player-slice-a"
+      ]
     }
   ]
 }
