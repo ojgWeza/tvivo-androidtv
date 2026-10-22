@@ -26,9 +26,6 @@ internal fun categoryPickerCanSelect(isOpen: Boolean, modeSettled: Boolean): Boo
 
 internal enum class TvBrowseBackAction { FocusRail, ReturnToPreviousTab }
 
-internal fun tvBrowseBackAction(gridHasFocus: Boolean): TvBrowseBackAction =
-    if (gridHasFocus) TvBrowseBackAction.FocusRail else TvBrowseBackAction.ReturnToPreviousTab
-
 internal fun selectedBrowseCategory(restoredId: String?, defaultId: String): String =
     restoredId ?: defaultId
 
@@ -36,3 +33,29 @@ internal enum class TvBrowseContentTarget { Grid, Recovery }
 
 internal fun tvBrowseContentTarget(cardCount: Int): TvBrowseContentTarget =
     if (cardCount > 0) TvBrowseContentTarget.Grid else TvBrowseContentTarget.Recovery
+
+/** The TV browse screen has one focus owner. Paging may replace the grid, but it
+ * cannot change this owner; only a remote transition or a detail return can. */
+internal enum class TvBrowseFocusOwner { EnteringRail, Rail, Grid, ReturningToCard }
+
+internal enum class TvBrowseFocusEvent {
+    RailFocused, CategorySelected, ContentFocused, OpenDetail, BackToRail
+}
+
+internal fun initialTvBrowseFocus(pendingDetailItemId: Int?): TvBrowseFocusOwner =
+    if (pendingDetailItemId == null) TvBrowseFocusOwner.EnteringRail
+    else TvBrowseFocusOwner.ReturningToCard
+
+internal fun tvBrowseFocusAfter(
+    owner: TvBrowseFocusOwner,
+    event: TvBrowseFocusEvent
+): TvBrowseFocusOwner = when (event) {
+    TvBrowseFocusEvent.RailFocused, TvBrowseFocusEvent.CategorySelected,
+    TvBrowseFocusEvent.BackToRail -> TvBrowseFocusOwner.Rail
+    TvBrowseFocusEvent.ContentFocused -> TvBrowseFocusOwner.Grid
+    TvBrowseFocusEvent.OpenDetail -> TvBrowseFocusOwner.ReturningToCard
+}
+
+internal fun tvBrowseBackAction(owner: TvBrowseFocusOwner): TvBrowseBackAction =
+    if (owner == TvBrowseFocusOwner.Grid || owner == TvBrowseFocusOwner.ReturningToCard)
+        TvBrowseBackAction.FocusRail else TvBrowseBackAction.ReturnToPreviousTab

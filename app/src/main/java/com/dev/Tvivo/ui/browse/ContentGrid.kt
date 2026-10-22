@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.testTag
@@ -83,6 +84,7 @@ fun ContentGrid(
     gridFocusRequester: FocusRequester,
     /** Direct entry target when no card has been focused in this category yet. */
     firstCardFocusRequester: FocusRequester? = null,
+    railFocusRequester: FocusRequester? = null,
     itemFilterFocusRequester: FocusRequester? = null,
     /** OK on a card. Opens the pre-run page — it has not started a stream since the
      *  detail screen landed, and the old name said otherwise. */
@@ -97,6 +99,7 @@ fun ContentGrid(
     val gridState = rememberLazyGridState()
     val restoreRequester = remember { FocusRequester() }
     var restored by remember(pendingFocusItemId) { mutableStateOf(pendingFocusItemId == null) }
+    var focusedCardId by remember { mutableStateOf<Int?>(null) }
     var focusedIndex by remember { mutableIntStateOf(0) }
     var navigationTargetIndex by remember { mutableIntStateOf(-1) }
     var lastRemoteMoveAt by remember { mutableStateOf(Long.MIN_VALUE) }
@@ -162,7 +165,8 @@ fun ContentGrid(
         gridState.scrollToItem(index)
         repeat(FOCUS_RESTORE_FRAMES) {
             withFrameNanos {}
-            if (runCatching { restoreRequester.requestFocus() }.isSuccess) {
+            runCatching { restoreRequester.requestFocus() }
+            if (focusedCardId == pendingFocusItemId) {
                 restored = true
                 return@LaunchedEffect
             }
@@ -209,8 +213,19 @@ fun ContentGrid(
             .focusProperties {
                 enter = {
                     runCatching {
-                        if (restoreTargetIsLaidOut()) restoreRequester else FocusRequester.Default
+                        when {
+                            restoreTargetIsLaidOut() -> restoreRequester
+                            firstCardFocusRequester != null && gridState.layoutInfo.visibleItemsInfo.any {
+                                it.index == items.itemSnapshotList.placeholdersBefore &&
+                                    items.peek(it.index) != null
+                            } -> firstCardFocusRequester
+                            else -> FocusRequester.Default
+                        }
                     }.getOrDefault(FocusRequester.Default)
+                }
+                exit = { direction ->
+                    if (television && direction == FocusDirection.Left && railFocusRequester != null)
+                        railFocusRequester else FocusRequester.Default
                 }
             }
             .focusGroup()
@@ -316,6 +331,7 @@ fun ContentGrid(
                             focusedIndex = index
                             if (index == navigationTargetIndex) navigationTargetIndex = -1
                             lastFocusedId = it.id
+                            focusedCardId = it.id
                             onFocused(it)
                         }
                     },

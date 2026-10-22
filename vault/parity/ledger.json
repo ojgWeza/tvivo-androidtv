@@ -450,19 +450,19 @@
     },
     {
       "id": "A-TV-RAIL-FOCUS-ENTRY",
-      "title": "TV browse focuses selected rail and first loaded card on entry",
+      "title": "TV browse entry focuses the selected rail row; Right enters the first loaded card",
       "type": "fix",
       "origin": "android",
       "status": {
-        "android": "PARTIAL",
+        "android": "HAS",
         "winui": "N-A",
-        "tv": "PARTIAL"
+        "tv": "HAS"
       },
       "links": [
         "app/src/main/java/com/dev/Tvivo/ui/browse/BrowseScreen.kt",
         "app/src/main/java/com/dev/Tvivo/ui/browse/CategoryRail.kt",
         "app/src/main/java/com/dev/Tvivo/ui/browse/ContentGrid.kt",
-        ".codex-android-qa-exec-report.md#tv-rail-focus-fix--device-verify"
+        ".codex-android-qa-exec-report.md#tv-focus-model-rewrite--device-verify"
       ]
     },
     {
@@ -479,6 +479,22 @@
         "app/src/main/java/com/dev/Tvivo/ui/home/HomeScreen.kt",
         "app/src/main/java/com/dev/Tvivo/ui/browse/CatalogLandingScreen.kt",
         ".codex-android-qa-exec-report.md#tv-rail-final-device-verify"
+      ]
+    },
+    {
+      "id": "A-TV-FOCUS-OWNER",
+      "title": "TV category paging swap retains rail focus and detail return restores card by ID",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "HAS"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/ui/browse/CategoryPickerState.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/browse/CategoryPickerStateTest.kt",
+        ".codex-android-qa-exec-report.md#tv-focus-model-rewrite--device-verify"
       ]
     }
   ]

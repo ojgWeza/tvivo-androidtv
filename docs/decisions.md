@@ -1990,7 +1990,9 @@ restoration split between the landing and opened grid. TV content tabs now mount
 the existing category rail beside the paged grid, starting on All and retaining
 each type's selection and last card through the browse view model. Category changes
 remount the grid by category ID so scroll and focus state from the prior category
-cannot be reused. Right or OK on a rail row selects it and enters the grid; Back
+cannot be reused. OK on a rail row selects it and leaves focus on that row through
+the paging swap. Right enters the grid through its focus group; Left returns to
+the selected row. Back
 returns through the selected rail row to the previous top-level tab. Phone and
 tablet keep the shelf landing and picker flow.
 The TV shell strip keeps the six destinations; browse Sort and Refresh sit in
@@ -2000,4 +2002,9 @@ When the TV grid has no cards, its loading, error, empty, and filter-miss states
 keep an attached focusable action in the content pane. Refresh category uses the
 existing manual refresh path, which bypasses the category TTL. Focus targets must
 follow the rendered grid or recovery action; direct requests are guarded and
-retried after layout. Device D-pad validation is still required.
+retried after layout. TV browse has one focus owner: initial type entry belongs
+to the selected rail row, category selection stays on the rail, and detail return
+requests its card by stable item ID after paging attaches it. Ordinary card
+focus does not mark a detail return. The 2026-10-22 API 34 TV run verified
+Movies, Series, Live, Box Office (678 items), detail Back, and 300 Down/300 Up
+without a focus crash; see `.codex-android-qa-exec-report.md`.

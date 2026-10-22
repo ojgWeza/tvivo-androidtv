@@ -74,7 +74,6 @@ fun CategoryRail(
     filter: String,
     onFilterChanged: (String) -> Unit,
     onSelect: (CategoryEntity) -> Unit,
-    onEnterGrid: ((CategoryEntity) -> Unit)? = null,
     /** Where RIGHT goes. Without this, Compose's 2D focus search picks the header's
      *  Refresh — it is also to the right, and further from the rail than the first card
      *  only in a way the search does not weigh. The rail must reach the grid. */
@@ -89,6 +88,7 @@ fun CategoryRail(
     overlayDrawer: Boolean = false,
     confineFocus: Boolean = false,
     onRailFocused: () -> Unit = {},
+    onSelectedRowFocused: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filterFocusRequester = remember { FocusRequester() }
@@ -183,13 +183,13 @@ fun CategoryRail(
                     selected = category.categoryId == selectedCategoryId,
                     onSelect = {
                         DiagnosticLog.info("Browse", "category selected", "categoryId=${category.categoryId}")
-                        if (onEnterGrid == null) onSelect(category) else onEnterGrid(category)
+                        onSelect(category)
                     },
-                    onEnterGrid = onEnterGrid?.let { enter -> { enter(category) } },
                     gridFocusRequester = gridFocusRequester,
                     gridAvailable = gridAvailable,
                     confineFocus = confineFocus,
                     selectedRowRequester = railFocusRequester.takeIf { category.categoryId == selectedCategoryId },
+                    onSelectedRowFocused = onSelectedRowFocused,
                     // Only the first row sends UP to the filter. Declared per-row rather
                     // than on the group, or UP from row 40 would jump to the filter
                     // instead of row 39.
@@ -281,11 +281,11 @@ private fun RailRow(
     count: Int?,
     selected: Boolean,
     onSelect: () -> Unit,
-    onEnterGrid: (() -> Unit)? = null,
     gridFocusRequester: FocusRequester,
     gridAvailable: Boolean,
     confineFocus: Boolean,
     selectedRowRequester: FocusRequester? = null,
+    onSelectedRowFocused: () -> Unit = {},
     /** Non-null on the first row only: UP from the top of the list opens the filter. */
     filterFocusRequester: FocusRequester? = null
 ) {
@@ -305,14 +305,6 @@ private fun RailRow(
         modifier = Modifier
             .then(if (selectedRowRequester != null) Modifier.focusRequester(selectedRowRequester) else Modifier)
             .fillMaxWidth()
-            .onPreviewKeyEvent { event ->
-                val native = event.nativeKeyEvent
-                if (onEnterGrid != null && native.action == android.view.KeyEvent.ACTION_DOWN &&
-                    native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    onEnterGrid()
-                    true
-                } else false
-            }
             // The override belongs on the focused node itself: declared on the parent
             // focus group it is not consulted, and the 2D search picks the header's
             // Refresh instead — also to the right, and nothing weighs it as further.
@@ -332,7 +324,10 @@ private fun RailRow(
             }
             .background(background)
             .then(if (selected && !focused) Modifier.border(2.dp, AppColors.AccentText) else Modifier)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused && selected) onSelectedRowFocused()
+            }
             .tvClickable { onSelect() }
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,

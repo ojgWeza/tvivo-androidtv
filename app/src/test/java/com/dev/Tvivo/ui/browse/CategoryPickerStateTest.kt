@@ -40,9 +40,31 @@ class CategoryPickerStateTest {
             selectedBrowseCategory(null, VirtualFolder.ALL.id))
         assertEquals("provider-category",
             selectedBrowseCategory("provider-category", VirtualFolder.ALL.id))
-        assertEquals(TvBrowseBackAction.FocusRail, tvBrowseBackAction(true))
-        assertEquals(TvBrowseBackAction.ReturnToPreviousTab, tvBrowseBackAction(false))
+        assertEquals(TvBrowseBackAction.FocusRail, tvBrowseBackAction(TvBrowseFocusOwner.Grid))
+        assertEquals(TvBrowseBackAction.ReturnToPreviousTab, tvBrowseBackAction(TvBrowseFocusOwner.Rail))
         assertEquals(TvBrowseContentTarget.Recovery, tvBrowseContentTarget(0))
         assertEquals(TvBrowseContentTarget.Grid, tvBrowseContentTarget(1))
+    }
+
+    @Test fun tvCategorySwapKeepsRailOwnerUntilRightEntersContent() {
+        var owner = initialTvBrowseFocus(null)
+        assertEquals(TvBrowseFocusOwner.EnteringRail, owner)
+        owner = tvBrowseFocusAfter(owner, TvBrowseFocusEvent.RailFocused)
+        owner = tvBrowseFocusAfter(owner, TvBrowseFocusEvent.CategorySelected)
+        assertEquals(TvBrowseFocusOwner.Rail, owner)
+        // A paging load or empty grid is not an input event and cannot change owner.
+        assertEquals(TvBrowseBackAction.ReturnToPreviousTab, tvBrowseBackAction(owner))
+        owner = tvBrowseFocusAfter(owner, TvBrowseFocusEvent.ContentFocused)
+        assertEquals(TvBrowseBackAction.FocusRail, tvBrowseBackAction(owner))
+        owner = tvBrowseFocusAfter(owner, TvBrowseFocusEvent.BackToRail)
+        assertEquals(TvBrowseFocusOwner.Rail, owner)
+    }
+
+    @Test fun onlyDetailReturnStartsWithCardOwner() {
+        assertEquals(TvBrowseFocusOwner.EnteringRail, initialTvBrowseFocus(null))
+        assertEquals(TvBrowseFocusOwner.ReturningToCard, initialTvBrowseFocus(42))
+        val returned = tvBrowseFocusAfter(TvBrowseFocusOwner.ReturningToCard,
+            TvBrowseFocusEvent.ContentFocused)
+        assertEquals(TvBrowseFocusOwner.Grid, returned)
     }
 }

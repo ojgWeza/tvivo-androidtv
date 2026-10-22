@@ -161,8 +161,14 @@ fun BrowseScreen(
     val firstCardFocusRequester = remember { FocusRequester() }
     val railFocusRequester = remember { FocusRequester() }
     val recoveryFocusRequester = remember { FocusRequester() }
-    var focusInGrid by remember { mutableStateOf(false) }
-    var recoveryFocused by remember { mutableStateOf(false) }
+    // Only a detail activation sets this saved ID. A focused card alone is not a
+    // return from detail, and cannot take initial focus away from the rail.
+    val detailReturnItemId = remember(accountId, contentType, tvBrowse) {
+        if (tvBrowse) viewModel.pendingFocusItemId else null
+    }
+    var tvFocusOwner by remember(accountId, contentType, tvBrowse) {
+        mutableStateOf(initialTvBrowseFocus(detailReturnItemId))
+    }
     // Retain picker position when adaptive mode moves the rail between the page and drawer.
     val categoryListState = rememberLazyListState()
     val itemFilterFocusRequester = remember { FocusRequester() }
@@ -188,14 +194,12 @@ fun BrowseScreen(
         }
     }
     BackHandler(enabled = tvBrowse && !state.isItemFilterOpen && contextMenuItem == null && resumePromptItem == null) {
-        if (tvBrowseBackAction(focusInGrid) == TvBrowseBackAction.FocusRail) {
+        if (tvBrowseBackAction(tvFocusOwner) == TvBrowseBackAction.FocusRail) {
             scope.launch {
-                repeat(6) {
+                repeat(60) {
                     androidx.compose.runtime.withFrameNanos {}
-                    if (runCatching { railFocusRequester.requestFocus() }.isSuccess) {
-                        focusInGrid = false
-                        return@launch
-                    }
+                    runCatching { railFocusRequester.requestFocus() }
+                    if (tvFocusOwner == TvBrowseFocusOwner.Rail) return@launch
                 }
             }
         } else onBackToLanding()
@@ -208,31 +212,24 @@ fun BrowseScreen(
         }
     }
 
-    // **Q-25 — the screen must open with something focused.** It did not, and an
-    // Android TV screen with no focus owner has no D-pad behaviour at all: the first
-    // press runs a 2D search with no origin to measure from, so it lands on whichever
-    // node the heuristic likes — which is how RIGHT out of the rail opened the search
-    // field instead of crossing to the grid. The rail is the resting place because it
-    // is where a user decides what to look at.
-    //
-    // Keyed on the first categories arriving: requesting focus on an empty LazyColumn
-    // has nothing to delegate to. `runCatching` because a FocusRequester whose node has
-    // left composition throws rather than returning false.
-    //
-    // **Returning from the pre-run page is not a fresh entry.** This screen recomposes
-    // from scratch on the way back, so `focusPlaced` starts false again and the rail took
-    // focus every time — which is why activating a card at grid position 800 and pressing
-    // Back left the user on `RECENTLY ADDED` with the grid still showing the category they
-    // came from. The rail and the header disagreed, and the grid position was unreachable
-    // without scrolling to it again.
-    //
-    // `pendingFocusItemId` is the signal for which of the two entries this is: it is set
-    // by `onActivate` on the way out and survives in `SavedStateHandle`. When it is
-    // present the grid owns the restore ([ContentGrid] scrolls to the item and requests
-    // focus onto it), so the rail must not compete for focus at all.
+    // The TV rail owns entry. Its selected-row callback, rather than a successful
+    // requestFocus call, confirms delivery. A category swap never runs this effect.
+    LaunchedEffect(tvBrowse, tvFocusOwner, state.selectedCategoryId) {
+        if (!tvBrowse || tvFocusOwner != TvBrowseFocusOwner.EnteringRail ||
+            state.selectedCategoryId == null) return@LaunchedEffect
+        repeat(60) {
+            androidx.compose.runtime.withFrameNanos {}
+            runCatching { railFocusRequester.requestFocus() }
+            if (tvFocusOwner == TvBrowseFocusOwner.Rail) return@LaunchedEffect
+        }
+    }
+
+    // Keep the existing phone/tablet and landing entry path separate from TV browse.
     var focusPlaced by remember(railAsPanel) { mutableStateOf(false) }
-    val returningToItem = viewModel.pendingFocusItemId != null
+    val returningToItem = if (tvBrowse) detailReturnItemId != null
+        else viewModel.pendingFocusItemId != null
     LaunchedEffect(state.visibleCategories.isNotEmpty(), returningToItem, railAsPanel, items.itemCount) {
+        if (tvBrowse) return@LaunchedEffect
         if (focusPlaced || returningToItem) return@LaunchedEffect
         if (state.visibleCategories.isNotEmpty()) {
             repeat(6) {
@@ -246,30 +243,6 @@ fun BrowseScreen(
                     focusPlaced = true
                     return@LaunchedEffect
                 }
-            }
-        }
-    }
-
-    LaunchedEffect(tvBrowse, state.selectedCategoryId, items.itemCount, items.loadState.refresh, returningToItem) {
-        if (!tvBrowse || returningToItem || items.itemCount > 0 || state.selectedCategoryId == null) return@LaunchedEffect
-        delay(250)
-        if (items.itemCount > 0) return@LaunchedEffect
-        repeat(6) {
-            androidx.compose.runtime.withFrameNanos {}
-            if (runCatching { recoveryFocusRequester.requestFocus() }.isSuccess) {
-                focusInGrid = true
-                recoveryFocused = true
-                return@LaunchedEffect
-            }
-        }
-    }
-    LaunchedEffect(tvBrowse, items.itemCount, recoveryFocused) {
-        if (!tvBrowse || !recoveryFocused || items.itemCount == 0) return@LaunchedEffect
-        repeat(6) {
-            androidx.compose.runtime.withFrameNanos {}
-            if (runCatching { gridFocusRequester.requestFocus() }.isSuccess) {
-                recoveryFocused = false
-                return@LaunchedEffect
             }
         }
     }
@@ -334,6 +307,8 @@ fun BrowseScreen(
             onFilterChanged = viewModel::onCategoryFilterChanged,
             onSelect = {
                 if (!tvBrowse && !categoryPickerCanSelect(categoryPanelOpen, pickerModeSettled)) return@CategoryRail
+                if (tvBrowse) tvFocusOwner = tvBrowseFocusAfter(
+                    tvFocusOwner, TvBrowseFocusEvent.CategorySelected)
                 viewModel.selectCategory(it.categoryId)
                 if (railAsPanel) {
                     categoryPanelOpen = categoryPickerIsOpenAfter(CategoryPickerAction.Select)
@@ -346,23 +321,6 @@ fun BrowseScreen(
                     }
                 }
             },
-            onEnterGrid = if (tvBrowse) ({ category ->
-                if (state.selectedCategoryId != category.categoryId)
-                    viewModel.selectCategory(category.categoryId)
-                scope.launch {
-                    repeat(12) {
-                        androidx.compose.runtime.withFrameNanos {}
-                        val target = when (tvBrowseContentTarget(items.itemCount)) {
-                            TvBrowseContentTarget.Grid -> if (viewModel.pendingFocusItemId == null)
-                                firstCardFocusRequester else gridFocusRequester
-                            TvBrowseContentTarget.Recovery -> recoveryFocusRequester
-                        }
-                        runCatching { target.requestFocus() }
-                        androidx.compose.runtime.withFrameNanos {}
-                        if (focusInGrid) return@launch
-                    }
-                }
-            }) else null,
             gridFocusRequester = if (tvBrowse && tvBrowseContentTarget(items.itemCount) == TvBrowseContentTarget.Recovery)
                 recoveryFocusRequester else gridFocusRequester,
             railFocusRequester = railFocusRequester,
@@ -372,7 +330,14 @@ fun BrowseScreen(
             onCategorySortChanged = updateCategorySort,
             fullScreen = railAsPanel && categoryPanelOpen && categoryPickerMode == CategoryPickerMode.FullScreen,
             confineFocus = railAsPanel && categoryPanelOpen,
-            onRailFocused = { focusInGrid = false; recoveryFocused = false }
+            onRailFocused = {
+                if (tvBrowse && tvFocusOwner != TvBrowseFocusOwner.EnteringRail)
+                    tvFocusOwner = tvBrowseFocusAfter(tvFocusOwner, TvBrowseFocusEvent.RailFocused)
+            },
+            onSelectedRowFocused = {
+                if (tvBrowse) tvFocusOwner = tvBrowseFocusAfter(
+                    tvFocusOwner, TvBrowseFocusEvent.RailFocused)
+            }
         )
 
         // The rail has a fixed 280 dp width. `fillMaxSize()` here measured the content
@@ -450,14 +415,14 @@ fun BrowseScreen(
                         onClear = { viewModel.onItemFilterChanged("") },
                         onRefresh = if (tvBrowse) viewModel::refreshSelected else null,
                         recoveryFocusRequester = recoveryFocusRequester,
-                        onFocused = { focusInGrid = true; recoveryFocused = true }
+                        onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid }
                     )
 
                 // Offline is fully browsable: a dead network must fail at play time, not
                 // throw a full-screen error over data the app already has.
                 state.error != null && items.itemCount == 0 -> ErrorState(state.error!!,
                     if (tvBrowse) viewModel::refreshSelected else null,
-                    recoveryFocusRequester, onFocused = { focusInGrid = true; recoveryFocused = true })
+                    recoveryFocusRequester, onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
                 // Phase 5 — the first load of a cold category. Without this the screen
                 // is blank while the query runs, which reads as an empty category that
@@ -465,41 +430,44 @@ fun BrowseScreen(
                 items.itemCount == 0 &&
                     items.loadState.refresh is androidx.paging.LoadState.Loading ->
                     LoadingState(if (tvBrowse) viewModel::refreshSelected else null,
-                        recoveryFocusRequester, onFocused = { focusInGrid = true; recoveryFocused = true })
+                        recoveryFocusRequester, onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
                 items.itemCount == 0 &&
                     items.loadState.refresh !is androidx.paging.LoadState.Loading ->
                     EmptyState(onRefresh = viewModel::refreshSelected,
                         recoveryFocusRequester = if (tvBrowse) recoveryFocusRequester else null,
-                        onFocused = { focusInGrid = true; recoveryFocused = true })
+                        onFocused = { if (tvBrowse) tvFocusOwner = TvBrowseFocusOwner.Grid })
 
                 else -> androidx.compose.runtime.key(state.selectedCategoryId) { ContentGrid(
                     items = items,
-                    pendingFocusItemId = viewModel.pendingFocusItemId,
+                    pendingFocusItemId = if (tvBrowse) detailReturnItemId else viewModel.pendingFocusItemId,
                     cardShape = viewModel.cardShape,
                     gridFocusRequester = gridFocusRequester,
                     firstCardFocusRequester = firstCardFocusRequester,
+                    railFocusRequester = railFocusRequester.takeIf { tvBrowse },
                     itemFilterFocusRequester = if (landingMode && !LocalIsTelevision.current) sortFocusRequester
                         else itemFilterFocusRequester,
                     onActivate = { item ->
                         viewModel.pendingFocusItemId = item.id
+                        if (tvBrowse) tvFocusOwner = tvBrowseFocusAfter(
+                            tvFocusOwner, TvBrowseFocusEvent.OpenDetail)
                         onOpenDetail(item)
                     },
                     onContextMenu = { contextMenuItem = it },
-                    onFocused = { viewModel.pendingFocusItemId = it.id },
-                    onGridFocused = { focusInGrid = true; recoveryFocused = false },
+                    onFocused = {
+                        if (tvBrowse) {
+                            if (detailReturnItemId == it.id) viewModel.pendingFocusItemId = null
+                            tvFocusOwner = tvBrowseFocusAfter(tvFocusOwner, TvBrowseFocusEvent.ContentFocused)
+                        } else viewModel.pendingFocusItemId = it.id
+                    },
+                    onGridFocused = {
+                        if (tvBrowse) tvFocusOwner = tvBrowseFocusAfter(
+                            tvFocusOwner, TvBrowseFocusEvent.ContentFocused)
+                    },
                     progressFor = viewModel::progressFor,
-                    onLeadingLeft = if (landingMode) ({ runCatching { categoriesFocusRequester.requestFocus() } })
-                        else if (tvBrowse) ({
-                            runCatching { railFocusRequester.requestFocus() }.onFailure {
-                                scope.launch {
-                                    repeat(6) {
-                                        androidx.compose.runtime.withFrameNanos {}
-                                        if (runCatching { railFocusRequester.requestFocus() }.isSuccess) return@launch
-                                    }
-                                }
-                            }
-                        }) else null
+                    onLeadingLeft = if (landingMode) ({
+                        runCatching { categoriesFocusRequester.requestFocus() }
+                    }) else null
                 ) }
             }
         }
