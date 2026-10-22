@@ -90,7 +90,8 @@ public sealed class SpotlightSettingsService
         {
             SpotlightSourceMode.SpecificFolders => (content.SelectedCategoryIds ?? Array.Empty<string>())
                 .SelectMany(id => _catalog.GetSpotlightCategoryCandidates(account, type, id)).ToArray(),
-            SpotlightSourceMode.UnexploredFolders => _catalog.GetSpotlightUnexploredCandidates(account, type, null),
+            SpotlightSourceMode.UnexploredFolders => _catalog.GetSpotlightUnexploredCandidates(account, type, null,
+                categoryLimit: 12, itemsPerCategory: 6),
             _ => _catalog.GetSpotlightRecentlyAddedCandidates(account, type),
         };
     }

@@ -3064,7 +3064,8 @@ public sealed partial class CatalogLandingPage : UserControl
         var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
         var focusedId = _spotlightCards.FirstOrDefault(card =>
             ReferenceEquals(card.SpotlightButton, focusedElement))?.Id;
-        var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(12).ToArray();
+        // D1 keeps the existing non-virtualized strip bounded until the D2 UI replaces it.
+        var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(8).ToArray();
         for (var i = 0; i < cards.Length; i++)
         {
             var existingIndex = -1;

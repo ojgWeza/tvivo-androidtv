@@ -25,7 +25,7 @@ public sealed class Round2PerformanceTests
         var result = SpotlightSelector.Select(SpotlightPageKind.Movies, "opaque", new DateOnly(2026, 10, 20),
             settings, items, Array.Empty<SpotlightCandidate>());
         watch.Stop();
-        Assert.Equal(8, result.Items.Count);
+        Assert.Equal(SpotlightSelector.SelectionSize, result.Items.Count);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"Spotlight selection took {watch.Elapsed}.");
         Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 64 * 1024 * 1024);
     }

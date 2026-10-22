@@ -810,25 +810,25 @@ public sealed class SqliteCatalogRepository : IDisposable
 
     /// <summary>Returns a bounded Spotlight pool ordered by effective add time. Only movie and series pools are supported.</summary>
     public IReadOnlyList<Channel> GetSpotlightRecentlyAddedCandidates(ProviderAccount account, CatalogItemType type,
-        ProviderConnection? connection = null, int limit = 200)
+        ProviderConnection? connection = null, int limit = SpotlightSelector.CandidatePoolLimit)
     {
         ValidateSpotlightType(type);
-        var capped = Math.Clamp(limit, 0, 200);
+        var capped = Math.Clamp(limit, 0, SpotlightSelector.CandidatePoolLimit);
         if (capped == 0) return Array.Empty<Channel>();
         var pool = GetOrderedItems(account, type, connection,
             "(added_at > 0 OR first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a))",
             "MAX(added_at,CASE WHEN first_indexed_at > (SELECT MIN(first_indexed_at) + 300000 FROM items WHERE account_id=$a) THEN first_indexed_at ELSE 0 END) DESC,id ASC",
-            Math.Min(800, capped * 4), useRecentlyAddedSortKey: true, artworkFirst: true);
+            Math.Min(1600, capped * 4), useRecentlyAddedSortKey: true, artworkFirst: true);
         return pool.GroupBy(DuplicateTitleKey, StringComparer.Ordinal).Select(group => group.First()).Take(capped).ToArray();
     }
 
     /// <summary>Returns a bounded Spotlight pool from one selected category; a missing category yields no rows.</summary>
     public IReadOnlyList<Channel> GetSpotlightCategoryCandidates(ProviderAccount account, CatalogItemType type,
-        string categoryId, ProviderConnection? connection = null, int limit = 200)
+        string categoryId, ProviderConnection? connection = null, int limit = SpotlightSelector.CandidatePoolLimit)
     {
         ValidateSpotlightType(type);
         if (string.IsNullOrWhiteSpace(categoryId)) return Array.Empty<Channel>();
-        var capped = Math.Clamp(limit, 0, 200);
+        var capped = Math.Clamp(limit, 0, SpotlightSelector.CandidatePoolLimit);
         if (capped == 0) return Array.Empty<Channel>();
         using var database = Open();
         using var command = database.CreateCommand();
@@ -836,7 +836,7 @@ public sealed class SqliteCatalogRepository : IDisposable
         command.Parameters.AddWithValue("$a", account.AccountId);
         command.Parameters.AddWithValue("$type", TypeName(type));
         command.Parameters.AddWithValue("$category", categoryId);
-        command.Parameters.AddWithValue("$limit", Math.Min(800, capped * 4));
+        command.Parameters.AddWithValue("$limit", Math.Min(1600, capped * 4));
         var rows = new List<Channel>(capped);
         using var reader = command.ExecuteReader();
         while (reader.Read())

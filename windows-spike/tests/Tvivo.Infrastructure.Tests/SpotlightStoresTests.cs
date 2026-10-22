@@ -154,4 +154,29 @@ public sealed class SpotlightStoresTests
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
+
+    [Fact]
+    public void Daily_store_accepts_seventy_and_preserves_legacy_eight_item_snapshot()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tvivo-spotlight-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SpotlightDailySelectionStore(directory);
+            var day = new DateOnly(2026, 10, 16);
+            var legacy = new SpotlightDailySelection("account", SpotlightPageKind.Movies, day,
+                SpotlightSourceMode.RecentlyAdded, "fingerprint",
+                Enumerable.Range(0, 8).Select(i => new SpotlightDailyItem(CatalogItemType.Movie, $"old-{i}")).ToArray());
+            store.Write(legacy);
+            var expanded = legacy with { UtcDate = day.AddDays(1), Items = Enumerable.Range(0, 70)
+                .Select(i => new SpotlightDailyItem(CatalogItemType.Movie, $"new-{i}")).ToArray() };
+            store.Write(expanded);
+            Assert.Equal(8, store.Read("account", SpotlightPageKind.Movies, day,
+                SpotlightSourceMode.RecentlyAdded, "fingerprint")!.Items.Count);
+            Assert.Equal(70, store.Read("account", SpotlightPageKind.Movies, day.AddDays(1),
+                SpotlightSourceMode.RecentlyAdded, "fingerprint")!.Items.Count);
+            Assert.Throws<ArgumentException>(() => store.Write(expanded with { Items = expanded.Items
+                .Append(new SpotlightDailyItem(CatalogItemType.Movie, "overflow")).ToArray() }));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
 }

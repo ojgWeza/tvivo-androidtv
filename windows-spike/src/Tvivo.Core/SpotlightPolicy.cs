@@ -109,8 +109,8 @@ public sealed record SpotlightSelectionResult(IReadOnlyList<SpotlightCandidate> 
 /// <summary>Deterministic, bounded Spotlight selection. Candidate inputs must already be bounded source pools.</summary>
 public static class SpotlightSelector
 {
-    public const int SelectionSize = 8;
-    public const int CandidatePoolLimit = 200;
+    public const int SelectionSize = 70;
+    public const int CandidatePoolLimit = 400;
 
     public static DateOnly BucketStart(DateOnly utcDate, int rotationDays)
     {
