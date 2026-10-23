@@ -55,6 +55,26 @@ class UrlGuard(private val resolver: AddressResolver = AddressResolver { InetAdd
 }
 data class CheckedUrl(val uri: URI, val address: InetAddress)
 
+/** A transport must connect to [CheckedUrl.address], never resolve [CheckedUrl.uri.host] itself. */
+fun interface PinnedConnection { fun execute(checked: CheckedUrl): GuardedResponse }
+data class GuardedResponse(val status: Int, val location: String? = null, val body: ByteArray = byteArrayOf())
+
+/** Follows only explicit redirects, re-validating and pinning each destination. */
+class GuardedUrlClient(private val guard: UrlGuard, private val connection: PinnedConnection, private val maxRedirects: Int = 5) {
+    init { require(maxRedirects >= 0) }
+    fun get(url: String): GuardedResponse {
+        var current = URI(url)
+        repeat(maxRedirects + 1) { hop ->
+            val response = connection.execute(guard.resolve(current.toString()))
+            if (response.status !in 300..399) return response
+            val location = response.location ?: throw IllegalStateException("Redirect missing Location")
+            if (hop == maxRedirects) throw IllegalStateException("Too many redirects")
+            current = current.resolve(location)
+        }
+        error("unreachable")
+    }
+}
+
 sealed interface SyncResult {
     data class Success(val changed: Set<String>) : SyncResult
     data class Failure(val copyKey: String, val cause: Throwable) : SyncResult

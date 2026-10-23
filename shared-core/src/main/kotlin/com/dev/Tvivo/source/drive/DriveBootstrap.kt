@@ -21,11 +21,11 @@ class DriveBootstrap(private val store: IndexStore, private val state: Bootstrap
         val saved = state.load()
         val roots = all(null).filter { it.name == ROOT_NAME && it.mimeType == DriveIndexStore.FOLDER_MIME }
         val selected = saved.rootId?.let { id -> roots.firstOrNull { it.id == id } }
-        var rootWasCreated = saved.pending && saved.rootId == null
+        val rootWasCreated = saved.pending && saved.createdByApp
         val root = selected ?: when (roots.size) {
             0 -> {
                 state.save(BootstrapState(null, pending = true, createdByApp = true))
-                store.createFolder(null, ROOT_NAME).also { state.save(BootstrapState(it.id, pending = true, createdByApp = true)) }
+                createOrFind(null, ROOT_NAME, DriveIndexStore.FOLDER_MIME).also { state.save(BootstrapState(it.id, pending = true, createdByApp = true)) }
             }
             1 -> roots.single().also { if (rootWasCreated) state.save(BootstrapState(it.id, pending = true, createdByApp = true)) }
             else -> return BootstrapResult.NeedsChoice(roots.map { it.id })
@@ -68,7 +68,16 @@ class DriveBootstrap(private val store: IndexStore, private val state: Bootstrap
         findChild(parent, name, mime)?.let { return it }
         // Re-list immediately before create to recover create-after-timeout safely.
         findChild(parent, name, mime)?.let { return it }
-        return store.createFolder(parent, name)
+        return createOrFind(parent, name, mime)
+    }
+    private suspend fun createOrFind(parent: String?, name: String, mime: String): IndexMetadata {
+        try { return store.createFolder(parent, name) }
+        catch (failure: Throwable) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
+            val created = all(parent).firstOrNull { it.name == name && it.mimeType == mime }
+            if (created != null) return created
+            throw failure
+        }
     }
     private fun validateIndex(folder: String, bytes: ByteArray) {
         val json = bytes.toString(Charsets.UTF_8)

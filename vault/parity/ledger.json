@@ -853,6 +853,23 @@
         "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveSyncEngine.kt",
         "shared-core/src/test/kotlin/com/dev/Tvivo/source/drive/DriveSlice5Test.kt"
       ]
+    },
+    {
+      "id": "D-DRIVE-SYNC-5B",
+      "title": "Drive failure recovery, sync retry, and pinned redirect validation",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveBootstrap.kt",
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveSyncEngine.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/source/drive/DriveSlice5bTest.kt",
+        ".codex-android-qa-exec-report.md"
+      ]
     }
   ]
 }
