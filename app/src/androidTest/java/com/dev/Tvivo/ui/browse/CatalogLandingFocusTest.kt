@@ -72,8 +72,10 @@ class CatalogLandingFocusTest {
         }
         composeRule.setContent {
             TvivoTheme {
+                val listState = androidx.compose.foundation.lazy.rememberLazyListState()
                 CategoryRail(categories, emptyMap(), selected, "", {},
-                    { selected = it.categoryId }, FocusRequester(), FocusRequester(), gridAvailable = true)
+                    { selected = it.categoryId }, FocusRequester(), FocusRequester(),
+                    listState = listState, gridAvailable = true)
             }
         }
         composeRule.onNodeWithText("ALL").performClick()
@@ -120,7 +122,8 @@ class CatalogLandingFocusTest {
             TvivoTheme {
                 AppShell(ShellTab.Movies, {}) {
                     val shell = requireNotNull(LocalShellFocus.current)
-                    LazyColumn {
+                    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    LazyColumn(state = listState) {
                         item {
                             CatalogSortControl(CatalogSort.AlphabeticalAsc, {},
                                 options = CatalogLandingPolicy.openedListSortOptions(),

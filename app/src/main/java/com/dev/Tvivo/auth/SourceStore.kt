@@ -181,6 +181,20 @@ class SourceStore(
         return revoked
     }
 
+    /** Removes all local source grants without loading or importing legacy credentials. */
+    suspend fun clearAll() {
+        blobs.update { raw ->
+            val data = decode(raw)
+            encode(data.copy(sources = emptyList(), activeId = null))
+        }
+        check(loadWithoutMigration().sources.isEmpty()) { "Source store clear did not read back" }
+    }
+
+    private suspend fun loadWithoutMigration(): SourceSnapshot {
+        val data = decode(blobs.read())
+        return SourceSnapshot(data.sources, data.activeId)
+    }
+
     fun refreshTokens(sourceId: String): RefreshTokenStore = object : RefreshTokenStore {
         override suspend fun load(): String? = this@SourceStore.load().sources
             .firstOrNull { it.id == sourceId && it.kind == SourceKind.DRIVE }?.refreshToken

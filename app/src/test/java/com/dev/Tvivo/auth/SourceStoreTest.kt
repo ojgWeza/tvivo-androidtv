@@ -15,8 +15,10 @@ import org.robolectric.RobolectricTestRunner
 class SourceStoreTest {
     private class MemoryBlobs : SourceBlobStore {
         var value: String? = null
+        var failUpdates = false
         override suspend fun read() = value
         override suspend fun update(change: (String?) -> String?): String? {
+            check(!failUpdates) { "source store unavailable" }
             value = change(value)
             return value
         }
@@ -78,5 +80,36 @@ class SourceStoreTest {
         store.stopUsing(candidate.id)
         assertNull(store.load().activeId)
         assertEquals("rotated", tokens.load())
+    }
+
+    @Test fun clearAllDoesNotNeedLegacyCredentialsAndRemovesEverySource() = runBlocking {
+        var legacyReads = 0
+        val store = SourceStore(MemoryBlobs(), cipher()) {
+            legacyReads++
+            null
+        }
+        store.stageSwitch(SavedSource.xtream(legacy)) { true }
+        store.stageSwitch(SavedSource.drive("permission-3", "refresh-secret")) { true }
+        val readsBeforeClear = legacyReads
+
+        store.clearAll()
+
+        assertEquals(readsBeforeClear, legacyReads)
+        assertTrue(store.load().sources.isEmpty())
+        assertNull(store.load().activeId)
+    }
+
+    @Test fun failedClearPropagatesAndLeavesSavedEntryForRetry() = runBlocking {
+        val blobs = MemoryBlobs()
+        val store = SourceStore(blobs, cipher()) { null }
+        val drive = SavedSource.drive("permission-4", "refresh-secret")
+        store.stageSwitch(drive) { true }
+        blobs.failUpdates = true
+
+        assertTrue(runCatching { store.clearAll() }.isFailure)
+        blobs.failUpdates = false
+
+        assertEquals(drive.id, store.load().activeId)
+        assertEquals(listOf(drive.id), store.load().sources.map { it.id })
     }
 }

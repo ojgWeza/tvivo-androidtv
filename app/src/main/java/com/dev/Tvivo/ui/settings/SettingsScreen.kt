@@ -173,6 +173,13 @@ fun SettingsScreen(
         state.refreshMessage?.let { message ->
             Text(message, color = AppColors.Dim, style = TvType.label)
         }
+        state.error?.let { error ->
+            Text(
+                text = com.dev.Tvivo.ui.common.ErrorCopy.of(error).message,
+                color = AppColors.AccentText,
+                style = TvType.label
+            )
+        }
 
         ActionRow(
             label = stringResource(com.dev.Tvivo.R.string.settings_show_subscription),

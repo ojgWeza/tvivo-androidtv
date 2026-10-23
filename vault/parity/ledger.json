@@ -921,6 +921,22 @@
         ".codex-android-qa-exec-report.md"
       ],
       "notes": "JVM and Robolectric gate passed; emulator focus and mock server end-to-end acceptance remain pending. Drive content browse is a later slice."
+    },
+    {
+      "id": "A-SIGNOUT-FAIL-CLOSED",
+      "title": "Clear all saved sources before sign-out and surface failures",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "N-A",
+        "tv": "N-A"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/auth/SourceStore.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/settings/AccountViewModel.kt",
+        "app/src/test/java/com/dev/Tvivo/auth/SourceStoreTest.kt"
+      ]
     }
   ]
 }

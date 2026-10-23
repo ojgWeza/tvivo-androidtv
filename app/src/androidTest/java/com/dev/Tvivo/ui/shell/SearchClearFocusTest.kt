@@ -20,7 +20,13 @@ class SearchClearFocusTest {
     @Test fun rightFromPopulatedSearchReachesClearAndClearsText() {
         composeRule.setContent {
             TvivoTheme {
-                SearchScreen("test-account", onOpen = {}, onBrowse = {})
+                SearchScreen(
+                    accountId = "test-account",
+                    query = "",
+                    onQueryChanged = {},
+                    onOpen = {},
+                    onBrowse = {}
+                )
             }
         }
         composeRule.onNodeWithTag("search-field").performTextInput("movie")

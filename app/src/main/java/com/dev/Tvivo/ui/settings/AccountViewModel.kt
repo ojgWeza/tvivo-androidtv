@@ -55,6 +55,12 @@ data class AccountUiState(
         }
 }
 
+internal fun signOutFailureState(current: AccountUiState, failure: Throwable) = current.copy(
+    isLoading = false,
+    signedOut = false,
+    error = (failure as? AppErrorException)?.error ?: AppError.Unreachable
+)
+
 /**
  * Account state and the whole-app actions: sign out, switch account and refresh everything.
  *
@@ -220,13 +226,17 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
      */
     fun signOut() {
         viewModelScope.launch {
-            DiagnosticLog.warn("account", "Signed out; stored credentials erased")
-            val current = store.load()
-            if (current != null) runCatching {
-                SourceStore.open(getApplication()).disconnect(AccountIdentity.of(current)) { true }
+            try {
+                // Clear every source first; a missing/unreadable legacy credential must not
+                // leave Drive or another saved source active. The shared Tink keyset is retained.
+                SourceStore.open(getApplication()).clearAll()
+                store.wipe()
+                DiagnosticLog.warn("account", "Signed out; stored credentials erased")
+                _state.update { AccountUiState(isLoading = false, signedOut = true) }
+            } catch (failure: Throwable) {
+                DiagnosticLog.error("account", "Sign-out failed", failure.javaClass.simpleName)
+                _state.update { signOutFailureState(it, failure) }
             }
-            store.wipe()
-            _state.update { AccountUiState(isLoading = false, signedOut = true) }
         }
     }
 

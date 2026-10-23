@@ -58,7 +58,6 @@ class HomeScreenTouchTest {
                         onRefreshEverything = {},
                         onSelect = { selected = it },
                         onOpenSearch = {},
-                        onOpenSettings = {},
                         onOpenCard = { _, _ -> },
                         onPlayCard = { _, _, _ -> },
                         onSeeAll = {},
