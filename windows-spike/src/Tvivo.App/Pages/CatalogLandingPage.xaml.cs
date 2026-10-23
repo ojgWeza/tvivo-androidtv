@@ -78,9 +78,18 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool _pendingExplicitHomeReset;
     private readonly SemaphoreSlim _modeTransitionGate = new(1, 1);
     private CatalogCard? _spotlightCard;
-    private readonly ObservableCollection<CatalogCard> _spotlightCards = new();
+    private readonly List<CatalogCard> _spotlightCards = new();
+    private readonly ObservableCollection<CatalogCard> _spotlightVisibleCards = new();
     private readonly SpotlightSettingsService _spotlightSettingsService;
-    private SpotlightStripState _spotlightState = SpotlightStripState.Create(0);
+    private SpotlightViewportState _spotlightState = SpotlightViewportState.Create(Array.Empty<string>(), 0);
+    private string? _spotlightReturnId;
+    private double _spotlightReturnOffset;
+    private int _spotlightVisibleFirst = -1;
+    private int _spotlightVisibleLast = -1;
+    private readonly DispatcherTimer _spotlightSlideTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    private double _spotlightSlideFrom;
+    private double _spotlightSlideTo;
+    private long _spotlightSlideStartedAt;
     private CancellationTokenSource? _spotlightDwellCts;
     private CancellationTokenSource? _spotlightMetadataCts;
     private CancellationTokenSource? _spotlightResolveCts;
@@ -88,7 +97,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private CatalogCard? _spotlightResolveCard;
     private double? _spotlightResolveElapsedMs;
     private long _spotlightRenderGeneration;
-    private int _spotlightTouchArmedIndex = -1;
     private CatalogCard? _spotlightMetadataCard;
     private readonly HashSet<Button> _wiredSpotlightInputButtons = new();
     private Button? _lastSpotlightInputButton;
@@ -106,7 +114,6 @@ public sealed partial class CatalogLandingPage : UserControl
     private bool _spotlightArtworkLayoutPending;
     private int _spotlightWindowFirst = -1;
     private int _spotlightWindowLast = -1;
-    private readonly Dictionary<Button, Storyboard> _spotlightWidthAnimations = new();
     private readonly Windows.UI.ViewManagement.UISettings _uiSettings = new();
     private readonly Dictionary<CatalogSnapshotKey, CachedCatalogSnapshot> _snapshotCache = new();
     private readonly Queue<CatalogSnapshotKey> _snapshotCacheOrder = new();
@@ -327,7 +334,10 @@ public sealed partial class CatalogLandingPage : UserControl
         OpenShelfGrid.ContainerContentChanging += CatalogCardContainerContentChanging;
         OpenShelfGrid.Unloaded += OpenShelfGrid_Unloaded;
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
-        SpotlightStripItems.ItemsSource = _spotlightCards;
+        SpotlightStripItems.ItemsSource = _spotlightVisibleCards;
+        _spotlightSlideTimer.Tick += SpotlightSlideTimer_Tick;
+        SpotlightStripViewer.AddHandler(UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(SpotlightStripViewer_PointerWheelChanged), true);
         CatalogPageRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightPage_KeyDown), true);
         SpotlightStripItems.LayoutUpdated += SpotlightStripItems_LayoutUpdated;
         _epgTimer.Tick += EpgTimer_Tick;
@@ -382,6 +392,8 @@ public sealed partial class CatalogLandingPage : UserControl
         _isActive = active;
         if (!active)
         {
+            if (_spotlightReturnId is not null && _spotlightReturnId == _spotlightState.ActivatedItemId)
+                _spotlightReturnOffset = SpotlightStripViewer.HorizontalOffset;
             _spotlightKeyboardSinceActivation = false;
             foreach (var card in _spotlightCards) card.SetSpotlightFocused(false);
         }
@@ -394,6 +406,13 @@ public sealed partial class CatalogLandingPage : UserControl
         if (!active) CancelSpotlightAsyncWork();
         else
         {
+            if (_spotlightReturnId is { } returnId && _spotlightState.SelectedItemId == returnId)
+            {
+                _spotlightState = _spotlightState.ReturnFromPlayer(returnId, _spotlightReturnOffset);
+                UpdateSpotlightCardStates();
+                RefreshSpotlightWindow(_spotlightState.Layout.ScrollTarget);
+                ScrollToSpotlightTarget(animate: false);
+            }
             RequestSpotlightArtworkLayout();
             if (_spotlightFocusedId is { } focusedId)
                 DispatcherQueue.TryEnqueue(() =>
@@ -506,6 +525,8 @@ public sealed partial class CatalogLandingPage : UserControl
         _shelfDeferredCommitTimer?.Stop();
         CancelSavedStartupAuthentication();
         CancelSpotlightAsyncWork();
+        _spotlightSlideTimer.Stop();
+        _spotlightSlideTimer.Tick -= SpotlightSlideTimer_Tick;
         SpotlightStripItems.LayoutUpdated -= SpotlightStripItems_LayoutUpdated;
         _epgTimer.Stop();
         _epgTimer.Tick -= EpgTimer_Tick;
@@ -3055,49 +3076,43 @@ public sealed partial class CatalogLandingPage : UserControl
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
         Interlocked.Increment(ref _spotlightRenderGeneration);
-        _spotlightTouchArmedIndex = -1;
         _spotlightMetadataCts?.Cancel();
         _spotlightDwellCts?.Cancel();
         _spotlightDwellCts = null;
         _spotlightWindowFirst = _spotlightWindowLast = -1;
-        var oldId = _spotlightCard?.Id;
+        _spotlightSlideTimer.Stop();
+        var previousIds = _spotlightState.ItemIds;
+        var previousState = _spotlightState;
         var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
         var focusedId = _spotlightCards.FirstOrDefault(card =>
             ReferenceEquals(card.SpotlightButton, focusedElement))?.Id;
-        // D1 keeps the existing non-virtualized strip bounded until the D2 UI replaces it.
-        var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).Take(8).ToArray();
+        var cards = shelves.SelectMany(shelf => shelf.Cards).Where(card => card.Channel is not null).ToArray();
+        var existingById = _spotlightCards.ToDictionary(card => card.Id, StringComparer.Ordinal);
+        _spotlightCards.Clear();
         for (var i = 0; i < cards.Length; i++)
         {
-            var existingIndex = -1;
-            for (var j = i; j < _spotlightCards.Count; j++)
-                if (_spotlightCards[j].Id == cards[i].Id) { existingIndex = j; break; }
-            if (existingIndex >= 0)
+            if (existingById.TryGetValue(cards[i].Id, out var existing))
             {
-                var existing = _spotlightCards[existingIndex];
                 if (existing.UpdateSpotlightData(cards[i]) && existing.SpotlightButton is { } button &&
                     FindDescendant<Image>(button) is { } image) StopArtwork(image);
-                if (existingIndex > i) _spotlightCards.Move(existingIndex, i);
+                _spotlightCards.Add(existing);
             }
-            else _spotlightCards.Insert(i, cards[i]);
+            else _spotlightCards.Add(cards[i]);
         }
-        while (_spotlightCards.Count > cards.Length)
-        {
-            _spotlightCards[^1].SpotlightButton = null;
-            _spotlightCards.RemoveAt(_spotlightCards.Count - 1);
-        }
-        _spotlightState = SpotlightStripState.Create(cards.Length);
-        if (oldId is not null)
-        {
-            var preserved = _spotlightCards.ToList().FindIndex(card => card.Id == oldId);
-            if (preserved >= 0) _spotlightState = _spotlightState.Open(preserved);
-        }
-        _spotlightCard = _spotlightState.OpenIndex >= 0 ? _spotlightCards[_spotlightState.OpenIndex] : null;
+        var ids = _spotlightCards.Select(card => card.Id).ToArray();
+        var viewport = SpotlightStripViewer.ActualWidth > 0 ? SpotlightStripViewer.ActualWidth : 680;
+        _spotlightState = previousIds.SequenceEqual(ids, StringComparer.Ordinal)
+            ? previousState.Resize(viewport, !_uiSettings.AnimationsEnabled)
+            : SpotlightViewportState.Create(ids, viewport, !_uiSettings.AnimationsEnabled).Idle();
+        if (!previousIds.SequenceEqual(ids, StringComparer.Ordinal)) _spotlightReturnId = null;
+        _spotlightCard = _spotlightState.OpenIndex is int open ? _spotlightCards[open] : null;
         SpotlightPanel.Visibility = _openShelfId is null && _renderedSnapshot?.IsFlatSearch != true &&
             _activeMode != CatalogMode.LiveTv ? Visibility.Visible : Visibility.Collapsed;
         SpotlightEmptySettingsButton.Visibility = cards.Length == 0 && SpotlightPanel.Visibility == Visibility.Visible
             ? Visibility.Visible : Visibility.Collapsed;
-        SpotlightPositionText.Text = cards.Length == 0 ? "Nothing to show yet" : $"Item {_spotlightState.OpenIndex + 1} of {cards.Length}";
         UpdateSpotlightCardStates();
+        RefreshSpotlightWindow(_spotlightState.Layout.ScrollTarget, force: true);
+        ScrollToSpotlightTarget(animate: false);
         RequestSpotlightArtworkLayout();
         if (focusedId is not null)
         {
@@ -3113,99 +3128,52 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ClearSpotlightCards()
     {
+        _spotlightSlideTimer.Stop();
+        _spotlightVisibleCards.Clear();
         foreach (var card in _spotlightCards) card.SpotlightButton = null;
-        foreach (var animation in _spotlightWidthAnimations.Values) animation.Stop();
-        _spotlightWidthAnimations.Clear();
         _spotlightCards.Clear();
+        _spotlightState = SpotlightViewportState.Create(Array.Empty<string>(), 0);
+        _spotlightReturnId = null;
         _spotlightCard = null;
         _spotlightFocusedId = null;
+        _spotlightVisibleFirst = _spotlightVisibleLast = -1;
         _spotlightWindowFirst = _spotlightWindowLast = -1;
     }
 
-    private void UpdateSpotlightCardStates(int previousOpenIndex = -1, int newOpenIndex = -1)
+    private void UpdateSpotlightCardStates()
     {
-        var viewport = SpotlightStripViewer.ActualWidth > 0 ? SpotlightStripViewer.ActualWidth : 776;
+        var layout = _spotlightState.Layout;
         for (var i = 0; i < _spotlightCards.Count; i++)
         {
             var card = _spotlightCards[i];
-            var targetWidth = i == _spotlightState.OpenIndex
-                ? SpotlightStripState.OpenWidth(viewport, _spotlightCards.Count)
-                : 64;
-            var animateOpening = i == newOpenIndex && _uiSettings.AnimationsEnabled &&
-                card.SpotlightButton is { ActualWidth: > 0 } openingButton &&
-                Math.Abs(openingButton.ActualWidth - targetWidth) > 0.5;
+            var targetWidth = i == _spotlightState.OpenIndex ? layout.OpenWidth : layout.CollapsedWidth;
             card.SetSpotlightState(i, _spotlightCards.Count, i == _spotlightState.OpenIndex,
-                targetWidth, i == _spotlightState.OpenIndex, !animateOpening);
+                targetWidth, i == _spotlightState.SelectedIndex, true);
             if (card.SpotlightButton is { } button)
-            {
-                if (_spotlightWidthAnimations.Remove(button, out var running)) running.Stop();
-                var text = FindDescendant<StackPanel>(button);
-                if (text is not null)
-                {
-                    if (i == newOpenIndex && _uiSettings.AnimationsEnabled) text.Opacity = 0;
-                    else text.Opacity = card.SpotlightExpanded ? 1 : 0;
-                }
-                if (_uiSettings.AnimationsEnabled && (i == previousOpenIndex || i == newOpenIndex) &&
-                    button.ActualWidth > 0 && Math.Abs(button.ActualWidth - card.SpotlightWidth) > 0.5)
-                {
-                    var animation = new DoubleAnimation
-                    {
-                        From = button.ActualWidth,
-                        To = card.SpotlightWidth,
-                        Duration = TimeSpan.FromMilliseconds(220),
-                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-                        EnableDependentAnimation = true,
-                    };
-                    Storyboard.SetTarget(animation, button);
-                    Storyboard.SetTargetProperty(animation, "Width");
-                    var storyboard = new Storyboard();
-                    storyboard.Children.Add(animation);
-                    var cardIndex = i;
-                    var finalWidth = card.SpotlightWidth;
-                    _spotlightWidthAnimations[button] = storyboard;
-                    storyboard.Completed += (_, _) =>
-                    {
-                        if (!_spotlightWidthAnimations.TryGetValue(button, out var current) || !ReferenceEquals(current, storyboard)) return;
-                        _spotlightWidthAnimations.Remove(button);
-                        storyboard.Stop();
-                        if (ReferenceEquals(card.SpotlightButton, button)) button.Width = finalWidth;
-                        RequestSpotlightArtworkLayout();
-                        if (cardIndex == newOpenIndex && text is not null && ReferenceEquals(card.SpotlightButton, button))
-                        {
-                            card.RevealSpotlightText();
-                            var reveal = new DoubleAnimation { From = 0, To = 1,
-                                Duration = TimeSpan.FromMilliseconds(120), EnableDependentAnimation = false };
-                            Storyboard.SetTarget(reveal, text);
-                            Storyboard.SetTargetProperty(reveal, "Opacity");
-                            var revealStoryboard = new Storyboard();
-                            revealStoryboard.Children.Add(reveal);
-                            revealStoryboard.Completed += (_, _) => { revealStoryboard.Stop(); text.Opacity = 1; };
-                            revealStoryboard.Begin();
-                        }
-                    };
-                    storyboard.Begin();
-                }
-                else
-                {
-                    button.Width = card.SpotlightWidth;
-                    if (text is not null) text.Opacity = card.SpotlightExpanded ? 1 : 0;
-                }
-            }
+                button.Width = targetWidth;
         }
-        if (_spotlightState.OpenIndex >= 0)
-            SpotlightPositionText.Text = $"Item {_spotlightState.OpenIndex + 1} of {_spotlightCards.Count}";
+        SpotlightPositionText.Text = _spotlightCards.Count == 0 ? "Nothing to show yet" :
+            $"Item {_spotlightState.SelectedIndex + 1} of {_spotlightCards.Count}";
     }
 
     private void OpenSpotlight(int index, string via, bool announce = false)
     {
-        if (via != "touch") _spotlightTouchArmedIndex = -1;
-        if (index < 0 || index >= _spotlightCards.Count || index == _spotlightState.OpenIndex) return;
-        var previousOpenIndex = _spotlightState.OpenIndex;
+        if (index < 0 || index >= _spotlightCards.Count) return;
+        if (index == _spotlightState.OpenIndex) return;
         CancelSpotlightResolution();
-        _spotlightState = _spotlightState.Open(index);
+        _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
+        _spotlightState = via switch
+        {
+            "hover" => _spotlightState.HoverAfterDwell(index, SpotlightStripState.DwellDuration),
+            "keyboard" => _spotlightState.Focus(index),
+            _ => _spotlightState.Focus(index),
+        };
+        _spotlightReturnId = null;
         _spotlightCard = _spotlightCards[index];
-        UpdateSpotlightCardStates(previousOpenIndex, index);
-        EnsureSpotlightVisible(index);
+        UpdateSpotlightCardStates();
+        RefreshSpotlightWindow(SpotlightStripViewer.HorizontalOffset);
+        ScrollToSpotlightTarget(animate: true);
+        RequestSpotlightArtworkLayout();
         UpdateSpotlightArtworkWindow();
         StartSpotlightResolution(_spotlightCard);
         LaunchDiagnostics.Write($"event=spotlight.open index={index + 1} via={via}");
@@ -3223,19 +3191,10 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Button { DataContext: CatalogCard card } button) return;
         var recentInput = ReferenceEquals(_lastSpotlightInputButton, button) &&
             Environment.TickCount64 - _lastSpotlightInputAt < 2_000;
-        var isTouch = recentInput && _lastSpotlightDevice == "Touch";
-        if (isTouch && !_spotlightState.TouchTapActivates(card.SpotlightIndex, _spotlightTouchArmedIndex))
-        {
-            _spotlightTouchArmedIndex = card.SpotlightIndex;
-            OpenSpotlight(card.SpotlightIndex, "touch");
-            return;
-        }
-        if (!_spotlightState.TouchTapActivates(card.SpotlightIndex))
-        {
-            OpenSpotlight(card.SpotlightIndex, "click");
-            return;
-        }
-        if (!isTouch) _spotlightTouchArmedIndex = -1;
+        OpenSpotlight(card.SpotlightIndex, "click");
+        _spotlightState = _spotlightState.Activate();
+        _spotlightReturnId = card.Id;
+        _spotlightReturnOffset = SpotlightStripViewer.HorizontalOffset;
         if (card.Channel is { } channel)
         {
             card.SetSpotlightFocused(false);
@@ -3266,8 +3225,8 @@ public sealed partial class CatalogLandingPage : UserControl
                 {
                     if (!cancellation.IsCancellationRequested && _isActive &&
                         _spotlightRenderGeneration == renderGeneration &&
-                        SpotlightStripState.ShouldOpenAfterDwell(_spotlightState.OpenIndex, card.SpotlightIndex,
-                            SpotlightStripState.DwellDuration)) OpenSpotlight(card.SpotlightIndex, "hover");
+                        card.SpotlightIndex != _spotlightState.OpenIndex)
+                        OpenSpotlight(card.SpotlightIndex, "hover");
                 }
                 finally { Complete(); }
             })) Complete();
@@ -3286,7 +3245,7 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Button { DataContext: CatalogCard card } button) return;
         _spotlightFocusedId = card.Id;
         var keyboard = button.FocusState == FocusState.Keyboard;
-        if (keyboard && card.SpotlightIndex != _spotlightState.OpenIndex)
+        if (card.SpotlightIndex != _spotlightState.OpenIndex)
             OpenSpotlight(card.SpotlightIndex, "keyboard", keyboard);
         card.SetSpotlightFocused(SpotlightFocusPolicy.ShowRing(_isActive,
             _spotlightKeyboardSinceActivation, keyboard));
@@ -3302,14 +3261,13 @@ public sealed partial class CatalogLandingPage : UserControl
         if (sender is not Button { DataContext: CatalogCard card }) return;
         var next = args.Key switch
         {
-            Windows.System.VirtualKey.Left => _spotlightState.Open(card.SpotlightIndex).Move(-1).OpenIndex,
-            Windows.System.VirtualKey.Right => _spotlightState.Open(card.SpotlightIndex).Move(1).OpenIndex,
+            Windows.System.VirtualKey.Left => _spotlightState.Move(-1).SelectedIndex,
+            Windows.System.VirtualKey.Right => _spotlightState.Move(1).SelectedIndex,
             _ => card.SpotlightIndex,
         };
         if (next == card.SpotlightIndex) return;
         args.Handled = true;
-        OpenSpotlight(next, "keyboard", announce: true);
-        _spotlightCards[next].SpotlightButton?.Focus(FocusState.Keyboard);
+        MoveSpotlight(next - _spotlightState.SelectedIndex, true);
     }
 
     private void SpotlightPage_KeyDown(object sender, KeyRoutedEventArgs args)
@@ -3332,7 +3290,7 @@ public sealed partial class CatalogLandingPage : UserControl
                 button.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightInput_KeyDown), true);
             }
             card.SpotlightButton = button;
-            button.Width = Math.Max(64, card.SpotlightWidth);
+            button.Width = card.SpotlightWidth;
             RequestSpotlightArtworkLayout();
         }
     }
@@ -3362,7 +3320,6 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (sender is Button { DataContext: CatalogCard card } button && ReferenceEquals(card.SpotlightButton, button))
             card.SpotlightButton = null;
-        if (sender is Button oldButton && _spotlightWidthAnimations.Remove(oldButton, out var animation)) animation.Stop();
         if (sender is Button unloadedButton && _wiredSpotlightInputButtons.Remove(unloadedButton))
         {
             unloadedButton.RemoveHandler(UIElement.PointerPressedEvent, new PointerEventHandler(SpotlightInput_PointerPressed));
@@ -3375,75 +3332,222 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightStripItems_LayoutUpdated(object? sender, object args)
     {
         if (!_spotlightArtworkLayoutPending || SpotlightStripViewer.ViewportWidth <= 0 ||
-            _spotlightCards.Any(card => card.SpotlightButton is not { ActualWidth: > 0 })) return;
+            _spotlightVisibleCards.Any(card => card.SpotlightButton is not { ActualWidth: > 0 })) return;
         _spotlightArtworkLayoutPending = false;
         UpdateSpotlightArtworkWindow();
     }
 
-    private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args) => UpdateSpotlightArtworkWindow();
+    private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
+    {
+        RefreshSpotlightWindow(SpotlightStripViewer.HorizontalOffset);
+        UpdateSpotlightArtworkWindow();
+    }
 
     private void SpotlightStripViewer_SizeChanged(object sender, SizeChangedEventArgs args)
     {
+        _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
         UpdateSpotlightCardStates();
+        RefreshSpotlightWindow(_spotlightState.Layout.ScrollTarget, force: true);
+        ScrollToSpotlightTarget(animate: false);
         RequestSpotlightArtworkLayout();
     }
 
-    private void EnsureSpotlightVisible(int index)
+    private void SpotlightPreviousButton_Click(object sender, RoutedEventArgs args) => MoveSpotlight(-1, false);
+
+    private void SpotlightNextButton_Click(object sender, RoutedEventArgs args) => MoveSpotlight(1, false);
+
+    private void SpotlightStripViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
     {
-        if (index < 0 || index >= _spotlightCards.Count) return;
-        var button = _spotlightCards[index].SpotlightButton;
-        if (button is null) return;
-        try
+        var delta = args.GetCurrentPoint(SpotlightStripViewer).Properties.MouseWheelDelta;
+        if (delta == 0 || _spotlightCards.Count == 0) return;
+        MoveSpotlight(delta > 0 ? -1 : 1, false);
+        args.Handled = true;
+    }
+
+    private void MoveSpotlight(int delta, bool keyboard)
+    {
+        _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
+        var selectedIsOutsideWindow = _spotlightVisibleFirst >= 0 &&
+            (_spotlightState.SelectedIndex < _spotlightVisibleFirst ||
+             _spotlightState.SelectedIndex > _spotlightVisibleLast);
+        var next = selectedIsOutsideWindow
+            ? _spotlightState.Focus(delta < 0 ? _spotlightVisibleFirst : _spotlightVisibleLast)
+            : _spotlightState.Move(delta);
+        if (next.SelectedIndex == _spotlightState.SelectedIndex && next.OpenIndex == _spotlightState.OpenIndex) return;
+        var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
+        var transferFocus = keyboard || ReferenceEquals(focusedElement, SpotlightPreviousButton) ||
+            ReferenceEquals(focusedElement, SpotlightNextButton);
+        var index = next.SelectedIndex;
+        CancelSpotlightResolution();
+        _spotlightReturnId = null;
+        _spotlightState = next;
+        _spotlightCard = _spotlightCards[index];
+        UpdateSpotlightCardStates();
+        RefreshSpotlightWindow(SpotlightStripViewer.HorizontalOffset);
+        ScrollToSpotlightTarget(animate: true);
+        RequestSpotlightArtworkLayout();
+        StartSpotlightResolution(_spotlightCard);
+        if (transferFocus)
         {
-            var transform = button.TransformToVisual(SpotlightStripViewer);
-            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-            var target = SpotlightStripState.ScrollIntoViewTarget(point.X + SpotlightStripViewer.HorizontalOffset,
-                button.ActualWidth, SpotlightStripViewer.HorizontalOffset, SpotlightStripViewer.ViewportWidth);
-            SpotlightStripViewer.ChangeView(target, null, null, true);
+            var targetCard = _spotlightCard;
+            if (targetCard.SpotlightButton?.Focus(FocusState.Keyboard) != true)
+                DispatcherQueue.TryEnqueue(() => targetCard.SpotlightButton?.Focus(FocusState.Keyboard));
         }
-        catch (InvalidOperationException) { RequestSpotlightArtworkLayout(); }
-        catch (ArgumentException) { RequestSpotlightArtworkLayout(); }
+        if (keyboard)
+        {
+            var targetCard = _spotlightCard;
+            var peer = FrameworkElementAutomationPeer.FromElement(SpotlightPositionText)
+                ?? FrameworkElementAutomationPeer.CreatePeerForElement(SpotlightPositionText);
+            peer?.RaiseNotificationEvent(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent,
+                SpotlightStripState.Announcement(targetCard.Title, index, _spotlightCards.Count), "SpotlightOpened");
+        }
+    }
+
+    private void ScrollToSpotlightTarget(bool animate)
+    {
+        var layout = _spotlightState.Layout;
+        _spotlightSlideTimer.Stop();
+        var target = layout.ScrollTarget;
+        if (!animate || !_uiSettings.AnimationsEnabled || layout.SlideDuration == TimeSpan.Zero ||
+            Math.Abs(SpotlightStripViewer.HorizontalOffset - target) < 0.5)
+        {
+            SpotlightStripViewer.ChangeView(target, null, null, true);
+            return;
+        }
+        _spotlightSlideFrom = SpotlightStripViewer.HorizontalOffset;
+        _spotlightSlideTo = target;
+        _spotlightSlideStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        _spotlightSlideTimer.Start();
+    }
+
+    private void SpotlightSlideTimer_Tick(object? sender, object args)
+    {
+        var duration = _spotlightState.Layout.SlideDuration.TotalSeconds;
+        if (duration <= 0)
+        {
+            _spotlightSlideTimer.Stop();
+            SpotlightStripViewer.ChangeView(_spotlightSlideTo, null, null, true);
+            return;
+        }
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_spotlightSlideStartedAt).TotalSeconds;
+        var progress = Math.Clamp(elapsed / duration, 0, 1);
+        var eased = 1 - Math.Pow(1 - progress, 3);
+        SpotlightStripViewer.ChangeView(_spotlightSlideFrom + (_spotlightSlideTo - _spotlightSlideFrom) * eased,
+            null, null, true);
+        if (progress >= 1) _spotlightSlideTimer.Stop();
+    }
+
+    private void RefreshSpotlightWindow(double offset, bool force = false)
+    {
+        var layout = _spotlightState.Layout;
+        if (_spotlightCards.Count == 0)
+        {
+            _spotlightVisibleCards.Clear();
+            _spotlightVisibleFirst = _spotlightVisibleLast = -1;
+            SpotlightLeadingSpace.Width = SpotlightTrailingSpace.Width = 0;
+            SpotlightPreviousButton.Visibility = SpotlightNextButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+        double WidthAt(int index) => index == _spotlightState.OpenIndex ? layout.OpenWidth : layout.CollapsedWidth;
+        double StartAt(int index) => index * (layout.CollapsedWidth + SpotlightViewportState.Gap) +
+            (_spotlightState.OpenIndex is int open && open < index ? layout.OpenWidth - layout.CollapsedWidth : 0);
+        var viewportEnd = offset + Math.Max(1, _spotlightState.ViewportWidth);
+        var first = -1;
+        var last = -1;
+        // The model exposes the preferred window; touch drag can move beyond it.
+        if (Math.Abs(offset - layout.ScrollTarget) < 0.5 && layout.ItemWidths.Count > 0)
+        {
+            first = layout.ItemWidths[0].Index;
+            last = layout.ItemWidths[^1].Index;
+        }
+        else
+        {
+            for (var index = 0; index < _spotlightCards.Count; index++)
+            {
+                var start = StartAt(index);
+                if (start + WidthAt(index) <= offset || start >= viewportEnd) continue;
+                if (first < 0) first = index;
+                last = index;
+            }
+            if (first < 0) first = last = Math.Clamp(_spotlightState.SelectedIndex, 0, _spotlightCards.Count - 1);
+            first = Math.Max(0, first - 1);
+            last = Math.Min(_spotlightCards.Count - 1, last + 1);
+        }
+        SpotlightLeadingSpace.Width = StartAt(first);
+        var total = StartAt(_spotlightCards.Count - 1) + WidthAt(_spotlightCards.Count - 1);
+        SpotlightTrailingSpace.Width = Math.Max(0, total - StartAt(last) - WidthAt(last));
+        SpotlightPreviousButton.Visibility = offset > 0.5 ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightNextButton.Visibility = offset < total - _spotlightState.ViewportWidth - 0.5
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (!force && first == _spotlightVisibleFirst && last == _spotlightVisibleLast) return;
+        _spotlightWindowFirst = first;
+        _spotlightWindowLast = last;
+        if (force || _spotlightVisibleFirst < 0 || first > _spotlightVisibleLast || last < _spotlightVisibleFirst)
+        {
+            _spotlightVisibleCards.Clear();
+            for (var index = first; index <= last; index++) _spotlightVisibleCards.Add(_spotlightCards[index]);
+        }
+        else
+        {
+            while (_spotlightVisibleFirst < first)
+            {
+                _spotlightVisibleCards.RemoveAt(0);
+                _spotlightVisibleFirst++;
+            }
+            while (_spotlightVisibleLast > last)
+            {
+                _spotlightVisibleCards.RemoveAt(_spotlightVisibleCards.Count - 1);
+                _spotlightVisibleLast--;
+            }
+            while (_spotlightVisibleFirst > first)
+                _spotlightVisibleCards.Insert(0, _spotlightCards[--_spotlightVisibleFirst]);
+            while (_spotlightVisibleLast < last)
+                _spotlightVisibleCards.Add(_spotlightCards[++_spotlightVisibleLast]);
+        }
+        _spotlightVisibleFirst = first;
+        _spotlightVisibleLast = last;
+        TrimSpotlightArtworkCache();
+        RequestSpotlightArtworkLayout();
+    }
+
+    private void TrimSpotlightArtworkCache(bool releaseAll = false)
+    {
+        var spotlightUrls = new HashSet<string>(StringComparer.Ordinal);
+        var visibleUrls = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var card in _spotlightCards)
+        {
+            if (!Uri.TryCreate(card.ArtworkUrl, UriKind.Absolute, out var uri)) continue;
+            spotlightUrls.Add(uri.AbsoluteUri);
+            if (!releaseAll && card.SpotlightIndex >= _spotlightVisibleFirst && card.SpotlightIndex <= _spotlightVisibleLast)
+                visibleUrls.Add(uri.AbsoluteUri);
+        }
+        foreach (var pair in _artworkBitmapCache.ToArray())
+        {
+            var separator = pair.Key.LastIndexOf('|');
+            if (separator < 0 || !spotlightUrls.Contains(pair.Key[..separator]) ||
+                visibleUrls.Contains(pair.Key[..separator])) continue;
+            _artworkBitmapCache.Remove(pair.Key);
+            _artworkBitmapLru.Remove(pair.Value);
+            _artworkBitmapCacheBytes -= pair.Value.Value.DecodedBytes;
+        }
     }
 
     private void UpdateSpotlightArtworkWindow()
     {
         if (SpotlightPanel.Visibility != Visibility.Visible || _spotlightArtworkLayoutPending) return;
-        var viewport = Math.Max(0, SpotlightStripViewer.ViewportWidth);
-        var visibleIndices = new List<int>();
-        foreach (var card in _spotlightCards)
+        foreach (var card in _spotlightVisibleCards)
         {
-            if (card.SpotlightButton is not { IsLoaded: true, ActualWidth: > 0 } button) continue;
-            try
+            if (card.SpotlightButton is not { IsLoaded: true } button || FindDescendant<Image>(button) is not { } image)
+                continue;
+            if (ShouldLoadSpotlightArtwork(card) && image.Source is null && !_artworkLoads.ContainsKey(image))
             {
-                var point = button.TransformToVisual(SpotlightStripViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
-                if (point.X + button.ActualWidth > 0 && point.X < viewport) visibleIndices.Add(card.SpotlightIndex);
+                ApplyArtworkClip(image);
+                StartArtwork(image, card.ArtworkUrl);
             }
-            catch (InvalidOperationException) { }
-            catch (ArgumentException) { }
+            else if (!ShouldLoadSpotlightArtwork(card)) StopArtwork(image);
         }
-        if (visibleIndices.Count == 0)
-        {
-            _spotlightMetadataCts?.Cancel();
-            if (_spotlightCards.Count > 0) RequestSpotlightArtworkLayout();
-            return;
-        }
-        var first = visibleIndices.Min();
-        var last = visibleIndices.Max();
-        _spotlightWindowFirst = Math.Max(0, first - 1);
-        _spotlightWindowLast = Math.Min(_spotlightCards.Count - 1, last + 1);
-        foreach (var card in _spotlightCards)
-        {
-            if (card.SpotlightButton is not { IsLoaded: true } button) continue;
-            var inWindow = ShouldLoadSpotlightArtwork(card);
-            if (FindDescendant<Image>(button) is { } image)
-                if (inWindow && image.Source is null && !_artworkLoads.ContainsKey(image))
-                {
-                    ApplyArtworkClip(image);
-                    StartArtwork(image, card.ArtworkUrl);
-                }
-                else if (!inWindow) StopArtwork(image);
-        }
-        if (_spotlightCard is { } openCard && !visibleIndices.Contains(openCard.SpotlightIndex))
+        if (_spotlightCard is { } openCard &&
+            (openCard.SpotlightIndex < _spotlightVisibleFirst || openCard.SpotlightIndex > _spotlightVisibleLast))
             _spotlightMetadataCts?.Cancel();
         else if (_spotlightCard is { } visibleOpen && !visibleOpen.SpotlightSummaryResolved)
             ScheduleSpotlightMetadata(visibleOpen);
@@ -3498,6 +3602,7 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CancelSpotlightAsyncWork()
     {
+        _spotlightSlideTimer.Stop();
         _spotlightDwellCts?.Cancel();
         _spotlightDwellCts = null;
         _spotlightMetadataCts?.Cancel();
@@ -3508,6 +3613,7 @@ public sealed partial class CatalogLandingPage : UserControl
         foreach (var card in _spotlightCards)
             if (card.SpotlightButton is not null)
                 if (FindDescendant<Image>(card.SpotlightButton) is { } image) StopArtwork(image);
+        TrimSpotlightArtworkCache(releaseAll: true);
     }
 
     private bool ShouldLoadSpotlightArtwork(CatalogCard card)
@@ -6000,13 +6106,15 @@ public sealed partial class CatalogLandingPage : UserControl
         public double Height { get; } = height;
         public int SpotlightIndex { get; private set; } = -1;
         public double SpotlightWidth { get; private set; } = 64;
-        public double SpotlightPosterWidth => SpotlightExpanded ? (SpotlightWidth >= 600 ? 190 : 164) : 64;
+        public double SpotlightPosterWidth => SpotlightExpanded ? (SpotlightWidth >= 600 ? 190 : 164) : SpotlightWidth;
         public double SpotlightPosterHeight => SpotlightExpanded ? (SpotlightWidth >= 600 ? 285 : 246) : 304;
+        public double SpotlightColumnSpacing => SpotlightExpanded ? 20 : 0;
         public Stretch SpotlightImageStretch => SpotlightExpanded ? Stretch.Uniform : Stretch.UniformToFill;
         public Visibility SpotlightTextVisibility => SpotlightExpanded && SpotlightTextRevealed ? Visibility.Visible : Visibility.Collapsed;
         private bool SpotlightTextRevealed { get; set; } = true;
         public Visibility SpotlightFocusVisibility { get; private set; } = Visibility.Collapsed;
-        public bool SpotlightIsTabStop => SpotlightExpanded;
+        private bool SpotlightKeyboardStop { get; set; }
+        public bool SpotlightIsTabStop => SpotlightKeyboardStop;
         public Thickness SpotlightPadding => SpotlightExpanded ? new Thickness(16) : new Thickness(0);
         public bool SpotlightExpanded { get; private set; }
         public string SpotlightDetails => DetailsLine;
@@ -6161,6 +6269,7 @@ public sealed partial class CatalogLandingPage : UserControl
             SpotlightIndex = index;
             SpotlightItemCount = Math.Max(1, itemCount);
             SpotlightExpanded = expanded;
+            SpotlightKeyboardStop = isFocusedTabStop;
             SpotlightTextRevealed = revealText;
             SpotlightWidth = width;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightIndex)));
@@ -6168,6 +6277,7 @@ public sealed partial class CatalogLandingPage : UserControl
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightWidth)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightPosterWidth)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightPosterHeight)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightColumnSpacing)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightImageStretch)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightTextVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightIsTabStop)));

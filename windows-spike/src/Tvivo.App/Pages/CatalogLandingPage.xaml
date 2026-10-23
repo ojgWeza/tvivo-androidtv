@@ -437,10 +437,18 @@
                                 </Border.Background>
                                 <Grid RowSpacing="6">
                                     <Grid.RowDefinitions><RowDefinition Height="320" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                                    <ScrollViewer x:Name="SpotlightStripViewer" HorizontalScrollMode="Enabled"
+                                    <Grid ColumnSpacing="4">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="44" /><ColumnDefinition Width="*" /><ColumnDefinition Width="44" /></Grid.ColumnDefinitions>
+                                        <Button x:Name="SpotlightPreviousButton" Grid.Column="0" Width="44" Height="44"
+                                                VerticalAlignment="Center" Content="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                                                Foreground="{ThemeResource AppTextBrush}" Background="{ThemeResource AppPanelSurfaceBrush}"
+                                                AutomationProperties.Name="Previous Spotlight item" Click="SpotlightPreviousButton_Click" />
+                                    <ScrollViewer x:Name="SpotlightStripViewer" Grid.Column="1" HorizontalScrollMode="Enabled"
                                                   HorizontalScrollBarVisibility="Visible" VerticalScrollMode="Disabled"
                                                   VerticalScrollBarVisibility="Disabled" ViewChanged="SpotlightStripViewer_ViewChanged"
                                                   SizeChanged="SpotlightStripViewer_SizeChanged">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border x:Name="SpotlightLeadingSpace" IsHitTestVisible="False" />
                                         <ItemsControl x:Name="SpotlightStripItems" ItemsPanel="{StaticResource SpotlightStripPanel}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -453,7 +461,7 @@
                                                             KeyDown="SpotlightItem_KeyDown" IsTabStop="{Binding SpotlightIsTabStop}"
                                                             AutomationProperties.Name="{Binding SpotlightAutomationName}"
                                                             Loaded="SpotlightItem_Loaded" Unloaded="SpotlightItem_Unloaded">
-                                                        <Grid ColumnSpacing="20">
+                                                        <Grid ColumnSpacing="{Binding SpotlightColumnSpacing}">
                                                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                                             <Border Width="{Binding SpotlightPosterWidth}" Height="{Binding SpotlightPosterHeight}"
                                                                     CornerRadius="8" VerticalAlignment="Center" Clip="{x:Null}">
@@ -474,7 +482,7 @@
                                                                            Foreground="{ThemeResource AppTextBrush}" />
                                                                 <TextBlock Text="{Binding SpotlightOriginFolder}" FontSize="16"
                                                                            Visibility="{Binding SpotlightOriginFolderVisibility}"
-                                                                           Foreground="{ThemeResource AppAccentBrush}" />
+                                                                           Foreground="{ThemeResource AppTextBrush}" />
                                                             </StackPanel>
                                                             <Border Grid.ColumnSpan="2" BorderThickness="3" BorderBrush="{ThemeResource AppAccentBrush}"
                                                                     IsHitTestVisible="False" Visibility="{Binding SpotlightFocusVisibility}" />
@@ -483,12 +491,19 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
+                                            <Border x:Name="SpotlightTrailingSpace" IsHitTestVisible="False" />
+                                        </StackPanel>
                                     </ScrollViewer>
+                                        <Button x:Name="SpotlightNextButton" Grid.Column="2" Width="44" Height="44"
+                                                VerticalAlignment="Center" Content="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                                                Foreground="{ThemeResource AppTextBrush}" Background="{ThemeResource AppPanelSurfaceBrush}"
+                                                AutomationProperties.Name="Next Spotlight item" Click="SpotlightNextButton_Click" />
+                                    </Grid>
                                     <Grid Grid.Row="1" ColumnSpacing="16">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                         <TextBlock x:Name="SpotlightPositionText" FontSize="16" Foreground="{ThemeResource AppTextBrush}"
                                                    AutomationProperties.LiveSetting="Polite" />
-                                        <TextBlock x:Name="SpotlightTouchHint" Grid.Column="1" Text="Select once to open; select again to play or view"
+                                        <TextBlock x:Name="SpotlightTouchHint" Grid.Column="1" Text="Select to play or view"
                                                    FontSize="16" Foreground="{ThemeResource AppTextBrush}" />
                                         <Button x:Name="SpotlightEmptySettingsButton" Grid.Column="2" Content="Settings → Spotlight"
                                                 MinHeight="44" MinWidth="44"
