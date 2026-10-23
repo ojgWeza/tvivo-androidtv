@@ -37,20 +37,34 @@ class UrlGuard(private val resolver: AddressResolver = AddressResolver { InetAdd
         return CheckedUrl(uri, addresses.first())
     }
     private fun isPublic(address: InetAddress): Boolean {
-        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress) return false
         val b = address.address.map { it.toInt() and 255 }
         if (b.size == 4) {
-            val a = b[0]; val second = b[1]
-            return a != 0 && a != 10 && a != 127 && !(a == 169 && second == 254) && !(a == 172 && second in 16..31) &&
-                !(a == 192 && second == 168) && !(a == 100 && second in 64..127) && a < 224
+            val a = b[0]; val second = b[1]; val third = b[2]
+            return a in 1..223 && a != 10 && a != 127 && !(a == 169 && second == 254) && !(a == 172 && second in 16..31) &&
+                !(a == 192 && (second == 168 || second == 0 && third == 0 || second == 31 && third == 196 || second == 88 && third == 99)) &&
+                !(a == 100 && second in 64..127) && !(a == 198 && second in 18..19) &&
+                !(a == 198 && second == 51 && third == 100) && !(a == 203 && second == 0 && third == 113) &&
+                !(a == 192 && second == 0 && third == 2) && a < 224
         }
         if (b.size != 16) return false
-        val uniqueLocal = b[0] and 0xfe == 0xfc
         val mapped = b.take(10).all { it == 0 } && b[10] == 255 && b[11] == 255
+        val compatible = b.take(12).all { it == 0 }
         val nat64 = b[0] == 0 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b
+        val nat64Local = nat64 && b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 1 && b[8] == 0
         val sixToFour = b[0] == 0x20 && b[1] == 0x02
-        val embedded = when { mapped -> b.takeLast(4); nat64 -> b.takeLast(4); sixToFour -> b.subList(2, 6); else -> null }
-        return !uniqueLocal && (embedded == null || isPublic(InetAddress.getByAddress(embedded.map(Int::toByte).toByteArray())))
+        val teredo = b[0] == 0x20 && b[1] == 0x01 && b[2] == 0 && b[3] == 0
+        val documentation = b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8
+        val embedded = when {
+            mapped || compatible || nat64 -> b.takeLast(4)
+            sixToFour -> b.subList(2, 6)
+            // Teredo stores the obfuscated client IPv4 address in its final 32 bits.
+            teredo -> b.takeLast(4).map { it xor 0xff }
+            else -> null
+        }
+        val embeddedIsPublic = embedded == null || isPublic(InetAddress.getByAddress(embedded.map(Int::toByte).toByteArray()))
+        if (!embeddedIsPublic || mapped || compatible || nat64 || nat64Local || teredo || documentation) return false
+        // Public IPv6 is an explicit allow-list: global unicast 2000::/3.
+        return b[0] in 0x20..0x3f
     }
 }
 data class CheckedUrl(val uri: URI, val address: InetAddress)

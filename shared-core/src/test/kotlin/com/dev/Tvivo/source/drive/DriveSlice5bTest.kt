@@ -2,6 +2,7 @@ package com.dev.Tvivo.source.drive
 
 import com.dev.Tvivo.source.SourceAccessToken
 import java.net.InetAddress
+import java.net.Inet6Address
 import java.util.ArrayDeque
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -98,6 +99,55 @@ class DriveSlice5bTest {
         val client = GuardedUrlClient(guard, PinnedConnection { count++; GuardedResponse(302, "/again") }, maxRedirects = 2)
         assertThrows(IllegalStateException::class.java) { client.get("https://safe.test/start") }
         assertEquals(3, count)
+    }
+
+    @Test fun urlGuardAllowsOnlyPublicIpv4AndRejectsEverySpecialPurposeBlock() {
+        val rejected = listOf(
+            "0.1.2.3", "10.1.2.3", "100.64.0.1", "100.127.255.254", "127.0.0.1",
+            "169.254.1.1", "172.16.0.1", "172.31.255.254", "192.0.0.1", "192.0.2.1", "192.31.196.1",
+            "192.88.99.1", "192.168.1.1", "198.18.0.1", "198.19.255.254", "198.51.100.1",
+            "203.0.113.1", "224.0.0.1", "240.0.0.1", "255.255.255.255"
+        )
+        rejected.forEach { ip -> assertRejectedAddress(ip) }
+        listOf("1.1.1.1", "8.8.8.8", "93.184.216.34", "192.0.1.1", "198.20.0.1", "223.255.255.254")
+            .forEach { ip -> assertAcceptedAddress(ip) }
+    }
+
+    @Test fun urlGuardAllowsOnlyGlobalUnicastIpv6AndRechecksEmbeddedIpv4() {
+        listOf(
+            "::", "::1", "::8.8.8.8", "fc00::1", "fdff::1", "fe80::1",
+            "ff02::1", "2001::1", "2001:db8::1", "64:ff9b::808:808", "64:ff9b:1::808:808",
+            "2002:0a00:1::1", "2001:0000:4136:e378:8000:63bf:3fff:fdd2"
+        ).forEach { ip -> assertRejectedAddress(ip) }
+        assertRejectedInet6(ByteArray(16).also { it[10] = 0xff.toByte(); it[11] = 0xff.toByte(); it[12] = 8; it[13] = 8; it[14] = 8; it[15] = 8 })
+        listOf("2001:4860:4860::8888", "2606:4700:4700::1111", "2a00:1450:4001::1", "3fff::1", "2002:0808:0808::1")
+            .forEach { ip -> assertAcceptedAddress(ip) }
+    }
+
+    @Test fun mockHttpStillRequiresItsExplicitFlagAndPublicResolvedAddress() {
+        val resolver = AddressResolver { listOf(InetAddress.getByName("93.184.216.34")) }
+        assertThrows(IllegalArgumentException::class.java) { UrlGuard(resolver).resolve("http://mock.test/file") }
+        assertEquals("mock.test", UrlGuard(resolver, allowMockHttp = true).resolve("http://mock.test/file").uri.host)
+        assertThrows(IllegalArgumentException::class.java) {
+            UrlGuard(AddressResolver { listOf(InetAddress.getByName("127.0.0.1")) }, allowMockHttp = true).resolve("http://mock.test/file")
+        }
+    }
+
+    private fun assertRejectedAddress(ip: String) {
+        assertThrows("$ip must be rejected", IllegalArgumentException::class.java) {
+            UrlGuard(AddressResolver { listOf(InetAddress.getByName(ip)) }).resolve("https://address.test/")
+        }
+    }
+
+    private fun assertAcceptedAddress(ip: String) {
+        assertEquals(InetAddress.getByName(ip), UrlGuard(AddressResolver { listOf(InetAddress.getByName(ip)) }).resolve("https://address.test/").address)
+    }
+
+    private fun assertRejectedInet6(bytes: ByteArray) {
+        val address = Inet6Address.getByAddress(null, bytes, -1)
+        assertThrows(IllegalArgumentException::class.java) {
+            UrlGuard(AddressResolver { listOf(address) }).resolve("https://address.test/")
+        }
     }
 
     private fun syncEngine(store: BootstrapStore, sleeper: suspend (Long) -> Unit = {}, jitter: (Long) -> Long = { 0 }, accountId: String = "slice5b-test-account", syncedTimes: MutableList<Long> = mutableListOf()) = DriveSyncEngine(
