@@ -142,3 +142,9 @@ CREATE INDEX index_drive_index_state_accountId_bootstrapState ON drive_index_sta
 - The project bible's v7 is the current development schema; the product bible's v5 line describes an older shipped state. Migration coverage still starts at real v5.
 - Existing `AccountIdentity.of` does not include the HTTP/HTTPS scheme in its Xtream hash (the TODO already calls for a separation test). This slice preserves its exact output to avoid orphaning user rows; a future change to that identity needs an explicit migration rather than a silent recompute.
 - A valid empty list and a corrupt/missing file have distinct outcomes. Each list can commit independently after its own validation; an invalid list retains its last-good generation, even when another changed list is valid.
+
+## Security follow-up (automated review of slice 2, 2026-10-23) — required before the feature flag is enabled
+
+LibraryParser's URL check is only a first filter. To do:
+1. Parser: strip a trailing dot before host comparison; reject single-label hosts and `.lan`, `.home.arpa`, `.internal`, `.local`; reject non-canonical numeric hosts (all-digit/hex/octal, fewer than 4 dotted parts); add fc00::/7, 100.64.0.0/10, unspecified, IPv4-mapped and NAT64/6to4-embedded private IPv4 to the private ranges.
+2. Fetch time (slice 5 sync + playback/image layer): resolve the host, reject private/loopback/link-local/multicast results, and connect to the exact checked address (pin the IP to stop DNS rebinding); re-check on every redirect hop. The mock's explicit local HTTP origin stays allowed only via the allowMockHttp flag in debug builds.
