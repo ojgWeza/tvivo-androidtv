@@ -151,3 +151,6 @@ LibraryParser's URL check is only a first filter. To do:
 
 ### Follow-up 2 (security review of slice 5, 2026-10-23) — UrlGuard must deny by default
 Make `UrlGuard`/`isPublic` in shared-core/.../source/drive/DriveSyncEngine.kt allow-list based: IPv6 allowed only in global unicast 2000::/3, then reject 2001::/32 (Teredo, re-check embedded IPv4), 2001:db8::/32, IPv4-compatible ::/96, 64:ff9b:1::/48, and re-check the IPv4 embedded in NAT64/6to4/mapped forms. Add IANA special-purpose IPv4 blocks 192.0.0.0/24, 198.18.0.0/15, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 (plus existing private/CGNAT/loopback/link-local/multicast/reserved). Tests for each. Run after slice 5b (same files).
+
+### Follow-up 3 (security review of slice 6, 2026-10-23) — sign-out must not fail open
+AccountViewModel sign-out currently does `runCatching { SourceStore...disconnect(...) }` then `store.wipe()`. Fix: sign-out must remove every source-store entry (or explicitly disconnect each source), even when the legacy credential cannot be loaded; failures must not be swallowed — surface an error state and keep the user signed-in-visible instead of reporting success; never clear the Tink keyset. Add tests (disconnect throws -> error shown, entry still present or retried; no legacy credential -> source store still cleared). Do after slice 7a (same files).
