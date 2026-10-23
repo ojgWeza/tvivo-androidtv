@@ -167,26 +167,58 @@ private fun optionalUrl(obj: JsonObject, name: String, allowMockHttp: Boolean): 
 private fun validateUrl(value: String, allowMockHttp: Boolean) {
     val uri = runCatching { URI(value) }.getOrNull() ?: reject(RejectionReason.UNSAFE_URL, "Invalid URL")
     val scheme = uri.scheme?.lowercase()
-    val host = uri.host?.lowercase() ?: reject(RejectionReason.UNSAFE_URL, "URL needs a host")
+    val host = uri.host?.lowercase()?.removeSuffix(".") ?: reject(RejectionReason.UNSAFE_URL, "URL needs a host")
     if (uri.rawUserInfo != null || uri.port !in -1..65535 || uri.fragment != null) reject(RejectionReason.UNSAFE_URL, "Invalid URL authority")
     val loopback = host == "localhost" || host.endsWith(".localhost") || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     val localHttpAllowed = allowMockHttp && scheme == "http" && (loopback || isPrivateAddress(host))
     if (scheme !in setOf("https", "http") || scheme == "http" && !localHttpAllowed) reject(RejectionReason.UNSAFE_URL, "Only HTTPS URLs are supported")
     if (loopback && !localHttpAllowed) reject(RejectionReason.UNSAFE_URL, "Local URLs are not supported")
-    if (host.endsWith(".local") || isPrivateAddress(host)) {
+    val localSuffix = listOf(".lan", ".home.arpa", ".internal", ".local").any(host::endsWith)
+    if (!host.startsWith("[") && ('.' !in host || localSuffix || isNonCanonicalNumericHost(host)) || isPrivateAddress(host)) {
         if (!localHttpAllowed) reject(RejectionReason.UNSAFE_URL, "Private network URLs are not supported")
     }
 }
+
+private fun isNonCanonicalNumericHost(host: String): Boolean {
+    val labels = host.split('.')
+    if (labels.size < 4 && labels.all(::isNumericHostLabel)) return true
+    if (labels.size == 4 && labels.all(::isNumericHostLabel) && labels.any { it.toIntOrNull()?.let { part -> part !in 0..255 } != false }) return true
+    return labels.any { label ->
+        label.startsWith("0x") && label.length > 2 && label.drop(2).all { it.digitToIntOrNull(16) != null } ||
+            label.length > 1 && label.startsWith('0') && label.all { it in '0'..'7' }
+    }
+}
+
+private fun isNumericHostLabel(label: String) = label.isNotEmpty() && label.all { it.isDigit() }
+
 private fun isPrivateAddress(host: String): Boolean {
     val literal = host.removePrefix("[").removeSuffix("]")
     val ipv4 = literal.split('.').takeIf { it.size == 4 }?.mapNotNull { it.toIntOrNull() }
     if (ipv4?.size == 4) {
         val a = ipv4[0]; val b = ipv4[1]
-        return a == 0 || a == 10 || a == 127 || a == 169 && b == 254 || a == 172 && b in 16..31 || a == 192 && b == 168 || a >= 224
+        return isPrivateIpv4(ipv4)
     }
     if (literal.contains(':')) {
         val address = runCatching { InetAddress.getByName(literal) }.getOrNull() ?: return true
-        return address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress
+        val bytes = address.address
+        if (bytes.size == 4) return isPrivateIpv4(bytes.map { it.toInt() and 0xff })
+        if (bytes.size != 16) return true
+        val first = bytes[0].toInt() and 0xff
+        val second = bytes[1].toInt() and 0xff
+        val uniqueLocal = first and 0xfe == 0xfc
+        val mapped = bytes.take(10).all { it == 0.toByte() } && bytes[10] == 0xff.toByte() && bytes[11] == 0xff.toByte()
+        val nat64 = first == 0x00 && second == 0x64 && bytes[2] == 0xff.toByte() && bytes[3] == 0x9b.toByte() && bytes.slice(4..11).all { it == 0.toByte() }
+        val sixToFour = first == 0x20 && second == 0x02
+        val embeddedPrivate = (mapped || nat64 || sixToFour) && isPrivateIpv4(bytes.slice(if (sixToFour) 2..5 else 12..15).map { it.toInt() and 0xff })
+        return address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress ||
+            address.isMulticastAddress || uniqueLocal || embeddedPrivate
     }
     return false
+}
+
+private fun isPrivateIpv4(ip: List<Int>): Boolean {
+    if (ip.size != 4) return true
+    val a = ip[0]; val b = ip[1]
+    return a == 0 || a == 10 || a == 127 || a == 169 && b == 254 || a == 172 && b in 16..31 ||
+        a == 192 && b == 168 || a == 100 && b in 64..127 || a >= 224
 }

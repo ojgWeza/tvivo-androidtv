@@ -804,6 +804,22 @@
         "shared-core/src/test/kotlin/com/dev/Tvivo/source/library/LibraryParserTest.kt",
         "docs/drive-signin-plan-2026-10-23.md"
       ]
+    },
+    {
+      "id": "D-URL-VALIDATION",
+      "type": "fix",
+      "title": "Harden link-library URL host and address validation",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/library/LibraryParser.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/source/library/LibraryParserTest.kt",
+        ".codex-android-qa-exec-report.md"
+      ]
     }
   ]
 }

@@ -41,6 +41,40 @@ class LibraryParserTest {
         rejected(parseMovies(movieWithUrl("http://example.org/movie.mp4"), allowMockHttp = true), RejectionReason.UNSAFE_URL)
     }
 
+    @Test fun acceptsPublicHostsAndCanonicalPublicIpv4() {
+        for (url in listOf("https://example.org/movie.mp4", "https://example.org./movie.mp4", "https://8.8.8.8/movie.mp4")) {
+            assertTrue("Expected valid URL: $url", parseMovies(movieWithUrl(url)) is ParseResult.Valid)
+        }
+    }
+
+    @Test fun rejectsLocalNamesAndNonCanonicalNumericHosts() {
+        for (host in listOf(
+            "printer", "nas.lan", "router.home.arpa", "service.internal", "device.local",
+            "2130706433", "0x7f000001", "0177.0.0.1", "127.1", "127.0.1",
+            "127.0.0.999", "192.168.1.01",
+        )) {
+            rejected(parseMovies(movieWithUrl("https://$host/movie.mp4")), RejectionReason.UNSAFE_URL)
+        }
+    }
+
+    @Test fun rejectsPrivateSpecialAndEmbeddedIpv4Addresses() {
+        for (host in listOf(
+            "100.64.0.1", "100.127.255.254", "[fc00::1]", "[fd12:3456::1]", "[::]",
+            "[::ffff:192.168.1.1]", "[64:ff9b::192.168.1.1]",
+            "[2002:c0a8:0101::1]",
+        )) {
+            rejected(parseMovies(movieWithUrl("https://$host/movie.mp4")), RejectionReason.UNSAFE_URL)
+        }
+        for (host in listOf("[::ffff:8.8.8.8]", "[64:ff9b::8.8.8.8]", "[2002:0808:0808::1]", "[2001:4860:4860::8888]")) {
+            assertTrue("Expected public URL: $host", parseMovies(movieWithUrl("https://$host/movie.mp4")) is ParseResult.Valid)
+        }
+    }
+
+    @Test fun mockHttpFlagStillAllowsLoopbackButNotPublicHttp() {
+        assertTrue(parseMovies(movieWithUrl("http://localhost:8080/mock.mp4"), allowMockHttp = true) is ParseResult.Valid)
+        rejected(parseMovies(movieWithUrl("http://example.org./movie.mp4"), allowMockHttp = true), RejectionReason.UNSAFE_URL)
+    }
+
     @Test fun rejectsMissingRequiredFieldsAndMoreThanOneThousandItems() {
         rejected(parseMovies("""{"format":"tvivo.link-library","version":1,"kind":"movies","items":[{}]}"""), RejectionReason.MISSING_REQUIRED_FIELD)
         val item = """{"id":"d44bfc8e-4106-4a8a-8b69-b57c1d03486a","title":"A","group":"G","streamUrl":"https://example.org/a"}"""
