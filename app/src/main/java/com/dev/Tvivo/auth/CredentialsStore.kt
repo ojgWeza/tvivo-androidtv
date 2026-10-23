@@ -77,8 +77,6 @@ class CredentialsStore(private val context: Context) {
 
     suspend fun wipe() = withContext(Dispatchers.IO) {
         context.credentialsDataStore.edit { it.remove(BLOB) }
-        context.getSharedPreferences(KEYSET_PREF_FILE, Context.MODE_PRIVATE)
-            .edit().clear().apply()
         Unit
     }
 

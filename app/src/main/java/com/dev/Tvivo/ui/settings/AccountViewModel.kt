@@ -7,6 +7,7 @@ import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.AuthRepository
 import com.dev.Tvivo.auth.CredentialsStore
+import com.dev.Tvivo.auth.SourceStore
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -206,13 +207,17 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Wipes the stored credentials and the Tink keyset. The cached catalog is left
+     * Wipes the stored credentials while retaining the shared Tink keyset. The cached catalog is left
      * alone: it is account-scoped, so signing back into the same account finds it warm,
      * and signing into a different one cannot see it.
      */
     fun signOut() {
         viewModelScope.launch {
             DiagnosticLog.warn("account", "Signed out; stored credentials erased")
+            val current = store.load()
+            if (current != null) runCatching {
+                SourceStore.open(getApplication()).disconnect(AccountIdentity.of(current)) { true }
+            }
             store.wipe()
             _state.update { AccountUiState(isLoading = false, signedOut = true) }
         }

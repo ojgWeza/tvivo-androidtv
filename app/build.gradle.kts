@@ -17,6 +17,9 @@ android {
         versionCode = 1
         versionName = "0.1.0-poc"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val driveTvClientId = providers.gradleProperty("driveTvClientId").orElse("").get()
+        require(driveTvClientId.matches(Regex("[A-Za-z0-9._-]*")))
+        buildConfigField("String", "DRIVE_TV_CLIENT_ID", "\"$driveTvClientId\"")
     }
 
     signingConfigs {
@@ -31,8 +34,10 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "DRIVE_SOURCE_ENABLED", "true")
         }
         release {
+            buildConfigField("boolean", "DRIVE_SOURCE_ENABLED", "false")
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

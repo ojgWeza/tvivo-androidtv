@@ -96,6 +96,12 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
             repository.authenticate(credentials)
                 .onSuccess { account ->
                     store.save(account.credentials)
+                    // Authentication already succeeded; retain the legacy blob for compatibility.
+                    runCatching {
+                        SourceStore.open(getApplication()).stageSwitch(
+                            SavedSource.xtream(account.credentials)
+                        ) { true }
+                    }
                     _state.update { it.copy(isSubmitting = false, authenticated = account) }
                 }
                 .onFailure { throwable ->

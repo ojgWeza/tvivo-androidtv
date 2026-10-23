@@ -886,6 +886,22 @@
         "shared-core/src/test/kotlin/com/dev/Tvivo/source/drive/DriveSlice5bTest.kt",
         ".codex-android-qa-exec-report.md"
       ]
+    },
+    {
+      "id": "D-DRIVE-AUTH-STORE",
+      "title": "Encrypted multi-source credentials and device authorization",
+      "type": "ux-perk",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/auth/SourceStore.kt",
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DeviceCodeAuthorizer.kt",
+        "docs/drive-signin-plan-2026-10-23.md"
+      ]
     }
   ]
 }

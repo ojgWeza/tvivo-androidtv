@@ -40,6 +40,7 @@ sealed interface AuthorizationStep {
     data object Pending : AuthorizationStep
     data object Denied : AuthorizationStep
     data object Expired : AuthorizationStep
+    data object ReauthRequired : AuthorizationStep
 }
 
 /** One instance per candidate source; UI owns consent resolution and cancellation. */
