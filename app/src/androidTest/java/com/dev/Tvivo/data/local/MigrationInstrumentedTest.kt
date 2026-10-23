@@ -22,16 +22,46 @@ class MigrationInstrumentedTest {
     private val types = listOf("vod", "live", "series")
 
     @Test
-    fun exported_v5_migrates_to_valid_v7_without_losing_user_rows() {
+    fun exported_v6_and_v7_preserve_profile_and_user_state_on_upgrade() {
+        for (version in listOf(6, 7)) {
+            val databaseName = "drive-v$version.db"
+            helper.createDatabase(databaseName, version).use { db ->
+                db.execSQL("INSERT INTO profile (id,accountKey,name,kind,createdAt) VALUES ('adult','account','Adult','Adult',1)")
+                db.execSQL("INSERT INTO favourites (accountId,profileId,contentType,itemId,addedAt) VALUES ('account','adult','vod','movie',2)")
+                db.execSQL("INSERT INTO resume_positions (accountId,profileId,contentType,itemId,positionMs,durationMs,updatedAt) VALUES ('account','adult','vod','movie',30000,90000,3)")
+                db.execSQL("INSERT INTO watched (profileId,accountKey,contentType,itemId,watchedAt) VALUES ('adult','account','series','episode',4)")
+                db.execSQL("INSERT INTO recently_played (profileId,accountKey,contentType,itemId,playedAt) VALUES ('adult','account','vod','movie',5)")
+            }
+            val migrations = if (version == 6) arrayOf(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8)
+                else arrayOf(AppDatabase.MIGRATION_7_8)
+            helper.runMigrationsAndValidate(databaseName, 8, true, *migrations).use { db ->
+                for ((table, column, expected) in listOf(
+                    Triple("profile", "id", "adult"), Triple("favourites", "itemId", "movie"),
+                    Triple("resume_positions", "itemId", "movie"), Triple("watched", "itemId", "episode"),
+                    Triple("recently_played", "itemId", "movie")
+                )) {
+                    db.query("SELECT $column FROM $table").use { rows ->
+                        assertTrue(rows.moveToFirst())
+                        assertEquals(expected, rows.getString(0))
+                        assertEquals(1, rows.count)
+                    }
+                }
+                db.query("PRAGMA foreign_key_check").use { assertEquals(0, it.count) }
+            }
+        }
+    }
+
+    @Test
+    fun exported_v5_migrates_to_valid_v8_without_losing_user_rows() {
         val before = helper.createDatabase(name, 5).use { db ->
             seed(db)
             oldUserRows(db)
         }
         assertUserRows(before)
 
-        // MigrationTestHelper reads 7.json and checks the complete resulting schema.
-        helper.runMigrationsAndValidate(name, 7, true,
-            AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7).use { db ->
+        // MigrationTestHelper reads 8.json and checks the complete resulting schema.
+        helper.runMigrationsAndValidate(name, 8, true,
+            AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8).use { db ->
             val after = oldUserRows(db)
             assertEquals(before, after)
             assertUserRows(after)

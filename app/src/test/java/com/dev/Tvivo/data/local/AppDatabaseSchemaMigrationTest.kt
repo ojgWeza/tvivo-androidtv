@@ -79,7 +79,7 @@ class AppDatabaseSchemaMigrationTest {
                 VALUES ('a','a','series','older',2)""")
         }
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_6_7).allowMainThreadQueries().build()
+            .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8).allowMainThreadQueries().build()
         try {
             val db = room.openHelper.writableDatabase
             db.query("SELECT plot FROM series_episodes WHERE episodeId='ep'").use { rows ->
@@ -111,7 +111,7 @@ class AppDatabaseSchemaMigrationTest {
 
         // Room runs both migrations, then validates the whole schema and identity hash on open.
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7)
+            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8)
             .allowMainThreadQueries()
             .build()
         try {

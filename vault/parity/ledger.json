@@ -820,6 +820,22 @@
         "shared-core/src/test/kotlin/com/dev/Tvivo/source/library/LibraryParserTest.kt",
         ".codex-android-qa-exec-report.md"
       ]
+    },
+    {
+      "id": "D-DRIVE-CACHE",
+      "title": "Account-scoped Drive index generations preserve last good rows and user state",
+      "type": "lesson",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/drive-slice1-source-session-2026-10-23.md",
+        "app/src/main/java/com/dev/Tvivo/data/repository/DriveRepository.kt",
+        "app/src/test/java/com/dev/Tvivo/data/repository/DriveRepositoryTest.kt"
+      ]
     }
   ]
 }

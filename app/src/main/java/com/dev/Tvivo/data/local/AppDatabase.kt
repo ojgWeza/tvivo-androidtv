@@ -8,6 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dev.Tvivo.data.local.dao.CatalogSyncDao
 import com.dev.Tvivo.data.local.dao.CategoryDao
+import com.dev.Tvivo.data.local.dao.DriveDao
 import com.dev.Tvivo.data.local.dao.FavouriteDao
 import com.dev.Tvivo.data.local.dao.LiveDao
 import com.dev.Tvivo.data.local.dao.ProfileDao
@@ -22,9 +23,15 @@ import com.dev.Tvivo.data.local.dao.VodDao
 import com.dev.Tvivo.data.local.dao.WatchedDao
 import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import com.dev.Tvivo.data.local.entities.DriveEpisodeEntity
+import com.dev.Tvivo.data.local.entities.DriveIndexStateEntity
+import com.dev.Tvivo.data.local.entities.DriveMovieEntity
+import com.dev.Tvivo.data.local.entities.DriveSeasonEntity
+import com.dev.Tvivo.data.local.entities.DriveShowEntity
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.data.local.entities.FavouriteEntity
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
+import com.dev.Tvivo.data.local.entities.MusicTrackEntity
 import com.dev.Tvivo.data.local.entities.ProfileAllowEntity
 import com.dev.Tvivo.data.local.entities.ProfileEntity
 import com.dev.Tvivo.data.local.entities.RecentlyPlayedEntity
@@ -52,9 +59,11 @@ import com.dev.Tvivo.data.local.entities.WatchedEntity
         WatchedEntity::class,
         VisitEntity::class,
         ShelfVisitEntity::class,
-        RecentlyPlayedEntity::class
+        RecentlyPlayedEntity::class,
+        DriveMovieEntity::class, DriveShowEntity::class, DriveSeasonEntity::class,
+        DriveEpisodeEntity::class, MusicTrackEntity::class, DriveIndexStateEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -73,6 +82,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun visitDao(): VisitDao
     abstract fun shelfVisitDao(): ShelfVisitDao
     abstract fun recentlyPlayedDao(): RecentlyPlayedDao
+    abstract fun driveDao(): DriveDao
 
     companion object {
         const val DATABASE_NAME = "tvivo.db"
@@ -89,6 +99,36 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE series ADD COLUMN genre TEXT")
                 db.execSQL("ALTER TABLE series ADD COLUMN `cast` TEXT")
                 db.execSQL("ALTER TABLE series ADD COLUMN year TEXT")
+            }
+        }
+
+        /** New source-local cache only; every v7 table and user row is left intact. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val statements = listOf(
+                    "CREATE TABLE IF NOT EXISTS `drive_movies` (`accountId` TEXT NOT NULL, `id` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `title` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `directUrl` TEXT NOT NULL, `posterUrl` TEXT, `year` INTEGER, `plot` TEXT, `sortOrder` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `id`, `generation`))",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_movies_accountId_categoryId_sortOrder` ON `drive_movies` (`accountId`, `categoryId`, `sortOrder`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_movies_accountId_nameNormalized` ON `drive_movies` (`accountId`, `nameNormalized`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_movies_accountId_generation` ON `drive_movies` (`accountId`, `generation`)",
+                    "CREATE TABLE IF NOT EXISTS `drive_shows` (`accountId` TEXT NOT NULL, `id` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `title` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `posterUrl` TEXT, `year` INTEGER, `plot` TEXT, `sortOrder` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `id`, `generation`))",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_shows_accountId_categoryId_sortOrder` ON `drive_shows` (`accountId`, `categoryId`, `sortOrder`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_shows_accountId_nameNormalized` ON `drive_shows` (`accountId`, `nameNormalized`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_shows_accountId_generation` ON `drive_shows` (`accountId`, `generation`)",
+                    "CREATE TABLE IF NOT EXISTS `drive_seasons` (`accountId` TEXT NOT NULL, `showId` TEXT NOT NULL, `seasonNumber` INTEGER NOT NULL, `title` TEXT, `sortOrder` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `showId`, `seasonNumber`, `generation`), FOREIGN KEY(`accountId`, `showId`, `generation`) REFERENCES `drive_shows`(`accountId`, `id`, `generation`) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_seasons_accountId_showId_sortOrder` ON `drive_seasons` (`accountId`, `showId`, `sortOrder`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_seasons_accountId_showId_generation` ON `drive_seasons` (`accountId`, `showId`, `generation`)",
+                    "CREATE TABLE IF NOT EXISTS `drive_episodes` (`accountId` TEXT NOT NULL, `id` TEXT NOT NULL, `showId` TEXT NOT NULL, `seasonNumber` INTEGER NOT NULL, `episodeNumber` INTEGER NOT NULL, `title` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `directUrl` TEXT NOT NULL, `posterUrl` TEXT, `plot` TEXT, `sortOrder` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `id`, `generation`), FOREIGN KEY(`accountId`, `showId`, `seasonNumber`, `generation`) REFERENCES `drive_seasons`(`accountId`, `showId`, `seasonNumber`, `generation`) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_episodes_accountId_showId_seasonNumber_sortOrder` ON `drive_episodes` (`accountId`, `showId`, `seasonNumber`, `sortOrder`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_episodes_accountId_generation` ON `drive_episodes` (`accountId`, `generation`)",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_episodes_accountId_showId_seasonNumber_generation` ON `drive_episodes` (`accountId`, `showId`, `seasonNumber`, `generation`)",
+                    "CREATE TABLE IF NOT EXISTS `music_tracks` (`accountId` TEXT NOT NULL, `id` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `title` TEXT NOT NULL, `nameDisplay` TEXT NOT NULL, `nameNormalized` TEXT NOT NULL, `directUrl` TEXT NOT NULL, `artist` TEXT, `album` TEXT, `artworkUrl` TEXT, `year` INTEGER, `durationSeconds` INTEGER, `sortOrder` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`accountId`, `id`, `generation`))",
+                    "CREATE INDEX IF NOT EXISTS `index_music_tracks_accountId_categoryId_sortOrder` ON `music_tracks` (`accountId`, `categoryId`, `sortOrder`)",
+                    "CREATE INDEX IF NOT EXISTS `index_music_tracks_accountId_nameNormalized` ON `music_tracks` (`accountId`, `nameNormalized`)",
+                    "CREATE INDEX IF NOT EXISTS `index_music_tracks_accountId_generation` ON `music_tracks` (`accountId`, `generation`)",
+                    "CREATE TABLE IF NOT EXISTS `drive_index_state` (`accountId` TEXT NOT NULL, `kind` TEXT NOT NULL, `folderId` TEXT, `fileId` TEXT, `version` TEXT, `md5Checksum` TEXT, `modifiedAtMillis` INTEGER, `sizeBytes` INTEGER, `generation` INTEGER NOT NULL, `lastSuccessfulSyncAt` INTEGER, `bootstrapState` TEXT NOT NULL, PRIMARY KEY(`accountId`, `kind`))",
+                    "CREATE INDEX IF NOT EXISTS `index_drive_index_state_accountId_bootstrapState` ON `drive_index_state` (`accountId`, `bootstrapState`)"
+                )
+                statements.forEach(db::execSQL)
             }
         }
 
@@ -256,7 +296,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // data the app holds and the panel cannot give them back — they are
                     // what Continue watching and Favourites are built from. A dropped
                     // table here is a silently emptied folder the user curated.
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .build()
                     .also { instance = it }
             }
