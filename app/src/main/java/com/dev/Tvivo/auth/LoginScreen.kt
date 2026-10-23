@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -27,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -65,6 +67,8 @@ import com.dev.Tvivo.data.AppError
 fun LoginScreen(
     onAuthenticated: (AuthenticatedAccount) -> Unit,
     showKeyboardOnOpen: Boolean = true,
+    driveSourceEnabled: Boolean = false,
+    onDriveSignIn: () -> Unit = {},
     viewModel: LoginViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -349,6 +353,19 @@ fun LoginScreen(
                         Text("Clear")
                     }
                 }
+            }
+            if (driveSourceEnabled && !isTelevision) {
+                Button(onClick = onDriveSignIn,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("drive-sign-in")) {
+                    Text("Sign in with Google Drive")
+                }
+            }
+        }
+        if (driveSourceEnabled && isTelevision) {
+            Button(onClick = { keyboard?.hide(); onDriveSignIn() },
+                modifier = Modifier.align(Alignment.TopEnd).heightIn(min = 48.dp)
+                    .tvFocusFrame().testTag("drive-sign-in")) {
+                Text("Sign in with Google Drive")
             }
         }
     }

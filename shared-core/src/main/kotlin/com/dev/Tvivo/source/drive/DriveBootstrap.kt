@@ -15,9 +15,18 @@ sealed interface BootstrapResult {
     data class NeedsChoice(val rootIds: List<String>) : BootstrapResult
 }
 
-class DriveBootstrap(private val store: IndexStore, private val state: BootstrapStateStore) {
+enum class BootstrapStep { FINDING_LIBRARY, CREATING_FOLDERS, ADDING_SAMPLE_LINKS, OPENING_SAVED_LIBRARY }
+
+class DriveBootstrap(
+    private val store: IndexStore,
+    private val state: BootstrapStateStore,
+    private val onStep: (BootstrapStep) -> Unit = {},
+    private val seedContent: suspend () -> SeedContent = { Seed.buildSeedContent() },
+    private val allowMockHttp: Boolean = false
+) {
     private val gson = Gson()
     suspend fun run(): BootstrapResult {
+        onStep(BootstrapStep.FINDING_LIBRARY)
         val saved = state.load()
         val roots = all(null).filter { it.name == ROOT_NAME && it.mimeType == DriveIndexStore.FOLDER_MIME }
         val selected = saved.rootId?.let { id -> roots.firstOrNull { it.id == id } }
@@ -33,14 +42,17 @@ class DriveBootstrap(private val store: IndexStore, private val state: Bootstrap
         val pendingState = state.load()
         val pending = pendingState.rootId == root.id && pendingState.pending
         if (!pending) {
+            onStep(BootstrapStep.OPENING_SAVED_LIBRARY)
             state.save(pendingState.copy(rootId = root.id))
             return BootstrapResult.Ready(root.id, false)
         }
 
+        onStep(BootstrapStep.CREATING_FOLDERS)
         val children = mutableMapOf<String, String>()
         for (name in CHILD_FOLDERS) children[name] = getOrCreate(root.id, name, DriveIndexStore.FOLDER_MIME).id
         val seeded = pendingState.createdByApp
-        val seed = Seed.buildSeedContent()
+        onStep(BootstrapStep.ADDING_SAMPLE_LINKS)
+        val seed = seedContent()
         val indexes = listOf(
             Triple("Movies", "index.json", seed.movies), Triple("Series", "index.json", seed.series), Triple("Music", "index.json", seed.songs),
         )
@@ -55,6 +67,7 @@ class DriveBootstrap(private val store: IndexStore, private val state: Bootstrap
         val marker = findChild(root.id, "library.json", DriveIndexStore.JSON_MIME)
         if (marker == null) store.writeIndex(root.id, "library.json", """{"format":"tvivo.link-library","version":1,"bootstrap":"complete"}""".toByteArray())
         else if (parseLibraryMarker(store.readIndex(marker.id).toString(Charsets.UTF_8)) !is ParseResult.Valid) throw IllegalStateException("Invalid library marker")
+        onStep(BootstrapStep.OPENING_SAVED_LIBRARY)
         state.save(BootstrapState(root.id, pending = false, createdByApp = false))
         return BootstrapResult.Ready(root.id, seeded)
     }
@@ -81,7 +94,7 @@ class DriveBootstrap(private val store: IndexStore, private val state: Bootstrap
     }
     private fun validateIndex(folder: String, bytes: ByteArray) {
         val json = bytes.toString(Charsets.UTF_8)
-        val valid = when (folder) { "Movies" -> parseMovies(json); "Series" -> parseSeries(json); else -> parseMusic(json) }
+        val valid = when (folder) { "Movies" -> parseMovies(json, allowMockHttp); "Series" -> parseSeries(json, allowMockHttp); else -> parseMusic(json, allowMockHttp) }
         if (valid !is ParseResult.Valid) throw IllegalStateException("Invalid existing index $folder/index.json")
     }
     private fun encode(value: Any): ByteArray {

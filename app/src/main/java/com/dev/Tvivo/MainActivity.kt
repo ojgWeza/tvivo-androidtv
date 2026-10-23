@@ -36,6 +36,18 @@ import com.dev.Tvivo.auth.AccountIdentity
 import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.auth.LoginScreen
+import com.dev.Tvivo.auth.SourceSession
+import com.dev.Tvivo.auth.SourceKind
+import com.dev.Tvivo.auth.SourceSnapshot
+import com.dev.Tvivo.auth.SourceStore
+import com.dev.Tvivo.auth.AndroidDriveGateway
+import com.dev.Tvivo.auth.DriveFlowViewModel
+import com.dev.Tvivo.auth.DriveFlowState
+import com.dev.Tvivo.auth.DriveFlowScreen
+import com.dev.Tvivo.auth.DriveHomeScreen
+import com.dev.Tvivo.auth.DriveAccountScreen
+import com.dev.Tvivo.auth.DriveAccount
+import com.dev.Tvivo.auth.DriveFailureCopy
 import com.dev.Tvivo.diagnostics.CodecProbe
 import com.dev.Tvivo.sync.RefreshWorker
 import com.dev.Tvivo.data.local.AppDatabase
@@ -81,6 +93,9 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 
 class MainActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: android.content.Context) {
@@ -159,6 +174,24 @@ class MainActivity : ComponentActivity() {
 internal fun shouldAutoShowLoginKeyboard(isTelevision: Boolean, switchingAccount: Boolean): Boolean =
     isTelevision && !switchingAccount
 
+internal fun sourceStartupRoute(
+    snapshot: SourceSnapshot,
+    legacyCredentials: Credentials?,
+    driveSourceEnabled: Boolean,
+    tab: ShellTab
+): Route {
+    if (!driveSourceEnabled) return legacyCredentials?.let { Route.Main(it, tab) } ?: Route.Login
+    return when (val active = snapshot.active) {
+        null -> Route.Login
+        else -> when (active.kind) {
+            SourceKind.XTREAM -> active.credentials?.let { Route.Main(it, tab) } ?: Route.Login
+            SourceKind.DRIVE -> active.permissionId?.let {
+                Route.DriveHome(SourceSession.Drive(active.id, it))
+            } ?: Route.Login
+        }
+    }
+}
+
 /**
  * The one place a movie or channel URL is built and handed to the player.
  *
@@ -217,6 +250,9 @@ internal sealed interface Route {
      *  animate a bar on a timer. */
     data class Loading(val progress: Float, val caption: String) : Route
     data object Login : Route
+    data object DriveFlow : Route
+    data class DriveHome(val session: SourceSession.Drive) : Route
+    data class DriveAccount(val session: SourceSession.Drive) : Route
     data class Main(val credentials: Credentials, val tab: ShellTab) : Route
     data class Home(val credentials: Credentials) : Route
     data class Browse(val credentials: Credentials, val type: ContentType) : Route
@@ -270,6 +306,9 @@ private val shellBrowseSaver = listSaver<ShellBrowseState, String>(
 private fun Route.diagnosticName(): String = when (this) {
     is Route.Loading -> "Loading"
     Route.Login -> "Login"
+    Route.DriveFlow -> "Drive authorization"
+    is Route.DriveHome -> "Drive home"
+    is Route.DriveAccount -> "Drive account"
     is Route.Main -> "Main ${tab.name}"
     is Route.Home -> "Home"
     is Route.Browse -> "Browse ${type.name}"
@@ -286,6 +325,20 @@ private fun TvivoApp() {
     val context = LocalContext.current
     val isTelevision = LocalIsTelevision.current
     val store = remember { CredentialsStore(context.applicationContext) }
+    val driveGateway = remember(context) { AndroidDriveGateway(context.applicationContext) }
+    val driveFlow: DriveFlowViewModel = viewModel(factory = remember(driveGateway) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                DriveFlowViewModel(driveGateway) as T
+        }
+    })
+    val driveFlowState by driveFlow.state.collectAsStateWithLifecycle()
+    var driveAccount by remember { mutableStateOf<DriveAccount?>(null) }
+    var driveSeeded by remember { mutableStateOf(false) }
+    var driveSyncing by remember { mutableStateOf(false) }
+    var driveSyncMessage by remember { mutableStateOf<String?>(null) }
+    var driveSyncJob by remember { mutableStateOf<Job?>(null) }
     var route by remember {
         mutableStateOf<Route>(Route.Loading(0.15f, "Starting…"))
     }
@@ -319,7 +372,7 @@ private fun TvivoApp() {
         val activity = context as? android.app.Activity ?: return@LaunchedEffect
         val requestedOrientation = when {
             isTelevision -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            route is Route.Login || route is Route.Loading ->
+            route is Route.Login || route is Route.Loading || route is Route.DriveFlow ->
                 ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
@@ -348,9 +401,13 @@ private fun TvivoApp() {
     LaunchedEffect(Unit) {
         route = Route.Loading(0.35f, "Unlocking your account")
         val credentials = store.load()
+        val snapshot = if (BuildConfig.DRIVE_SOURCE_ENABLED) SourceStore.open(context.applicationContext).load()
+            else SourceSnapshot(emptyList(), null)
         route = Route.Loading(0.8f, "Opening your library")
         AppDatabase.get(context.applicationContext)
-        route = credentials?.let { Route.Main(it, savedTab) } ?: Route.Login
+        val destination = sourceStartupRoute(snapshot, credentials, BuildConfig.DRIVE_SOURCE_ENABLED, savedTab)
+        if (destination is Route.DriveHome) driveAccount = driveGateway.savedAccount(destination.session)
+        route = destination
     }
 
     // The tile Home returns focus to. Kept out of Route.Home so Back restores it
@@ -360,6 +417,7 @@ private fun TvivoApp() {
     // Set when Login was opened from Settings with an account still signed in, so Back
     // returns to Home instead of exiting an app the user is still signed into.
     var switchingAccount by remember { mutableStateOf<Credentials?>(null) }
+    var switchingDrive by remember { mutableStateOf<SourceSession.Drive?>(null) }
 
     val account: AccountViewModel = viewModel()
     val accountState by account.state.collectAsStateWithLifecycle()
@@ -376,7 +434,10 @@ private fun TvivoApp() {
             route is Route.Subscription ||
             route is Route.Diagnostics ||
             route is Route.NetworkDiagnostics ||
-            (route is Route.Login && switchingAccount != null)
+            route is Route.DriveFlow ||
+            route is Route.DriveAccount ||
+            route is Route.DriveHome ||
+            (route is Route.Login && (switchingAccount != null || switchingDrive != null))
     ) {
         when (val current = route) {
             is Route.Main -> {
@@ -410,10 +471,16 @@ private fun TvivoApp() {
             is Route.Subscription -> route = Route.Main(current.credentials, ShellTab.Settings)
             is Route.Diagnostics -> route = Route.Main(current.credentials, ShellTab.Settings)
             is Route.NetworkDiagnostics -> route = Route.Main(current.credentials, ShellTab.Settings)
+            Route.DriveFlow -> { driveFlow.cancel(); route = Route.Login }
+            is Route.DriveAccount -> route = Route.DriveHome(current.session)
+            is Route.DriveHome -> (context as? android.app.Activity)?.finish()
             is Route.Login -> switchingAccount?.let {
                 switchingAccount = null
                 savedTab = ShellTab.MyTvivo
                 route = Route.Main(it, ShellTab.MyTvivo)
+            } ?: switchingDrive?.let {
+                switchingDrive = null
+                route = Route.DriveHome(it)
             }
             else -> Unit
         }
@@ -427,11 +494,14 @@ private fun TvivoApp() {
 
         Route.Login -> LoginScreen(
             showKeyboardOnOpen = shouldAutoShowLoginKeyboard(
-                isTelevision = LocalIsTelevision.current, switchingAccount = switchingAccount != null),
+                isTelevision = LocalIsTelevision.current, switchingAccount = switchingAccount != null || switchingDrive != null),
+            driveSourceEnabled = BuildConfig.DRIVE_SOURCE_ENABLED,
+            onDriveSignIn = { if (BuildConfig.DRIVE_SOURCE_ENABLED) route = Route.DriveFlow },
             onAuthenticated = { authenticated ->
                 // Re-read the account: after a sign-out or a switch, the strip on Home
                 // would otherwise still describe the previous subscription.
                 switchingAccount = null
+                switchingDrive = null
                 account.load()
                 savedTab = ShellTab.MyTvivo
                 pendingHomeFocusKey = null
@@ -442,6 +512,90 @@ private fun TvivoApp() {
                 route = Route.Main(authenticated.credentials, ShellTab.MyTvivo)
             }
         )
+
+        Route.DriveFlow -> {
+            LaunchedEffect(Unit) { driveFlow.start(isTelevision) }
+            LaunchedEffect(driveFlowState) {
+                val ready = driveFlowState as? DriveFlowState.Ready ?: return@LaunchedEffect
+                driveAccount = ready.account
+                driveSeeded = ready.seeded
+                switchingAccount = null
+                switchingDrive = null
+                driveSyncMessage = null
+                route = Route.DriveHome(ready.account.session)
+            }
+            DriveFlowScreen(driveFlowState,
+                onRefreshCode = driveFlow::refreshCode,
+                onRetry = {
+                    if (driveFlowState is DriveFlowState.Failed &&
+                        (driveFlowState as DriveFlowState.Failed).retryAuthorization)
+                        driveFlow.start(isTelevision)
+                    else driveFlow.retry()
+                },
+                onChooseFolder = driveFlow::chooseFolder,
+                onCancel = { driveFlow.cancel(); route = Route.Login })
+        }
+
+        is Route.DriveHome -> {
+            val accountInfo = driveAccount
+            if (accountInfo == null || accountInfo.session.id != current.session.id) {
+                LaunchedEffect(current.session) { driveAccount = driveGateway.savedAccount(current.session) }
+            } else {
+                if (accountInfo.displayName == null && accountInfo.email == null) LaunchedEffect(current.session) {
+                    val refreshed = driveGateway.refreshIdentity(accountInfo)
+                    if (route == current && refreshed != accountInfo) driveAccount = refreshed
+                }
+                DriveHomeScreen(accountInfo, driveSeeded) { route = Route.DriveAccount(current.session) }
+            }
+        }
+
+        is Route.DriveAccount -> {
+            val accountInfo = driveAccount
+            if (accountInfo == null || accountInfo.session.id != current.session.id) {
+                LaunchedEffect(current.session) { driveAccount = driveGateway.savedAccount(current.session) }
+            } else {
+                if (accountInfo.displayName == null && accountInfo.email == null) LaunchedEffect(current.session) {
+                    val refreshed = driveGateway.refreshIdentity(accountInfo)
+                    if (route == current && refreshed != accountInfo) driveAccount = refreshed
+                }
+                DriveAccountScreen(accountInfo, driveSyncing, driveSyncMessage,
+                onResync = {
+                    if (!driveSyncing) {
+                        driveSyncing = true
+                        driveSyncMessage = null
+                        driveSyncJob = shellScope.launch {
+                            try {
+                                val at = driveGateway.resync(current.session)
+                                if (route == current) {
+                                    driveAccount = accountInfo.copy(lastSyncAt = at)
+                                    driveSyncMessage = "Library is up to date."
+                                }
+                            } catch (failure: Throwable) {
+                                if (failure !is kotlinx.coroutines.CancellationException && route == current)
+                                    driveSyncMessage = DriveFailureCopy.message(failure)
+                            } finally { driveSyncing = false }
+                        }
+                    }
+                },
+                onSwitchSource = {
+                    driveSyncJob?.cancel()
+                    switchingDrive = current.session
+                    route = Route.Login
+                },
+                onDisconnect = {
+                    driveSyncJob?.cancel()
+                    shellScope.launch {
+                        val revoked = driveGateway.disconnect(current.session)
+                        driveAccount = null
+                        driveSeeded = false
+                        switchingDrive = null
+                        route = Route.Login
+                        if (!revoked) android.widget.Toast.makeText(context,
+                            "Disconnected here. Check Google access separately.", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                })
+            }
+        }
 
         is Route.Home -> LaunchedEffect(current.credentials) {
             route = Route.Main(current.credentials, ShellTab.MyTvivo)

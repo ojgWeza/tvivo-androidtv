@@ -48,3 +48,28 @@ The initial sample set covers TV browse at 1280×720 and 1920×1080, phone
 category picker, English and Arabic/RTL TV search keyboard, and the player
 overlay. Each view is rendered at font scale 1.0 and 1.5. Fixture titles and
 counts are synthetic.
+
+## Debug Google Drive source
+
+The Drive source is enabled in debug builds and disabled in release builds. Its
+runtime values default to empty. Put local values in the ignored root
+`secrets.properties` or pass them as Gradle properties:
+
+```properties
+driveMockBaseUrl=http://10.0.2.2:8090
+driveTvClientId=local-mock-client
+```
+
+Start `node tools/mock-drive/server.mjs` on the host before using the debug
+source. Android emulators reach the host through `10.0.2.2`. For a connected
+device, use `adb reverse tcp:8090 tcp:8090` and set
+`driveMockBaseUrl=http://127.0.0.1:8090`. Keep these values in local untracked
+configuration; `BuildConfig` defaults to an empty URL and client ID. The debug
+phone consent adapter approves a synthetic mock device code and requests a
+mock bearer. TV displays a device code and waits for approval through
+`POST /__ctl/approve` as described in `tools/mock-drive/README.md`.
+
+The phone adapter is mock-only until a Google Identity consent client is
+provided. A build without mock configuration reports that Drive is unavailable
+instead of trying the Xtream credential path. No automated UI test opens a
+stream.

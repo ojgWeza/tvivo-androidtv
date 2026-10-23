@@ -8,6 +8,8 @@ import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.auth.AuthRepository
 import com.dev.Tvivo.auth.CredentialsStore
 import com.dev.Tvivo.auth.SourceStore
+import com.dev.Tvivo.auth.SourceKind
+import com.dev.Tvivo.BuildConfig
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
 import com.dev.Tvivo.data.local.entities.TYPE_LIVE
@@ -76,6 +78,11 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
 
     fun load() {
         viewModelScope.launch {
+            if (BuildConfig.DRIVE_SOURCE_ENABLED &&
+                SourceStore.open(getApplication()).load().active?.kind == SourceKind.DRIVE) {
+                _state.update { AccountUiState(isLoading = false) }
+                return@launch
+            }
             val credentials = store.load()
             if (credentials == null) {
                 _state.update { it.copy(isLoading = false, signedOut = true) }

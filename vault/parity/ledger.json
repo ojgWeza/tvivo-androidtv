@@ -902,6 +902,25 @@
         "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DeviceCodeAuthorizer.kt",
         "docs/drive-signin-plan-2026-10-23.md"
       ]
+    },
+    {
+      "id": "D-SOURCE-SWITCH",
+      "title": "Drive source routing and sign-in, bootstrap, account UI behind feature flag",
+      "type": "ux-perk",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/MainActivity.kt",
+        "app/src/main/java/com/dev/Tvivo/auth/AndroidDriveGateway.kt",
+        "app/src/main/java/com/dev/Tvivo/auth/DriveScreens.kt",
+        "app/src/test/java/com/dev/Tvivo/auth/DriveScreensComposeTest.kt",
+        ".codex-android-qa-exec-report.md"
+      ],
+      "notes": "JVM and Robolectric gate passed; emulator focus and mock server end-to-end acceptance remain pending. Drive content browse is a later slice."
     }
   ]
 }

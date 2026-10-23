@@ -2025,3 +2025,10 @@ content types. Keep this exception at the TV route boundary so phone/tablet
 activation and the service's single-stream handoff remain stable. In the TV
 player, hidden controls retain a focus target, and Back dismisses the current
 panel or popup before stopping playback. Device acceptance is still pending.
+
+Drive source credentials use a separate encrypted DataStore blob and associated data
+while sharing the existing Tink keyset. Xtream sign-out removes only its legacy
+credential blob: clearing the shared keyset would strand every saved source. A
+staged source switch first imports any legacy Xtream credential, validates the
+candidate, then writes the saved-source list and active pointer in one DataStore
+edit. The legacy credential remains until a separately reviewed removal.

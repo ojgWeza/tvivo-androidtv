@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,15 +13,24 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        val driveLocalConfig = Properties().apply {
+            rootProject.file("secrets.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+        }
         applicationId = providers.gradleProperty("appApplicationId").orElse("com.dev.Tvivo").get()
         minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0-poc"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        val driveTvClientId = providers.gradleProperty("driveTvClientId").orElse("").get()
+        val driveTvClientId = providers.gradleProperty("driveTvClientId")
+            .orElse(driveLocalConfig.getProperty("driveTvClientId", "")).get()
         require(driveTvClientId.matches(Regex("[A-Za-z0-9._-]*")))
         buildConfigField("String", "DRIVE_TV_CLIENT_ID", "\"$driveTvClientId\"")
+        val driveMockBaseUrl = providers.gradleProperty("driveMockBaseUrl")
+            .orElse(driveLocalConfig.getProperty("driveMockBaseUrl", "")).get().trimEnd('/')
+        require(driveMockBaseUrl.isEmpty() ||
+            driveMockBaseUrl.matches(Regex("http://(10\\.0\\.2\\.2|127\\.0\\.0\\.1|localhost):[0-9]{2,5}")))
+        buildConfigField("String", "DRIVE_MOCK_BASE_URL", "\"$driveMockBaseUrl\"")
     }
 
     signingConfigs {
