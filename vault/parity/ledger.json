@@ -602,6 +602,208 @@
         "app/src/test/java/com/dev/Tvivo/ui/player/PlayerOverlayComposeTest.kt",
         "app/build/outputs/roborazzi"
       ]
+    },
+    {
+      "id": "W-FILE-SIZE-PROBE",
+      "type": "ux-perk",
+      "title": "Learn exact movie/episode size on open with a header-only HEAD (fallback Range bytes=0-0) before playback; many IPTV providers send no size in any list/info call",
+      "status": {
+        "android": "MISSING",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:bb0be31",
+        "docs/provider-field-report.md (windows-spike)"
+      ],
+      "notes": "Verified on a real provider: list/info JSON has no size; the media URL answers HEAD (Content-Length) and Range 0-0 (206 + Content-Range total). Run it BEFORE playback starts, after the old stream stops, so there is never a second connection (providers often allow one). Cap ~2 s, never read a body, never probe series, never log URL. No 7-day wait for an opened item. Plausibility 1 MB-200 GB.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-FILE-SIZE-ESTIMATE",
+      "type": "ux-perk",
+      "title": "Show \"~1.4 GB\" estimate from bitrate x duration when no exact size exists; exact replaces it",
+      "status": {
+        "android": "MISSING",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:bb0be31"
+      ],
+      "notes": "estimate = total kbit/s x duration s / 8; accept 128-80,000 kbit/s, 60 s-8 h, result 1 MB-200 GB; prefer info.duration over duration_secs when they disagree; store in a separate estimated column so exact always wins; label with ~ and an approximate automation name; DB-only on cards/hover (no network on hover).",
+      "origin": "winui"
+    },
+    {
+      "id": "W-LESSON-SIZE-STAMP",
+      "type": "lesson",
+      "title": "Never stamp \"checked\" when a metadata response simply had no size field",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:bb0be31"
+      ],
+      "notes": "Root cause of \"size never appears\": SaveMetadata wrote size_checked_at on every save, so the later probe saw a recent check and silently skipped. Keep metadata-fetch time and media-probe time separate; log a decision line (found/none/failed/skipped + reason category) for EVERY probe decision, including skips, or the failure is invisible. Also: a stored \"none\" must not block an open-item probe.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-LESSON-NO-SERIES-SIZE",
+      "type": "lesson",
+      "title": "File size only for movies and episodes, never for a series",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:a828237"
+      ],
+      "notes": "A series has no single file. Remove size from series cards/hover/details and from coverage counts.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-SPOTLIGHT-ART-FIRST",
+      "type": "ux-perk",
+      "title": "Spotlight prefers titles with artwork; fills from artwork-less only when fewer than the target",
+      "status": {
+        "android": "MISSING",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:a828237"
+      ],
+      "notes": "Provider data: about 1.2% of movies and 7.2% of series have an empty image; those are provider gaps, not parser bugs.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-LOADING-STATUS-TEXT",
+      "type": "ux-perk",
+      "title": "Loading/retry status text sits directly under the loading bar, no background plate, same colour as the title",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:4f19b12"
+      ],
+      "notes": "White text on the dimmed (about 0.45) artwork over a black curtain; terminal failure keeps a separate 44-DIP retry control.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-SLEEP-TIMER-QUIET",
+      "type": "ux-perk",
+      "title": "Sleep timer: compact menu, ONE small hint in the last minutes, quiet stop, no big warnings",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:a5ea395"
+      ],
+      "notes": "Presets 15/30/45 min, 1 h, 1.5 h, 2 h, end of item, off; hint only in the last 5 min for timers >= 10 min (last 1 min for shorter), once per deadline, tiny Cancel and +15 min; stop is quiet, no ended overlay, no next-item autoplay. A 3-hour movie never shows a 3-hour warning.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-PLAYER-CATEGORY-BROWSER",
+      "type": "ux-perk",
+      "title": "Player sidebar category browser: collapsed folders of the current content type, one open at a time, paged, series drill-in",
+      "status": {
+        "android": "MISSING",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:2780a07",
+        "codex/winui-catalog-design-plan:bd24cc2"
+      ],
+      "notes": "KNOWN GAPS (owner feedback after first build): the folder of the playing item must be auto-expanded and focused on open; the open folder must be visibly marked and move to the top; expanding must not blink/rebuild the whole list. Keep next/shuffle queue independent of rendered rows; never load a whole folder.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-SCOUT-A11Y-AUDIT",
+      "type": "lesson",
+      "title": "Use an in-process UI audit (Scout, Debug-only, opt-in) to find unnamed controls, <44 DIP targets and <16 DIP text on real screens",
+      "status": {
+        "android": "N-A",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:7a21dc5",
+        "D:/HCode/Scout"
+      ],
+      "notes": "Android equivalent: Compose semantics + Roborazzi/Robolectric audits (see A-JVM-UI-TESTS). Findings on WinUI For You: 8 unnamed buttons (tabs, shelf headers), toolbar/scroll/caption buttons 36-40 DIP, card meta text 13-15.6 DIP. Rule: every interactive control has a name; targets >= 44 DIP; text >= 16 DIP.",
+      "origin": "winui"
+    },
+    {
+      "id": "W-LESSON-SENTRY-FEED",
+      "type": "lesson",
+      "title": "Debug-only, opt-in, already-sanitized log feed to Sentry exposes stalls and artwork failures; never send PII, URLs or exceptions bodies",
+      "status": {
+        "android": "N-A",
+        "winui": "HAS",
+        "tv": "N-A"
+      },
+      "links": [
+        "codex/winui-catalog-design-plan:99a2167",
+        "docs/logging-improvement-plan.md (windows-spike)"
+      ],
+      "notes": "Release/MSI never reference the SDK. Fingerprint by event name; breadcrumbs for info, events for problems. Plan: error codes, noise control, trace ids.",
+      "origin": "winui"
+    },
+    {
+      "id": "A-PLAYER-DISTINCT-ICONS",
+      "type": "ux-perk",
+      "title": "Use distinct transport symbols for rewind, previous episode, and start over",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/ui/player/PlayerOverlay.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/player/PlayerOverlayComposeTest.kt"
+      ]
+    },
+    {
+      "id": "D-SOURCE-KEYS",
+      "title": "Source-scoped stable string identity for link-index media",
+      "type": "lesson",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/drive-slice1-source-session-2026-10-23.md",
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/SourceKeys.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/source/SourceKeysTest.kt"
+      ],
+      "notes": "Pure shared-core key/port contract tested; Android and TV source routing and Room integration remain for later slices."
+    },
+    {
+      "id": "D-INDEX-FORMAT",
+      "title": "Platform-neutral Drive link-library JSON v1 models and validation",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/library/LibraryParser.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/source/library/LibraryParserTest.kt",
+        "docs/drive-signin-plan-2026-10-23.md"
+      ]
     }
   ]
 }
