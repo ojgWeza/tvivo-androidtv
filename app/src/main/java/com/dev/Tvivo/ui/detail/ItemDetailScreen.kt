@@ -38,6 +38,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Text
+import com.dev.Tvivo.auth.AccountIdentity
+import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.playback.DetailPlaybackPolicy
 import com.dev.Tvivo.playback.MovieActionKind
 import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
@@ -54,6 +56,7 @@ import kotlinx.coroutines.launch
 fun ItemDetailScreen(
     contentType: ContentType,
     itemId: Int,
+    credentials: Credentials? = null,
     onPlay: (resumeFromMs: Long, extension: String?, title: String, knownDurationMs: Long) -> Unit,
     onOpenEpisodes: () -> Unit,
     insideShell: Boolean = false,
@@ -64,8 +67,8 @@ fun ItemDetailScreen(
     val application = LocalContext.current.applicationContext as android.app.Application
     val context = LocalContext.current
     val vm: ItemDetailViewModel? = if (stateOverride == null) viewModel(
-        key = "detail:${contentType.name}:$itemId",
-        factory = viewModelFactory { initializer { ItemDetailViewModel(application, contentType, itemId) } }
+        key = "detail:${credentials?.let(AccountIdentity::of)}:${contentType.name}:$itemId",
+        factory = viewModelFactory { initializer { ItemDetailViewModel(application, contentType, itemId, requireNotNull(credentials)) } }
     ) else null
     val state = stateOverride ?: requireNotNull(vm).state.collectAsStateWithLifecycle().value
     val primaryFocus = remember { FocusRequester() }

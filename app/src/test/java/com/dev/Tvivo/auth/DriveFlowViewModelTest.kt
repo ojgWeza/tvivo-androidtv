@@ -70,6 +70,12 @@ class DriveFlowViewModelTest {
         assertTrue(model.state.value is DriveFlowState.Ready)
     }
 
+    @Test fun driveFileFailureNamesTheFailedOperationInsteadOfClaimingConnectionTrouble() {
+        val message = DriveFailureCopy.message(DriveFailure.Transient)
+        assertTrue(message.contains("save or read a library file"))
+        assertTrue(!message.contains("Check the connection"))
+    }
+
     @Test fun cancellingDeviceCodeStopsPollingAndReturnsIdle() = runTest(dispatcher) {
         val fake = FakeGateway().apply { beginStep = AuthorizationStep.DeviceCode("https://example.test", "Case-A", 60_000L, 5) }
         val model = DriveFlowViewModel(fake)

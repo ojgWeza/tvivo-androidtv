@@ -31,6 +31,7 @@ test('folder/index bootstrap and existing folder read', async () => withServer(a
   const { access_token: access } = await token(base);
   assert.deepEqual((await list(base, access, "name='Tvivo Library' and mimeType='application/vnd.google-apps.folder' and trashed=false")).files, []);
   const root = await create(base, access, 'Tvivo Library', 'application/vnd.google-apps.folder');
+  assert.equal((await list(base, access, "trashed = false and 'root' in parents")).files[0].id, root.id);
   for (const name of ['Movies', 'Series', 'Music']) await create(base, access, name, 'application/vnd.google-apps.folder', [root.id]);
   const movies = await list(base, access, `'${root.id}' in parents and name='Movies' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
   assert.equal(movies.files.length, 1);
@@ -40,6 +41,23 @@ test('folder/index bootstrap and existing folder read', async () => withServer(a
   assert.equal((await list(base, access, `'${folder.id}' in parents and name='index.json' and trashed=false`)).files[0].id, index.id);
   const bytes = await fetch(`${base}/drive/v3/files/${index.id}?alt=media`, { headers: auth(access) }).then(r => r.text());
   assert.match(bytes, /"kind":"movies"/);
+}));
+
+test('multipart index creation is atomic and root relisting prevents duplicate bootstrap', async () => withServer(async base => {
+  const { access_token: access } = await token(base);
+  const root = await create(base, access, 'Tvivo Library', 'application/vnd.google-apps.folder');
+  const child = await create(base, access, 'Movies', 'application/vnd.google-apps.folder', [root.id]);
+  const boundary = 'atomic-seed';
+  const bytes = '{"format":"tvivo.link-library","version":1,"kind":"movies","items":[]}';
+  const body = `--${boundary}\r\nContent-Type: application/json\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n${JSON.stringify({ name: 'index.json', mimeType: 'application/json', parents: [child.id] })}\r\n--${boundary}\r\nContent-Type: application/json\r\nContent-Disposition: form-data; name="file"; filename="index.json"\r\n\r\n${bytes}\r\n--${boundary}--\r\n`;
+  const response = await fetch(`${base}/upload/drive/v3/files?uploadType=multipart&fields=id`, {
+    method: 'POST', headers: { authorization: `Bearer ${access}`, 'content-type': `multipart/related; boundary=${boundary}` }, body });
+  assert.equal(response.status, 200);
+  const file = await response.json();
+  assert.equal(await fetch(`${base}/drive/v3/files/${file.id}?alt=media`, { headers: auth(access) }).then(r => r.text()), bytes);
+  const found = await list(base, access, "trashed = false and 'root' in parents");
+  assert.deepEqual(found.files.map(f => f.id), [root.id]);
+  assert.equal((await ctl(base, 'reset')).status, 200);
 }));
 
 test('pending bootstrap can resume by relisting without overwriting existing indexes', async () => withServer(async base => {
@@ -95,11 +113,11 @@ test('device flow pending, approval, denial, expiry, slow_down and refresh rotat
   assert.equal((await fetch(`${base}/__ctl/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ device_code: pending.device_code, denied: true }) })).status, 200);
   assert.equal((await post('/token', { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: pending.device_code }).then(r => r.json())).error, 'access_denied');
   response = await post('/device/code', { account: 'account-a' }); pending = await response.json();
-  await ctl(base, 'approve', { device_code: pending.device_code });
+  assert.equal((await ctl(base, 'approve', { user_code: pending.user_code })).status, 200);
   const first = await post('/token', { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: pending.device_code }).then(r => r.json());
   const rotated = await post('/token', { grant_type: 'refresh_token', refresh_token: first.refresh_token }).then(r => r.json());
   assert.notEqual(rotated.refresh_token, first.refresh_token); assert.equal((await post('/token', { grant_type: 'refresh_token', refresh_token: first.refresh_token }).then(r => r.json())).error, 'invalid_grant');
-  assert.equal((await post('/token', { grant_type: 'revoke', token: rotated.refresh_token })).status, 200);
+  assert.equal((await post('/revoke', { token: rotated.refresh_token })).status, 200);
   assert.equal((await post('/token', { grant_type: 'refresh_token', refresh_token: rotated.refresh_token }).then(r => r.json())).error, 'invalid_grant');
   const fresh = await fetch(`${base}/device/code`, { method: 'POST', body: new URLSearchParams({ account: 'account-b' }) }).then(r => r.json());
   await ctl(base, 'slow-down', { device_code: fresh.device_code });

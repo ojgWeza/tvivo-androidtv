@@ -915,6 +915,7 @@ private fun TvivoApp() {
             val page: @Composable () -> Unit = { ItemDetailScreen(
                 contentType = current.type,
                 itemId = current.itemId,
+                credentials = current.credentials,
                 insideShell = !LocalIsTelevision.current,
                 onPlay = { resumeFromMs, extension, title, knownDurationMs ->
                     playItem(

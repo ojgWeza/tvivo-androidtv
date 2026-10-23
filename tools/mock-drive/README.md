@@ -18,7 +18,7 @@ The server listens on `0.0.0.0:8090` by default. Set `PORT`, `MOCK_HOST`, or `MO
 - `GET /drive/v3/files` supports `q` clauses for `name`, `mimeType`, `'<id>' in parents`, and `trashed=false`; `pageSize`, numeric `pageToken`, and `fields` are supported.
 - `POST /drive/v3/files` creates metadata-only files or accepts `multipart/related` metadata and media parts. `GET /drive/v3/files/{id}` reads metadata; `?alt=media` reads bytes; `PATCH` updates metadata or media and bumps version and modified time.
 - `GET /seed` returns movies, series, and music `tvivo.link-library` examples. Their URLs point to `GET /media/sample-audio.mp3`, `/media/sample-video.mp4`, and `/media/sample-video.ts`, generated in code.
-- `POST /__ctl/approve` with `{ "device_code": "…" }` approves a device flow; include `denied:true` to reject it.
+- `POST /__ctl/approve` with `{ "user_code": "TV-0002" }` approves the code displayed on TV. The internal `{ "device_code": "device-2" }` also works; include `denied:true` to reject either code.
 - `POST /__ctl/slow-down` and `/__ctl/expire-device` set device-flow polling outcomes for the given code.
 - `POST /__ctl/expire-access` immediately expires issued access tokens.
 - `GET /__ctl` shows active faults and file count. `POST /__ctl/reset` resets all state.

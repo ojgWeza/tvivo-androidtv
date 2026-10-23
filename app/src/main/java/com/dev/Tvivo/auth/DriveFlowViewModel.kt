@@ -2,6 +2,7 @@ package com.dev.Tvivo.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.util.Log
 import com.dev.Tvivo.source.AuthorizationStep
 import com.dev.Tvivo.source.drive.BootstrapStep
 import kotlinx.coroutines.CancellationException
@@ -118,6 +119,7 @@ class DriveFlowViewModel(private val gateway: DriveFlowGateway) : ViewModel() {
     }
 
     private fun fail(failure: Throwable, retryAuthorization: Boolean = false) {
+        runCatching { Log.e("DriveBootstrap", "Failed: ${failure::class.java.simpleName}: ${failure.message}") }
         _state.value = DriveFlowState.Failed(DriveFailureCopy.message(failure), retryAuthorization)
     }
 }
@@ -128,6 +130,14 @@ object DriveFailureCopy {
             "Drive is full. No library files were changed. Free some space, then retry."
         failure is com.dev.Tvivo.source.drive.DriveFailure.Offline ->
             "You're offline. Your saved library is still available. Retry when connected."
+        failure is com.dev.Tvivo.source.drive.DriveFailure.Unauthorized ->
+            "Google Drive access expired. Sign in again."
+        failure is com.dev.Tvivo.source.drive.DriveFailure.Forbidden ->
+            "Tvivo cannot access this Google Drive library. Check its permissions, then retry."
+        failure is com.dev.Tvivo.source.drive.DriveFailure.RateLimited ->
+            "Google Drive is busy. Wait a moment, then retry."
+        failure is com.dev.Tvivo.source.drive.DriveFailure.Transient ->
+            "Google Drive could not save or read a library file. Retry; files already created will be reused."
         failure.message?.contains("index", ignoreCase = true) == true ||
             failure.message?.contains("marker", ignoreCase = true) == true ->
             "A library file needs repair. Fix the JSON file in Google Drive, then retry. Saved titles were kept."

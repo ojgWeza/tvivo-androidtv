@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dev.Tvivo.auth.AccountIdentity
-import com.dev.Tvivo.auth.CredentialsStore
+import com.dev.Tvivo.auth.Credentials
 import com.dev.Tvivo.auth.AppErrorException
 import com.dev.Tvivo.data.AppError
 import com.dev.Tvivo.data.local.AppDatabase
@@ -64,11 +64,10 @@ data class ItemDetailUiState(
 class ItemDetailViewModel(
     application: Application,
     private val contentType: ContentType,
-    private val itemId: Int
+    private val itemId: Int,
+    private val credentials: Credentials,
+    private val db: AppDatabase = AppDatabase.get(application)
 ) : AndroidViewModel(application) {
-
-    private val db = AppDatabase.get(application)
-    private val store = CredentialsStore(application)
 
     private val _state = MutableStateFlow(ItemDetailUiState())
     val state: StateFlow<ItemDetailUiState> = _state.asStateFlow()
@@ -85,7 +84,6 @@ class ItemDetailViewModel(
 
     init {
         viewModelScope.launch {
-            val credentials = store.load() ?: return@launch
             val accountId = AccountIdentity.of(credentials)
             this@ItemDetailViewModel.accountId = accountId
             val pb = PlaybackStateRepository(db, accountId)

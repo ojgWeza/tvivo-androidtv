@@ -49,6 +49,36 @@ class DriveSlice5bTest {
         assertEquals(4, fake.records.values.count { it.mimeType == DriveIndexStore.JSON_MIME })
     }
 
+    @Test fun indexAcceptedThenResponseDroppedIsReusedOnRetry() = runBlocking {
+        val fake = BootstrapStore().apply { dropNextIndexResponse = true }
+        val state = MutableBootstrapState()
+        assertTrue(DriveBootstrap(fake, state).run() is BootstrapResult.Ready)
+        assertEquals(8, fake.records.size)
+        assertTrue(DriveBootstrap(fake, state).run() is BootstrapResult.Ready)
+        assertEquals(8, fake.records.size)
+        assertEquals(4, fake.records.values.count { it.mimeType == DriveIndexStore.JSON_MIME })
+        assertEquals(1, fake.records.values.count { it.name == "library.json" })
+    }
+
+    @Test fun restUploadsIndexWithBytesInOneMultipartCreate() = runBlocking {
+        val calls = mutableListOf<DriveHttpRequest>()
+        val store = DriveIndexStore(DriveHttpClient { request ->
+            calls += request
+            when (request.method) {
+                "GET" -> if (request.url.contains("/files/file-1?")) DriveHttpResponse(200,
+                    body = """{"id":"file-1","name":"index.json","mimeType":"application/json","version":"1"}""".toByteArray())
+                    else DriveHttpResponse(200, body = """{"files":[]}""".toByteArray())
+                else -> DriveHttpResponse(200, body = """{"id":"file-1"}""".toByteArray())
+            }
+        }, { SourceAccessToken("test") })
+        store.writeIndex("parent", "index.json", "{\"items\":[]}".toByteArray())
+        val post = calls.single { it.method == "POST" }
+        assertTrue(post.url.contains("/upload/drive/v3/files?uploadType=multipart"))
+        assertTrue(post.headers["Content-Type"]!!.startsWith("multipart/related; boundary="))
+        assertTrue(post.body!!.toString(Charsets.UTF_8).contains("{\"items\":[]}"))
+        assertFalse(calls.any { it.method == "PATCH" })
+    }
+
     @Test fun retryAfterIsHonoredAndPermissionDoesNotRetry() = runBlocking {
         val fake = BootstrapStore().apply { seedForSync() }
         val waits = mutableListOf<Long>()
@@ -169,7 +199,7 @@ class DriveSlice5bTest {
     private class BootstrapStore : com.dev.Tvivo.source.IndexStore {
         val records = linkedMapOf<String, com.dev.Tvivo.source.IndexMetadata>()
         val parents = mutableMapOf<String, String?>(); val contents = mutableMapOf<String, ByteArray>()
-        var id = 0; var dropNextCreateResponse = false
+        var id = 0; var dropNextCreateResponse = false; var dropNextIndexResponse = false
         var failReads: ArrayDeque<DriveFailure> = ArrayDeque()
         var beforeRead: suspend () -> Unit = {}
         override suspend fun listChildren(parentId: String?, pageToken: String?) = com.dev.Tvivo.source.IndexPage(records.values.filter { parents[it.id] == parentId }, null)
@@ -178,7 +208,11 @@ class DriveSlice5bTest {
             if (dropNextCreateResponse) { dropNextCreateResponse = false; throw DriveFailure.Offline }
             return item
         }
-        override suspend fun writeIndex(parentId: String, name: String, bytes: ByteArray): com.dev.Tvivo.source.IndexMetadata = add(parentId, name, DriveIndexStore.JSON_MIME, bytes)
+        override suspend fun writeIndex(parentId: String, name: String, bytes: ByteArray): com.dev.Tvivo.source.IndexMetadata {
+            val item = add(parentId, name, DriveIndexStore.JSON_MIME, bytes)
+            if (dropNextIndexResponse) { dropNextIndexResponse = false; throw DriveFailure.Offline }
+            return item
+        }
         override suspend fun readIndex(fileId: String): ByteArray { beforeRead(); if (failReads.isNotEmpty()) throw failReads.removeFirst(); return contents.getValue(fileId) }
         override suspend fun metadata(fileId: String) = records.getValue(fileId)
         fun seedForSync() {

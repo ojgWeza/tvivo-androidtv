@@ -61,11 +61,15 @@ class DriveBootstrap(
             if (found == null) {
                 if (!seeded) throw IllegalStateException("Library file missing: $folder/$file")
                 val payload = encode(content)
-                store.writeIndex(children.getValue(folder), file, payload)
+                writeOrFind(children.getValue(folder), file, payload) { bytes -> validateIndex(folder, bytes) }
             } else validateIndex(folder, store.readIndex(found.id))
         }
         val marker = findChild(root.id, "library.json", DriveIndexStore.JSON_MIME)
-        if (marker == null) store.writeIndex(root.id, "library.json", """{"format":"tvivo.link-library","version":1,"bootstrap":"complete"}""".toByteArray())
+        if (marker == null) writeOrFind(root.id, "library.json",
+            """{"format":"tvivo.link-library","version":1,"bootstrap":"complete"}""".toByteArray()) { bytes ->
+            if (parseLibraryMarker(bytes.toString(Charsets.UTF_8)) !is ParseResult.Valid)
+                throw IllegalStateException("Invalid library marker")
+        }
         else if (parseLibraryMarker(store.readIndex(marker.id).toString(Charsets.UTF_8)) !is ParseResult.Valid) throw IllegalStateException("Invalid library marker")
         onStep(BootstrapStep.OPENING_SAVED_LIBRARY)
         state.save(BootstrapState(root.id, pending = false, createdByApp = false))
@@ -90,6 +94,16 @@ class DriveBootstrap(
             val created = all(parent).firstOrNull { it.name == name && it.mimeType == mime }
             if (created != null) return created
             throw failure
+        }
+    }
+    private suspend fun writeOrFind(parent: String, name: String, payload: ByteArray,
+                                    validate: (ByteArray) -> Unit) {
+        // A dropped response does not tell us whether Drive accepted the write.
+        try { store.writeIndex(parent, name, payload) }
+        catch (failure: Throwable) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
+            val found = findChild(parent, name, DriveIndexStore.JSON_MIME) ?: throw failure
+            validate(store.readIndex(found.id))
         }
     }
     private fun validateIndex(folder: String, bytes: ByteArray) {

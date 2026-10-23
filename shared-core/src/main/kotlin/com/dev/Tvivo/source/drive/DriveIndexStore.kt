@@ -57,9 +57,21 @@ class DriveIndexStore(
     }
     private suspend fun create(parentId: String?, name: String, mime: String, bytes: ByteArray?): IndexMetadata {
         val body = JsonObject().apply { addProperty("name", name); addProperty("mimeType", mime); if (parentId != null) add("parents", gson.toJsonTree(listOf(parentId))) }
-        val created = parse(api("POST", "$baseUrl/files?uploadType=multipart", body.toString().toByteArray(), "application/json"))
+        val created = if (bytes == null) {
+            parse(api("POST", "$baseUrl/files?fields=${enc("id")}", body.toString().toByteArray(), "application/json"))
+        } else {
+            val boundary = "tvivo-${java.util.UUID.randomUUID()}"
+            val payload = java.io.ByteArrayOutputStream().apply {
+                write("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n${body}\r\n".toByteArray(Charsets.UTF_8))
+                write("--$boundary\r\nContent-Type: application/json\r\nContent-Disposition: form-data; name=\"file\"; filename=\"$name\"\r\n\r\n".toByteArray(Charsets.UTF_8))
+                write(bytes)
+                write("\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+            }.toByteArray()
+            val uploadBase = baseUrl.replace("/drive/v3", "/upload/drive/v3")
+            parse(api("POST", "$uploadBase/files?uploadType=multipart&fields=${enc("id")}", payload,
+                "multipart/related; boundary=$boundary"))
+        }
         val id = created.get("id")?.asString ?: throw DriveFailure.Transient
-        if (bytes != null) api("PATCH", "$baseUrl/files/${enc(id)}?uploadType=media", bytes, "application/json; charset=utf-8")
         return metadata(parse(api("GET", "$baseUrl/files/${enc(id)}?fields=${enc("id,name,mimeType,size,modifiedTime,version,md5Checksum")}")))
     }
     private suspend fun api(method: String, url: String, body: ByteArray? = null, contentType: String? = null): ByteArray {
