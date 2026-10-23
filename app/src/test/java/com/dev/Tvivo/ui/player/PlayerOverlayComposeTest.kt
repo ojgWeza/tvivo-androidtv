@@ -60,6 +60,26 @@ class PlayerOverlayComposeTest {
         assertTrue(backed)
     }
 
+    @Test fun playerSeekEpisodeAndStartOverButtonsRemainAvailable() {
+        compose.setContent {
+            TvivoTheme {
+                CompositionLocalProvider(LocalIsTelevision provides true) {
+                    PlayerOverlay(
+                        state = PlayerOverlayState(title = "Fixture playback", isLive = false,
+                            isPlaying = true, seekable = true, positionMs = 45_000, durationMs = 600_000),
+                        visible = true, onToggleOverlay = {}, onBack = {}, onPlayPause = {},
+                        onSeek = {}, onScrub = {}, onAudio = {}, onSubtitle = {}, onNext = {},
+                        onStartOver = {}, hasPreviousEpisode = true, onPrevious = {}
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithTag("player_rewind").assertExists()
+        compose.onNodeWithTag("player_previous").assertExists()
+        compose.onNodeWithTag("player_start_over").assertExists()
+    }
+
     @Test @Config(qualifiers = "w1280dp-h720dp-mdpi")
     fun playerOverlayFontScale1() = snapshotPlayer(1f)
 

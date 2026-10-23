@@ -513,7 +513,7 @@ fun PlayerOverlay(
                         onHeld = { onSeek(it) }
                     )
                     if (television && !state.isLive && hasPreviousEpisode) OverlayButton(
-                        IconKind.Rewind, stringResource(R.string.player_previous_episode),
+                        IconKind.Previous, stringResource(R.string.player_previous_episode),
                         Modifier.testTag("player_previous"), onPrevious
                     )
                 }
@@ -575,7 +575,7 @@ fun PlayerOverlay(
                                     (if (state.seekable) "" else " · ${stringResource(R.string.player_seek_unavailable)}")
                             else "${formatPlayerTime(state.positionMs)} / ${state.durationMs.takeIf { it > 0L }?.let(::formatPlayerTime) ?: "--:--"} · ${stringResource(R.string.player_seek_unavailable)}",
                             color = AppColors.MediaText, style = type.caption)
-                        if (controls.startOver) OverlayButton(IconKind.Rewind, stringResource(R.string.player_start_over),
+                        if (controls.startOver) OverlayButton(IconKind.StartOver, stringResource(R.string.player_start_over),
                             (if (controls.jumpToTime) Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
                                 .testTag("player_start_over"), onStartOver)
                         if (controls.jumpToTime) TextButton(onClick = { jumpOpen = true },
@@ -855,7 +855,7 @@ private fun JumpToTimeDialog(positionMs: Long, television: Boolean, onDismiss: (
     }
 }
 
-private enum class IconKind { Back, Play, Pause, Rewind, Forward, Audio, Subtitles, Next, Timer }
+private enum class IconKind { Back, Play, Pause, Rewind, Forward, Audio, Subtitles, Next, Previous, StartOver, Timer }
 
 @Composable
 private fun OverlayButton(
@@ -918,6 +918,27 @@ private fun OverlayButton(
                 IconKind.Next -> {
                     triangle(.16f, .66f)
                     drawRect(ink, Offset(.70f*w, .18f*h), androidx.compose.ui.geometry.Size(.14f*w, .64f*h))
+                }
+                IconKind.Previous -> {
+                    val p = Path().apply {
+                        moveTo(.84f*w, .18f*h)
+                        lineTo(.34f*w, .5f*h)
+                        lineTo(.84f*w, .82f*h)
+                        close()
+                    }
+                    drawPath(p, ink)
+                    drawRect(ink, Offset(.14f*w, .18f*h), androidx.compose.ui.geometry.Size(.14f*w, .64f*h))
+                }
+                IconKind.StartOver -> {
+                    drawArc(ink, -60f, 300f, false, topLeft = Offset(.16f*w, .16f*h),
+                        size = androidx.compose.ui.geometry.Size(.68f*w, .68f*h), style = Stroke(3.dp.toPx()))
+                    val head = Path().apply {
+                        moveTo(.50f*w, .02f*h)
+                        lineTo(.50f*w, .32f*h)
+                        lineTo(.24f*w, .17f*h)
+                        close()
+                    }
+                    drawPath(head, ink)
                 }
                 IconKind.Timer -> {
                     drawCircle(ink, radius = .35f * w, style = Stroke(2.dp.toPx()))
