@@ -836,6 +836,23 @@
         "app/src/main/java/com/dev/Tvivo/data/repository/DriveRepository.kt",
         "app/src/test/java/com/dev/Tvivo/data/repository/DriveRepositoryTest.kt"
       ]
+    },
+    {
+      "id": "D-DRIVE-SYNC",
+      "title": "Drive REST bootstrap and fingerprint-based library sync",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveIndexStore.kt",
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveBootstrap.kt",
+        "shared-core/src/main/kotlin/com/dev/Tvivo/source/drive/DriveSyncEngine.kt",
+        "shared-core/src/test/kotlin/com/dev/Tvivo/source/drive/DriveSlice5Test.kt"
+      ]
     }
   ]
 }
