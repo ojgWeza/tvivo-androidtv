@@ -63,6 +63,46 @@ async function probeStatus(url, init, label) {
   } catch (e) { return { label, http: 0, error: String(e.name || e) }; }
 }
 
+// Reads a stream continuously (discarding bytes) and counts them, so we can see whether it keeps flowing.
+function openCounting(url, label) {
+  const controller = new AbortController();
+  const st = { label, bytes: 0, ended: false, error: null, http: 0 };
+  const done = (async () => {
+    try {
+      const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
+      st.http = res.status;
+      if (!res.ok) { st.ended = true; return; }
+      const reader = res.body.getReader();
+      for (;;) { const { done: d, value } = await reader.read(); if (d) { st.ended = true; break; } st.bytes += value.length; }
+    } catch (e) { if (!controller.signal.aborted) { st.error = String(e.name || e); st.ended = true; } }
+  })();
+  return { st, close: () => controller.abort(), done };
+}
+
+async function keepReadingPair(urlA, urlB, name) {
+  const a = openCounting(urlA, 'A');
+  await sleep(4000);
+  const a0 = a.st.bytes;
+  await sleep(4000);
+  const aRate = Math.round((a.st.bytes - a0) / 4);
+  step(name + ' A alone: bytes/s over 4 s', { http: a.st.http, bytesPerSec: aRate });
+  const b = openCounting(urlB, 'B');
+  await sleep(3000);
+  const a1 = a.st.bytes, b1 = b.st.bytes;
+  await sleep(6000);
+  step(name + ' A and B together over 6 s', {
+    aHttp: a.st.http, bHttp: b.st.http,
+    aBytesPerSec: Math.round((a.st.bytes - a1) / 6), bBytesPerSec: Math.round((b.st.bytes - b1) / 6),
+    aEnded: a.st.ended, bEnded: b.st.ended, aError: a.st.error, bError: b.st.error
+  });
+  step(name + ' active_cons with both reading', await userInfo());
+  const verdict = a.st.ended ? 'A WAS CUT when B opened (provider keeps only the newest)'
+    : (a.st.bytes - a1) / 6 < aRate * 0.2 ? 'A starved when B opened' : 'A kept flowing; both streams ran together';
+  step(name + ' verdict', { verdict });
+  a.close(); b.close();
+  await Promise.allSettled([a.done, b.done]);
+}
+
 try {
   const base0 = await userInfo();
   step('0 baseline user_info', base0);
@@ -115,6 +155,12 @@ try {
     await sleep(5000);
   }
   if (back === null) step('5 active_cons did NOT return to baseline within window', { watchSeconds });
+
+  if (allowOverlap) {
+    await sleep(6000);
+    await keepReadingPair(A, Bu, '7 live');
+    await sleep(8000);
+  }
 
   if (allowOverlap) {
     // 6: VOD file held, then a size probe / second Range read of the SAME file (playing + probing/downloading it).
