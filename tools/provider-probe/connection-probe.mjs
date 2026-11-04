@@ -233,7 +233,7 @@ try {
     } catch (e) { step('6 error', { message: String(e.message || e) }); }
   }
 } catch (e) {
-  step('error', { message: String(e.message || e), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
+  step('error', { message: String(e.message || e), cause: String(e.cause?.code || e.cause?.message || ''), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
 }
 const json = JSON.stringify(out, null, 2);
 console.log(json);
