@@ -9,6 +9,7 @@ import com.dev.Tvivo.home.CatalogSort
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
+import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
 import com.dev.Tvivo.data.local.entities.SeriesEntity
 import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.remote.CategoryListParser
@@ -177,13 +178,27 @@ class SeriesRepository(
                     val json = response.body()?.string().orEmpty()
                     lastSeasonNames = SeriesInfoParser.parseSeasonNames(json)
                     lastShowMetadata = SeriesInfoParser.parseShowMetadata(json)
-                    SeriesInfoParser.parse(json, accountId, seriesId)
+                    SeriesInfoParser.parseWithMetadata(json, accountId, seriesId)
                 },
-                write = { rows ->
-                    db.seriesDao().replaceEpisodes(accountId, seriesId, rows)
+                write = { parsed ->
+                    db.seriesDao().replaceEpisodes(accountId, seriesId, parsed.map { it.episode })
                     lastShowMetadata?.let { metadata ->
                         db.seriesDao().updateDetails(accountId, seriesId,
                             metadata.genre, metadata.cast, metadata.year)
+                    }
+                    val sizes = db.mediaFileSizeDao()
+                    parsed.forEach { item ->
+                        when {
+                            item.sizeBytes != null -> sizes.upsertExact(MediaFileSizeEntity(
+                                accountId, "episode", seriesId, item.episode.episodeId,
+                                exactBytes = item.sizeBytes))
+                            else -> FileSizeEstimatePolicy.estimateBytes(
+                                item.bitrateKbps, item.episode.durationSecs)?.let { bytes ->
+                                sizes.upsertEstimate(MediaFileSizeEntity(
+                                    accountId, "episode", seriesId, item.episode.episodeId,
+                                    estimatedBytes = bytes))
+                            }
+                        }
                     }
                 }
             )

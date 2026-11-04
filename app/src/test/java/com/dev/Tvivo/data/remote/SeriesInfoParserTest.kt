@@ -98,6 +98,23 @@ class SeriesInfoParserTest {
     }
 
     @Test
+    fun `size aliases and bitrate are returned separately from replaceable episode rows`() {
+        val json = """{"episodes":{"1":[
+            {"id":"a","duration":"00:10:00","size":"1.4 GB","bitrate":2400},
+            {"id":"b","info":{"duration":"00:12:00","file_size":14000000,"bitrate":"1800"}},
+            {"id":"c","size_bytes":"bad","filesize":null}
+        ]}}"""
+        val parsed = SeriesInfoParser.parseWithMetadata(json, ACCOUNT, SERIES_ID)
+        assertEquals(1_400_000_000L, parsed[0].sizeBytes)
+        assertEquals(2400, parsed[0].bitrateKbps)
+        assertEquals(14_000_000L, parsed[1].sizeBytes)
+        assertEquals(1800, parsed[1].bitrateKbps)
+        assertNull(parsed[2].sizeBytes)
+        assertNull(parsed[2].bitrateKbps)
+        assertEquals(600, parsed[0].episode.durationSecs)
+    }
+
+    @Test
     fun `season names come from the seasons array`() {
         assertEquals(mapOf(1 to "Season 1"), SeriesInfoParser.parseSeasonNames(realShaped))
     }

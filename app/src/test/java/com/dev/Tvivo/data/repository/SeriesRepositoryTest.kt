@@ -109,6 +109,35 @@ class SeriesRepositoryTest {
     }
 
     @Test
+    fun metadata_size_estimate_is_replaced_by_exact_and_missing_size_never_stamps_probe() = runTest {
+        server.enqueue(MockResponse().setBody("""{"episodes":{"1":[
+            {"id":"ep-size","duration":"00:10:00","bitrate":2400}
+        ]}}"""))
+        repo.refreshSeriesInfo(seriesId).getOrThrow()
+        val dao = db.mediaFileSizeDao()
+        val estimate = dao.get(account, "episode", seriesId, "ep-size")
+        assertEquals(180_000_000L, estimate?.estimatedBytes)
+        assertEquals(null, estimate?.exactBytes)
+        assertEquals(null, estimate?.lastProbeAt)
+
+        server.enqueue(MockResponse().setBody("""{"episodes":{"1":[
+            {"id":"ep-size","size":"24 MB"}
+        ]}}"""))
+        repo.refreshSeriesInfo(seriesId, force = true).getOrThrow()
+        val exact = dao.get(account, "episode", seriesId, "ep-size")
+        assertEquals(24_000_000L, exact?.exactBytes)
+        assertEquals(null, exact?.estimatedBytes)
+        assertEquals(null, exact?.lastProbeAt)
+
+        server.enqueue(MockResponse().setBody("""{"episodes":{"1":[{"id":"ep-size"}]}}"""))
+        repo.refreshSeriesInfo(seriesId, force = true).getOrThrow()
+        val retained = dao.get(account, "episode", seriesId, "ep-size")
+        assertEquals(24_000_000L, retained?.exactBytes)
+        assertEquals(null, retained?.lastProbeAt)
+        assertEquals(null, dao.get(account, "episode", seriesId, "ep-no-size"))
+    }
+
+    @Test
     fun a_second_open_inside_the_TTL_does_not_hit_the_panel() = runTest {
         server.enqueue(MockResponse().setBody(infoJson))
         repo.refreshSeriesInfo(seriesId).getOrThrow()

@@ -13,7 +13,7 @@ interface MediaFileSizeDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIfMissing(row: MediaFileSizeEntity)
 
-    @Query("""UPDATE media_file_sizes SET exactBytes = :bytes
+    @Query("""UPDATE media_file_sizes SET exactBytes = :bytes, estimatedBytes = NULL
         WHERE accountId = :accountId AND kind = :kind AND seriesId = :seriesId AND mediaId = :mediaId""")
     suspend fun updateExact(accountId: String, kind: String, seriesId: Int, mediaId: String, bytes: Long): Int
 

@@ -7,6 +7,7 @@ import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.home.CatalogSort
 import com.dev.Tvivo.data.local.entities.CATEGORY_LIST_SENTINEL
 import com.dev.Tvivo.data.local.entities.CategoryEntity
+import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.local.entities.VodStreamEntity
 import com.dev.Tvivo.data.remote.CategoryListParser
@@ -107,6 +108,16 @@ class VodRepository(
             VodInfoParser.parseDetails(body)?.also { details ->
                 db.vodDao().updateDetails(accountId, streamId, details.plot,
                     details.genre, details.cast, details.year, details.durationMinutes, details.trailer)
+                val sizes = db.mediaFileSizeDao()
+                when {
+                    details.sizeBytes != null -> sizes.upsertExact(MediaFileSizeEntity(
+                        accountId, "movie", 0, streamId.toString(), exactBytes = details.sizeBytes))
+                    else -> FileSizeEstimatePolicy.estimateBytes(
+                        details.bitrateKbps, details.durationSecs)?.let { bytes ->
+                        sizes.upsertEstimate(MediaFileSizeEntity(
+                            accountId, "movie", 0, streamId.toString(), estimatedBytes = bytes))
+                    }
+                }
             }
         }
     }

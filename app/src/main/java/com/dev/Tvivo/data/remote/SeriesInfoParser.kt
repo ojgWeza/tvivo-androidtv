@@ -35,6 +35,7 @@ import com.google.gson.JsonParser
 object SeriesInfoParser {
 
     data class ShowMetadata(val genre: String?, val cast: String?, val year: String?)
+    data class ParsedEpisode(val episode: EpisodeEntity, val sizeBytes: Long?, val bitrateKbps: Int?)
 
     fun parseShowMetadata(json: String): ShowMetadata? = runCatching {
         val root = JsonParser.parseString(json).asJsonObject
@@ -44,6 +45,11 @@ object SeriesInfoParser {
     }.getOrNull()
 
     fun parse(json: String, accountId: String, seriesId: Int): List<EpisodeEntity> {
+        return parseWithMetadata(json, accountId, seriesId).map { it.episode }
+    }
+
+    /** Size metadata is returned separately because episode rows are replaced on every refresh. */
+    fun parseWithMetadata(json: String, accountId: String, seriesId: Int): List<ParsedEpisode> {
         if (json.isBlank()) return emptyList()
         val root = runCatching { JsonParser.parseString(json) }.getOrNull() ?: return emptyList()
         if (!root.isJsonObject) return emptyList()
@@ -55,7 +61,7 @@ object SeriesInfoParser {
         val showName = root.asJsonObject.get("info")?.takeIf { it.isJsonObject }
             ?.asJsonObject?.string("name")
 
-        val rows = ArrayList<EpisodeEntity>()
+        val rows = ArrayList<ParsedEpisode>()
         for ((seasonKey, value) in episodes.entrySet()) {
             // A panel that has nothing for a season sometimes sends an empty object
             // instead of an empty array.
@@ -67,22 +73,26 @@ object SeriesInfoParser {
                 val episodeId = obj.string("id") ?: return@forEachIndexed
                 val episodeNumber = obj.string("episode_num")?.toIntOrNull() ?: (index + 1)
                 rows.add(
-                    EpisodeEntity(
-                        accountId = accountId,
-                        seriesId = seriesId,
-                        episodeId = episodeId,
-                        seasonNumber = seasonFromKey ?: obj.string("season")?.toIntOrNull() ?: 0,
-                        // Position in the season is the fallback: an episode with no
-                        // number must still sort somewhere stable rather than collapsing
-                        // onto every other unnumbered episode at 0.
-                        episodeNum = episodeNumber,
-                        title = EpisodeTitlePolicy.displayTitle(obj.string("title"), episodeNumber, showName),
-                        containerExtension = obj.string("container_extension")
-                            ?.takeIf { it.isNotBlank() },
-                        durationSecs = durationOf(obj),
-                        added = obj.string("added")?.toLongOrNull(),
-                        plot = (obj.string("plot") ?: obj.info()?.string("plot"))
-                            ?.takeIf { it.isNotBlank() }
+                    ParsedEpisode(
+                        episode = EpisodeEntity(
+                            accountId = accountId,
+                            seriesId = seriesId,
+                            episodeId = episodeId,
+                            seasonNumber = seasonFromKey ?: obj.string("season")?.toIntOrNull() ?: 0,
+                            // Position in the season is the fallback: an episode with no
+                            // number must still sort somewhere stable rather than collapsing
+                            // onto every other unnumbered episode at 0.
+                            episodeNum = episodeNumber,
+                            title = EpisodeTitlePolicy.displayTitle(obj.string("title"), episodeNumber, showName),
+                            containerExtension = obj.string("container_extension")
+                                ?.takeIf { it.isNotBlank() },
+                            durationSecs = durationOf(obj),
+                            added = obj.string("added")?.toLongOrNull(),
+                            plot = (obj.string("plot") ?: obj.info()?.string("plot"))
+                                ?.takeIf { it.isNotBlank() }
+                        ),
+                        sizeBytes = sizeOf(obj) ?: sizeOf(obj.info()),
+                        bitrateKbps = bitrateOf(obj) ?: bitrateOf(obj.info())
                     )
                 )
             }
@@ -99,6 +109,32 @@ object SeriesInfoParser {
             ?: parseClock(obj.info()?.string("duration"))
             ?: obj.string("duration_secs")?.toIntOrNull()
             ?: obj.info()?.string("duration_secs")?.toIntOrNull()
+
+    private fun sizeOf(obj: JsonObject?): Long? = obj?.let {
+        listOf("size", "filesize", "file_size", "size_bytes").firstNotNullOfOrNull { key ->
+            it.get(key)?.let(::parseBytes)
+        }
+    }
+
+    private fun bitrateOf(obj: JsonObject?): Int? = obj?.get("bitrate")?.let { value ->
+        if (!value.isJsonPrimitive || value.asJsonPrimitive.isBoolean) return@let null
+        value.asString.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 && it <= Int.MAX_VALUE }?.toInt()
+    }
+
+    private fun parseBytes(value: JsonElement): Long? {
+        if (!value.isJsonPrimitive || value.asJsonPrimitive.isBoolean) return null
+        val raw = value.asString.trim()
+        val match = SIZE_PATTERN.matchEntire(raw) ?: return null
+        val amount = match.groupValues[1].toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: return null
+        val multiplier = when (match.groupValues[2].uppercase().ifEmpty { "B" }) {
+            "B" -> 1.0; "KB" -> 1e3; "MB" -> 1e6; "GB" -> 1e9; "TB" -> 1e12
+            else -> return null
+        }
+        val bytes = amount * multiplier
+        return bytes.takeIf { it.isFinite() && it <= Long.MAX_VALUE }?.toLong()
+    }
+
+    private val SIZE_PATTERN = Regex("^([0-9]+(?:\\.[0-9]+)?)\\s*(B|KB|MB|GB|TB)?$", RegexOption.IGNORE_CASE)
 
     /** `HH:MM:SS` or `MM:SS`; anything else is not a clock and is left to the fallback. */
     private fun parseClock(raw: String?): Int? {
