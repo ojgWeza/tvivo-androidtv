@@ -17,6 +17,11 @@ interface MediaFileSizeDao {
         WHERE accountId = :accountId AND kind = :kind AND seriesId = :seriesId AND mediaId = :mediaId""")
     suspend fun updateExact(accountId: String, kind: String, seriesId: Int, mediaId: String, bytes: Long): Int
 
+    @Query("""UPDATE media_file_sizes SET exactBytes = :bytes, estimatedBytes = NULL,
+        lastProbeAt = :at, lastProbeOutcome = 'exact'
+        WHERE accountId = :accountId AND kind = :kind AND seriesId = :seriesId AND mediaId = :mediaId""")
+    suspend fun updateExactProbe(accountId: String, kind: String, seriesId: Int, mediaId: String, bytes: Long, at: Long): Int
+
     @Query("""UPDATE media_file_sizes SET estimatedBytes = :bytes
         WHERE accountId = :accountId AND kind = :kind AND seriesId = :seriesId AND mediaId = :mediaId""")
     suspend fun updateEstimate(accountId: String, kind: String, seriesId: Int, mediaId: String, bytes: Long): Int
@@ -44,6 +49,12 @@ interface MediaFileSizeDao {
     suspend fun recordProbeAttempt(accountId: String, kind: String, seriesId: Int, mediaId: String, at: Long, outcome: String) {
         insertIfMissing(MediaFileSizeEntity(accountId, kind, seriesId, mediaId))
         updateProbe(accountId, kind, seriesId, mediaId, at, outcome)
+    }
+
+    @Transaction
+    suspend fun recordExactProbe(accountId: String, kind: String, seriesId: Int, mediaId: String, bytes: Long, at: Long) {
+        insertIfMissing(MediaFileSizeEntity(accountId, kind, seriesId, mediaId))
+        updateExactProbe(accountId, kind, seriesId, mediaId, bytes, at)
     }
 
     @Query("""SELECT * FROM media_file_sizes WHERE accountId = :accountId AND kind = :kind

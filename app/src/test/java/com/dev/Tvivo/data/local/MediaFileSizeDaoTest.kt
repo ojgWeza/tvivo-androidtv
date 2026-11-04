@@ -3,6 +3,8 @@ package com.dev.Tvivo.data.local
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
+import com.dev.Tvivo.data.remote.HttpFileSizeProbe
+import com.dev.Tvivo.data.repository.MediaFileSizeRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -37,6 +39,38 @@ class MediaFileSizeDaoTest {
         assertEquals(1100L, dao.get("a", "movie", 0, "42")?.estimatedBytes)
         dao.upsertExact(movie("a", exact = 1200))
         assertEquals(1200L, dao.get("a", "movie", 0, "42")?.exactBytes)
+    }
+
+    @Test fun probeRepository_doesNotStampTransientFailure_andUnknownIsBounded() = runTest {
+        var now = 100L
+        val repository = MediaFileSizeRepository(db.mediaFileSizeDao()) { now }
+        repository.recordProbeResult("a", "movie", 0, "42", HttpFileSizeProbe.Result.Failed(HttpFileSizeProbe.Failure.SERVER))
+        assertNull(db.mediaFileSizeDao().get("a", "movie", 0, "42"))
+
+        repository.recordProbeResult("a", "movie", 0, "42",
+            HttpFileSizeProbe.Result.Unknown(HttpFileSizeProbe.Reason.NO_SIZE_HEADER))
+        val absent = db.mediaFileSizeDao().get("a", "movie", 0, "42")!!
+        assertEquals(100L, absent.lastProbeAt)
+        assertEquals("unknown:no_size_header", absent.lastProbeOutcome)
+        assertTrue(!repository.shouldProbe("a", "movie", 0, "42"))
+        now += MediaFileSizeRepository.UNKNOWN_REPROBE_INTERVAL_MS
+        assertTrue(repository.shouldProbe("a", "movie", 0, "42"))
+    }
+
+    @Test fun unknownProbeNeverDowngradesExistingExactSize() = runTest {
+        val dao = db.mediaFileSizeDao()
+        dao.upsertExact(movie("a", exact = 900))
+        var now = 200L
+        val repository = MediaFileSizeRepository(dao) { now }
+        repository.recordProbeResult("a", "movie", 0, "42",
+            HttpFileSizeProbe.Result.Unknown(HttpFileSizeProbe.Reason.NO_SIZE_HEADER))
+        var row = dao.get("a", "movie", 0, "42")!!
+        assertEquals(900L, row.exactBytes)
+        assertNull(row.lastProbeAt)
+        repository.recordProbeResult("a", "movie", 0, "42", HttpFileSizeProbe.Result.Exact(1_200_000))
+        row = dao.get("a", "movie", 0, "42")!!
+        assertEquals(1_200_000L, row.exactBytes)
+        assertEquals(200L, row.lastProbeAt)
     }
 
     @Test fun probe_attempt_keeps_exact_and_batch_reads_are_account_scoped() = runTest {
