@@ -50,7 +50,7 @@ async function openHeld(url, label) {
     await Promise.race([reader.read(), sleep(8000)]);
     return { label, http: res.status, held: true, ms: Date.now() - started, close: () => controller.abort() };
   } catch (e) {
-    return { label, http: 0, held: false, error: String(e.name || e) };
+    return { label, http: 0, held: false, error: String(e.name || e), cause: String(e.cause?.code || e.cause?.message || e.message || '') };
   }
 }
 
@@ -116,7 +116,7 @@ try {
   const Bu = urlFor(live[1]);
 
   const a = await openHeld(A, 'A');
-  step('1 open stream A (held)', { http: a.http, held: a.held, error: a.error });
+  step('1 open stream A (held)', { http: a.http, held: a.held, error: a.error, cause: a.cause });
   if (!a.held) throw new Error('stream A was not accepted; stopping');
 
   await sleep(3000);
