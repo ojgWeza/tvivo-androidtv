@@ -196,9 +196,10 @@ console.log(json);
 try {
   const fs = await import('node:fs');
   const path = await import('node:path');
+  const url = await import('node:url');
   const oi = process.argv.indexOf('--out');
   const file = oi > 0 ? process.argv[oi + 1]
-    : path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^/([A-Za-z]:)/, '$1')), 'results', 'probe-' + out.startedAt.replace(/[:.]/g, '-') + '.json');
+    : path.join(path.dirname(url.fileURLToPath(import.meta.url)), 'results', 'probe-' + out.startedAt.replace(/[:.]/g, '-') + '.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, json);
   console.error('Saved result to ' + file);
