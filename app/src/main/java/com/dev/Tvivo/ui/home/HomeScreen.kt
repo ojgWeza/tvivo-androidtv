@@ -254,7 +254,9 @@ fun HomeScreen(
         }
     }
     LaunchedEffect(accountId, shelves.map { it.id }, pendingFocusCardKey, snapshot?.isFirstRun) {
-        if (!television || pendingFocusCardKey != null || snapshot?.isFirstRun != false) return@LaunchedEffect
+        // A pending See all restore owns focus; otherwise this effect steals it back to the first card.
+        if (!television || pendingFocusCardKey != null || pendingSeeAllShelfId != null ||
+            snapshot?.isFirstRun != false) return@LaunchedEffect
         val targetShelfId = lastFocusedShelfId?.takeIf { id -> shelves.any { it.id == id } }
             ?: firstNonEmptyShelfId
         if (targetShelfId != null) {
