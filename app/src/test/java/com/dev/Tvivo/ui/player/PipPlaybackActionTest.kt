@@ -13,4 +13,16 @@ class PipPlaybackActionTest {
         assertEquals(PipPlaybackAction.Command.Close, PipPlaybackAction.command(PipPlaybackAction.CLOSE))
         assertNull(PipPlaybackAction.command("unknown"))
     }
+
+    @Test fun seekablePipKeepsPlayPauseInTheMiddleAndOmitsSeekForNonSeekableMedia() {
+        assertEquals(
+            listOf(PipPlaybackAction.Transport.Rewind, PipPlaybackAction.Transport.PlayPause,
+                PipPlaybackAction.Transport.Forward),
+            PipPlaybackAction.transport(isSeekable = true),
+        )
+        assertEquals(
+            listOf(PipPlaybackAction.Transport.PlayPause),
+            PipPlaybackAction.transport(isSeekable = false),
+        )
+    }
 }

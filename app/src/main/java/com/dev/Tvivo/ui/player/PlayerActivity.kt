@@ -109,7 +109,7 @@ class PlayerActivity : ComponentActivity() {
     private var lastPipEntry: PipPolicy.Entry? = null
     private var lastPipPlaying: Boolean? = null
     private var lastPipAspectRatio: Rational? = null
-    private var lastPipHasNext: Boolean? = null
+    private var lastPipSeekable: Boolean? = null
     private var positionTicker: Job? = null
     private var autoHideJob: Job? = null
     private var feedbackJob: Job? = null
@@ -657,20 +657,21 @@ class PlayerActivity : ComponentActivity() {
             PipPlaybackAction.PLAY_PAUSE, if (isPlaying) "Pause" else "Play",
             if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, 1,
         )
-        val hasNext = nextIndex() != null
-        val seek = pipAction(PipPlaybackAction.REWIND, "Rewind 10 seconds", android.R.drawable.ic_media_rew, 3)
-        val nextOrForward = pipAction(
-            if (hasNext) PipPlaybackAction.NEXT else PipPlaybackAction.FORWARD,
-            if (hasNext) "Next episode" else "Forward 10 seconds",
-            if (hasNext) android.R.drawable.ic_media_next else android.R.drawable.ic_media_ff, 4,
-        )
+        val seekable = !isLive && overlayState.seekable
+        val transport = PipPlaybackAction.transport(seekable).map { action ->
+            when (action) {
+                PipPlaybackAction.Transport.Rewind -> pipAction(
+                    PipPlaybackAction.REWIND, "Rewind 10 seconds", android.R.drawable.ic_media_rew, 3)
+                PipPlaybackAction.Transport.PlayPause -> toggle
+                PipPlaybackAction.Transport.Forward -> pipAction(
+                    PipPlaybackAction.FORWARD, "Forward 10 seconds", android.R.drawable.ic_media_ff, 4)
+            }
+        }
         val close = pipAction(PipPlaybackAction.CLOSE, "Close", android.R.drawable.ic_menu_close_clear_cancel, 2)
         val sourceRect = Rect().takeIf { playerView?.getGlobalVisibleRect(it) == true }
         return PictureInPictureParams.Builder()
             .setAspectRatio(videoAspectRatio)
-            .setActions((if (overlayState.seekable) listOf(seek, toggle, nextOrForward)
-                else if (hasNext) listOf(toggle, nextOrForward) else listOf(toggle))
-                .take(getMaxNumPictureInPictureActions()))
+            .setActions(transport)
             .apply { sourceRect?.let(::setSourceRectHint) }
             .apply {
                 if (Build.VERSION.SDK_INT >= 31) setAutoEnterEnabled(entry == PipPolicy.Entry.AutoEnter)
@@ -684,13 +685,14 @@ class PlayerActivity : ComponentActivity() {
             !packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
         val entry = pipEntry()
         val playing = player?.isPlaying == true
-        val hasNext = nextIndex() != null
-        if (entry == lastPipEntry && playing == lastPipPlaying && videoAspectRatio == lastPipAspectRatio && hasNext == lastPipHasNext) return
+        val seekable = !isLive && overlayState.seekable
+        if (entry == lastPipEntry && playing == lastPipPlaying && videoAspectRatio == lastPipAspectRatio &&
+            seekable == lastPipSeekable) return
         setPictureInPictureParams(pipParams(entry))
         lastPipEntry = entry
         lastPipPlaying = playing
         lastPipAspectRatio = videoAspectRatio
-        lastPipHasNext = hasNext
+        lastPipSeekable = seekable
     }
 
     override fun onUserLeaveHint() {

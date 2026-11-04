@@ -63,6 +63,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
@@ -494,6 +496,11 @@ fun PlayerOverlay(
                             }
                         }
                     }
+                    if (!television && state.playbackState != "retry" && state.playbackState != "reconnecting" &&
+                        !state.isLive && hasPreviousEpisode) OverlayButton(
+                        IconKind.Previous, stringResource(R.string.player_previous_episode),
+                        Modifier.testTag("player_previous"), onPrevious
+                    )
                     if (state.playbackState != "retry" && state.playbackState != "reconnecting" && controls.relativeSeek) OverlayButton(
                         IconKind.Rewind, stringResource(R.string.player_rewind), Modifier.testTag("player_rewind"),
                         onClick = { onSeek(-10_000L) },
@@ -515,6 +522,11 @@ fun PlayerOverlay(
                     if (television && !state.isLive && hasPreviousEpisode) OverlayButton(
                         IconKind.Previous, stringResource(R.string.player_previous_episode),
                         Modifier.testTag("player_previous"), onPrevious
+                    )
+                    if (!television && state.playbackState != "retry" && state.playbackState != "reconnecting" &&
+                        controls.next) OverlayButton(
+                        IconKind.Next, stringResource(R.string.player_next),
+                        Modifier.testTag("player_next"), onNext
                     )
                 }
                 }
@@ -605,7 +617,7 @@ fun PlayerOverlay(
                                 Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
                                 .testTag("player_subtitles"), PlayerPopup.Subtitles, dismissMenus, onMenuOpenChanged
                         )
-                        if (controls.next) OverlayButton(
+                        if (television && controls.next) OverlayButton(
                             IconKind.Next, stringResource(R.string.player_next),
                             (if (!controls.scrubber && !controls.startOver && !controls.audio && !controls.subtitles)
                                 Modifier.focusRequester(bottomFocus).onFocusChanged { if (it.isFocused) focusRow = 2 } else Modifier)
@@ -913,8 +925,26 @@ private fun OverlayButton(
                 }
                 IconKind.Play -> triangle(.30f, .76f)
                 IconKind.Pause -> { drawRect(ink, Offset(.28f*w, .2f*h), androidx.compose.ui.geometry.Size(.16f*w, .6f*h)); drawRect(ink, Offset(.56f*w, .2f*h), androidx.compose.ui.geometry.Size(.16f*w, .6f*h)) }
-                IconKind.Rewind -> { triangle(.50f, .12f); triangle(.87f, .49f) }
-                IconKind.Forward -> { triangle(.12f, .50f); triangle(.49f, .87f) }
+                IconKind.Rewind, IconKind.Forward -> {
+                    val points = if (kind == IconKind.Rewind) listOf(.42f to .12f, .82f to .52f)
+                        else listOf(.18f to .58f, .58f to .98f)
+                    points.forEach { (left, tip) ->
+                        val p = Path().apply {
+                            moveTo(left * w, .08f * h)
+                            lineTo(tip * w, .31f * h)
+                            lineTo(left * w, .54f * h)
+                            close()
+                        }
+                        drawPath(p, ink)
+                    }
+                    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        color = ink.toArgb()
+                        textAlign = android.graphics.Paint.Align.CENTER
+                        textSize = .34f * h
+                        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                    }
+                    drawContext.canvas.nativeCanvas.drawText("10", w / 2f, .94f * h, paint)
+                }
                 IconKind.Next -> {
                     triangle(.16f, .66f)
                     drawRect(ink, Offset(.70f*w, .18f*h), androidx.compose.ui.geometry.Size(.14f*w, .64f*h))

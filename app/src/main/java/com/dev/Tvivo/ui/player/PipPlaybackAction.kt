@@ -10,6 +10,13 @@ internal object PipPlaybackAction {
 
     enum class Command { PlayPause, Close, Rewind, Forward, Next }
 
+    enum class Transport { Rewind, PlayPause, Forward }
+
+    /** PiP has room for three transport actions: keep Play/Pause centered and use both sides for seek. */
+    fun transport(isSeekable: Boolean): List<Transport> =
+        if (isSeekable) listOf(Transport.Rewind, Transport.PlayPause, Transport.Forward)
+        else listOf(Transport.PlayPause)
+
     fun command(action: String?): Command? = when (action) {
         PLAY_PAUSE -> Command.PlayPause
         CLOSE -> Command.Close

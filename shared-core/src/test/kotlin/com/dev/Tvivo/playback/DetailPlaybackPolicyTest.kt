@@ -23,6 +23,16 @@ class DetailPlaybackPolicyTest {
         assertEquals(DetailAction(DetailActionKind.Next, "3"), actions.secondary)
     }
 
+    @Test fun continueChoosesMostRecentlyWatchedUnfinishedEpisodeAmongOneTwoAndFive() {
+        val actions = DetailPlaybackPolicy.actions(listOf(
+            ep("episode-1", 1, 1, 120_000, updated = 1),
+            ep("episode-2", 1, 2, 240_000, updated = 2),
+            ep("episode-5", 1, 5, 360_000, updated = 5),
+        ))
+
+        assertEquals(DetailAction(DetailActionKind.Continue, "episode-5", 1_440_000), actions.primary)
+    }
+
     @Test fun completedSeasonMovesToNextSeasonAndFinalEpisodeWatchesAgain() {
         val a = DetailPlaybackPolicy.actions(listOf(ep("last", 1, 2), ep("first", 1, 1, watched = true)))
         assertEquals(DetailActionKind.Next, a.primary?.kind)

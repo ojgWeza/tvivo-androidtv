@@ -50,7 +50,7 @@ object DetailPlaybackPolicy {
         val sorted = ordered(episodes)
         if (sorted.isEmpty()) return SeriesActions(null)
         val partial = sorted.filter { rowState(it) == EpisodeRowState.Partial }
-            .maxByOrNull { it.updatedAt }
+            .maxWithOrNull(compareBy<DetailEpisode>({ it.updatedAt }, { it.season }, { it.number }, { it.id }))
         val lastWatchedIndex = sorted.indexOfLast { rowState(it) == EpisodeRowState.Watched }
         val nextId = if (lastWatchedIndex >= 0) {
             NextPlaybackSelector().selectNext(sorted.map { it.id }, sorted[lastWatchedIndex].id)
