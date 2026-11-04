@@ -66,14 +66,14 @@ async function probeStatus(url, init, label) {
 // Reads a stream continuously (discarding bytes) and counts them, so we can see whether it keeps flowing.
 function openCounting(url, label) {
   const controller = new AbortController();
-  const st = { label, bytes: 0, ended: false, error: null, http: 0 };
+  const st = { label, bytes: 0, ended: false, error: null, http: 0, firstByteMs: null, t0: Date.now() };
   const done = (async () => {
     try {
       const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
       st.http = res.status;
       if (!res.ok) { st.ended = true; return; }
       const reader = res.body.getReader();
-      for (;;) { const { done: d, value } = await reader.read(); if (d) { st.ended = true; break; } st.bytes += value.length; }
+      for (;;) { const { done: d, value } = await reader.read(); if (d) { st.ended = true; break; } if (st.firstByteMs === null) st.firstByteMs = Date.now() - st.t0; st.bytes += value.length; }
     } catch (e) { if (!controller.signal.aborted) { st.error = String(e.name || e); st.ended = true; } }
   })();
   return { st, close: () => controller.abort(), done };
@@ -160,6 +160,51 @@ try {
     await sleep(6000);
     await keepReadingPair(A, Bu, '7 live');
     await sleep(8000);
+  }
+
+  if (allowOverlap) {
+    await sleep(8000);
+    // 8: does a HEAD / Range 0-0 / second open of the SAME live stream cut the stream that is being played?
+    const play = openCounting(A, 'A');
+    await sleep(4000);
+    let mark = play.st.bytes; await sleep(3000);
+    const base = Math.round((play.st.bytes - mark) / 3);
+    step('8 A playing alone: bytes/s', { http: play.st.http, bytesPerSec: base });
+    const survive = async (name, action) => {
+      const before = play.st.bytes;
+      const result = await action();
+      await sleep(4000);
+      const rate = Math.round((play.st.bytes - before) / 4);
+      step(name, { ...result, playingBytesPerSec: rate, playingEnded: play.st.ended,
+        verdict: play.st.ended ? 'PLAYING STREAM WAS CUT' : (rate < base * 0.2 ? 'playing stream starved' : 'playing stream survived') });
+    };
+    await survive('8a HEAD on the playing stream', () => probeStatus(A, { method: 'HEAD' }, 'HEAD'));
+    await survive('8b Range 0-0 on the playing stream', () => probeStatus(A, { method: 'GET', headers: { Range: 'bytes=0-0' } }, 'Range0-0'));
+    if (!play.st.ended) {
+      const again = openCounting(A, 'A-again');
+      await survive('8c second full open of the SAME stream (playing one tracked)', async () => ({ http: again.st.http }));
+      step('8c second open itself', { http: again.st.http, bytes: again.st.bytes, ended: again.st.ended });
+      again.close(); await Promise.allSettled([again.done]);
+    }
+    play.close(); await Promise.allSettled([play.done]);
+  }
+
+  if (allowOverlap) {
+    await sleep(8000);
+    // 9: switching back and forth between two live channels (close one, open the other), 6 turns of 5 s.
+    const turns = [];
+    for (let i = 0; i < 6; i++) {
+      const url = i % 2 === 0 ? A : Bu;
+      const c = openCounting(url, i % 2 === 0 ? 'A' : 'B');
+      const started = Date.now();
+      await sleep(5000);
+      turns.push({ turn: i + 1, channel: c.st.label, http: c.st.http, firstByteMs: c.st.firstByteMs,
+        bytesPerSec: Math.round(c.st.bytes / 5), ended: c.st.ended, error: c.st.error });
+      c.close(); await Promise.allSettled([c.done]);
+      await sleep(i % 2 === 0 ? 1000 : 3000); // short and longer gaps, to see whether the gap matters
+    }
+    step('9 live switching A,B,A,B,A,B (gaps 1 s / 3 s)', { turns });
+    step('9 active_cons after switching', await userInfo());
   }
 
   if (allowOverlap) {
