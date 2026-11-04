@@ -15,6 +15,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.input.key.Key
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -42,6 +43,31 @@ import org.junit.Assert.assertEquals
 @OptIn(ExperimentalTestApi::class, ExperimentalFoundationApi::class)
 class ShelfFocusTest {
     @get:Rule val rule = createComposeRule()
+
+    @Test fun seeAllRequesterCanRestoreFocusAfterReturningFromFullList() {
+        val shelf = HomeShelf("restore", "Recently added Movies", ContentType.MOVIES,
+            listOf(HomeCard(ContentType.MOVIES, BrowseItem(31, "Fixture", null, null))),
+            totalCount = 10)
+        var fullList by mutableStateOf(false)
+        val seeAll = FocusRequester()
+        rule.setContent {
+            TvivoTheme {
+                if (fullList) androidx.tv.material3.Text("Full list")
+                else {
+                    LaunchedEffect(fullList) {
+                        androidx.compose.runtime.withFrameNanos { }
+                        seeAll.requestFocus()
+                    }
+                    ShelfRow(shelf, FocusRequester(), seeAllRequester = seeAll,
+                        onSeeAll = { fullList = true }, onOpen = {}, onContextMenu = {})
+                }
+            }
+        }
+        rule.onNodeWithTag("see-all-restore").performClick()
+        rule.onNodeWithText("Full list").assertExists()
+        rule.runOnIdle { fullList = false }
+        rule.onNodeWithTag("see-all-restore").assertIsFocused()
+    }
 
     @Test fun shelfCardCanOwnFocusWithoutFocusRestorer() {
         val card = HomeCard(ContentType.MOVIES, BrowseItem(1, "Fixture title", null, null))

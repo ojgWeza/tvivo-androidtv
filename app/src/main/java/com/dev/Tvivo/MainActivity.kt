@@ -350,7 +350,9 @@ private fun TvivoApp() {
         mutableStateOf(ShellBrowseState())
     }
     var pendingHomeFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingHomeSeeAllShelfId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSearchFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingSearchSeeAllType by rememberSaveable { mutableStateOf<ContentType?>(null) }
     var pendingCatalogFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
     var focusSettingsNetworkDiagnostics by rememberSaveable { mutableStateOf(false) }
     val tabStates = rememberSaveableStateHolder()
@@ -652,6 +654,7 @@ private fun TvivoApp() {
                             subscriptionExpiry = accountState.expiry,
                             accountWarning = accountState.expiringSoon,
                             pendingFocusCardKey = pendingHomeFocusKey,
+                            pendingSeeAllShelfId = pendingHomeSeeAllShelfId,
                             lastSelected = lastOpened,
                             isRefreshing = accountState.isRefreshing,
                             refreshMessage = accountState.refreshMessage,
@@ -676,6 +679,7 @@ private fun TvivoApp() {
                                     card.item.extension, resumeMs, card.item.knownDurationMs)
                             },
                             onSeeAll = { shelf ->
+                                pendingHomeSeeAllShelfId = shelf.id
                                 if (shelf.id == "__my_suggestions") {
                                     select(ShellTab.Search)
                                 } else {
@@ -708,15 +712,19 @@ private fun TvivoApp() {
                             onExit = { (context as? android.app.Activity)?.finish() },
                             exitRequest = homeExitRequest,
                             onExitRequestHandled = { homeExitRequest = 0 },
-                            onPendingFocusConsumed = { pendingHomeFocusKey = null }
+                            onPendingFocusConsumed = { pendingHomeFocusKey = null },
+                            onSeeAllFocusConsumed = { pendingHomeSeeAllShelfId = null }
                         )
                         ShellTab.Search -> SearchScreen(accountId,
                             query = shellBrowse.query,
                             onQueryChanged = { shellBrowse = shellBrowse.copy(query = it) },
                             pendingFocusCardKey = pendingSearchFocusKey,
+                            restoreSeeAllFocusType = pendingSearchSeeAllType,
+                            onSeeAllFocusRestored = { pendingSearchSeeAllType = null },
                             onPendingFocusConsumed = { pendingSearchFocusKey = null },
                             onOpen = { card -> openCard(card) },
                             onBrowse = { type ->
+                                pendingSearchSeeAllType = type
                                 select(when (type) {
                                     ContentType.MOVIES -> ShellTab.Movies
                                     ContentType.SERIES -> ShellTab.Series

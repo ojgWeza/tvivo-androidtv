@@ -69,6 +69,8 @@ fun SearchScreen(
     onQueryChanged: (String) -> Unit,
     pendingFocusCardKey: String? = null,
     onPendingFocusConsumed: () -> Unit = {},
+    restoreSeeAllFocusType: ContentType? = null,
+    onSeeAllFocusRestored: () -> Unit = {},
     onOpen: (HomeCard) -> Unit,
     onBrowse: (ContentType) -> Unit
 ) {
@@ -87,6 +89,7 @@ fun SearchScreen(
     val resultsFocus = remember { FocusRequester() }
     val clearFocus = remember { FocusRequester() }
     val restoreFocus = remember { FocusRequester() }
+    val seeAllFocus = remember { ContentType.entries.associateWith { FocusRequester() } }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val television = LocalIsTelevision.current
@@ -124,6 +127,18 @@ fun SearchScreen(
         }
     }
     val visibleShelves = shelves.filter { typeFilter == null || it.type == typeFilter }
+    LaunchedEffect(restoreSeeAllFocusType, visibleShelves, searchLoaded) {
+        val type = restoreSeeAllFocusType ?: return@LaunchedEffect
+        if (!searchLoaded || visibleShelves.none { it.type == type }) return@LaunchedEffect
+        val requester = seeAllFocus[type] ?: return@LaunchedEffect
+        repeat(60) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (runCatching { requester.requestFocus() }.isSuccess) {
+                onSeeAllFocusRestored()
+                return@LaunchedEffect
+            }
+        }
+    }
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     val columns = searchGridColumnCount(television, LocalConfiguration.current.screenWidthDp)
     LaunchedEffect(pendingFocusCardKey, visibleShelves, searchLoaded) {
@@ -171,6 +186,7 @@ fun SearchScreen(
                 firstKeyFocus = tvKeyboardFocus,
                 resultsFocus = resultsFocus,
                 onKeyboardFocused = { resultsFocused = false },
+                requestInitialFocus = restoreSeeAllFocusType == null,
             )
         } else {
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -241,7 +257,9 @@ fun SearchScreen(
                     ContentType.LIVE -> R.string.search_section_live
                 }), color = AppColors.Ink, style = TvType.title, modifier = Modifier.weight(1f))
                 Text(stringResource(R.string.search_see_all), color = AppColors.AccentText, style = TvType.label,
-                    modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame().tvClickable { onBrowse(shelf.type) }
+                    modifier = Modifier.heightIn(min = 48.dp).focusRequester(seeAllFocus.getValue(shelf.type))
+                        .testTag("search-see-all-${shelf.type.name.lowercase()}")
+                        .tvFocusFrame().tvClickable { onBrowse(shelf.type) }
                         .padding(8.dp))
             }
         }
@@ -264,7 +282,9 @@ fun SearchScreen(
                             ContentType.LIVE -> R.string.search_section_live
                         }), color = AppColors.Ink, style = TvType.title)
                         Text(stringResource(R.string.search_see_all), color = AppColors.AccentText, style = TvType.label,
-                            modifier = Modifier.heightIn(min = 48.dp).tvFocusFrame().tvClickable { onBrowse(shelf.type) }
+                            modifier = Modifier.heightIn(min = 48.dp).focusRequester(seeAllFocus.getValue(shelf.type))
+                                .testTag("search-see-all-${shelf.type.name.lowercase()}")
+                                .tvFocusFrame().tvClickable { onBrowse(shelf.type) }
                                 .padding(8.dp))
                     }
                 }

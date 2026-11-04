@@ -120,6 +120,8 @@ fun HomeScreen(
     subscriptionExpiry: String? = null,
     accountWarning: Boolean = false,
     pendingFocusCardKey: String? = null,
+    pendingSeeAllShelfId: String? = null,
+    onSeeAllFocusConsumed: () -> Unit = {},
     lastSelected: ContentType? = null,
     isRefreshing: Boolean,
     refreshMessage: String?,
@@ -187,6 +189,9 @@ fun HomeScreen(
                 shellFocus.firstContent else FocusRequester()
         }
     }
+    val seeAllRequesters = remember(shelves.map { it.id }) {
+        shelves.associate { it.id to FocusRequester() }
+    }
     val listState = rememberLazyListState()
     val shelfFocusRegistry = remember { ShelfFocusRegistry() }
     val nonEmptyShelfIds = shelves.filter { it.cards.isNotEmpty() }.map { it.id }
@@ -233,6 +238,20 @@ fun HomeScreen(
         }
         if (index >= 0) listState.scrollToItem(index + 1)
         else onPendingFocusConsumed()
+    }
+    LaunchedEffect(pendingSeeAllShelfId, shelves.map { it.id }) {
+        val shelfId = pendingSeeAllShelfId ?: return@LaunchedEffect
+        val index = shelves.indexOfFirst { it.id == shelfId }
+        val requester = seeAllRequesters[shelfId]
+        if (index < 0 || requester == null) return@LaunchedEffect
+        listState.scrollToItem(index + 1)
+        repeat(60) {
+            androidx.compose.runtime.withFrameNanos {}
+            if (runCatching { requester.requestFocus() }.isSuccess) {
+                onSeeAllFocusConsumed()
+                return@LaunchedEffect
+            }
+        }
     }
     LaunchedEffect(accountId, shelves.map { it.id }, pendingFocusCardKey, snapshot?.isFirstRun) {
         if (!television || pendingFocusCardKey != null || snapshot?.isFirstRun != false) return@LaunchedEffect
@@ -309,6 +328,7 @@ fun HomeScreen(
             items(shelves.size, key = { "home:shelf:${shelves[it].id}" }) { index ->
                 val shelf = shelves[index]
                 ShelfRow(shelf, rowRequesters[index],
+                    seeAllRequester = seeAllRequesters[shelf.id],
                     aboveRequester = shellFocus?.topBar.takeIf { shelf.id == firstNonEmptyShelfId },
                     restoreKey = pendingFocusCardKey.takeIf { it?.substringBefore('|') == shelf.id },
                     onRestoreConsumed = onPendingFocusConsumed,

@@ -113,7 +113,8 @@ internal fun TvSearchKeyboard(
     firstKeyFocus: FocusRequester,
     resultsFocus: FocusRequester,
     onKeyboardFocused: () -> Unit,
-    initialLanguage: TvSearchLanguage = TvSearchLanguage.ENGLISH
+    initialLanguage: TvSearchLanguage = TvSearchLanguage.ENGLISH,
+    requestInitialFocus: Boolean = true
 ) {
     var language by remember(initialLanguage) { mutableStateOf(initialLanguage) }
     var focusedIndex by remember { mutableIntStateOf(0) }
@@ -122,7 +123,8 @@ internal fun TvSearchKeyboard(
         List(keys.size) { index -> if (index == 0) firstKeyFocus else FocusRequester() }
     }
     val recentFocus = remember { FocusRequester() }
-    LaunchedEffect(language) {
+    LaunchedEffect(language, requestInitialFocus) {
+        if (!requestInitialFocus) return@LaunchedEffect
         repeat(4) {
             androidx.compose.runtime.withFrameNanos { }
             if (runCatching { firstKeyFocus.requestFocus() }.isSuccess) return@LaunchedEffect
