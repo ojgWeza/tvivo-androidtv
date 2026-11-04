@@ -33,7 +33,7 @@ const step = (name, data) => { out.steps.push({ name, t: Math.round((Date.now() 
 const t0 = Date.now();
 
 async function userInfo() {
-  const res = await fetch(api(), { signal: AbortSignal.timeout(10000) });
+  const res = await fetch(api(), { signal: AbortSignal.timeout(30000) });
   const j = await res.json();
   const u = j.user_info || {};
   return { http: res.status, status: u.status, maxConnections: Number(u.max_connections), activeCons: Number(u.active_cons) };
@@ -107,7 +107,7 @@ try {
   }
   if (back === null) step('5 active_cons did NOT return to baseline within window', { watchSeconds });
 } catch (e) {
-  step('error', { message: String(e.message || e) });
+  step('error', { message: String(e.message || e), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
 }
 console.log(JSON.stringify(out, null, 2));
 process.exit(0);
