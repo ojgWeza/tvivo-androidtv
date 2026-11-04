@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="file_size">File size %1$s</string>
+    <string name="file_size_estimate">File size ~%1$s</string>
+    <string name="file_size_accessibility">File size: %1$s</string>
+    <string name="file_size_approximate_accessibility">Approximate file size: %1$s</string>
     <string name="app_name">Tvivo</string>
     <string name="nav_my_tvivo">My Tvivo</string>
     <string name="nav_for_you">For You</string>

@@ -2,12 +2,21 @@ package com.dev.Tvivo.data.repository
 
 import com.dev.Tvivo.data.local.dao.MediaFileSizeDao
 import com.dev.Tvivo.data.remote.HttpFileSizeProbe
+import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
+import kotlinx.coroutines.flow.Flow
 
 /** Persistence policy for serialized, caller-owned movie and episode size probes. */
 class MediaFileSizeRepository(
     private val dao: MediaFileSizeDao,
     private val clockMillis: () -> Long = System::currentTimeMillis
 ) {
+    fun observeMovie(accountId: String, streamId: Int): Flow<List<MediaFileSizeEntity>> =
+        dao.observeForMediaIds(accountId, "movie", 0, listOf(streamId.toString()))
+
+    fun observeEpisodes(accountId: String, seriesId: Int, episodeIds: List<String>): Flow<List<MediaFileSizeEntity>> =
+        if (episodeIds.isEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
+        else dao.observeForMediaIds(accountId, "episode", seriesId, episodeIds)
+
     suspend fun shouldProbe(accountId: String, kind: String, seriesId: Int, mediaId: String): Boolean {
         requireValidIdentity(kind, seriesId, mediaId)
         val row = dao.get(accountId, kind, seriesId, mediaId) ?: return true

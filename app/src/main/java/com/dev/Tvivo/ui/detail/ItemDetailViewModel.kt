@@ -17,6 +17,7 @@ import com.dev.Tvivo.data.repository.LiveRepository
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
 import com.dev.Tvivo.data.repository.VodRepository
+import com.dev.Tvivo.data.repository.MediaFileSizeRepository
 import com.dev.Tvivo.ui.home.ContentType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,7 +50,8 @@ data class ItemDetailUiState(
     val isLoading: Boolean = true,
     val plotError: AppError? = null,
     /** The row is gone from the catalog — a favourite whose item was removed upstream. */
-    val notFound: Boolean = false
+    val notFound: Boolean = false,
+    val fileSize: FileSizeDisplay? = null
 )
 
 /**
@@ -153,6 +155,10 @@ class ItemDetailViewModel(
                     if (row == null) {
                         markNotFound()
                     } else {
+                        launch {
+                            MediaFileSizeRepository(db.mediaFileSizeDao()).observeMovie(accountId, itemId)
+                                .collect { rows -> _state.update { it.copy(fileSize = FileSizeFormatter.display(rows.firstOrNull())) } }
+                        }
                         val cached = row.plot?.takeIf { p -> p.isNotBlank() }
                         _state.update {
                             it.copy(

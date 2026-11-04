@@ -14,6 +14,9 @@ import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
+import com.dev.Tvivo.data.repository.MediaFileSizeRepository
+import com.dev.Tvivo.ui.detail.FileSizeDisplay
+import com.dev.Tvivo.ui.detail.FileSizeFormatter
 import com.dev.Tvivo.playback.DetailEpisode
 import com.dev.Tvivo.playback.DetailPlaybackPolicy
 import com.dev.Tvivo.playback.SeriesActions
@@ -44,6 +47,7 @@ data class SeriesDetailUiState(
     val seasons: List<SeasonTab> = emptyList(),
     val selectedSeason: Int? = null,
     val episodes: List<EpisodeEntity> = emptyList(),
+    val fileSizes: Map<String, FileSizeDisplay> = emptyMap(),
     /** Only while there is nothing cached to show — a refresh over cached episodes is a
      *  line under the header, never a blocking spinner. */
     val isLoading: Boolean = true,
@@ -74,6 +78,7 @@ class SeriesDetailViewModel(
     private var repo: SeriesRepository? = null
     private var playbackState: PlaybackStateRepository? = null
     private var accountId: String? = null
+    private var sizeJob: kotlinx.coroutines.Job? = null
 
     /** All episodes of the show, ungrouped, as cached. Grouped into seasons on emit. */
     private var allEpisodes: List<EpisodeEntity> = emptyList()
@@ -120,6 +125,7 @@ class SeriesDetailViewModel(
                 repository.observeEpisodes(seriesId).collect { episodes ->
                     allEpisodes = episodes
                     emitSeasons(repository.lastSeasonNames)
+                    observeVisibleEpisodeSizes(accountId)
                     if (episodes.isNotEmpty()) _state.update {
                         it.copy(isLoading = false, isRefreshing = true)
                     }
@@ -146,6 +152,21 @@ class SeriesDetailViewModel(
     fun selectSeason(number: Int) {
         _state.update { it.copy(selectedSeason = number) }
         emitSeasons(repo?.lastSeasonNames.orEmpty())
+        accountId?.let(::observeVisibleEpisodeSizes)
+    }
+
+    private fun observeVisibleEpisodeSizes(account: String) {
+        sizeJob?.cancel()
+        val visibleIds = _state.value.episodes.map { it.episodeId }
+        val sizeRepo = MediaFileSizeRepository(db.mediaFileSizeDao())
+        sizeJob = viewModelScope.launch {
+            sizeRepo.observeEpisodes(account, seriesId, visibleIds).collect { rows ->
+                val displays = rows.mapNotNull { row ->
+                    FileSizeFormatter.display(row)?.let { row.mediaId to it }
+                }.toMap()
+                _state.update { it.copy(fileSizes = displays) }
+            }
+        }
     }
 
     fun refresh() {

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="file_size">حجم الملف %1$s</string>
+    <string name="file_size_estimate">حجم الملف ~%1$s</string>
+    <string name="file_size_accessibility">حجم الملف: %1$s</string>
+    <string name="file_size_approximate_accessibility">حجم الملف التقريبي: %1$s</string>
     <string name="category_order_accessibility">ترتيب الفئات</string>
     <string name="content_type_movie">فيلم</string>
     <string name="language_title">اللغة</string>

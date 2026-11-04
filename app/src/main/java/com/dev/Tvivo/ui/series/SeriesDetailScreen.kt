@@ -50,6 +50,8 @@ import com.dev.Tvivo.ui.browse.ResumePrompt
 import com.dev.Tvivo.ui.common.ErrorCopy
 import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.detail.DetailHero
+import com.dev.Tvivo.ui.detail.FileSizeDisplay
+import com.dev.Tvivo.ui.detail.FileSizeLabel
 import com.dev.Tvivo.ui.detail.DetailTextButton
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
@@ -257,8 +259,9 @@ internal fun SeriesEpisodeList(
         }
         items(state.episodes, key = { "episode:${it.episodeId}" }) { episode ->
             val progress = state.playback[episode.episodeId]
-            EpisodeRow(episode, progress?.let(DetailPlaybackPolicy::rowState) ?: EpisodeRowState.Unstarted,
+        EpisodeRow(episode, progress?.let(DetailPlaybackPolicy::rowState) ?: EpisodeRowState.Unstarted,
                 progress?.positionMs, progress?.durationMs,
+                state.fileSizes[episode.episodeId],
                 highlighted = episode.episodeId == state.actions.primary?.episodeId,
                 modifier = if (episode.episodeId == targetId) Modifier.focusRequester(listFocus) else Modifier,
                 onFocus = { onFocusedEpisode(episode.seasonNumber, episode.episodeId) },
@@ -274,6 +277,7 @@ private fun EpisodeRow(
     state: EpisodeRowState,
     positionMs: Long?,
     durationMs: Long?,
+    fileSize: FileSizeDisplay?,
     highlighted: Boolean,
     modifier: Modifier,
     onFocus: () -> Unit,
@@ -296,7 +300,13 @@ private fun EpisodeRow(
             if (it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_MENU &&
                 it.nativeKeyEvent.action == KeyEvent.ACTION_UP) { onMenu(); true } else false
         }
-        .semantics { contentDescription = "$displayTitle, $stateLabel" }
+        .semantics {
+            val sizeLabel = fileSize?.let {
+                context.getString(if (it.isEstimate) com.dev.Tvivo.R.string.file_size_approximate_accessibility
+                    else com.dev.Tvivo.R.string.file_size_accessibility, it.text)
+            }
+            contentDescription = listOfNotNull(displayTitle, stateLabel, sizeLabel).joinToString(", ")
+        }
         .combinedClickable(onClick = onPlay, onLongClick = onMenu)
         .padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -316,6 +326,9 @@ private fun EpisodeRow(
         episode.plot?.let { plot ->
             Text(plot, color = AppColors.Dim, style = TvType.label, maxLines = 2,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 48.dp, top = 4.dp))
+        }
+        fileSize?.let { size ->
+            FileSizeLabel(size, Modifier.padding(start = 48.dp, top = 4.dp))
         }
         if (state == EpisodeRowState.Partial && positionMs != null && durationMs != null && durationMs > 0) {
             Box(Modifier.fillMaxWidth().height(4.dp).padding(start = 48.dp).background(AppColors.Line)) {

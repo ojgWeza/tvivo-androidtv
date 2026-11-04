@@ -58,6 +58,7 @@ fun DetailHero(
     durationMinutes: Int? = null,
     genre: String? = null,
     cast: String? = null,
+    fileSize: FileSizeDisplay? = null,
     isLive: Boolean = false,
     horizontal: Boolean = false,
     modifier: Modifier = Modifier,
@@ -101,6 +102,9 @@ fun DetailHero(
                             .padding(horizontal = 12.dp, vertical = 7.dp))
                 }
             }
+        }
+        fileSize?.let { size ->
+            FileSizeLabel(size, Modifier.padding(top = 8.dp))
         }
         listOfNotNull(genre?.takeIf { it.isNotBlank() }, cast?.takeIf { it.isNotBlank() })
             .forEach { value ->

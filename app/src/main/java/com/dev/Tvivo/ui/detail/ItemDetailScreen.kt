@@ -128,6 +128,7 @@ fun ItemDetailScreen(
             durationMinutes = state.durationMinutes,
             genre = state.genre,
             cast = state.cast,
+            fileSize = if (isLive) null else state.fileSize,
             isLive = isLive,
             horizontal = !compact,
             modifier = Modifier.fillMaxWidth(),
