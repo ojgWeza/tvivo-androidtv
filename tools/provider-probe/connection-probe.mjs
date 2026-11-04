@@ -9,6 +9,7 @@
 //   1. opens stream A and holds it (reads one small chunk, then stops reading)
 //   2. while A is held: re-reads active_cons  -> does ONE held call count as 1 connection?
 //   3. while A is held: HEAD, then GET "Range: bytes=0-0" on the SAME stream -> does a header-only probe count / get refused?
+//   4a/6. only with --allow-overlap: the SAME stream opened twice, and a VOD file read twice (play + probe/download)
 //   4. only with --allow-overlap: opens stream B (different channel) from the SAME IP while A is held
 //        accepted -> the panel does not count per call (looks per device/IP or unenforced)
 //        refused  -> it counts per call
@@ -87,6 +88,14 @@ try {
 
   let b = null;
   if (allowOverlap) {
+    // 4a: the SAME stream opened a second time (what a shared/tee stream or a re-open would look like).
+    const a2 = await openHeld(A, 'A-again');
+    step('4a open the SAME stream A a second time while A held', { http: a2.http, held: a2.held, error: a2.error });
+    await sleep(2000);
+    step('4a active_cons with A + A-again', await userInfo());
+    if (a2.held) a2.close();
+    await sleep(6000);
+    step('4a active_cons after closing A-again (A still held)', await userInfo());
     b = await openHeld(Bu, 'B');
     step('4 open DIFFERENT stream B from same IP while A held', { http: b.http, held: b.held, error: b.error });
     await sleep(2000);
@@ -106,6 +115,32 @@ try {
     await sleep(5000);
   }
   if (back === null) step('5 active_cons did NOT return to baseline within window', { watchSeconds });
+
+  if (allowOverlap) {
+    // 6: VOD file held, then a size probe / second Range read of the SAME file (playing + probing/downloading it).
+    try {
+      const vr = await fetch(api('&action=get_vod_streams'), { signal: AbortSignal.timeout(60000) });
+      const vod = await vr.json();
+      const v = Array.isArray(vod) ? vod.find(x => x.container_extension) : null;
+      if (!v) { step('6 skipped', { note: 'no VOD item found' }); }
+      else {
+        const vu = `${base}/movie/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${v.stream_id}.${v.container_extension}`;
+        await sleep(6000);
+        const v1 = await openHeld(vu, 'VOD-1');
+        step('6a open VOD file (held, like playing it)', { http: v1.http, held: v1.held, error: v1.error });
+        await sleep(2000);
+        step('6a active_cons with VOD held', await userInfo());
+        step('6b HEAD same VOD while held', await probeStatus(vu, { method: 'HEAD' }, 'HEAD'));
+        step('6c Range 0-0 same VOD while held', await probeStatus(vu, { method: 'GET', headers: { Range: 'bytes=0-0' } }, 'Range0-0'));
+        const v2 = await openHeld(vu, 'VOD-2');
+        step('6d second full read of the SAME VOD (like play + download)', { http: v2.http, held: v2.held, error: v2.error });
+        await sleep(2000);
+        step('6d active_cons with VOD x2', await userInfo());
+        if (v2.held) v2.close();
+        if (v1.held) v1.close();
+      }
+    } catch (e) { step('6 error', { message: String(e.message || e) }); }
+  }
 } catch (e) {
   step('error', { message: String(e.message || e), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
 }
