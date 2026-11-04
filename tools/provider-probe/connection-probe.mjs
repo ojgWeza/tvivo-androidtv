@@ -190,5 +190,17 @@ try {
 } catch (e) {
   step('error', { message: String(e.message || e), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
 }
-console.log(JSON.stringify(out, null, 2));
+const json = JSON.stringify(out, null, 2);
+console.log(json);
+// Also save the result so it can be read later: --out <file>, default tools/provider-probe/results/probe-<time>.json
+try {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const oi = process.argv.indexOf('--out');
+  const file = oi > 0 ? process.argv[oi + 1]
+    : path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^/([A-Za-z]:)/, '$1')), 'results', 'probe-' + out.startedAt.replace(/[:.]/g, '-') + '.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, json);
+  console.error('Saved result to ' + file);
+} catch (e) { console.error('Could not save result file: ' + (e.message || e)); }
 process.exit(0);
