@@ -204,6 +204,13 @@ No separate proc/`.sql` layer in this repo — each method's own tables are alre
 - [`liveDao().recentlyAdded`](src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt#L183) — 1 inline statement(s)
 - [`liveDao().searchPreview`](src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt#L134) — 1 inline statement(s)
 - [`liveDao().totalCount`](src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt#L120) — 1 inline statement(s)
+- [`mediaFileSizeDao().deleteByAccount`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L62) — 1 inline statement(s)
+- [`mediaFileSizeDao().get`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L51) — 1 inline statement(s)
+- [`mediaFileSizeDao().getForMediaIds`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L59) — 1 inline statement(s)
+- [`mediaFileSizeDao().observeForMediaIds`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L55) — 1 inline statement(s)
+- [`mediaFileSizeDao().updateEstimate`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L22) — 1 inline statement(s)
+- [`mediaFileSizeDao().updateExact`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L18) — 1 inline statement(s)
+- [`mediaFileSizeDao().updateProbe`](src/main/java/com/dev/Tvivo/data/local/dao/MediaFileSizeDao.kt#L26) — 1 inline statement(s)
 - [`profileAllowDao().observe`](src/main/java/com/dev/Tvivo/data/local/dao/ProfileDaos.kt#L67) — 1 inline statement(s)
 - [`profileAllowDao().remove`](src/main/java/com/dev/Tvivo/data/local/dao/ProfileDaos.kt#L80) — 1 inline statement(s)
 - [`profileDao().deleteRow`](src/main/java/com/dev/Tvivo/data/local/dao/ProfileDaos.kt#L51) — 1 inline statement(s)
@@ -311,6 +318,7 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 | `drive_shows` _(external)_ | `driveDao().pruneShows` | `driveDao().pageShows`<br>`driveDao().searchShows`<br>`driveDao().show` |
 | `favourites` | `favouriteDao().remove`<br>`favouriteDao().removeForProfile` | `favouriteDao().count`<br>`favouriteDao().isFavourite`<br>`favouriteDao().isFavouriteForProfile`<br>`favouriteDao().observe`<br>`favouriteDao().observeForProfile`<br>`favouriteDao().preview` |
 | `live_streams` | `liveDao().deleteCategory`<br>`liveDao().deleteGenerationsUpTo` | `liveDao().allInCategory`<br>`liveDao().allPreview`<br>`liveDao().allPreviewFiltered`<br>`liveDao().byId`<br>`liveDao().byIds`<br>`liveDao().categoryCount`<br>`liveDao().categoryLatest`<br>`liveDao().categoryPreview`<br>`liveDao().categoryPreviewFiltered`<br>`liveDao().countAllFiltered`<br>`liveDao().countInCategoryFiltered`<br>`liveDao().countSnapshot`<br>`liveDao().countsByCategory`<br>`liveDao().deepCheckCandidate`<br>`liveDao().landingPreviewSorted`<br>`liveDao().matchingCategoryCounts`<br>`liveDao().pagingAll`<br>`liveDao().pagingAllFiltered`<br>`liveDao().pagingInCategory`<br>`liveDao().pagingInCategoryFiltered`<br>`liveDao().pagingSearch`<br>`liveDao().pagingSorted`<br>`liveDao().recentlyAdded`<br>`liveDao().searchPreview`<br>`liveDao().totalCount` |
+| `media_file_sizes` _(external)_ | `mediaFileSizeDao().deleteByAccount`<br>`mediaFileSizeDao().updateEstimate`<br>`mediaFileSizeDao().updateExact`<br>`mediaFileSizeDao().updateProbe` | `mediaFileSizeDao().get`<br>`mediaFileSizeDao().getForMediaIds`<br>`mediaFileSizeDao().observeForMediaIds` |
 | `music_tracks` _(external)_ | `driveDao().pruneMusic` | `driveDao().pageMusic`<br>`driveDao().searchMusic`<br>`driveDao().track` |
 | `profile` _(external)_ | `profileDao().deleteRow` | `profileDao().get`<br>`profileDao().observe`<br>`profileWriteGuard().profileExists` |
 | `profile_allow` _(external)_ | `profileAllowDao().remove` | `profileAllowDao().observe` |
@@ -326,4 +334,4 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 
 ---
 
-Indexed 61 routes · 177 backend methods · 145 procs · 21 tables · 62 frontend files · 0 SQL files.
+Indexed 61 routes · 188 backend methods · 152 procs · 22 tables · 62 frontend files · 0 SQL files.

@@ -79,7 +79,7 @@ class AppDatabaseSchemaMigrationTest {
                 VALUES ('a','a','series','older',2)""")
         }
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8).allowMainThreadQueries().build()
+            .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9).allowMainThreadQueries().build()
         try {
             val db = room.openHelper.writableDatabase
             db.query("SELECT plot FROM series_episodes WHERE episodeId='ep'").use { rows ->
@@ -111,7 +111,7 @@ class AppDatabaseSchemaMigrationTest {
 
         // Room runs both migrations, then validates the whole schema and identity hash on open.
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8)
+            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9)
             .allowMainThreadQueries()
             .build()
         try {
@@ -150,6 +150,31 @@ class AppDatabaseSchemaMigrationTest {
         } finally {
             room.close()
         }
+    }
+
+    @Test
+    fun exported_v8_migrates_to_v9_and_keeps_existing_user_rows() {
+        val v8 = openExported(8)
+        try {
+            val db = v8.writableDatabase
+            db.execSQL("INSERT INTO profile (id,accountKey,name,kind,createdAt) VALUES ('a','a','Adult','Adult',1)")
+            db.execSQL("INSERT INTO favourites (accountId,profileId,contentType,itemId,addedAt) VALUES ('a','a','vod','m',11)")
+            db.execSQL("INSERT INTO resume_positions (accountId,profileId,contentType,itemId,positionMs,durationMs,updatedAt) VALUES ('a','a','vod','m',22,99,33)")
+        } finally { v8.close() }
+        val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
+            .addMigrations(AppDatabase.MIGRATION_8_9).allowMainThreadQueries().build()
+        try {
+            val db = room.openHelper.writableDatabase
+            db.query("SELECT COUNT(*) FROM media_file_sizes").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(0, rows.getInt(0))
+            }
+            db.query("SELECT addedAt FROM favourites WHERE itemId='m'").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(11L, rows.getLong(0))
+            }
+            db.query("SELECT positionMs FROM resume_positions WHERE itemId='m'").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(22L, rows.getLong(0))
+            }
+        } finally { room.close() }
     }
 
     private fun seed(db: SupportSQLiteDatabase) {

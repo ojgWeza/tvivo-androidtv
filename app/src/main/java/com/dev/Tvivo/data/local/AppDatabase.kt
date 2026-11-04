@@ -11,6 +11,7 @@ import com.dev.Tvivo.data.local.dao.CategoryDao
 import com.dev.Tvivo.data.local.dao.DriveDao
 import com.dev.Tvivo.data.local.dao.FavouriteDao
 import com.dev.Tvivo.data.local.dao.LiveDao
+import com.dev.Tvivo.data.local.dao.MediaFileSizeDao
 import com.dev.Tvivo.data.local.dao.ProfileDao
 import com.dev.Tvivo.data.local.dao.ProfileAllowDao
 import com.dev.Tvivo.data.local.dao.RecentlyPlayedDao
@@ -31,6 +32,7 @@ import com.dev.Tvivo.data.local.entities.DriveShowEntity
 import com.dev.Tvivo.data.local.entities.EpisodeEntity
 import com.dev.Tvivo.data.local.entities.FavouriteEntity
 import com.dev.Tvivo.data.local.entities.LiveStreamEntity
+import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
 import com.dev.Tvivo.data.local.entities.MusicTrackEntity
 import com.dev.Tvivo.data.local.entities.ProfileAllowEntity
 import com.dev.Tvivo.data.local.entities.ProfileEntity
@@ -61,9 +63,10 @@ import com.dev.Tvivo.data.local.entities.WatchedEntity
         ShelfVisitEntity::class,
         RecentlyPlayedEntity::class,
         DriveMovieEntity::class, DriveShowEntity::class, DriveSeasonEntity::class,
-        DriveEpisodeEntity::class, MusicTrackEntity::class, DriveIndexStateEntity::class
+        DriveEpisodeEntity::class, MusicTrackEntity::class, DriveIndexStateEntity::class,
+        MediaFileSizeEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -83,6 +86,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun shelfVisitDao(): ShelfVisitDao
     abstract fun recentlyPlayedDao(): RecentlyPlayedDao
     abstract fun driveDao(): DriveDao
+    abstract fun mediaFileSizeDao(): MediaFileSizeDao
 
     companion object {
         const val DATABASE_NAME = "tvivo.db"
@@ -129,6 +133,17 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_drive_index_state_accountId_bootstrapState` ON `drive_index_state` (`accountId`, `bootstrapState`)"
                 )
                 statements.forEach(db::execSQL)
+            }
+        }
+
+        /** Independent size cache; deliberately has no foreign keys to replaceable media rows. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `media_file_sizes` (
+                    `accountId` TEXT NOT NULL, `kind` TEXT NOT NULL, `seriesId` INTEGER NOT NULL,
+                    `mediaId` TEXT NOT NULL, `exactBytes` INTEGER, `estimatedBytes` INTEGER,
+                    `lastProbeAt` INTEGER, `lastProbeOutcome` TEXT,
+                    PRIMARY KEY(`accountId`, `kind`, `seriesId`, `mediaId`))""")
             }
         }
 
@@ -296,7 +311,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // data the app holds and the panel cannot give them back — they are
                     // what Continue watching and Favourites are built from. A dropped
                     // table here is a silently emptied folder the user curated.
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .build()
                     .also { instance = it }
             }
