@@ -1,22 +1,18 @@
 package com.dev.Tvivo.playback
 
 import android.app.PendingIntent
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
-import android.os.Build
 import android.os.SystemClock
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -37,8 +33,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSessionService
-import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
@@ -60,6 +56,7 @@ import com.dev.Tvivo.playback.StallDecision
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
+import com.google.common.collect.ImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -91,11 +88,8 @@ class PlaybackService : MediaSessionService() {
     private var sleepTimer = SleepTimerPolicy()
     private var timerStopping = false
     private var timerNoticeReason = SleepTimerNoticeReason.None
-    private var notificationWarningVisible = false
-    private var timerForegroundStarted = false
+    private var notificationTimerActionsVisible = false
     private var timerReceiverRegistered = false
-    private lateinit var stopButton: CommandButton
-    private lateinit var playPauseButton: CommandButton
     private var recoveryJob: Job? = null
     private var retryCount = 1
     private var playbackState = "idle"
@@ -150,6 +144,80 @@ class PlaybackService : MediaSessionService() {
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
+        setMediaNotificationProvider(object : DefaultMediaNotificationProvider(this) {
+            override fun getMediaButtons(
+                session: MediaSession,
+                playerCommands: Player.Commands,
+                customLayout: ImmutableList<CommandButton>,
+                showPauseButton: Boolean,
+            ): ImmutableList<CommandButton> {
+                val current = handoff.current
+                val mode = current?.let {
+                    if (it.contentType == "series") savedPlaybackModes.episodeMode else savedPlaybackModes.movieMode
+                } ?: PlaybackMode.Off
+                val hasPrevious = current != null && current.playlistIndex > 0 &&
+                    queueItem(current, current.playlistIndex - 1) != null
+                val hasNext = current != null && selectedNext(current, mode) != null
+                val seekable = current != null && !current.isLive && effectiveDurationMs(current) > 0L &&
+                    player.isCurrentMediaItemSeekable
+                val actions = NotificationActionPlan.create(
+                    hasPrevious, hasNext, seekable, notificationTimerActionsVisible,
+                )
+                val customButtons = customLayout.mapNotNull { button ->
+                    button.sessionCommand?.customAction?.let { it to button }
+                }.toMap()
+                val availableActions = actions.filter {
+                    it != NotificationActionPlan.Action.PLAY_PAUSE ||
+                        playerCommands.contains(Player.COMMAND_PLAY_PAUSE)
+                }
+                val compactIndices = NotificationActionPlan.compactActions(availableActions)
+                val buttons = ImmutableList.builder<CommandButton>()
+                availableActions.forEach { action ->
+                    val compactIndex = compactIndices.indexOf(action)
+                    val extras = Bundle().apply {
+                        putInt(
+                            DefaultMediaNotificationProvider.COMMAND_KEY_COMPACT_VIEW_INDEX,
+                            if (compactIndex >= 0) compactIndex else -1,
+                        )
+                    }
+                    val customAction = when (action) {
+                        NotificationActionPlan.Action.PREVIOUS -> PlaybackCommands.NOTIFICATION_PREVIOUS
+                        NotificationActionPlan.Action.REWIND -> PlaybackCommands.NOTIFICATION_REWIND
+                        NotificationActionPlan.Action.FORWARD -> PlaybackCommands.NOTIFICATION_FORWARD
+                        NotificationActionPlan.Action.NEXT -> PlaybackCommands.NOTIFICATION_NEXT
+                        NotificationActionPlan.Action.STOP -> PlaybackCommands.STOP
+                        NotificationActionPlan.Action.TIMER_EXTEND -> PlaybackCommands.TIMER_EXTEND_15
+                        NotificationActionPlan.Action.TIMER_CANCEL -> PlaybackCommands.TIMER_CANCEL
+                        NotificationActionPlan.Action.PLAY_PAUSE -> null
+                    }
+                    if (action == NotificationActionPlan.Action.PLAY_PAUSE) {
+                        if (playerCommands.contains(Player.COMMAND_PLAY_PAUSE)) {
+                            buttons.add(
+                                CommandButton.Builder().setIconResId(
+                                    if (showPauseButton) android.R.drawable.ic_media_pause
+                                    else android.R.drawable.ic_media_play,
+                                ).setDisplayName(if (showPauseButton) "Pause" else "Play")
+                                    .setPlayerCommand(Player.COMMAND_PLAY_PAUSE)
+                                    .setExtras(extras)
+                                    .build(),
+                            )
+                        }
+                    } else {
+                        customAction?.let(customButtons::get)?.let { customButton ->
+                            buttons.add(
+                                CommandButton.Builder()
+                                    .setIconResId(customButton.iconResId)
+                                    .setDisplayName(customButton.displayName)
+                                    .setSessionCommand(customButton.sessionCommand!!)
+                                    .setExtras(extras)
+                                    .build(),
+                            )
+                        }
+                    }
+                }
+                return buttons.build()
+            }
+        })
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
@@ -280,6 +348,7 @@ class PlaybackService : MediaSessionService() {
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateTimerNotificationActions()
             override fun onPlaybackStateChanged(state: Int) {
+                updateTimerNotificationActions()
                 if (state == Player.STATE_READY && handoff.current?.isLive == true) openTimeoutJob?.cancel()
                 if (state == Player.STATE_READY && playbackState == "reconnecting" && retryAtElapsedMs < 0) {
                     playbackState = "playing"
@@ -354,12 +423,6 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         })
-        stopButton = CommandButton.Builder().setIconResId(android.R.drawable.ic_menu_close_clear_cancel)
-            .setDisplayName(getString(com.dev.Tvivo.R.string.playback_stop))
-            .setSessionCommand(PlaybackCommands.command(PlaybackCommands.STOP))
-            .build()
-        playPauseButton = CommandButton.Builder().setIconResId(android.R.drawable.ic_media_play)
-            .setDisplayName("Play or pause").setPlayerCommand(Player.COMMAND_PLAY_PAUSE).build()
         session = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivityPendingIntent())
             .setCustomLayout(notificationLayout())
@@ -375,6 +438,8 @@ class PlaybackService : MediaSessionService() {
                     .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_NEXT))
                     .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_REWIND))
                     .add(PlaybackCommands.command(PlaybackCommands.NOTIFICATION_FORWARD))
+                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_EXTEND_15))
+                    .add(PlaybackCommands.command(PlaybackCommands.TIMER_CANCEL))
                 if (PlaybackSessionPolicy.mayRunPrivilegedCommands(controller.uid, applicationInfo.uid)) {
                     listOf(
                         PlaybackCommands.PLAY, PlaybackCommands.STATUS, PlaybackCommands.SELECT_TRACK,
@@ -623,16 +688,9 @@ class PlaybackService : MediaSessionService() {
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         if (stopRequested || sessionReleased) return
-        if (sleepTimer.state == SleepTimerState.Armed || sleepTimer.state == SleepTimerState.Warning ||
-            handoff.current != null && !player.playWhenReady) {
-            showTimerForeground()
-        } else {
-            if (timerForegroundStarted) {
-                timerForegroundStarted = false
-                stopForeground(true)
-            }
-            super.onUpdateNotification(session, startInForegroundRequired)
-        }
+        val keepForeground = sleepTimer.state == SleepTimerState.Armed ||
+            sleepTimer.state == SleepTimerState.Warning || handoff.current != null && !player.playWhenReady
+        super.onUpdateNotification(session, startInForegroundRequired || keepForeground)
     }
 
     private fun sessionActivityPendingIntent(): PendingIntent = PendingIntent.getActivity(
@@ -778,7 +836,6 @@ class PlaybackService : MediaSessionService() {
                     session.release()
                 }
             } finally {
-                timerForegroundStarted = false
                 try {
                     if (!playerReleased) {
                         playerReleased = true
@@ -957,7 +1014,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun applyTimerDecision(decision: SleepTimerDecision, naturalEnd: Boolean = false) {
-        val wasWarning = notificationWarningVisible
+        val wasWarning = sleepTimer.state == SleepTimerState.Warning
         if (decision.noticeReason != SleepTimerNoticeReason.None)
             timerNoticeReason = decision.noticeReason
         if (decision.state == SleepTimerState.Off) {
@@ -1003,9 +1060,8 @@ class PlaybackService : MediaSessionService() {
 
     private fun updateTimerNotificationActions() {
         if (!::session.isInitialized) return
-        val warning = PlaybackCommands.TIMER_EXTEND_15 in
-            PlaybackSleepTimerGate.notificationActions(sleepTimer.state)
-        notificationWarningVisible = warning
+        notificationTimerActionsVisible = sleepTimer.state == SleepTimerState.Armed ||
+            sleepTimer.state == SleepTimerState.Warning
         session.setCustomLayout(notificationLayout())
     }
 
@@ -1017,98 +1073,65 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun notificationLayout(): List<CommandButton> {
-        if (!::stopButton.isInitialized || !::playPauseButton.isInitialized) return emptyList()
         val current = handoff.current
-        val buttons = mutableListOf<CommandButton>()
-        if (current != null && current.playlistIndex > 0)
-            buttons += notificationButton(android.R.drawable.ic_media_previous, "Previous episode", PlaybackCommands.NOTIFICATION_PREVIOUS)
-        buttons += CommandButton.Builder()
-            .setIconResId(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play)
-            .setDisplayName(if (player.isPlaying) "Pause" else "Play")
-            .setPlayerCommand(Player.COMMAND_PLAY_PAUSE).build()
         val mode = current?.let { if (it.contentType == "series") savedPlaybackModes.episodeMode else savedPlaybackModes.movieMode }
             ?: PlaybackMode.Off
-        if (current != null && selectedNext(current, mode) != null)
-            buttons += notificationButton(android.R.drawable.ic_media_next, "Next episode", PlaybackCommands.NOTIFICATION_NEXT)
-        if (current?.isLive != true && current != null && effectiveDurationMs(current) > 0L &&
-            player.isCurrentMediaItemSeekable) {
-            buttons += notificationButton(android.R.drawable.ic_media_rew, "Rewind 10 seconds", PlaybackCommands.NOTIFICATION_REWIND)
-            buttons += notificationButton(android.R.drawable.ic_media_ff, "Forward 10 seconds", PlaybackCommands.NOTIFICATION_FORWARD)
+        val actions = NotificationActionPlan.create(
+            hasPrevious = current != null && current.playlistIndex > 0 &&
+                queueItem(current, current.playlistIndex - 1) != null,
+            hasNext = current != null && selectedNext(current, mode) != null,
+            isSeekable = current != null && !current.isLive && effectiveDurationMs(current) > 0L &&
+                player.isCurrentMediaItemSeekable,
+            showTimerActions = notificationTimerActionsVisible,
+        )
+        return actions.mapNotNull { action ->
+            when (action) {
+                NotificationActionPlan.Action.PREVIOUS -> notificationButton(
+                    android.R.drawable.ic_media_previous, "Previous episode", PlaybackCommands.NOTIFICATION_PREVIOUS,
+                )
+                NotificationActionPlan.Action.REWIND -> notificationButton(
+                    android.R.drawable.ic_media_rew, "Rewind 10 seconds", PlaybackCommands.NOTIFICATION_REWIND,
+                )
+                NotificationActionPlan.Action.PLAY_PAUSE -> null
+                NotificationActionPlan.Action.FORWARD -> notificationButton(
+                    android.R.drawable.ic_media_ff, "Forward 10 seconds", PlaybackCommands.NOTIFICATION_FORWARD,
+                )
+                NotificationActionPlan.Action.NEXT -> notificationButton(
+                    android.R.drawable.ic_media_next, "Next episode", PlaybackCommands.NOTIFICATION_NEXT,
+                )
+                NotificationActionPlan.Action.STOP -> notificationButton(
+                    com.dev.Tvivo.R.drawable.ic_notification_close,
+                    getString(com.dev.Tvivo.R.string.playback_stop), PlaybackCommands.STOP,
+                )
+                NotificationActionPlan.Action.TIMER_EXTEND -> notificationButton(
+                    android.R.drawable.ic_menu_add, "Add 15 minutes", PlaybackCommands.TIMER_EXTEND_15,
+                )
+                NotificationActionPlan.Action.TIMER_CANCEL -> notificationButton(
+                    com.dev.Tvivo.R.drawable.ic_notification_close, "Turn off timer", PlaybackCommands.TIMER_CANCEL,
+                )
+            }
         }
-        buttons += stopButton
-        if (notificationWarningVisible) {
-            buttons += notificationButton(android.R.drawable.ic_menu_add, "Add 15 minutes", PlaybackCommands.TIMER_EXTEND_15)
-            buttons += notificationButton(android.R.drawable.ic_menu_close_clear_cancel, "Turn off timer", PlaybackCommands.TIMER_CANCEL)
-        }
-        return buttons
     }
 
     private fun notificationButton(icon: Int, label: String, command: String) =
         CommandButton.Builder().setIconResId(icon).setDisplayName(label)
             .setSessionCommand(PlaybackCommands.command(command)).build()
 
-    private fun timerAction(action: String, requestCode: Int) = PendingIntent.getBroadcast(
-        this, requestCode, Intent(action).setPackage(packageName),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
-
     private fun showTimerForeground() {
         if (!::session.isInitialized ||
             sleepTimer.state != SleepTimerState.Armed && sleepTimer.state != SleepTimerState.Warning &&
             (handoff.current == null || player.playWhenReady)) return
-        if (Build.VERSION.SDK_INT >= 26) {
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (manager.getNotificationChannel(TIMER_CHANNEL_ID) == null)
-                manager.createNotificationChannel(NotificationChannel(
-                    TIMER_CHANNEL_ID, "Playback", NotificationManager.IMPORTANCE_LOW))
-        }
-        val warning = sleepTimer.state == SleepTimerState.Warning
-        val style = MediaStyleNotificationHelper.MediaStyle(session)
-            .setShowActionsInCompactView(*(if (sleepTimer.state == SleepTimerState.Armed || warning)
-                intArrayOf(0, 1, 2) else intArrayOf(0, 1)))
-        val notification = NotificationCompat.Builder(this, TIMER_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(handoff.current?.title ?: "Now playing")
-            .setContentText(when {
-                warning -> "Sleep timer: 2 minutes left"
-                sleepTimer.state == SleepTimerState.Armed -> "Sleep timer on"
-                else -> "Playback paused"
-            })
-            .setContentIntent(sessionActivityPendingIntent())
-            .setStyle(style)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setOngoing(true)
-            .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                if (player.isPlaying) "Pause" else "Play", timerAction(PlaybackCommands.TIMER_PLAY_PAUSE_NOTIFICATION, 11))
-            .apply {
-                if (sleepTimer.state == SleepTimerState.Armed || warning) {
-                    addAction(android.R.drawable.ic_menu_add, "Add 15 minutes",
-                        timerAction(PlaybackCommands.TIMER_EXTEND_15, 12))
-                    addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn off timer",
-                        timerAction(PlaybackCommands.TIMER_CANCEL, 13))
-                }
-            }
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop",
-                timerAction(PlaybackCommands.STOP, 14))
-            .build()
-        if (!timerForegroundStarted) {
-            ContextCompat.startForegroundService(this, Intent(this, PlaybackService::class.java))
-            timerForegroundStarted = true
-        }
-        if (Build.VERSION.SDK_INT >= 29)
-            startForeground(TIMER_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        else startForeground(TIMER_NOTIFICATION_ID, notification)
+        updateTimerNotificationActions()
+        super.onUpdateNotification(session, true)
     }
 
     private fun returnToMediaNotification() {
-        if (!timerForegroundStarted || !::session.isInitialized) return
-        if (!player.playWhenReady && handoff.current != null) { showTimerForeground(); return }
-        timerForegroundStarted = false
+        if (!::session.isInitialized) return
+        updateTimerNotificationActions()
         super.onUpdateNotification(session,
             player.playWhenReady && (player.playbackState == Player.STATE_READY ||
-                player.playbackState == Player.STATE_BUFFERING))
+                player.playbackState == Player.STATE_BUFFERING) ||
+                handoff.current != null && !player.playWhenReady)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -1136,7 +1159,6 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_INTERNAL_TOKEN = "internalToken"
         val INTERNAL_TOKEN: String = java.util.UUID.randomUUID().toString()
         const val ACTION_REOPEN_SESSION = "com.dev.Tvivo.playback.REOPEN_SESSION"
-        const val TIMER_CHANNEL_ID = "playback_timer"
         const val TIMER_NOTIFICATION_ID = 1001
     }
 }
