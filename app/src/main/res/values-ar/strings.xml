@@ -543,4 +543,8 @@
     <string name="downloads_wifi_on">مفعّل</string>
     <string name="downloads_wifi_off">متوقف</string>
     <plurals name="downloads_cap_request_count"><item quantity="zero">إضافة %d عناصر</item><item quantity="one">إضافة عنصر واحد</item><item quantity="two">إضافة عنصرين</item><item quantity="few">إضافة %d عناصر</item><item quantity="many">إضافة %d عنصراً</item><item quantity="other">إضافة %d عنصر</item></plurals>
+    <string name="network_event_size_found">تم العثور على حجم الملف</string>
+    <string name="network_event_size_none">لم يوفّر المزوّد حجم الملف</string>
+    <string name="network_event_size_failed">فشل فحص حجم الملف</string>
+    <string name="network_event_size_skipped">تم تخطي فحص حجم الملف</string>
 </resources>

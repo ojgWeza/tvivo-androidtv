@@ -84,6 +84,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
     }
 
     fun play(episode: EpisodeEntity, offerPrompt: Boolean) {
+        vm.cancelSizeProbeForPlay()
         vm.pendingFocusEpisodeId = episode.episodeId
         scope.launch {
             val position = vm.resumePositionMs(episode.episodeId) ?: 0L
@@ -118,6 +119,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                     if (action.kind == DetailActionKind.Continue) {
                         DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("series-start-over")) {
                             vm.playbackQueue().firstOrNull { it.episodeId == action.episodeId }?.let { episode ->
+                                vm.cancelSizeProbeForPlay()
                                 scope.launch {
                                     vm.clearResumeNow(episode.episodeId)
                                     onPlayEpisode(episode, 0L, vm.playbackQueue())
@@ -162,9 +164,10 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
 
     resumePrompt?.let { (episode, position) ->
         ResumePrompt(episode.title, position,
-            onResume = { resumePrompt = null; onPlayEpisode(episode, position, vm.playbackQueue()) },
+            onResume = { resumePrompt = null; vm.cancelSizeProbeForPlay(); onPlayEpisode(episode, position, vm.playbackQueue()) },
             onStartOver = {
                 resumePrompt = null
+                vm.cancelSizeProbeForPlay()
                 scope.launch {
                     vm.clearResumeNow(episode.episodeId)
                     onPlayEpisode(episode, 0L, vm.playbackQueue())

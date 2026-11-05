@@ -496,6 +496,10 @@ fun NetworkDiagnosticsScreen(accountPartition: String, credentials: Credentials)
         NetworkEventKind.STALL -> stringResource(R.string.network_event_stall)
         NetworkEventKind.RETRY -> stringResource(R.string.network_event_retry)
         NetworkEventKind.HANDOFF_COOLDOWN_403 -> stringResource(R.string.network_event_handoff_403)
+        NetworkEventKind.SIZE_FOUND -> stringResource(R.string.network_event_size_found)
+        NetworkEventKind.SIZE_NONE -> stringResource(R.string.network_event_size_none)
+        NetworkEventKind.SIZE_FAILED -> stringResource(R.string.network_event_size_failed)
+        NetworkEventKind.SIZE_SKIPPED -> stringResource(R.string.network_event_size_skipped)
     }
 
 @Composable private fun findingTitle(id: String): String = stringResource(when (id) {

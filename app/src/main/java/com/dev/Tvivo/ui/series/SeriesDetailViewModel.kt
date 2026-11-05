@@ -15,6 +15,11 @@ import com.dev.Tvivo.data.local.NameNormalizer
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
 import com.dev.Tvivo.data.repository.MediaFileSizeRepository
+import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.remote.HttpFileSizeProbe
+import com.dev.Tvivo.diagnostics.NetworkEventKind
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import com.dev.Tvivo.ui.detail.FileSizeDisplay
 import com.dev.Tvivo.ui.detail.FileSizeFormatter
 import com.dev.Tvivo.playback.DetailEpisode
@@ -30,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 data class SeasonTab(val number: Int, val label: String, val episodeCount: Int)
 
@@ -85,7 +91,11 @@ class SeriesDetailViewModel(
     private var repo: SeriesRepository? = null
     private var playbackState: PlaybackStateRepository? = null
     private var accountId: String? = null
+    private var credentials: com.dev.Tvivo.auth.Credentials? = null
     private var sizeJob: kotlinx.coroutines.Job? = null
+    private var sizeProbeJob: kotlinx.coroutines.Job? = null
+    private var primaryProbeRequested = false
+    private var playRequested = false
 
     /** All episodes of the show, ungrouped, as cached. Grouped into seasons on emit. */
     private var allEpisodes: List<EpisodeEntity> = emptyList()
@@ -114,6 +124,7 @@ class SeriesDetailViewModel(
                 return@launch
             }
             val accountId = AccountIdentity.of(credentials)
+            this@SeriesDetailViewModel.credentials = credentials
             this@SeriesDetailViewModel.accountId = accountId
             viewModelScope.launch {
                 DownloadDependencies.repository(application).observe(accountId).collect { rows ->
@@ -229,9 +240,63 @@ class SeriesDetailViewModel(
                     episode.episodeId in watched
                 )
             }
-            _state.update { it.copy(playback = playback,
-                actions = DetailPlaybackPolicy.actions(playback.values.toList())) }
+            val actions = DetailPlaybackPolicy.actions(playback.values.toList())
+            _state.update { it.copy(playback = playback, actions = actions) }
+            actions.primary?.episodeId?.let(::requestPrimaryEpisodeSizeProbe)
         }
+    }
+
+    private fun requestPrimaryEpisodeSizeProbe(episodeId: String) {
+        if (playRequested || primaryProbeRequested) return
+        val episode = allEpisodes.firstOrNull { it.episodeId == episodeId } ?: return
+        val account = accountId ?: return
+        val auth = credentials ?: return
+        primaryProbeRequested = true
+        sizeProbeJob?.cancel()
+        sizeProbeJob = viewModelScope.launch {
+            val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
+            if (!sizes.shouldProbe(account, "episode", seriesId, episodeId)) {
+                NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account,
+                    NetworkEventKind.SIZE_SKIPPED, if (sizes.downloadSize(account, "episode", seriesId, episodeId)?.exact == true)
+                        "exact known" else "probed within 24h")
+                return@launch
+            }
+            val extension = episode.containerExtension ?: "mkv"
+            val result = try {
+                sizes.probeWhenIdle(account, "episode", seriesId, episodeId,
+                    StreamUrlBuilder.episode(auth, episodeId, extension), HttpFileSizeProbe())
+            } catch (cancelled: CancellationException) {
+                if (!playRequested) NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account,
+                    NetworkEventKind.SIZE_SKIPPED, "playback active")
+                throw cancelled
+            }
+            val (kind, reason) = when (result) {
+                is HttpFileSizeProbe.Result.Exact -> NetworkEventKind.SIZE_FOUND to "episode exact"
+                is HttpFileSizeProbe.Result.Unknown -> NetworkEventKind.SIZE_NONE to when (result.reason) {
+                    HttpFileSizeProbe.Reason.NO_SIZE_HEADER -> "no size header"
+                    HttpFileSizeProbe.Reason.INVALID_SIZE_HEADER -> "invalid size header"
+                    HttpFileSizeProbe.Reason.UNSUPPORTED_RESPONSE -> "unsupported response"
+                }
+                is HttpFileSizeProbe.Result.Failed -> NetworkEventKind.SIZE_FAILED to when (result.kind) {
+                    HttpFileSizeProbe.Failure.UNAUTHORIZED -> "unauthorized"
+                    HttpFileSizeProbe.Failure.FORBIDDEN -> "forbidden"
+                    HttpFileSizeProbe.Failure.RATE_LIMITED -> "rate limited"
+                    HttpFileSizeProbe.Failure.SERVER -> "server"
+                    HttpFileSizeProbe.Failure.TIMEOUT -> "timeout"
+                    HttpFileSizeProbe.Failure.NETWORK -> "network"
+                }
+            }
+            NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account, kind, reason)
+        }
+    }
+
+    /** Called synchronously by the screen before it hands playback to the Activity. */
+    fun cancelSizeProbeForPlay() {
+        playRequested = true
+        if (sizeProbeJob?.isActive == true) NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE,
+            accountId, NetworkEventKind.SIZE_SKIPPED, "play requested")
+        sizeProbeJob?.cancel()
+        sizeProbeJob = null
     }
 
     /** Favourites are kept at *show* level: a show is what a viewer follows. */

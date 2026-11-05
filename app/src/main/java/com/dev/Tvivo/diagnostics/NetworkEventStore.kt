@@ -13,10 +13,11 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
-enum class NetworkEventSource { CONNECTIVITY, PLAYBACK, CATALOG, CHECK }
+enum class NetworkEventSource { CONNECTIVITY, PLAYBACK, CATALOG, CHECK, SIZE_PROBE }
 enum class NetworkEventKind {
     PROCESS_GAP, AVAILABLE, LOST, NETWORK_CHANGED, VALIDATION_CHANGED, LINK_CHANGED,
-    HTTP_403, HTTP_429, HTTP_5XX, DNS_FAILURE, TIMEOUT, TLS_FAILURE, NETWORK_FAILURE, STALL, RETRY, HANDOFF_COOLDOWN_403
+    HTTP_403, HTTP_429, HTTP_5XX, DNS_FAILURE, TIMEOUT, TLS_FAILURE, NETWORK_FAILURE, STALL, RETRY, HANDOFF_COOLDOWN_403,
+    SIZE_FOUND, SIZE_NONE, SIZE_FAILED, SIZE_SKIPPED
 }
 
 /** Strict allowlist. This model has no fields for URLs, IPs, SSIDs, titles, or exception text. */
@@ -175,7 +176,9 @@ object NetworkEventStore {
         "default network lost", "callback unavailable", "initial", "available", "capabilities", "link properties",
         "catalog sync", "vod", "live", "series", "vod details", "vod categories", "vod streams",
         "live categories", "live streams", "series categories", "series list", "series info", "series_info",
-        "stream source", "source error", "stall recovery", "stream open", "stream open timeout", "recent stream close"
+        "stream source", "source error", "stall recovery", "stream open", "stream open timeout", "recent stream close",
+        "movie exact", "episode exact", "no size header", "invalid size header", "unsupported response",
+        "unauthorized", "forbidden", "rate limited", "server", "timeout", "network", "exact known", "probed within 24h", "play requested", "playback active"
     )
 }
 

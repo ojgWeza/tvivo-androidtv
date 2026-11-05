@@ -18,6 +18,11 @@ import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
 import com.dev.Tvivo.data.repository.VodRepository
 import com.dev.Tvivo.data.repository.MediaFileSizeRepository
+import com.dev.Tvivo.data.StreamUrlBuilder
+import com.dev.Tvivo.data.remote.HttpFileSizeProbe
+import com.dev.Tvivo.diagnostics.NetworkEventKind
+import com.dev.Tvivo.diagnostics.NetworkEventRecorder
+import com.dev.Tvivo.diagnostics.NetworkEventSource
 import com.dev.Tvivo.download.DownloadDependencies
 import com.dev.Tvivo.download.DownloadRequest
 import com.dev.Tvivo.download.DownloadRepository
@@ -32,6 +37,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 data class ItemDetailUiState(
     val title: String = "",
@@ -89,6 +95,8 @@ class ItemDetailViewModel(
     private var playback: PlaybackStateRepository? = null
     private var accountId: String? = null
     private var vodRepository: VodRepository? = null
+    private var sizeProbeJob: kotlinx.coroutines.Job? = null
+    private var playRequested = false
 
     private val typeKey = when (contentType) {
         ContentType.LIVE -> TYPE_LIVE
@@ -206,6 +214,7 @@ class ItemDetailViewModel(
                         // the title and Play are all up, and the description fills in
                         // underneath them or does not.
                         if (cached == null) retryPlot()
+                        requestMovieSizeProbe(accountId, row.containerExtension ?: "mkv")
                     }
                 }
             }
@@ -221,6 +230,54 @@ class ItemDetailViewModel(
     }
 
     private fun markNotFound() = _state.update { it.copy(isLoading = false, notFound = true) }
+
+    private fun requestMovieSizeProbe(account: String, extension: String) {
+        if (playRequested) return
+        sizeProbeJob?.cancel()
+        sizeProbeJob = viewModelScope.launch {
+            val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
+            if (!sizes.shouldProbe(account, "movie", 0, itemId.toString())) {
+                NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account,
+                    NetworkEventKind.SIZE_SKIPPED, if (sizes.downloadSize(account, "movie", 0, itemId.toString())?.exact == true)
+                        "exact known" else "probed within 24h")
+                return@launch
+            }
+            val result = try {
+                sizes.probeWhenIdle(account, "movie", 0, itemId.toString(),
+                    StreamUrlBuilder.movie(credentials, itemId, extension), HttpFileSizeProbe())
+            } catch (cancelled: CancellationException) {
+                if (!playRequested) NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account,
+                    NetworkEventKind.SIZE_SKIPPED, "playback active")
+                throw cancelled
+            }
+            val (kind, reason) = when (result) {
+                is HttpFileSizeProbe.Result.Exact -> NetworkEventKind.SIZE_FOUND to "movie exact"
+                is HttpFileSizeProbe.Result.Unknown -> NetworkEventKind.SIZE_NONE to when (result.reason) {
+                    HttpFileSizeProbe.Reason.NO_SIZE_HEADER -> "no size header"
+                    HttpFileSizeProbe.Reason.INVALID_SIZE_HEADER -> "invalid size header"
+                    HttpFileSizeProbe.Reason.UNSUPPORTED_RESPONSE -> "unsupported response"
+                }
+                is HttpFileSizeProbe.Result.Failed -> NetworkEventKind.SIZE_FAILED to when (result.kind) {
+                    HttpFileSizeProbe.Failure.UNAUTHORIZED -> "unauthorized"
+                    HttpFileSizeProbe.Failure.FORBIDDEN -> "forbidden"
+                    HttpFileSizeProbe.Failure.RATE_LIMITED -> "rate limited"
+                    HttpFileSizeProbe.Failure.SERVER -> "server"
+                    HttpFileSizeProbe.Failure.TIMEOUT -> "timeout"
+                    HttpFileSizeProbe.Failure.NETWORK -> "network"
+                }
+            }
+            NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account, kind, reason)
+        }
+    }
+
+    /** Play takes priority over a queued or active detail-screen probe. */
+    fun cancelSizeProbeForPlay() {
+        playRequested = true
+        if (sizeProbeJob?.isActive == true) NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE,
+            accountId, NetworkEventKind.SIZE_SKIPPED, "play requested")
+        sizeProbeJob?.cancel()
+        sizeProbeJob = null
+    }
 
     /**
      * The heart. For a series this favourites the **show**, not an episode — the show is

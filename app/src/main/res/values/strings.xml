@@ -531,4 +531,8 @@
     <string name="downloads_wifi_on">On</string>
     <string name="downloads_wifi_off">Off</string>
     <plurals name="downloads_cap_request_count"><item quantity="one">Queue %d item</item><item quantity="other">Queue %d items</item></plurals>
+    <string name="network_event_size_found">File size found</string>
+    <string name="network_event_size_none">File size not provided</string>
+    <string name="network_event_size_failed">File size check failed</string>
+    <string name="network_event_size_skipped">File size check skipped</string>
 </resources>

@@ -84,6 +84,7 @@ fun ItemDetailScreen(
         if (pendingPlay && !state.isLoading) {
             pendingPlay = false
             if (!state.notFound) {
+                vm?.cancelSizeProbeForPlay()
                 if (isSeries) onOpenEpisodes() else onPlay(
                     if (DetailPlaybackPolicy.movieActions(state.resumeFromMs,
                             state.durationMs ?: state.durationMinutes?.times(60_000L)).primary == MovieActionKind.Resume)
@@ -155,6 +156,7 @@ fun ItemDetailScreen(
                 }
                 DetailTextButton(if (pendingPlay) stringResource(com.dev.Tvivo.R.string.detail_loading) else primaryLabel,
                     Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
+                    vm?.cancelSizeProbeForPlay()
                     if (state.isLoading) pendingPlay = true
                     else if (isSeries) onOpenEpisodes() else onPlay(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
@@ -165,6 +167,7 @@ fun ItemDetailScreen(
                     DetailTextButton(stringResource(com.dev.Tvivo.R.string.downloads_play_downloaded), Modifier.testTag("detail-play-downloaded"), onPlayDownloaded)
                 }
                 if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
+                    vm?.cancelSizeProbeForPlay()
                     scope.launch {
                         if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
                         onPlay(0L, state.extension, state.title,
