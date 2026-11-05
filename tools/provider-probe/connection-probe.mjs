@@ -21,6 +21,45 @@ import net from 'node:net';
 // curl reaches the provider in ~0.2 s while Node's default dual-stack connect can time out: prefer IPv4, wait longer per address.
 dns.setDefaultResultOrder('ipv4first');
 try { net.setDefaultAutoSelectFamilyAttemptTimeout(2000); } catch {}
+
+// Minimal fetch replacement on node:http/https: forces IPv4, follows redirects, no connection pooling.
+// (Node's built-in fetch timed out connecting here while raw sockets and curl worked.)
+import http from 'node:http';
+import https from 'node:https';
+function hfetch(rawUrl, init = {}, hops = 0) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(rawUrl);
+    const mod = u.protocol === 'https:' ? https : http;
+    const signal = init.signal;
+    const fail = e => reject(e);
+    if (signal?.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; return fail(e); }
+    const req = mod.request(u, { method: init.method || 'GET', headers: init.headers || {}, family: 4, agent: false, timeout: 15000 }, res => {
+      const code = res.statusCode || 0;
+      if ([301, 302, 303, 307, 308].includes(code) && res.headers.location && hops < 5) {
+        res.resume();
+        return hfetch(new URL(res.headers.location, u).toString(), init, hops + 1).then(resolve, reject);
+      }
+      const response = {
+        status: code, ok: code >= 200 && code < 300,
+        headers: { get: n => { const v = res.headers[String(n).toLowerCase()]; return v === undefined ? null : String(v); } },
+        body: {
+          getReader() {
+            const it = res[Symbol.asyncIterator]();
+            return { read: async () => { const r = await it.next(); return r.done ? { done: true, value: undefined } : { done: false, value: r.value }; } };
+          },
+          cancel: async () => { res.destroy(); }
+        },
+        json: async () => { const parts = []; for await (const c of res) parts.push(c); return JSON.parse(Buffer.concat(parts).toString('utf8')); }
+      };
+      if (signal) signal.addEventListener('abort', () => res.destroy(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      resolve(response);
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('connect/idle timeout'), { name: 'TimeoutError' })));
+    req.on('error', fail);
+    if (signal) signal.addEventListener('abort', () => req.destroy(Object.assign(new Error(signal.reason?.message || 'aborted'), { name: signal.reason?.name || 'AbortError' })), { once: true });
+    req.end();
+  });
+}
 const base = (process.env.PROVIDER_BASE || '').replace(/\/+$/, '');
 const user = process.env.PROVIDER_USER || '';
 const pass = process.env.PROVIDER_PASS || '';
@@ -39,7 +78,7 @@ const step = (name, data) => { out.steps.push({ name, t: Math.round((Date.now() 
 const t0 = Date.now();
 
 async function userInfo() {
-  const res = await fetch(api(), { signal: AbortSignal.timeout(30000) });
+  const res = await hfetch(api(), { signal: AbortSignal.timeout(30000) });
   const j = await res.json();
   const u = j.user_info || {};
   return { http: res.status, status: u.status, maxConnections: Number(u.max_connections), activeCons: Number(u.active_cons) };
@@ -49,7 +88,7 @@ async function openHeld(url, label) {
   const controller = new AbortController();
   const started = Date.now();
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
+    const res = await hfetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
     if (!res.ok) { controller.abort(); return { label, http: res.status, held: false }; }
     const reader = res.body.getReader();
     await Promise.race([reader.read(), sleep(8000)]);
@@ -61,7 +100,7 @@ async function openHeld(url, label) {
 
 async function probeStatus(url, init, label) {
   try {
-    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(6000) });
+    const res = await hfetch(url, { ...init, signal: AbortSignal.timeout(6000) });
     const range = res.headers.get('content-range');
     try { await res.body?.cancel(); } catch {}
     return { label, http: res.status, contentRange: range ? 'present' : 'absent', contentLength: res.headers.get('content-length') ? 'present' : 'absent' };
@@ -74,7 +113,7 @@ function openCounting(url, label) {
   const st = { label, bytes: 0, ended: false, error: null, http: 0, firstByteMs: null, t0: Date.now() };
   const done = (async () => {
     try {
-      const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
+      const res = await hfetch(url, { signal: controller.signal, headers: { 'User-Agent': 'tvivo-connection-probe' } });
       st.http = res.status;
       if (!res.ok) { st.ended = true; return; }
       const reader = res.body.getReader();
@@ -113,7 +152,7 @@ try {
   step('0 baseline user_info', base0);
   if (base0.activeCons > 0) step('0 warning', { note: 'active_cons already > 0 at baseline: another device/app may be streaming; results are less clean' });
 
-  const listRes = await fetch(api('&action=get_live_streams'), { signal: AbortSignal.timeout(30000) });
+  const listRes = await hfetch(api('&action=get_live_streams'), { signal: AbortSignal.timeout(30000) });
   const live = await listRes.json();
   if (!Array.isArray(live) || live.length < 2) throw new Error('need at least 2 live streams');
   const urlFor = s => `${base}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${s.stream_id}.ts`;
@@ -215,7 +254,7 @@ try {
   if (allowOverlap) {
     // 6: VOD file held, then a size probe / second Range read of the SAME file (playing + probing/downloading it).
     try {
-      const vr = await fetch(api('&action=get_vod_streams'), { signal: AbortSignal.timeout(60000) });
+      const vr = await hfetch(api('&action=get_vod_streams'), { signal: AbortSignal.timeout(60000) });
       const vod = await vr.json();
       const v = Array.isArray(vod) ? vod.find(x => x.container_extension) : null;
       if (!v) { step('6 skipped', { note: 'no VOD item found' }); }
