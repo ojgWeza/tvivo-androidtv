@@ -513,6 +513,27 @@
     <string name="downloads_wifi_only">شبكة Wi-Fi فقط</string>
     <string name="downloads_usage">المستخدم %1$.2f من %2$.2f جيجابايت (%3$.2f جيجابايت محجوزة)</string>
     <string name="downloads_over_limit">التنزيلات الجديدة متوقفة حتى توفير مساحة.</string>
+    <string name="downloads_manage">إدارة التنزيلات</string>
+    <string name="downloads_manage_hint">عرض التقدم وإدارة الملفات المحفوظة</string>
+    <string name="downloads_settings">الإعدادات</string>
+    <string name="downloads_empty">لا توجد تنزيلات بعد</string>
+    <string name="downloads_active">النشطة</string>
+    <string name="downloads_completed_group">المكتملة</string>
+    <string name="download_neutral_title">عنصر تم تنزيله</string>
+    <string name="downloads_resume">متابعة</string>
+    <string name="downloads_retry">إعادة المحاولة</string>
+    <string name="downloads_delete">حذف</string>
+    <string name="downloads_play">تشغيل</string>
+    <string name="downloads_delete_title">حذف التنزيل؟</string>
+    <string name="downloads_delete_body">سيؤدي ذلك إلى إزالة الملف الذي تم تنزيله وتوفير مساحته.</string>
+    <string name="downloads_delete_series_title">حذف الحلقات؟</string>
+    <string name="downloads_delete_series_body">حذف الحلقات الـ%1$d التي تم تنزيلها وتوفير مساحتها؟</string>
+    <string name="downloads_delete_all_episodes">حذف الحلقات الـ%1$d كلها</string>
+    <string name="downloads_failed_authorization">توقف التنزيل: تم رفض التفويض. سجّل الدخول مجدداً أو أعد المحاولة لاحقاً.</string>
+    <string name="downloads_failed_storage">توقف التنزيل: مساحة التخزين غير كافية.</string>
+    <string name="downloads_failed_generic">فشل التنزيل. يمكنك إعادة المحاولة.</string>
+    <string name="downloads_retry_blocked">المساحة المتاحة للتنزيل غير كافية. وفّر مساحة من الإعدادات ثم أعد المحاولة.</string>
+    <string name="downloads_progress_percent">%1$d٪</string>
     <plurals name="download_unknown_batch"><item quantity="zero">أحجام الحلقات غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="one">حجم حلقة واحدة غير معروف. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="two">حجم حلقتين غير معروف. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="few">أحجام %d حلقات غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="many">أحجام %d حلقة غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="other">أحجام %d حلقة غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item></plurals>
     <string name="downloads_cap_decrease">خفض حد التخزين</string>
     <string name="downloads_cap_increase">زيادة حد التخزين</string>

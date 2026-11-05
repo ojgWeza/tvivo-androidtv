@@ -97,6 +97,9 @@ class SeriesRepository(
 
     suspend fun byId(seriesId: Int): SeriesEntity? = db.seriesDao().byId(accountId, seriesId)
 
+    suspend fun episodeById(seriesId: Int, episodeId: String): EpisodeEntity? =
+        db.seriesDao().episodeById(accountId, seriesId, episodeId)
+
     fun observeEpisodes(seriesId: Int): Flow<List<EpisodeEntity>> =
         db.seriesDao().observeEpisodes(accountId, seriesId)
 

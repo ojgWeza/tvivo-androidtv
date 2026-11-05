@@ -202,6 +202,9 @@ interface SeriesDao {
     @Query("SELECT * FROM series_episodes WHERE accountId = :accountId AND episodeId IN (:ids)")
     suspend fun episodesByIds(accountId: String, ids: List<String>): List<EpisodeEntity>
 
+    @Query("SELECT * FROM series_episodes WHERE accountId = :accountId AND seriesId = :seriesId AND episodeId = :episodeId LIMIT 1")
+    suspend fun episodeById(accountId: String, seriesId: Int, episodeId: String): EpisodeEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<SeriesEntity>)
 

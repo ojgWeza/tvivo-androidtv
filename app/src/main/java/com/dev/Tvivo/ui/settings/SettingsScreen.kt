@@ -77,6 +77,7 @@ fun SettingsScreen(
     focusNetworkDiagnostics: Boolean = false,
     onNetworkDiagnosticsFocusConsumed: () -> Unit = {},
     onRefreshLibrary: () -> Unit = {},
+    onShowDownloads: () -> Unit = {},
     viewModel: AccountViewModel? = null,
     stateOverride: AccountUiState? = null,
     onConfirmSignOutOverride: () -> Unit = {}
@@ -172,6 +173,8 @@ fun SettingsScreen(
         if (!LocalIsTelevision.current) {
             Spacer(Modifier.height(24.dp))
             Text(text = stringResource(com.dev.Tvivo.R.string.downloads_title), color = AppColors.Ink, style = TvType.title)
+            ActionRow(stringResource(com.dev.Tvivo.R.string.downloads_manage),
+                stringResource(com.dev.Tvivo.R.string.downloads_manage_hint), onClick = onShowDownloads)
             Text(stringResource(com.dev.Tvivo.R.string.downloads_storage_limit), color = AppColors.Ink, style = TvType.title)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
                 Text("−", color = AppColors.Ink, style = TvType.title, modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clickable {

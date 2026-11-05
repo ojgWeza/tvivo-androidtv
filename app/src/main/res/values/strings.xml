@@ -501,6 +501,27 @@
     <string name="downloads_wifi_only">Wi-Fi only</string>
     <string name="downloads_usage">Used %1$.2f of %2$.2f GB (%3$.2f GB reserved)</string>
     <string name="downloads_over_limit">New downloads are blocked until space is freed.</string>
+    <string name="downloads_manage">Manage downloads</string>
+    <string name="downloads_manage_hint">View progress and manage saved files</string>
+    <string name="downloads_settings">Settings</string>
+    <string name="downloads_empty">No downloads yet</string>
+    <string name="downloads_active">Active</string>
+    <string name="downloads_completed_group">Completed</string>
+    <string name="download_neutral_title">Downloaded item</string>
+    <string name="downloads_resume">Resume</string>
+    <string name="downloads_retry">Retry</string>
+    <string name="downloads_delete">Delete</string>
+    <string name="downloads_play">Play</string>
+    <string name="downloads_delete_title">Delete download?</string>
+    <string name="downloads_delete_body">This removes the downloaded file and frees its storage.</string>
+    <string name="downloads_delete_series_title">Delete episodes?</string>
+    <string name="downloads_delete_series_body">Delete all %1$d downloaded episodes and free their storage?</string>
+    <string name="downloads_delete_all_episodes">Delete all %1$d episodes</string>
+    <string name="downloads_failed_authorization">Download stopped: authorization was rejected. Sign in again or retry later.</string>
+    <string name="downloads_failed_storage">Download stopped: free storage is insufficient.</string>
+    <string name="downloads_failed_generic">Download failed. You can retry.</string>
+    <string name="downloads_retry_blocked">There is not enough available download space. Free space in Settings and retry.</string>
+    <string name="downloads_progress_percent">%1$d%%</string>
     <plurals name="download_unknown_batch"><item quantity="one">One episode has an unknown size. This request cannot be queued.</item><item quantity="other">%d episodes have unknown sizes. This request cannot be queued.</item></plurals>
     <string name="downloads_cap_decrease">Decrease storage limit</string>
     <string name="downloads_cap_increase">Increase storage limit</string>

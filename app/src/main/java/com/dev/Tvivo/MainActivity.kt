@@ -67,6 +67,7 @@ import com.dev.Tvivo.ui.browse.VirtualFolder
 import com.dev.Tvivo.ui.settings.AccountViewModel
 import com.dev.Tvivo.ui.series.SeriesDetailScreen
 import com.dev.Tvivo.ui.settings.SettingsScreen
+import com.dev.Tvivo.ui.downloads.DownloadsScreen
 import com.dev.Tvivo.ui.settings.DiagnosticsScreen
 import com.dev.Tvivo.ui.settings.NetworkDiagnosticsScreen
 import com.dev.Tvivo.ui.settings.SubscriptionScreen
@@ -273,6 +274,7 @@ internal sealed interface Route {
      *  one opens its season/episode picker rather than the player. */
     data class SeriesDetail(val credentials: Credentials, val seriesId: Int) : Route
     data class Settings(val credentials: Credentials) : Route
+    data class Downloads(val credentials: Credentials) : Route
 
     /** D-15. Read-only, and its own screen: Account keeps the actions, this keeps the
      *  facts. Back returns to Account, not to Home. */
@@ -316,6 +318,7 @@ private fun Route.diagnosticName(): String = when (this) {
     is Route.ItemDetail -> "Detail ${type.name}"
     is Route.SeriesDetail -> "Series detail"
     is Route.Settings -> "Settings"
+    is Route.Downloads -> "Downloads"
     is Route.Subscription -> "Subscription"
     is Route.Diagnostics -> "Diagnostics"
     is Route.NetworkDiagnostics -> "Network diagnostics"
@@ -434,6 +437,7 @@ private fun TvivoApp() {
             route is Route.ItemDetail ||
             route is Route.SeriesDetail ||
             route is Route.Settings ||
+            route is Route.Downloads ||
             route is Route.Subscription ||
             route is Route.Diagnostics ||
             route is Route.NetworkDiagnostics ||
@@ -469,6 +473,7 @@ private fun TvivoApp() {
             is Route.ItemDetail -> route = Route.Main(current.credentials, detailOriginTab)
             is Route.SeriesDetail -> route = Route.Main(current.credentials, detailOriginTab)
             is Route.Settings -> route = Route.Main(current.credentials, ShellTab.MyTvivo)
+            is Route.Downloads -> route = Route.Main(current.credentials, ShellTab.Settings)
             // Back out of Subscription returns to Account, which is where it was opened
             // from — skipping to Home would lose the user's place in the action list.
             is Route.Subscription -> route = Route.Main(current.credentials, ShellTab.Settings)
@@ -749,6 +754,7 @@ private fun TvivoApp() {
                                 route = Route.Login
                             },
                             onShowSubscription = { route = Route.Subscription(current.credentials) },
+                            onShowDownloads = { if (!isTelevision) route = Route.Downloads(current.credentials) },
                             onShowDiagnostics = { route = Route.Diagnostics(current.credentials) },
                             focusNetworkDiagnostics = focusSettingsNetworkDiagnostics,
                             onNetworkDiagnosticsFocusConsumed = { focusSettingsNetworkDiagnostics = false },
@@ -841,6 +847,7 @@ private fun TvivoApp() {
                 route = Route.Login
             },
             onShowSubscription = { route = Route.Subscription(current.credentials) },
+            onShowDownloads = { if (!isTelevision) route = Route.Downloads(current.credentials) },
             onShowDiagnostics = { route = Route.Diagnostics(current.credentials) },
             focusNetworkDiagnostics = focusSettingsNetworkDiagnostics,
             onNetworkDiagnosticsFocusConsumed = { focusSettingsNetworkDiagnostics = false },
@@ -849,6 +856,16 @@ private fun TvivoApp() {
                 route = Route.NetworkDiagnostics(current.credentials)
             }
         )
+
+        is Route.Downloads -> {
+            if (downloadsAvailable(LocalIsTelevision.current)) Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                ScreenTopBar(stringResource(R.string.downloads_title)) { route = Route.Main(current.credentials, ShellTab.Settings) }
+                Box(Modifier.weight(1f)) {
+                    DownloadsScreen(credentials = current.credentials, accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) },
+                        onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) })
+                }
+            } else route = Route.Main(current.credentials, ShellTab.MyTvivo)
+        }
 
         is Route.Subscription -> {
             if (LocalIsTelevision.current) SubscriptionScreen(viewModel = account)
@@ -1038,3 +1055,5 @@ private fun TvivoApp() {
         }
     }
 }
+
+internal fun downloadsAvailable(isTelevision: Boolean): Boolean = !isTelevision
