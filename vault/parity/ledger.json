@@ -223,14 +223,17 @@
       "type": "ux-perk",
       "origin": "winui",
       "status": {
-        "android": "MISSING",
+        "android": "PARTIAL",
         "winui": "HAS",
         "tv": "N-A"
       },
       "links": [
         "codex/winui-catalog-design-plan:c1cad81",
-        "app/src/main/java/com/dev/Tvivo/ui"
-      ]
+        "app/src/main/java/com/dev/Tvivo/ui",
+        "app/src/main/java/com/dev/Tvivo/ui/detail/FileSizeLabel.kt",
+        "app/src/test/java/com/dev/Tvivo/ui/detail/FileSizeDisplayJob4Test.kt"
+      ],
+      "notes": "Android 2026-11-05: movie and episode detail screens show exact or about-sizes (JVM-tested, EN/AR); browse/shelf card labels deferred; no device acceptance yet."
     },
     {
       "id": "W-PAGE-CACHE",
@@ -608,15 +611,17 @@
       "type": "ux-perk",
       "title": "Learn exact movie/episode size on open with a header-only HEAD (fallback Range bytes=0-0) before playback; many IPTV providers send no size in any list/info call",
       "status": {
-        "android": "MISSING",
+        "android": "PARTIAL",
         "winui": "HAS",
         "tv": "N-A"
       },
       "links": [
         "codex/winui-catalog-design-plan:bb0be31",
-        "docs/provider-field-report.md (windows-spike)"
+        "docs/provider-field-report.md (windows-spike)",
+        "app/src/main/java/com/dev/Tvivo/data/remote/HttpFileSizeProbe.kt",
+        "app/src/test/java/com/dev/Tvivo/data/remote/HttpFileSizeProbeTest.kt"
       ],
-      "notes": "Verified on a real provider: list/info JSON has no size; the media URL answers HEAD (Content-Length) and Range 0-0 (206 + Content-Range total). Run it BEFORE playback starts, after the old stream stops, so there is never a second connection (providers often allow one). Cap ~2 s, never read a body, never probe series, never log URL. No 7-day wait for an opened item. Plausibility 1 MB-200 GB.",
+      "notes": "Verified on a real provider: list/info JSON has no size; the media URL answers HEAD (Content-Length) and Range 0-0 (206 + Content-Range total). Run it BEFORE playback starts, after the old stream stops, so there is never a second connection (providers often allow one). Cap ~2 s, never read a body, never probe series, never log URL. No 7-day wait for an opened item. Plausibility 1 MB-200 GB. Android 2026-11-05: HttpFileSizeProbe (HEAD then Range 0-0) and MediaFileSizeRepository.probeWhenIdle run under the media-connection coordinator; NOT yet triggered automatically when an item opens.",
       "origin": "winui"
     },
     {
@@ -624,12 +629,13 @@
       "type": "ux-perk",
       "title": "Show \"~1.4 GB\" estimate from bitrate x duration when no exact size exists; exact replaces it",
       "status": {
-        "android": "MISSING",
+        "android": "PARTIAL",
         "winui": "HAS",
         "tv": "N-A"
       },
       "links": [
-        "codex/winui-catalog-design-plan:bb0be31"
+        "codex/winui-catalog-design-plan:bb0be31",
+        "app/src/main/java/com/dev/Tvivo/data/repository/FileSizeEstimatePolicy.kt"
       ],
       "notes": "estimate = total kbit/s x duration s / 8; accept 128-80,000 kbit/s, 60 s-8 h, result 1 MB-200 GB; prefer info.duration over duration_secs when they disagree; store in a separate estimated column so exact always wins; label with ~ and an approximate automation name; DB-only on cards/hover (no network on hover).",
       "origin": "winui"
@@ -937,6 +943,94 @@
         "app/src/main/java/com/dev/Tvivo/ui/settings/AccountViewModel.kt",
         "app/src/test/java/com/dev/Tvivo/auth/SourceStoreTest.kt"
       ]
+    },
+    {
+      "id": "A-PHONE-DOWNLOAD",
+      "title": "Phone and tablet downloads: queue movies, episodes and seasons, resumable background transfer, Downloads screen, delete",
+      "type": "ux-perk",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "docs/android-download-and-size-plan-2026-11-04.md",
+        "app/src/main/java/com/dev/Tvivo/download/DownloadTransfer.kt",
+        "app/src/main/java/com/dev/Tvivo/download/DownloadWorker.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/downloads/DownloadsScreen.kt",
+        "app/src/test/java/com/dev/Tvivo/download/DownloadTransferTest.kt"
+      ],
+      "notes": "JVM-tested only (MockWebServer resume/416/403/5xx/validator/cap/ENOSPC, pause/cancel write barrier). Device checks pending: Doze, foreground-service quota, notification permission, real provider. TV hides all of it (small memory). WinUI downloads are the next platform job; the cap, warning and connection semantics here are the shared spec."
+    },
+    {
+      "id": "A-PHONE-DOWNLOAD-CAP",
+      "title": "Download storage cap set in Settings (1-500 GB, default 20) with a hard-cap warning before a download that would exceed it",
+      "type": "ux-perk",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/download/DownloadQuota.kt",
+        "app/src/main/java/com/dev/Tvivo/download/DownloadPlanner.kt",
+        "app/src/main/java/com/dev/Tvivo/ui/settings/SettingsScreen.kt",
+        "app/src/test/java/com/dev/Tvivo/download/DownloadQuotaTest.kt"
+      ],
+      "notes": "Decimal GB; unknown size blocks (stream instead); estimates reserve 1.5x; whole batches are atomic; there is no download-anyway action: the cap is enforced by enqueue. Phone UI not yet device-checked."
+    },
+    {
+      "id": "A-OFFLINE-PLAYBACK",
+      "title": "Play completed downloads offline through the normal player with the same history keys, auto-next to downloaded episodes, missing-file recovery",
+      "type": "ux-perk",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "N-A"
+      },
+      "links": [
+        "app/src/main/java/com/dev/Tvivo/playback/PlaybackSessionPolicy.kt",
+        "app/src/main/java/com/dev/Tvivo/playback/PlaybackService.kt",
+        "app/src/test/java/com/dev/Tvivo/playback/LocalMediaPolicyTest.kt"
+      ],
+      "notes": "Local playback never starts a provider playback session and does not pause downloads. JVM-tested; PiP, notification controls, background audio and a damaged file on a device are unverified."
+    },
+    {
+      "id": "A-MEDIA-CONNECTION-COORDINATION",
+      "title": "One app-wide owner of the provider media connection: playback preempts downloads and size probes; they wait while a player session is active",
+      "type": "fix",
+      "origin": "android",
+      "status": {
+        "android": "PARTIAL",
+        "winui": "MISSING",
+        "tv": "PARTIAL"
+      },
+      "links": [
+        "docs/media-connection-coordination.md",
+        "app/src/main/java/com/dev/Tvivo/playback/MediaConnectionCoordinator.kt",
+        "app/src/test/java/com/dev/Tvivo/playback/MediaConnectionCoordinatorTest.kt",
+        "tools/provider-probe/connection-probe.mjs"
+      ],
+      "notes": "Derived from the provider probe: with max_connections=1 a new stream is accepted but the OLDER stream is silently cut (newest wins). JVM-tested; playback behaviour with the coordinator idle is unchanged but still needs a TV and phone device pass. WinUI must adopt the same rules before it downloads."
+    },
+    {
+      "id": "L-PROVIDER-NEWEST-STREAM-WINS",
+      "title": "Provider accepted != allowed: with a one-connection account the newest stream cuts the older one silently; user_info active_cons is unreliable",
+      "type": "lesson",
+      "origin": "android",
+      "status": {
+        "android": "HAS",
+        "winui": "MISSING",
+        "tv": "HAS"
+      },
+      "links": [
+        "docs/media-connection-coordination.md",
+        "tools/provider-probe/connection-probe.mjs"
+      ],
+      "notes": "Measured on the owner provider 2026-11-04/05: live A was cut when live B opened; active_cons read 0 with a stream open; slot frees about 5 s after close; new TCP connects drop intermittently (retry with spacing); HEAD on VOD gives Content-Length, on live gives none. Never use active_cons for decisions; never run a second media request next to a playing stream. Unknown: whether HEAD/Range on a playing live stream cuts it (assumed yes)."
     }
   ]
 }
