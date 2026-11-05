@@ -9,6 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dev.Tvivo.data.local.dao.CatalogSyncDao
 import com.dev.Tvivo.data.local.dao.CategoryDao
 import com.dev.Tvivo.data.local.dao.DriveDao
+import com.dev.Tvivo.data.local.dao.DownloadDao
 import com.dev.Tvivo.data.local.dao.FavouriteDao
 import com.dev.Tvivo.data.local.dao.LiveDao
 import com.dev.Tvivo.data.local.dao.MediaFileSizeDao
@@ -26,6 +27,7 @@ import com.dev.Tvivo.data.local.entities.CatalogSyncEntity
 import com.dev.Tvivo.data.local.entities.CategoryEntity
 import com.dev.Tvivo.data.local.entities.DriveEpisodeEntity
 import com.dev.Tvivo.data.local.entities.DriveIndexStateEntity
+import com.dev.Tvivo.data.local.entities.DownloadEntity
 import com.dev.Tvivo.data.local.entities.DriveMovieEntity
 import com.dev.Tvivo.data.local.entities.DriveSeasonEntity
 import com.dev.Tvivo.data.local.entities.DriveShowEntity
@@ -64,9 +66,10 @@ import com.dev.Tvivo.data.local.entities.WatchedEntity
         RecentlyPlayedEntity::class,
         DriveMovieEntity::class, DriveShowEntity::class, DriveSeasonEntity::class,
         DriveEpisodeEntity::class, MusicTrackEntity::class, DriveIndexStateEntity::class,
-        MediaFileSizeEntity::class
+        MediaFileSizeEntity::class,
+        DownloadEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -87,6 +90,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun recentlyPlayedDao(): RecentlyPlayedDao
     abstract fun driveDao(): DriveDao
     abstract fun mediaFileSizeDao(): MediaFileSizeDao
+    abstract fun downloadDao(): DownloadDao
 
     companion object {
         const val DATABASE_NAME = "tvivo.db"
@@ -144,6 +148,20 @@ abstract class AppDatabase : RoomDatabase() {
                     `mediaId` TEXT NOT NULL, `exactBytes` INTEGER, `estimatedBytes` INTEGER,
                     `lastProbeAt` INTEGER, `lastProbeOutcome` TEXT,
                     PRIMARY KEY(`accountId`, `kind`, `seriesId`, `mediaId`))""")
+            }
+        }
+
+        /** Persist download state without changing catalog, size, or user-owned rows. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `downloads` (
+                    `accountId` TEXT NOT NULL, `kind` TEXT NOT NULL, `seriesId` INTEGER NOT NULL,
+                    `mediaId` TEXT NOT NULL, `containerExtension` TEXT, `state` TEXT NOT NULL,
+                    `expectedBytes` INTEGER, `partialBytes` INTEGER NOT NULL, `reservedBytes` INTEGER NOT NULL,
+                    `etag` TEXT, `lastModified` TEXT, `relativePath` TEXT, `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL, `failureReason` TEXT,
+                    PRIMARY KEY(`accountId`,`kind`,`seriesId`,`mediaId`))""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_downloads_state` ON `downloads` (`state`)")
             }
         }
 
@@ -311,7 +329,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // data the app holds and the panel cannot give them back — they are
                     // what Continue watching and Favourites are built from. A dropped
                     // table here is a silently emptied folder the user curated.
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                     .build()
                     .also { instance = it }
             }

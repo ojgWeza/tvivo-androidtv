@@ -10,6 +10,17 @@ class MediaFileSizeRepository(
     private val dao: MediaFileSizeDao,
     private val clockMillis: () -> Long = System::currentTimeMillis
 ) {
+    data class DownloadSize(val bytes: Long, val exact: Boolean)
+
+    /** Exact source metadata always wins; an estimate remains explicitly approximate. */
+    suspend fun downloadSize(accountId: String, kind: String, seriesId: Int, mediaId: String): DownloadSize? {
+        requireValidIdentity(kind, seriesId, mediaId)
+        val row = dao.get(accountId, kind, seriesId, mediaId) ?: return null
+        row.exactBytes?.let { return DownloadSize(it, exact = true) }
+        row.estimatedBytes?.let { return DownloadSize(it, exact = false) }
+        return null
+    }
+
     fun observeMovie(accountId: String, streamId: Int): Flow<List<MediaFileSizeEntity>> =
         dao.observeForMediaIds(accountId, "movie", 0, listOf(streamId.toString()))
 

@@ -34,7 +34,7 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun v5_user_rows_survive_and_schema_matches_a_fresh_v9_database() = assertMigrates(5)
+    fun v5_user_rows_survive_and_schema_matches_a_fresh_v10_database() = assertMigrates(5)
 
     @Test
     fun v3_to_v9_chain_preserves_user_rows() = assertMigrates(3)
@@ -145,7 +145,7 @@ class AppDatabaseMigrationTest {
         val migrated = Room.databaseBuilder(context, AppDatabase::class.java, name)
             .addMigrations(AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9)
+                AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10)
             .allowMainThreadQueries()
             .build()
         val fresh = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)

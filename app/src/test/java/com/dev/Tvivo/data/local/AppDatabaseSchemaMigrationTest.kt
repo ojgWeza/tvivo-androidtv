@@ -79,7 +79,7 @@ class AppDatabaseSchemaMigrationTest {
                 VALUES ('a','a','series','older',2)""")
         }
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9).allowMainThreadQueries().build()
+            .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10).allowMainThreadQueries().build()
         try {
             val db = room.openHelper.writableDatabase
             db.query("SELECT plot FROM series_episodes WHERE episodeId='ep'").use { rows ->
@@ -111,7 +111,7 @@ class AppDatabaseSchemaMigrationTest {
 
         // Room runs both migrations, then validates the whole schema and identity hash on open.
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9)
+            .addMigrations(AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10)
             .allowMainThreadQueries()
             .build()
         try {
@@ -162,7 +162,7 @@ class AppDatabaseSchemaMigrationTest {
             db.execSQL("INSERT INTO resume_positions (accountId,profileId,contentType,itemId,positionMs,durationMs,updatedAt) VALUES ('a','a','vod','m',22,99,33)")
         } finally { v8.close() }
         val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_8_9).allowMainThreadQueries().build()
+            .addMigrations(AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10).allowMainThreadQueries().build()
         try {
             val db = room.openHelper.writableDatabase
             db.query("SELECT COUNT(*) FROM media_file_sizes").use { rows ->
@@ -173,6 +173,33 @@ class AppDatabaseSchemaMigrationTest {
             }
             db.query("SELECT positionMs FROM resume_positions WHERE itemId='m'").use { rows ->
                 assertTrue(rows.moveToFirst()); assertEquals(22L, rows.getLong(0))
+            }
+        } finally { room.close() }
+    }
+
+    @Test
+    fun exported_v9_migrates_to_v10_and_preserves_size_and_user_data() {
+        openExported(9).use { helper ->
+            val db = helper.writableDatabase
+            db.execSQL("INSERT INTO media_file_sizes (accountId,kind,seriesId,mediaId,exactBytes,estimatedBytes,lastProbeAt,lastProbeOutcome) VALUES ('a','movie',0,'m',1234,NULL,55,'exact')")
+            db.execSQL("INSERT INTO favourites (accountId,profileId,contentType,itemId,addedAt) VALUES ('a','a','vod','m',11)")
+            db.execSQL("INSERT INTO resume_positions (accountId,profileId,contentType,itemId,positionMs,durationMs,updatedAt) VALUES ('a','a','vod','m',22,99,33)")
+        }
+        val room = Room.databaseBuilder(context, AppDatabase::class.java, name)
+            .addMigrations(AppDatabase.MIGRATION_9_10).allowMainThreadQueries().build()
+        try {
+            val db = room.openHelper.writableDatabase
+            db.query("SELECT exactBytes FROM media_file_sizes WHERE mediaId='m'").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(1234L, rows.getLong(0))
+            }
+            db.query("SELECT addedAt FROM favourites WHERE itemId='m'").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(11L, rows.getLong(0))
+            }
+            db.query("SELECT positionMs FROM resume_positions WHERE itemId='m'").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(22L, rows.getLong(0))
+            }
+            db.query("SELECT COUNT(*) FROM downloads").use { rows ->
+                assertTrue(rows.moveToFirst()); assertEquals(0, rows.getInt(0))
             }
         } finally { room.close() }
     }
