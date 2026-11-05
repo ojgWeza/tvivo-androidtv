@@ -33,7 +33,7 @@ function hfetch(rawUrl, init = {}, hops = 0) {
     const signal = init.signal;
     const fail = e => reject(e);
     if (signal?.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; return fail(e); }
-    const req = mod.request(u, { method: init.method || 'GET', headers: init.headers || {}, family: 4, agent: false, timeout: 15000 }, res => {
+    const req = mod.request(u, { method: init.method || 'GET', headers: init.headers || {}, family: 4, agent: false, timeout: init.idleMs || 90000 }, res => {
       const code = res.statusCode || 0;
       if ([301, 302, 303, 307, 308].includes(code) && res.headers.location && hops < 5) {
         res.resume();
