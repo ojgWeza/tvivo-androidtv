@@ -621,7 +621,7 @@
         "app/src/main/java/com/dev/Tvivo/data/remote/HttpFileSizeProbe.kt",
         "app/src/test/java/com/dev/Tvivo/data/remote/HttpFileSizeProbeTest.kt"
       ],
-      "notes": "Verified on a real provider: list/info JSON has no size; the media URL answers HEAD (Content-Length) and Range 0-0 (206 + Content-Range total). Run it BEFORE playback starts, after the old stream stops, so there is never a second connection (providers often allow one). Cap ~2 s, never read a body, never probe series, never log URL. No 7-day wait for an opened item. Plausibility 1 MB-200 GB. Android 2026-11-05: HttpFileSizeProbe (HEAD then Range 0-0) and MediaFileSizeRepository.probeWhenIdle run under the media-connection coordinator; NOT yet triggered automatically when an item opens.",
+      "notes": "Verified on a real provider: list/info JSON has no size; the media URL answers HEAD (Content-Length) and Range 0-0 (206 + Content-Range total). Run it BEFORE playback starts, after the old stream stops, so there is never a second connection (providers often allow one). Cap ~2 s, never read a body, never probe series, never log URL. No 7-day wait for an opened item. Plausibility 1 MB-200 GB. Android 2026-11-05: HttpFileSizeProbe (HEAD then Range 0-0) and MediaFileSizeRepository.probeWhenIdle run under the media-connection coordinator; Triggered once when a movie detail or the primary/next episode opens, only when idle; cancelled on Play (JVM-verified policy; open-trigger ViewModel tests need an injection seam; no device check).",
       "origin": "winui"
     },
     {
