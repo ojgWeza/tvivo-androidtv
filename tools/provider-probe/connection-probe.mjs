@@ -60,6 +60,21 @@ function hfetch(rawUrl, init = {}, hops = 0) {
     req.end();
   });
 }
+const connectFailures = [];
+async function hfetchRetry(url, init, label) {
+  let last;
+  for (let i = 0; i < 5; i++) {
+    try { return await hfetch(url, init); }
+    catch (e) {
+      last = e;
+      const code = e.code || e.name;
+      if (!['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'TimeoutError', 'EAI_AGAIN'].includes(code)) throw e;
+      connectFailures.push({ label: label || 'call', attempt: i + 1, code, atSec: Math.round((Date.now() - t0) / 1000) });
+      await new Promise(r => setTimeout(r, 4000));
+    }
+  }
+  throw last;
+}
 const base = (process.env.PROVIDER_BASE || '').replace(/\/+$/, '');
 const user = process.env.PROVIDER_USER || '';
 const pass = process.env.PROVIDER_PASS || '';
@@ -78,7 +93,7 @@ const step = (name, data) => { out.steps.push({ name, t: Math.round((Date.now() 
 const t0 = Date.now();
 
 async function userInfo() {
-  const res = await hfetch(api(), { signal: AbortSignal.timeout(30000) });
+  const res = await hfetchRetry(api(), { signal: AbortSignal.timeout(60000) }, 'user_info');
   const j = await res.json();
   const u = j.user_info || {};
   return { http: res.status, status: u.status, maxConnections: Number(u.max_connections), activeCons: Number(u.active_cons) };
@@ -100,7 +115,7 @@ async function openHeld(url, label) {
 
 async function probeStatus(url, init, label) {
   try {
-    const res = await hfetch(url, { ...init, signal: AbortSignal.timeout(6000) });
+    const res = await hfetchRetry(url, { ...init, signal: AbortSignal.timeout(20000) }, 'probe-' + label);
     const range = res.headers.get('content-range');
     try { await res.body?.cancel(); } catch {}
     return { label, http: res.status, contentRange: range ? 'present' : 'absent', contentLength: res.headers.get('content-length') ? 'present' : 'absent' };
@@ -277,8 +292,9 @@ try {
     } catch (e) { step('6 error', { message: String(e.message || e) }); }
   }
 } catch (e) {
-  step('error', { message: String(e.message || e), cause: String(e.cause?.code || e.cause?.message || ''), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
+  step('error', { message: String(e.message || e), cause: String(e.cause?.code || e.cause?.message || e.code || ''), hint: 'If this is a timeout on step 0, check PROVIDER_BASE (scheme, host, port) and try opening it in a browser.' });
 }
+out.connectFailures = connectFailures;
 const json = JSON.stringify(out, null, 2);
 console.log(json);
 // Also save the result so it can be read later: --out <file>, default tools/provider-probe/results/probe-<time>.json
