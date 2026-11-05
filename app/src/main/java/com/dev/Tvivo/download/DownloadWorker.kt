@@ -68,6 +68,8 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 DownloadTransfer.Outcome.Retry -> return Result.retry()
                 DownloadTransfer.Outcome.Authorization -> return fail(row, "authorization")
                 DownloadTransfer.Outcome.Storage -> return fail(row, "storage")
+                DownloadTransfer.Outcome.UserPaused -> return Result.success()
+                DownloadTransfer.Outcome.UserCancelled -> return Result.success()
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

@@ -23,6 +23,7 @@ object DownloadController {
     }
 
     suspend fun pause(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity) {
+        DownloadTransfer.requestAction(row, DownloadTransfer.UserAction.Pause)
         DownloadDependencies.repository(context).pause(row)
     }
 
@@ -32,6 +33,7 @@ object DownloadController {
     }
 
     suspend fun cancel(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity) {
+        DownloadTransfer.requestAction(row, DownloadTransfer.UserAction.Cancel)
         DownloadDependencies.repository(context).cancel(row, deletePartial = true)
         kick(context)
     }

@@ -14,6 +14,10 @@ import org.junit.Test
 import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class DownloadTransferTest {
     private lateinit var server: MockWebServer
@@ -108,6 +112,40 @@ class DownloadTransferTest {
         assertFalse(files.finalFile("item")!!.exists())
     }
 
+    @Test fun cancelAcknowledgementWaitsForInFlightWriteToClose() = runTest {
+        server.enqueue(MockResponse().setBody("abcdef"))
+        files.writeEntered = CountDownLatch(1)
+        files.allowWrite = CountDownLatch(1)
+        val item = row()
+        val transferJob = async(Dispatchers.IO) { transfer().run(item, false) }
+        withContext(Dispatchers.IO) { check(files.writeEntered!!.await(2, TimeUnit.SECONDS)) }
+        val action = async(Dispatchers.IO) {
+            DownloadTransfer.requestAction(item, DownloadTransfer.UserAction.Cancel)
+        }
+        withContext(Dispatchers.IO) { files.allowWrite!!.countDown() }
+        assertTrue(action.await())
+        assertEquals(DownloadTransfer.Outcome.UserCancelled, transferJob.await())
+        assertEquals("abcdef", files.part("item")!!.readText())
+        assertFalse(repo.completed)
+    }
+
+    @Test fun pauseAcknowledgementWaitsForInFlightWriteToClose() = runTest {
+        server.enqueue(MockResponse().setBody("abcdef"))
+        files.writeEntered = CountDownLatch(1)
+        files.allowWrite = CountDownLatch(1)
+        val item = row()
+        val transferJob = async(Dispatchers.IO) { transfer().run(item, false) }
+        withContext(Dispatchers.IO) { check(files.writeEntered!!.await(2, TimeUnit.SECONDS)) }
+        val action = async(Dispatchers.IO) {
+            DownloadTransfer.requestAction(item, DownloadTransfer.UserAction.Pause)
+        }
+        withContext(Dispatchers.IO) { files.allowWrite!!.countDown() }
+        assertTrue(action.await())
+        assertEquals(DownloadTransfer.Outcome.UserPaused, transferJob.await())
+        assertEquals("abcdef", files.part("item")!!.readText())
+        assertFalse(repo.completed)
+    }
+
     @Test fun wifiOnlyPausesWhenConnectionBecomesMetered() = runTest {
         server.enqueue(MockResponse().setBody("abcdef"))
         assertEquals(DownloadTransfer.Outcome.Retry, transfer(unmetered = { false }).run(row(), true))
@@ -134,12 +172,16 @@ class DownloadTransferTest {
 
     private class LocalFiles(private val root: File) : TransferFileSystem {
         var failWrites = false
+        var writeEntered: CountDownLatch? = null
+        var allowWrite: CountDownLatch? = null
         override fun part(relativePath: String) = File(root, "$relativePath.part")
         override fun finalFile(relativePath: String?) = relativePath?.let { File(root, it) }
         override fun length(file: File) = file.length()
         override fun delete(file: File) = file.delete()
         override fun truncate(file: File) { file.writeBytes(byteArrayOf()) }
         override fun write(file: File, offset: Long, bytes: ByteArray, length: Int) {
+            writeEntered?.countDown()
+            allowWrite?.await(2, TimeUnit.SECONDS)
             if (failWrites) throw java.io.IOException("ENOSPC")
             java.io.RandomAccessFile(file, "rw").use { out -> out.seek(offset); out.write(bytes, 0, length) }
         }

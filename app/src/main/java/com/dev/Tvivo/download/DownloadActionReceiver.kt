@@ -21,7 +21,7 @@ class DownloadActionReceiver : BroadcastReceiver() {
                 val app = context.applicationContext
                 val row = AppDatabase.get(app).downloadDao().get(account, kind, series, media) ?: return@launch
                 when (intent.action) {
-                    ACTION_PAUSE -> { WorkManager.getInstance(app).cancelUniqueWork("phone-download-transfer"); DownloadDependencies.repository(app).pause(row) }
+                    ACTION_PAUSE -> DownloadController.pause(app, row)
                     ACTION_CANCEL -> DownloadController.cancel(app, row)
                 }
             } finally { pending.finish() }

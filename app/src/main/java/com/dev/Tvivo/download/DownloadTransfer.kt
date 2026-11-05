@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -24,16 +25,39 @@ class DownloadTransfer(
     private val progress: suspend (Long, Long?) -> Unit = { _, _ -> },
     private val progressIntervalMillis: Long = 1_000,
 ) {
+    private data class Active(val action: CompletableDeferred<UserAction>, @Volatile var cancelCall: (() -> Unit)? = null,
+        val finished: CompletableDeferred<Unit> = CompletableDeferred())
     sealed interface Outcome {
         data object Complete : Outcome
         data object Retry : Outcome
         data object Authorization : Outcome
         data object Storage : Outcome
+        data object UserPaused : Outcome
+        data object UserCancelled : Outcome
     }
+
+    companion object {
+        private const val SLACK_BYTES = 1_000_000L
+        private const val CHECKPOINT_BYTES = 1_000_000L
+        private val active = java.util.concurrent.ConcurrentHashMap<String, Active>()
+        private fun key(row: DownloadEntity) = "${row.accountId}\u0000${row.kind}\u0000${row.seriesId}\u0000${row.mediaId}"
+        suspend fun requestAction(row: DownloadEntity, action: UserAction): Boolean {
+            val transfer = active[key(row)] ?: return false
+            transfer.action.complete(action)
+            transfer.cancelCall?.invoke()
+            transfer.finished.await()
+            return true
+        }
+    }
+
+    enum class UserAction { Pause, Cancel }
 
     suspend fun run(row: DownloadEntity, wifiOnly: Boolean): Outcome {
         val part = files.part(row.relativePath ?: return Outcome.Storage) ?: return Outcome.Storage
         val final = files.finalFile(row.relativePath) ?: return Outcome.Storage
+        val transfer = Active(CompletableDeferred())
+        val transferKey = key(row)
+        if (active.putIfAbsent(transferKey, transfer) != null) return Outcome.Retry
         try {
             coordinator.withSlot(MediaConnectionCoordinator.Kind.DOWNLOAD, row.mediaId.take(80), row.accountId) {
                 transfer(row, part, final, wifiOnly)
@@ -46,14 +70,24 @@ class DownloadTransfer(
         } catch (e: CancellationException) {
             repository.markProgress(row, files.length(part))
             throw e
+        } catch (_: UserActionException) {
+            repository.markProgress(row, files.length(part))
+            return if (transfer.action.await() == UserAction.Pause) Outcome.UserPaused else Outcome.UserCancelled
         } catch (_: AuthorizationException) {
             return Outcome.Authorization
         } catch (_: StorageException) {
             return Outcome.Storage
         } catch (_: IOException) {
+            transfer.action.takeIf { it.isCompleted }?.let {
+                repository.markProgress(row, files.length(part))
+                return if (it.await() == UserAction.Pause) Outcome.UserPaused else Outcome.UserCancelled
+            }
             repository.markProgress(row, files.length(part))
             repository.resume(row)
             return Outcome.Retry
+        } finally {
+            active.remove(transferKey, transfer)
+            transfer.finished.complete(Unit)
         }
     }
 
@@ -66,6 +100,8 @@ class DownloadTransfer(
             }
         }.build()
         val call = client.newCall(request)
+        val transfer = active[key(row)] ?: throw IOException("transfer action unavailable")
+        transfer.cancelCall = { call.cancel() }
         currentCoroutineContext()[kotlinx.coroutines.Job]?.invokeOnCompletion { call.cancel() }
         val response = withContext(Dispatchers.IO) { call.execute() }
         response.use { res ->
@@ -107,6 +143,7 @@ class DownloadTransfer(
                     var lastDb = offset
                     var lastNotice = clockMillis()
                     while (true) {
+                        if (transfer.action.isCompleted) throw UserActionException()
                         currentCoroutineContext().ensureActive()
                         if (wifiOnly && !unmetered()) throw IOException("metered")
                         val count = withContext(Dispatchers.IO) { input.read(buffer) }
@@ -141,8 +178,8 @@ class DownloadTransfer(
 
     private class AuthorizationException : IOException()
     private class StorageException : IOException()
+    private class UserActionException : IOException()
 
-    companion object { private const val SLACK_BYTES = 1_000_000L; private const val CHECKPOINT_BYTES = 1_000_000L }
 }
 
 interface TransferFileSystem {
