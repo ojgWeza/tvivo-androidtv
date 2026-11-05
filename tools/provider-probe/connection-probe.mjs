@@ -16,6 +16,11 @@
 //   5. closes everything and polls active_cons until it returns to baseline (how long a slot stays "busy")
 // Output is one JSON object. No URLs with credentials, no tokens.
 
+import dns from 'node:dns';
+import net from 'node:net';
+// curl reaches the provider in ~0.2 s while Node's default dual-stack connect can time out: prefer IPv4, wait longer per address.
+dns.setDefaultResultOrder('ipv4first');
+try { net.setDefaultAutoSelectFamilyAttemptTimeout(2000); } catch {}
 const base = (process.env.PROVIDER_BASE || '').replace(/\/+$/, '');
 const user = process.env.PROVIDER_USER || '';
 const pass = process.env.PROVIDER_PASS || '';
