@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
 /** One page from a series card to an episode. Back is owned by MainActivity. */
 @Composable
 fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit,
-    insideShell: Boolean = false) {
+    insideShell: Boolean = false, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val application = context.applicationContext as android.app.Application
     val vm: SeriesDetailViewModel = viewModel(key = "series:$seriesId", factory = viewModelFactory {
@@ -141,7 +141,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
             vm::rememberEpisodeFocus, vm::refresh,
             onPlay = { play(it, true) }, onMenu = {
                 if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
-            },
+            }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
             header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg))
     } else {
         Row(Modifier.fillMaxSize().background(AppColors.Bg)
@@ -153,7 +153,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                 vm::rememberEpisodeFocus, vm::refresh,
                 onPlay = { play(it, true) }, onMenu = {
                     if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
-                },
+                }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
                 header = null, modifier = Modifier.weight(1f).fillMaxSize())
         }
     }
@@ -177,6 +177,22 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                     DetailTextButton(stringResource(com.dev.Tvivo.R.string.episode_clear_resume)) {
                         vm.clearResume(episode.episodeId); menuEpisode = null
                     }
+                }
+            }
+        }
+    }
+    state.downloadWarning?.let { warning ->
+        Dialog(onDismissRequest = vm::dismissDownloadWarning) {
+            Column(Modifier.fillMaxWidth().background(AppColors.Elevated).padding(20.dp)) {
+                Text(pluralStringResource(com.dev.Tvivo.R.plurals.downloads_cap_request_count,
+                    state.downloadWarningItemCount, state.downloadWarningItemCount), color = AppColors.Ink, style = TvType.title)
+                Text(stringResource(com.dev.Tvivo.R.string.download_cap_warning,
+                    warning.projected / 1_000_000_000.0, (warning.cap / 1_000_000_000L).toInt(),
+                    warning.overBy / 1_000_000_000.0,
+                    state.downloadWarningUsedBytes / 1_000_000_000.0), color = AppColors.Ink, style = TvType.body)
+                DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_cancel), Modifier.testTag("download-warning-cancel")) { vm.dismissDownloadWarning() }
+                DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_change_limit), Modifier.testTag("download-warning-settings")) {
+                    vm.dismissDownloadWarning(); onOpenSettings()
                 }
             }
         }
@@ -205,6 +221,8 @@ internal fun SeriesEpisodeList(
     onRetry: () -> Unit,
     onPlay: (EpisodeEntity) -> Unit,
     onMenu: (EpisodeEntity) -> Unit,
+    onDownload: (EpisodeEntity) -> Unit,
+    onDownloadSeason: () -> Unit,
     header: (@Composable () -> Unit)?,
     modifier: Modifier
 ) {
@@ -219,6 +237,7 @@ internal fun SeriesEpisodeList(
     val offset = (if (header == null) 1 else 2) +
         (if (state.isRefreshing) 1 else 0) + (if (state.error != null) 1 else 0)
     LaunchedEffect(state.selectedSeason) { listState.scrollToItem(0) }
+    val isTelevision = LocalIsTelevision.current
     LazyColumn(state = listState, modifier = modifier.testTag("series-episode-list"),
         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (header != null) item("hero") { header() }
@@ -242,9 +261,16 @@ internal fun SeriesEpisodeList(
                 }
             }
         }
+        if (!isTelevision && state.episodes.isNotEmpty()) item("download-season") {
+            DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_season), Modifier.testTag("download-season")) { onDownloadSeason() }
+        }
         if (state.isRefreshing) item("refreshing") {
             Text(stringResource(com.dev.Tvivo.R.string.episodes_updating), color = AppColors.Dim, style = TvType.label)
         }
+        state.downloadMessage?.takeIf { it.startsWith("unknown:") }?.let { message -> item("download-message") {
+            val count = message.substringAfter(':').toIntOrNull() ?: 1
+            Text(pluralStringResource(com.dev.Tvivo.R.plurals.download_unknown_batch, count, count), color = AppColors.Dim, style = TvType.label)
+        } }
         state.error?.let { error -> item("error") {
             Text(ErrorCopy.of(error).message, color = AppColors.Dim, style = TvType.label)
             DetailTextButton(stringResource(com.dev.Tvivo.R.string.common_retry)) { onRetry() }
@@ -265,7 +291,9 @@ internal fun SeriesEpisodeList(
                 highlighted = episode.episodeId == state.actions.primary?.episodeId,
                 modifier = if (episode.episodeId == targetId) Modifier.focusRequester(listFocus) else Modifier,
                 onFocus = { onFocusedEpisode(episode.seasonNumber, episode.episodeId) },
-                onPlay = { onPlay(episode) }, onMenu = { onMenu(episode) })
+                onPlay = { onPlay(episode) }, onMenu = { onMenu(episode) },
+                downloadState = state.downloadStates[episode.episodeId],
+                onDownload = { onDownload(episode) })
         }
     }
 }
@@ -282,7 +310,9 @@ private fun EpisodeRow(
     modifier: Modifier,
     onFocus: () -> Unit,
     onPlay: () -> Unit,
-    onMenu: () -> Unit
+    onMenu: () -> Unit,
+    downloadState: String?,
+    onDownload: () -> Unit
 ) {
     val context = LocalContext.current
     val displayTitle = if (EpisodeTitlePolicy.isGenericTitle(episode.title))
@@ -335,6 +365,12 @@ private fun EpisodeRow(
                 Box(Modifier.fillMaxWidth((positionMs.toFloat() / durationMs).coerceIn(0f, 1f))
                     .height(4.dp).background(AppColors.Accent))
             }
+        }
+        if (!LocalIsTelevision.current && downloadState !in setOf("QUEUED", "PAUSED", "DOWNLOADING", "COMPLETED")) {
+            if (fileSize == null) Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
+            else DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_action), Modifier.testTag("episode-download-${episode.episodeId}")) { onDownload() }
+        } else if (!LocalIsTelevision.current && downloadState != null) {
+            Text(stringResource(if (downloadState == "COMPLETED") com.dev.Tvivo.R.string.download_completed else com.dev.Tvivo.R.string.download_queued), color = AppColors.Dim, style = TvType.label)
         }
     }
 }

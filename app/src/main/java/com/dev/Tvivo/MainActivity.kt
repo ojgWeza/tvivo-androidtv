@@ -942,7 +942,8 @@ private fun TvivoApp() {
                 // stream endpoint, so the picker is the only thing it can mean.
                 onOpenEpisodes = {
                     route = Route.SeriesDetail(current.credentials, current.itemId)
-                }
+                },
+                onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) }
             ) }
             if (LocalIsTelevision.current) page() else AppShell(
                 selected = detailOriginTab,
@@ -1018,7 +1019,8 @@ private fun TvivoApp() {
                             )
                         )
                     }
-                }
+                },
+                onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) }
             ) }
             if (LocalIsTelevision.current) page() else AppShell(
                 selected = detailOriginTab,

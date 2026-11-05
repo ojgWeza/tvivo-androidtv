@@ -125,6 +125,7 @@ class DownloadRepository(
     }
 
     suspend fun usedBytes(): Long = database.withTransaction { usedBytesLocked() }
+    suspend fun reservedBytes(): Long = dao.sumReservedBytes().coerceAtLeast(0)
 
     private suspend fun usedBytesLocked(): Long = dao.getAll().sumOf { row ->
         if (row.state == "COMPLETED" || row.state in setOf("QUEUED", "PAUSED", "DOWNLOADING", "FAILED"))

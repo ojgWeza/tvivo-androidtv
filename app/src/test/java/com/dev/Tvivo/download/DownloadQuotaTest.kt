@@ -35,4 +35,10 @@ class DownloadQuotaTest {
         assertEquals(500, DownloadQuota.clampCapGb(500))
         assertEquals(500, DownloadQuota.clampCapGb(501))
     }
+
+    @Test fun settingsUsageShowsUsedAndReservedDecimalGbAndClampedCap() {
+        assertEquals(DownloadQuota.Usage(1.25, 1, 0.5, true),
+            DownloadQuota.usage(1_250_000_000L, 500_000_000L, 0))
+        assertEquals(DownloadQuota.Usage(0.0, 500, 0.0, false), DownloadQuota.usage(-1, -1, 900))
+    }
 }

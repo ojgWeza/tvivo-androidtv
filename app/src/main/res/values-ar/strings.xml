@@ -488,4 +488,28 @@
     <string name="network_test_ip_families">إصدارات IP</string>
     <string name="network_test_request_sample">عينات الطلبات</string>
     <string name="network_test_throughput">سرعة النقل</string>
+    <string name="network_deep_stalled">توقف البث أثناء الفحص</string>
+    <string name="network_deep_stall_detail">توقف البث عن إرسال البيانات لمدة %1$d ث بعد %2$.2f ميجابايت.</string>
+    <string name="download_action">إضافة إلى قائمة التنزيل</string>
+    <string name="download_queued">في قائمة الانتظار</string>
+    <string name="download_paused">متوقف مؤقتاً</string>
+    <string name="download_completed">مكتمل</string>
+    <string name="download_failed">فشل</string>
+    <string name="download_unknown">الحجم غير معروف — شغّل البث</string>
+    <string name="download_season">تنزيل الموسم</string>
+    <string name="download_cap_warning">الاستخدام الإجمالي المقدّر: %1$.2f جيجابايت من حدك البالغ %2$d جيجابايت، متجاوزاً الحد بمقدار %3$.2f جيجابايت. المستخدم حالياً: %4$.2f جيجابايت. الحد مُلزِم، لذلك لا يمكن إضافة الطلب إلى القائمة. غيّر الحد من الإعدادات أو وفّر مساحة.</string>
+    <string name="download_cancel">إلغاء</string>
+    <string name="download_change_limit">تغيير الحد من الإعدادات</string>
+    <string name="downloads_title">التنزيلات</string>
+    <string name="downloads_storage_limit">حد التخزين</string>
+    <string name="downloads_wifi_only">شبكة Wi-Fi فقط</string>
+    <string name="downloads_usage">المستخدم %1$.2f من %2$.2f جيجابايت (%3$.2f جيجابايت محجوزة)</string>
+    <string name="downloads_over_limit">التنزيلات الجديدة متوقفة حتى توفير مساحة.</string>
+    <plurals name="download_unknown_batch"><item quantity="zero">أحجام الحلقات غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="one">حجم حلقة واحدة غير معروف. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="two">حجم حلقتين غير معروف. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="few">أحجام %d حلقات غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="many">أحجام %d حلقة غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item><item quantity="other">أحجام %d حلقة غير معروفة. لا يمكن إضافة هذا الطلب إلى القائمة.</item></plurals>
+    <string name="downloads_cap_decrease">خفض حد التخزين</string>
+    <string name="downloads_cap_increase">زيادة حد التخزين</string>
+    <string name="downloads_wifi_hint">إضافة التنزيلات إلى القائمة عند الاتصال بشبكة Wi-Fi فقط</string>
+    <string name="downloads_wifi_on">مفعّل</string>
+    <string name="downloads_wifi_off">متوقف</string>
+    <plurals name="downloads_cap_request_count"><item quantity="zero">إضافة %d عناصر</item><item quantity="one">إضافة عنصر واحد</item><item quantity="two">إضافة عنصرين</item><item quantity="few">إضافة %d عناصر</item><item quantity="many">إضافة %d عنصراً</item><item quantity="other">إضافة %d عنصر</item></plurals>
 </resources>

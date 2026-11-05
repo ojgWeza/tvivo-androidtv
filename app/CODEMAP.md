@@ -95,7 +95,10 @@
 Broken at runtime, or a route renamed on one side only.
 
 - `countFiltered` — called from `browse/BrowseViewModel.kt`
+- `enqueue` — called from `detail/ItemDetailViewModel.kt`, `series/SeriesDetailViewModel.kt`
+- `reservedBytes` — called from `detail/ItemDetailViewModel.kt`, `series/SeriesDetailViewModel.kt`
 - `toString` — called from `player/PlayerOverlay.kt`
+- `usedBytes` — called from `detail/ItemDetailViewModel.kt`, `series/SeriesDetailViewModel.kt`
 
 ## 3. Route defined but never called from the frontend
 

@@ -29,7 +29,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -62,7 +64,8 @@ fun ItemDetailScreen(
     insideShell: Boolean = false,
     stateOverride: ItemDetailUiState? = null,
     onToggleFavouriteOverride: () -> Unit = {},
-    onClearResumeOverride: () -> Unit = {}
+    onClearResumeOverride: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as android.app.Application
     val context = LocalContext.current
@@ -169,6 +172,25 @@ fun ItemDetailScreen(
                     Modifier.testTag("detail-favourite")) {
                     if (vm != null) vm.toggleFavourite() else onToggleFavouriteOverride()
                 }
+                if (!isLive && !isSeries && !LocalIsTelevision.current && state.downloadState !in setOf("QUEUED", "PAUSED", "COMPLETED")) {
+                    if (state.fileSize == null) {
+                        Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
+                    } else {
+                        DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_action), Modifier.testTag("movie-download")) {
+                            vm?.downloadMovie()
+                        }
+                    }
+                }
+                state.downloadState?.let { downloadState ->
+                    val label = when (downloadState) {
+                        "QUEUED", "DOWNLOADING" -> com.dev.Tvivo.R.string.download_queued
+                        "PAUSED" -> com.dev.Tvivo.R.string.download_paused
+                        "COMPLETED" -> com.dev.Tvivo.R.string.download_completed
+                        "FAILED" -> com.dev.Tvivo.R.string.download_failed
+                        else -> null
+                    }
+                    if (!LocalIsTelevision.current) label?.let { Text(stringResource(it), color = AppColors.Dim, style = TvType.label) }
+                }
                 state.trailer?.let { trailer ->
                     DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_watch_trailer), Modifier.testTag("detail-trailer")) {
                         val url = if (trailer.startsWith("https://")) trailer
@@ -181,6 +203,22 @@ fun ItemDetailScreen(
         state.plotError?.let { error ->
             Text(ErrorCopy.of(error).message, color = AppColors.Dim, style = TvType.label)
             DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_retry)) { vm?.retryPlot() }
+        }
+    }
+    state.downloadWarning?.let { warning ->
+        Dialog(onDismissRequest = { vm?.dismissDownloadWarning() }) {
+            Column(Modifier.fillMaxWidth().background(AppColors.Elevated).padding(20.dp)) {
+                Text(pluralStringResource(com.dev.Tvivo.R.plurals.downloads_cap_request_count,
+                    state.downloadWarningItemCount, state.downloadWarningItemCount), color = AppColors.Ink, style = TvType.title)
+                Text(stringResource(com.dev.Tvivo.R.string.download_cap_warning,
+                    warning.projected / 1_000_000_000.0, (warning.cap / 1_000_000_000L).toInt(),
+                    warning.overBy / 1_000_000_000.0,
+                    state.downloadWarningUsedBytes / 1_000_000_000.0), color = AppColors.Ink, style = TvType.body)
+                DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_cancel), Modifier.testTag("download-warning-cancel")) { vm?.dismissDownloadWarning() }
+                DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_change_limit), Modifier.testTag("download-warning-settings")) {
+                    vm?.dismissDownloadWarning(); onOpenSettings()
+                }
+            }
         }
     }
 }

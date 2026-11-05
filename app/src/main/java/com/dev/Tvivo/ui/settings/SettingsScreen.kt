@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -27,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
@@ -48,6 +53,8 @@ import com.dev.Tvivo.playback.PreferredSubtitles
 import com.dev.Tvivo.ui.ThemeMode
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import com.dev.Tvivo.download.DownloadDependencies
+import com.dev.Tvivo.download.DownloadQuota
 
 /**
  * Account **actions**, and only actions.
@@ -88,6 +95,11 @@ fun SettingsScreen(
     val modes by preferenceStore.modes.collectAsStateWithLifecycle(initialValue = com.dev.Tvivo.playback.PlaybackModePreferences.AndroidDefaults)
     val tracks by preferenceStore.tracks.collectAsStateWithLifecycle(initialValue = com.dev.Tvivo.playback.TrackPreferences.AndroidDefaults)
     val themeMode by preferenceStore.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.Dark)
+    val downloadStore = remember(appContext) { DownloadDependencies.preferences(appContext) }
+    val downloadRepository = remember(appContext) { DownloadDependencies.repository(appContext) }
+    val downloadPreferences by downloadStore.preferences.collectAsStateWithLifecycle(initialValue = com.dev.Tvivo.download.DownloadPreferences())
+    var downloadUsedBytes by remember { mutableStateOf(0L) }
+    var downloadReservedBytes by remember { mutableStateOf(0L) }
     var appLanguage by remember(appContext) { mutableStateOf(AppLanguage.current(appContext)) }
     val spacing = adaptiveSpacing()
 
@@ -96,6 +108,10 @@ fun SettingsScreen(
             if (focusNetworkDiagnostics) networkDiagnosticsFocus.requestFocus() else firstAction.requestFocus()
         }
         if (focusNetworkDiagnostics) onNetworkDiagnosticsFocusConsumed()
+    }
+    LaunchedEffect(downloadRepository) {
+        downloadUsedBytes = runCatching { downloadRepository.usedBytes() }.getOrDefault(0L)
+        downloadReservedBytes = runCatching { downloadRepository.reservedBytes() }.getOrDefault(0L)
     }
     LaunchedEffect(state.signedOut) { if (state.signedOut) onSignedOut() }
 
@@ -153,6 +169,33 @@ fun SettingsScreen(
             val next = when (tracks.subtitles) { PreferredSubtitles.Off -> PreferredSubtitles.Arabic; PreferredSubtitles.Arabic -> PreferredSubtitles.English; PreferredSubtitles.English -> PreferredSubtitles.Off }
             scope.launch { preferenceStore.setSubtitles(next) }
         })
+        if (!LocalIsTelevision.current) {
+            Spacer(Modifier.height(24.dp))
+            Text(text = stringResource(com.dev.Tvivo.R.string.downloads_title), color = AppColors.Ink, style = TvType.title)
+            Text(stringResource(com.dev.Tvivo.R.string.downloads_storage_limit), color = AppColors.Ink, style = TvType.title)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
+                Text("−", color = AppColors.Ink, style = TvType.title, modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clickable {
+                    scope.launch { downloadStore.setCapGb(downloadPreferences.capGb - 1) }
+                }.semantics { role = Role.Button; contentDescription = appContext.getString(com.dev.Tvivo.R.string.downloads_cap_decrease) }.padding(horizontal = 24.dp, vertical = 8.dp))
+                Text("${downloadPreferences.capGb} GB", color = AppColors.AccentText, style = TvType.title, modifier = Modifier.testTag("downloads-cap-value"))
+                Text("+", color = AppColors.Ink, style = TvType.title, modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clickable {
+                    scope.launch { downloadStore.setCapGb(downloadPreferences.capGb + 1) }
+                }.semantics { role = Role.Button; contentDescription = appContext.getString(com.dev.Tvivo.R.string.downloads_cap_increase) }.padding(horizontal = 24.dp, vertical = 8.dp))
+            }
+            ActionRow(stringResource(com.dev.Tvivo.R.string.downloads_wifi_only),
+                stringResource(com.dev.Tvivo.R.string.downloads_wifi_hint),
+                value = stringResource(if (downloadPreferences.wifiOnly) com.dev.Tvivo.R.string.downloads_wifi_on else com.dev.Tvivo.R.string.downloads_wifi_off), onClick = {
+                    scope.launch { downloadStore.setWifiOnly(!downloadPreferences.wifiOnly) }
+                })
+            val downloadUsage = DownloadQuota.usage(downloadUsedBytes, downloadReservedBytes, downloadPreferences.capGb)
+            Text(stringResource(com.dev.Tvivo.R.string.downloads_usage,
+                downloadUsage.usedGb, downloadUsage.capGb.toDouble(), downloadUsage.reservedGb),
+                color = AppColors.Dim, style = TvType.label, modifier = Modifier.padding(20.dp))
+            if (downloadUsage.overLimit) {
+                Text(stringResource(com.dev.Tvivo.R.string.downloads_over_limit), color = AppColors.AccentText,
+                    style = TvType.label, modifier = Modifier.padding(horizontal = 20.dp))
+            }
+        }
         Spacer(Modifier.height(24.dp))
         Text(text = stringResource(com.dev.Tvivo.R.string.settings_account), color = AppColors.Ink, style = TvType.title)
         state.username?.let {

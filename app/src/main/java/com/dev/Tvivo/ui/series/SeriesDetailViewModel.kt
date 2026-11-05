@@ -20,6 +20,8 @@ import com.dev.Tvivo.ui.detail.FileSizeFormatter
 import com.dev.Tvivo.playback.DetailEpisode
 import com.dev.Tvivo.playback.DetailPlaybackPolicy
 import com.dev.Tvivo.playback.SeriesActions
+import com.dev.Tvivo.download.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
@@ -48,6 +50,11 @@ data class SeriesDetailUiState(
     val selectedSeason: Int? = null,
     val episodes: List<EpisodeEntity> = emptyList(),
     val fileSizes: Map<String, FileSizeDisplay> = emptyMap(),
+    val downloadStates: Map<String, String> = emptyMap(),
+    val downloadWarning: DownloadQuota.Evaluation.ExceedsCap? = null,
+    val downloadWarningUsedBytes: Long = 0,
+    val downloadWarningItemCount: Int = 0,
+    val downloadMessage: String? = null,
     /** Only while there is nothing cached to show — a refresh over cached episodes is a
      *  line under the header, never a blocking spinner. */
     val isLoading: Boolean = true,
@@ -108,6 +115,12 @@ class SeriesDetailViewModel(
             }
             val accountId = AccountIdentity.of(credentials)
             this@SeriesDetailViewModel.accountId = accountId
+            viewModelScope.launch {
+                DownloadDependencies.repository(application).observe(accountId).collect { rows ->
+                    _state.update { it.copy(downloadStates = rows.filter { row -> row.kind == "episode" && row.seriesId == seriesId }
+                        .associate { row -> row.mediaId to row.state }) }
+                }
+            }
             val repository = SeriesRepository(db, credentials, accountId)
             repo = repository
             playbackState = PlaybackStateRepository(db, accountId)
@@ -222,6 +235,56 @@ class SeriesDetailViewModel(
     fun toggleFavourite(makeFavourite: Boolean) {
         viewModelScope.launch {
             playbackState?.toggleFavourite(TYPE_SERIES, seriesId.toString(), makeFavourite)
+        }
+    }
+
+    fun dismissDownloadWarning() { _state.update { it.copy(downloadWarning = null) } }
+
+    fun downloadEpisode(episode: EpisodeEntity) = queueEpisodes(listOf(episode))
+    fun downloadSeason() = queueEpisodes(_state.value.episodes)
+
+    private fun queueEpisodes(episodes: List<EpisodeEntity>) {
+        val account = accountId ?: return
+        if (episodes.isEmpty()) return
+        viewModelScope.launch {
+            val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
+            val existingStates = _state.value.downloadStates
+            val planItems = episodes.map { episode ->
+                val size = sizes.downloadSize(account, "episode", seriesId, episode.episodeId)
+                DownloadPlanner.Item(size?.bytes, size?.exact ?: false,
+                    existingStates[episode.episodeId] in setOf("QUEUED", "PAUSED", "DOWNLOADING", "COMPLETED"))
+            }
+            val unknown = planItems.count { !it.alreadyQueuedOrDone && it.bytes == null }
+            if (unknown > 0) { _state.update { it.copy(downloadMessage = "unknown:$unknown") }; return@launch }
+            val pending = episodes.filterNot { existingStates[it.episodeId] in setOf("QUEUED", "PAUSED", "DOWNLOADING", "COMPLETED") }
+            if (pending.isEmpty()) return@launch
+            val repo = DownloadDependencies.repository(getApplication())
+            val preferences = DownloadDependencies.preferences(getApplication()).preferences.first()
+            val used = repo.usedBytes()
+            when (val plan = DownloadPlanner.plan(planItems, preferences.capBytes, used, repo.reservedBytes())) {
+                DownloadPlanner.Plan.Ready -> enqueueEpisodes(repo, account, pending)
+                is DownloadPlanner.Plan.NeedsConfirmation -> _state.update { it.copy(downloadWarning =
+                    DownloadQuota.Evaluation.ExceedsCap(plan.projected, plan.cap, plan.overBy),
+                    downloadWarningUsedBytes = used, downloadWarningItemCount = plan.itemCount) }
+                is DownloadPlanner.Plan.Blocked -> _state.update { it.copy(downloadMessage = "unknown:${plan.unknownSize}") }
+                DownloadPlanner.Plan.AlreadyQueuedOrDone -> Unit
+            }
+        }
+    }
+
+    private suspend fun enqueueEpisodes(repo: DownloadRepository, account: String, episodes: List<EpisodeEntity>) {
+        val batch = episodes.map { episode ->
+            val ext = episode.containerExtension?.lowercase()?.filter(Char::isLetterOrDigit)?.take(8) ?: "mkv"
+            DownloadRequest(account, "episode", seriesId, episode.episodeId, ext,
+                "series/$seriesId/${episode.episodeId}.$ext")
+        }
+        when (val result = repo.enqueue(batch)) {
+            is DownloadRepository.EnqueueResult.Accepted -> _state.update { it.copy(downloadMessage = null, downloadWarning = null) }
+            is DownloadRepository.EnqueueResult.Rejected -> {
+                val used = repo.usedBytes()
+                _state.update { it.copy(downloadWarning = result.evaluation as? DownloadQuota.Evaluation.ExceedsCap,
+                    downloadWarningUsedBytes = used, downloadWarningItemCount = episodes.size) }
+            }
         }
     }
 

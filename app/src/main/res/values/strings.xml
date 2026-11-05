@@ -478,4 +478,26 @@
     <string name="network_test_ip_families">IP FAMILIES</string>
     <string name="network_test_request_sample">REQUEST SAMPLE</string>
     <string name="network_test_throughput">THROUGHPUT</string>
+    <string name="download_action">Queue download</string>
+    <string name="download_queued">Queued</string>
+    <string name="download_paused">Paused</string>
+    <string name="download_completed">Completed</string>
+    <string name="download_failed">Failed</string>
+    <string name="download_unknown">Size unknown — stream instead</string>
+    <string name="download_season">Download season</string>
+    <string name="download_cap_warning">Estimated total use: %1$.2f GB of your %2$d GB limit, exceeding it by %3$.2f GB. Currently used: %4$.2f GB. The limit is enforced, so this request cannot be queued. Change the limit in Settings or free space.</string>
+    <string name="download_cancel">Cancel</string>
+    <string name="download_change_limit">Change limit in Settings</string>
+    <string name="downloads_title">Downloads</string>
+    <string name="downloads_storage_limit">Storage limit</string>
+    <string name="downloads_wifi_only">Wi-Fi only</string>
+    <string name="downloads_usage">Used %1$.2f of %2$.2f GB (%3$.2f GB reserved)</string>
+    <string name="downloads_over_limit">New downloads are blocked until space is freed.</string>
+    <plurals name="download_unknown_batch"><item quantity="one">One episode has an unknown size. This request cannot be queued.</item><item quantity="other">%d episodes have unknown sizes. This request cannot be queued.</item></plurals>
+    <string name="downloads_cap_decrease">Decrease storage limit</string>
+    <string name="downloads_cap_increase">Increase storage limit</string>
+    <string name="downloads_wifi_hint">Queue downloads only while connected to Wi-Fi</string>
+    <string name="downloads_wifi_on">On</string>
+    <string name="downloads_wifi_off">Off</string>
+    <plurals name="downloads_cap_request_count"><item quantity="one">Queue %d item</item><item quantity="other">Queue %d items</item></plurals>
 </resources>

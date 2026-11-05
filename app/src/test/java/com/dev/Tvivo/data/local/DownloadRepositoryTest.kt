@@ -12,6 +12,7 @@ import com.dev.Tvivo.download.DownloadRequest
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -57,6 +58,20 @@ class DownloadRepositoryTest {
             val missing = repo.reconcile().single()
             assertEquals("FAILED", missing.state)
             assertEquals("missing", missing.failureReason)
+        } finally { db.close() }
+    }
+
+    @Test fun rejectedUnknownSeasonBatchLeavesNoRows() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        try {
+            db.mediaFileSizeDao().upsertExact(MediaFileSizeEntity("acct", "episode", 9, "known", exactBytes = 20))
+            val repo = DownloadRepository(db, db.downloadDao(), MediaFileSizeRepository(db.mediaFileSizeDao()), FakeFiles(), { 1_000 })
+            val result = repo.enqueue(listOf(
+                DownloadRequest("acct", "episode", 9, "known", "mp4", "series/9/known.mp4"),
+                DownloadRequest("acct", "episode", 9, "unknown", "mp4", "series/9/unknown.mp4")
+            ))
+            assertTrue(result is DownloadRepository.EnqueueResult.Rejected)
+            assertTrue(db.downloadDao().getAll().isEmpty())
         } finally { db.close() }
     }
 

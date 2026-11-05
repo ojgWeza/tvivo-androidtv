@@ -18,11 +18,17 @@ import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.SeriesRepository
 import com.dev.Tvivo.data.repository.VodRepository
 import com.dev.Tvivo.data.repository.MediaFileSizeRepository
+import com.dev.Tvivo.download.DownloadDependencies
+import com.dev.Tvivo.download.DownloadRequest
+import com.dev.Tvivo.download.DownloadRepository
+import com.dev.Tvivo.download.DownloadQuota
+import com.dev.Tvivo.download.DownloadPlanner
 import com.dev.Tvivo.ui.home.ContentType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -51,7 +57,12 @@ data class ItemDetailUiState(
     val plotError: AppError? = null,
     /** The row is gone from the catalog — a favourite whose item was removed upstream. */
     val notFound: Boolean = false,
-    val fileSize: FileSizeDisplay? = null
+    val fileSize: FileSizeDisplay? = null,
+    val downloadState: String? = null,
+    val downloadMessage: String? = null,
+    val downloadWarning: DownloadQuota.Evaluation.ExceedsCap? = null,
+    val downloadWarningUsedBytes: Long = 0,
+    val downloadWarningItemCount: Int = 1
 )
 
 /**
@@ -156,8 +167,16 @@ class ItemDetailViewModel(
                         markNotFound()
                     } else {
                         launch {
-                            MediaFileSizeRepository(db.mediaFileSizeDao()).observeMovie(accountId, itemId)
-                                .collect { rows -> _state.update { it.copy(fileSize = FileSizeFormatter.display(rows.firstOrNull())) } }
+                            val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
+                            sizes.observeMovie(accountId, itemId).collect { rows ->
+                                _state.update { it.copy(fileSize = FileSizeFormatter.display(rows.firstOrNull())) }
+                            }
+                        }
+                        launch {
+                            DownloadDependencies.repository(getApplication()).observe(accountId).collect { rows ->
+                                val row = rows.firstOrNull { it.kind == "movie" && it.mediaId == itemId.toString() }
+                                _state.update { it.copy(downloadState = row?.state) }
+                            }
                         }
                         val cached = row.plot?.takeIf { p -> p.isNotBlank() }
                         _state.update {
@@ -229,6 +248,42 @@ class ItemDetailViewModel(
     /** Dismissing the resume choice by starting over must also forget the position. */
     fun clearResume() {
         viewModelScope.launch { clearResumeNow() }
+    }
+
+    fun downloadMovie() {
+        val account = accountId ?: return
+        val extension = _state.value.extension?.lowercase()?.filter { it.isLetterOrDigit() }?.take(8) ?: "mkv"
+        viewModelScope.launch {
+            val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
+            val size = sizes.downloadSize(account, "movie", 0, itemId.toString())
+            if (size == null) { _state.update { it.copy(downloadMessage = "unknown") }; return@launch }
+            val repo = DownloadDependencies.repository(getApplication())
+            val prefs = DownloadDependencies.preferences(getApplication()).preferences.first()
+            val used = repo.usedBytes()
+            val plan = DownloadPlanner.plan(listOf(DownloadPlanner.Item(size.bytes, size.exact)), prefs.capBytes,
+                used, repo.reservedBytes())
+            when (plan) {
+                DownloadPlanner.Plan.Ready -> enqueueMovie(repo, account, extension)
+                is DownloadPlanner.Plan.NeedsConfirmation -> _state.update { it.copy(downloadWarning =
+                    DownloadQuota.Evaluation.ExceedsCap(plan.projected, plan.cap, plan.overBy),
+                    downloadWarningUsedBytes = used, downloadWarningItemCount = 1) }
+                is DownloadPlanner.Plan.Blocked -> _state.update { it.copy(downloadMessage = "unknown") }
+                DownloadPlanner.Plan.AlreadyQueuedOrDone -> Unit
+            }
+        }
+    }
+
+    fun dismissDownloadWarning() { _state.update { it.copy(downloadWarning = null) } }
+
+    private suspend fun enqueueMovie(repo: DownloadRepository, account: String, extension: String) {
+        val result = repo.enqueue(listOf(DownloadRequest(account, "movie", 0, itemId.toString(), extension,
+            "movie/$itemId/media.$extension")))
+        val used = if (result is DownloadRepository.EnqueueResult.Rejected) repo.usedBytes() else 0L
+        _state.update { current -> when (result) {
+            is DownloadRepository.EnqueueResult.Accepted -> current.copy(downloadState = "QUEUED", downloadMessage = null, downloadWarning = null)
+            is DownloadRepository.EnqueueResult.Rejected -> current.copy(downloadWarning = result.evaluation as? DownloadQuota.Evaluation.ExceedsCap,
+                downloadWarningUsedBytes = used, downloadWarningItemCount = 1)
+        } }
     }
 
     suspend fun clearResumeNow() {

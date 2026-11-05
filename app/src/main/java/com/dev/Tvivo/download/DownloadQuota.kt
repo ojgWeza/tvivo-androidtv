@@ -10,6 +10,14 @@ object DownloadQuota {
     fun clampCapGb(value: Int): Int = value.coerceIn(MIN_CAP_GB, MAX_CAP_GB)
     fun capBytes(capGb: Int): Long = clampCapGb(capGb).toLong() * BYTES_PER_GB
 
+    data class Usage(val usedGb: Double, val capGb: Int, val reservedGb: Double, val overLimit: Boolean)
+    fun usage(usedBytes: Long, reservedBytes: Long, capGb: Int): Usage = Usage(
+        usedBytes.coerceAtLeast(0) / BYTES_PER_GB.toDouble(), clampCapGb(capGb),
+        reservedBytes.coerceAtLeast(0) / BYTES_PER_GB.toDouble(),
+        reservedBytes.coerceAtLeast(0) > capBytes(capGb) ||
+            usedBytes.coerceAtLeast(0) > capBytes(capGb) - reservedBytes.coerceAtLeast(0)
+    )
+
     sealed interface Evaluation {
         data class Fits(val projected: Long, val cap: Long) : Evaluation
         data class ExceedsCap(val projected: Long, val cap: Long, val overBy: Long) : Evaluation
