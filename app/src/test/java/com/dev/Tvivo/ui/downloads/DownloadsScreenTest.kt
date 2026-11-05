@@ -59,7 +59,7 @@ class DownloadsScreenTest {
         compose.onNodeWithTag("retry-8").assertIsDisplayed()
     }
 
-    @Test fun completedPlayActionRemainsHiddenUntilJob9C() {
+    @Test fun completedPlayActionIsAvailableOnlyForCompletedRows() {
         compose.setContent {
             TvivoTheme {
                 CompositionLocalProvider(LocalIsTelevision provides false) {
@@ -68,8 +68,15 @@ class DownloadsScreenTest {
                 }
             }
         }
-        compose.onNodeWithTag("play-8").assertDoesNotExist()
+        compose.onNodeWithTag("play-8").assertIsDisplayed()
         compose.onNodeWithTag("delete-8").assertIsDisplayed()
+    }
+
+    @Test fun activePlayActionIsHidden() {
+        compose.setContent { TvivoTheme { CompositionLocalProvider(LocalIsTelevision provides false) {
+            DownloadRows(listOf(DownloadDisplayRow(row("QUEUED"), "Film")), onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = {})
+        } } }
+        compose.onNodeWithTag("play-8").assertDoesNotExist()
     }
 
     @Test fun emptyDownloadsShowsEmptyState() {

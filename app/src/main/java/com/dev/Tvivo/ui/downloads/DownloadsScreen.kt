@@ -36,7 +36,7 @@ internal data class DownloadDisplayRow(val row: DownloadEntity, val title: Strin
 internal fun groupDownloads(rows: List<DownloadDisplayRow>): Pair<List<DownloadDisplayRow>, List<DownloadDisplayRow>> =
     rows.partition { it.row.state != "COMPLETED" }
 
-private const val ENABLE_DOWNLOADED_PLAY = false
+private const val ENABLE_DOWNLOADED_PLAY = true
 
 @Composable
 fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings: () -> Unit, onPlayDownloaded: (DownloadEntity) -> Unit = {}) {
@@ -153,7 +153,6 @@ internal fun DownloadRows(rows: List<DownloadDisplayRow>, onAction: (DownloadEnt
                         "FAILED" -> { Action(stringResource(R.string.downloads_retry), "retry-${row.mediaId}") { onAction(row, "retry") }; Action(stringResource(R.string.downloads_delete), "delete-${row.mediaId}") { onAction(row, "delete") } }
                         "COMPLETED" -> {
                             if (ENABLE_DOWNLOADED_PLAY) Action(stringResource(R.string.downloads_play), "play-${row.mediaId}") {
-                                // TODO(job 9C): wire this callback to the local-media PlayerActivity path.
                                 onPlayDownloaded(row)
                             }
                             Action(stringResource(R.string.downloads_delete), "delete-${row.mediaId}") { onAction(row, "delete") }

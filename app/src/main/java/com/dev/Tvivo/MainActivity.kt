@@ -78,6 +78,9 @@ import com.dev.Tvivo.data.local.entities.TYPE_SERIES
 import com.dev.Tvivo.data.local.entities.TYPE_VOD
 import com.dev.Tvivo.data.local.entities.RecentlyPlayedEntity
 import com.dev.Tvivo.data.local.entities.ShelfVisitEntity
+import com.dev.Tvivo.data.local.entities.DownloadEntity
+import com.dev.Tvivo.download.AndroidDownloadFileSystem
+import com.dev.Tvivo.download.DownloadDependencies
 import com.dev.Tvivo.data.repository.roomKey
 import com.dev.Tvivo.diagnostics.DiagnosticLog
 import com.dev.Tvivo.diagnostics.NetworkDiagnosticsRuntime
@@ -93,6 +96,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import androidx.lifecycle.ViewModel
@@ -245,6 +249,28 @@ private fun playItem(
             )
         )
     }
+}
+
+private fun playDownloaded(context: android.content.Context, row: DownloadEntity, title: String) {
+    if (row.state != "COMPLETED") return
+    val file = AndroidDownloadFileSystem(context).playableFile(row.relativePath)
+    if (file == null) {
+        (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+            DownloadDependencies.repository(context).fail(row, "missing")
+            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, R.string.download_missing_playback, android.widget.Toast.LENGTH_LONG).show() }
+        }
+        return
+    }
+    context.startActivity(Intent(context, PlayerActivity::class.java)
+        .putExtra(PlayerActivity.EXTRA_URL, android.net.Uri.fromFile(file).toString())
+        .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
+        .putExtra(PlayerActivity.EXTRA_ITEM_ID, row.mediaId)
+        .putExtra(PlayerActivity.EXTRA_TITLE, title)
+        .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, if (row.kind == "episode") TYPE_SERIES else TYPE_VOD)
+        .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, row.accountId)
+        .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, 0L)
+        .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
+        .putExtra(PlayerActivity.EXTRA_SERIES_ID, row.seriesId))
 }
 
 internal sealed interface Route {
@@ -862,7 +888,8 @@ private fun TvivoApp() {
                 ScreenTopBar(stringResource(R.string.downloads_title)) { route = Route.Main(current.credentials, ShellTab.Settings) }
                 Box(Modifier.weight(1f)) {
                     DownloadsScreen(credentials = current.credentials, accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) },
-                        onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) })
+                        onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) },
+                        onPlayDownloaded = { row -> playDownloaded(context, row, row.mediaId) })
                 }
             } else route = Route.Main(current.credentials, ShellTab.MyTvivo)
         }
@@ -956,6 +983,13 @@ private fun TvivoApp() {
                         knownDurationMs = knownDurationMs
                     )
                 },
+                onPlayDownloaded = {
+                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                        val row = DownloadDependencies.repository(context).observe(accountId).first()
+                            .firstOrNull { it.kind == "movie" && it.mediaId == current.itemId.toString() && it.state == "COMPLETED" }
+                        if (row != null) withContext(Dispatchers.Main) { playDownloaded(context, row, "${current.itemId}") }
+                    }
+                },
                 // A show's Play is "show me the episodes" — `series_id` addresses no
                 // stream endpoint, so the picker is the only thing it can mean.
                 onOpenEpisodes = {
@@ -1008,6 +1042,7 @@ private fun TvivoApp() {
                             )
                             .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, TYPE_SERIES)
                             .putExtra(PlayerActivity.EXTRA_ACCOUNT_ID, accountId)
+                            .putExtra(PlayerActivity.EXTRA_SERIES_ID, current.seriesId)
                             .putExtra(PlayerActivity.EXTRA_RESUME_FROM_MS, resumeFromMs)
                             .putExtra(PlayerActivity.EXTRA_KNOWN_DURATION_MS,
                                 episode.durationSecs?.takeIf { it > 0 }?.toLong()?.times(1000L) ?: 0L)
@@ -1038,7 +1073,16 @@ private fun TvivoApp() {
                         )
                     }
                 },
-                onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) }
+                onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) },
+                onPlayDownloaded = { episode ->
+                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                        val row = DownloadDependencies.repository(context).observe(accountId).first()
+                            .firstOrNull { it.kind == "episode" && it.seriesId == current.seriesId && it.mediaId == episode.episodeId && it.state == "COMPLETED" }
+                        if (row != null) withContext(Dispatchers.Main) {
+                            playDownloaded(context, row, "S${episode.seasonNumber} · E${episode.episodeNum}: ${episode.title}")
+                        }
+                    }
+                }
             ) }
             if (LocalIsTelevision.current) page() else AppShell(
                 selected = detailOriginTab,

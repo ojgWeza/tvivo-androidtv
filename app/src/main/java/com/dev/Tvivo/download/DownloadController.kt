@@ -32,6 +32,16 @@ object DownloadController {
         kick(context)
     }
 
+    suspend fun retry(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity): DownloadRepository.EnqueueResult {
+        val relativePath = requireNotNull(row.relativePath) { "Failed download has no local path" }
+        val result = DownloadDependencies.repository(context).enqueue(listOf(DownloadRequest(
+            accountId = row.accountId, kind = row.kind, seriesId = row.seriesId, mediaId = row.mediaId,
+            containerExtension = row.containerExtension, relativePath = relativePath
+        )))
+        if (result is DownloadRepository.EnqueueResult.Accepted) kick(context)
+        return result
+    }
+
     suspend fun cancel(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity) {
         DownloadTransfer.requestAction(row, DownloadTransfer.UserAction.Cancel)
         DownloadDependencies.repository(context).cancel(row, deletePartial = true)

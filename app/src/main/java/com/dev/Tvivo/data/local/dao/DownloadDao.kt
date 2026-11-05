@@ -18,6 +18,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY createdAt, mediaId")
     suspend fun getAll(): List<DownloadEntity>
 
+    @Query("SELECT * FROM downloads WHERE accountId = :accountId AND kind = 'episode' AND seriesId = :seriesId AND state = 'COMPLETED'")
+    suspend fun completedEpisodes(accountId: String, seriesId: Int): List<DownloadEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(row: DownloadEntity)
 

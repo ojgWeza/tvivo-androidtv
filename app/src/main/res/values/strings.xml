@@ -512,6 +512,8 @@
     <string name="downloads_retry">Retry</string>
     <string name="downloads_delete">Delete</string>
     <string name="downloads_play">Play</string>
+    <string name="downloads_play_downloaded">Play downloaded</string>
+    <string name="download_missing_playback">Downloaded file is missing or empty. Queue it again to download, or use Play to stream.</string>
     <string name="downloads_delete_title">Delete download?</string>
     <string name="downloads_delete_body">This removes the downloaded file and frees its storage.</string>
     <string name="downloads_delete_series_title">Delete episodes?</string>

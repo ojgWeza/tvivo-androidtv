@@ -524,6 +524,8 @@
     <string name="downloads_retry">إعادة المحاولة</string>
     <string name="downloads_delete">حذف</string>
     <string name="downloads_play">تشغيل</string>
+    <string name="downloads_play_downloaded">تشغيل التنزيل</string>
+    <string name="download_missing_playback">الملف الذي تم تنزيله مفقود أو فارغ. أعد إدراجه للتنزيل، أو استخدم تشغيل للبث.</string>
     <string name="downloads_delete_title">حذف التنزيل؟</string>
     <string name="downloads_delete_body">سيؤدي ذلك إلى إزالة الملف الذي تم تنزيله وتوفير مساحته.</string>
     <string name="downloads_delete_series_title">حذف الحلقات؟</string>

@@ -74,7 +74,7 @@
 | [`recordProbeResult`](src/main/java/com/dev/Tvivo/data/repository/MediaFileSizeRepository.kt#L68) | CALL | — ⚠️ | — | — | — | — |
 | [`refreshCategories`](src/main/java/com/dev/Tvivo/data/repository/LiveRepository.kt#L89) | CALL ×3 | `browse/BrowseViewModel.kt`<br>`settings/AccountViewModel.kt` | [`categoryDao().replaceAll`](src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt#L42) | — | — | — |
 | [`refreshCategory`](src/main/java/com/dev/Tvivo/data/repository/LiveRepository.kt#L112) | CALL ×3 | `browse/BrowseViewModel.kt` | [`liveDao().replaceCategory`](src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt#L207)<br>[`seriesDao().replaceCategory`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L218)<br>[`vodDao().replaceCategory`](src/main/java/com/dev/Tvivo/data/local/dao/VodDao.kt#L240) | — | — | — |
-| [`refreshSeriesInfo`](src/main/java/com/dev/Tvivo/data/repository/SeriesRepository.kt#L164) | CALL | `series/SeriesDetailViewModel.kt` | [`seriesDao().replaceEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L251)<br>[`seriesDao().updateDetails`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L177) | `seriesDao().updateDetails` | `series` | _direct SQL, see §7_ |
+| [`refreshSeriesInfo`](src/main/java/com/dev/Tvivo/data/repository/SeriesRepository.kt#L164) | CALL | `series/SeriesDetailViewModel.kt` | [`seriesDao().replaceEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L254)<br>[`seriesDao().updateDetails`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L177) | `seriesDao().updateDetails` | `series` | _direct SQL, see §7_ |
 | [`replaceCategories`](src/main/java/com/dev/Tvivo/data/repository/DriveRepository.kt#L108) | CALL | — ⚠️ | [`categoryDao().replaceAll`](src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt#L42) | — | — | — |
 | [`requireValidIdentity`](src/main/java/com/dev/Tvivo/data/repository/MediaFileSizeRepository.kt#L92) | CALL | — ⚠️ | — | — | — | — |
 | [`resolve`](src/main/java/com/dev/Tvivo/data/repository/HomeRepository.kt#L319) | CALL | — ⚠️ | [`liveDao().byIds`](src/main/java/com/dev/Tvivo/data/local/dao/LiveDao.kt#L195)<br>[`seriesDao().byIds`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L200)<br>[`vodDao().byIds`](src/main/java/com/dev/Tvivo/data/local/dao/VodDao.kt#L208) | `liveDao().byIds`<br>`seriesDao().byIds`<br>`vodDao().byIds` | _direct SQL, see §7_ | `live_streams`<br>`series`<br>`vod_streams` |
@@ -175,14 +175,15 @@ No separate proc/`.sql` layer in this repo — each method's own tables are alre
 - [`categoryDao().byIds`](src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt#L29) — 1 inline statement(s)
 - [`categoryDao().deleteAll`](src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt#L35) — 1 inline statement(s)
 - [`categoryDao().observe`](src/main/java/com/dev/Tvivo/data/local/dao/SupportDaos.kt#L25) — 1 inline statement(s)
-- [`downloadDao().delete`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L31) — 1 inline statement(s)
+- [`downloadDao().completedEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L22) — 1 inline statement(s)
+- [`downloadDao().delete`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L34) — 1 inline statement(s)
 - [`downloadDao().get`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L16) — 1 inline statement(s)
 - [`downloadDao().getAll`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L19) — 1 inline statement(s)
 - [`downloadDao().observe`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L13) — 1 inline statement(s)
-- [`downloadDao().sumPartialBytes`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L34) — 1 inline statement(s)
-- [`downloadDao().sumReservedBytes`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L37) — 1 inline statement(s)
-- [`downloadDao().updateProgress`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L25) — 1 inline statement(s)
-- [`downloadDao().updateState`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L28) — 1 inline statement(s)
+- [`downloadDao().sumPartialBytes`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L37) — 1 inline statement(s)
+- [`downloadDao().sumReservedBytes`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L40) — 1 inline statement(s)
+- [`downloadDao().updateProgress`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L28) — 1 inline statement(s)
+- [`downloadDao().updateState`](src/main/java/com/dev/Tvivo/data/local/dao/DownloadDao.kt#L31) — 1 inline statement(s)
 - [`driveDao().episode`](src/main/java/com/dev/Tvivo/data/local/dao/DriveDao.kt#L46) — 1 inline statement(s)
 - [`driveDao().episodes`](src/main/java/com/dev/Tvivo/data/local/dao/DriveDao.kt#L58) — 1 inline statement(s)
 - [`driveDao().movie`](src/main/java/com/dev/Tvivo/data/local/dao/DriveDao.kt#L40) — 1 inline statement(s)
@@ -275,10 +276,11 @@ No separate proc/`.sql` layer in this repo — each method's own tables are alre
 - [`seriesDao().countsByCategory`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L166) — 1 inline statement(s)
 - [`seriesDao().countSnapshot`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L169) — 1 inline statement(s)
 - [`seriesDao().deleteCategory`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L212) — 1 inline statement(s)
-- [`seriesDao().deleteEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L243) — 1 inline statement(s)
+- [`seriesDao().deleteEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L246) — 1 inline statement(s)
 - [`seriesDao().deleteGenerationsUpTo`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L215) — 1 inline statement(s)
 - [`seriesDao().episodeById`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L206) — 1 inline statement(s)
 - [`seriesDao().episodesByIds`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L203) — 1 inline statement(s)
+- [`seriesDao().episodesInOrder`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L240) — 1 inline statement(s)
 - [`seriesDao().landingPreviewSorted`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L106) — 1 inline statement(s)
 - [`seriesDao().matchingCategoryCounts`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L149) — 1 inline statement(s)
 - [`seriesDao().observeEpisodes`](src/main/java/com/dev/Tvivo/data/local/dao/SeriesDao.kt#L237) — 1 inline statement(s)
@@ -343,7 +345,7 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 |---|---|---|
 | `catalog_sync` | — | `catalogSyncDao().get`<br>`catalogSyncDao().observe` |
 | `categories` | `categoryDao().deleteAll` | `categoryDao().byIds`<br>`categoryDao().observe` |
-| `downloads` _(external)_ | `downloadDao().delete`<br>`downloadDao().updateProgress`<br>`downloadDao().updateState` | `downloadDao().get`<br>`downloadDao().getAll`<br>`downloadDao().observe`<br>`downloadDao().sumPartialBytes`<br>`downloadDao().sumReservedBytes` |
+| `downloads` _(external)_ | `downloadDao().delete`<br>`downloadDao().updateProgress`<br>`downloadDao().updateState` | `downloadDao().completedEpisodes`<br>`downloadDao().get`<br>`downloadDao().getAll`<br>`downloadDao().observe`<br>`downloadDao().sumPartialBytes`<br>`downloadDao().sumReservedBytes` |
 | `drive_episodes` _(external)_ | — | `driveDao().episode`<br>`driveDao().episodes` |
 | `drive_index_state` _(external)_ | — | `driveDao().episode`<br>`driveDao().episodes`<br>`driveDao().movie`<br>`driveDao().pageMovies`<br>`driveDao().pageMusic`<br>`driveDao().pageShows`<br>`driveDao().searchMovies`<br>`driveDao().searchMusic`<br>`driveDao().searchShows`<br>`driveDao().seasons`<br>`driveDao().show`<br>`driveDao().state`<br>`driveDao().track` |
 | `drive_movies` _(external)_ | `driveDao().pruneMovies` | `driveDao().movie`<br>`driveDao().pageMovies`<br>`driveDao().searchMovies` |
@@ -358,7 +360,7 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 | `recently_played` _(external)_ | — | `recentlyPlayedDao().count`<br>`recentlyPlayedDao().recent`<br>`recentlyPlayedDao().recentSnapshot` |
 | `resume_positions` | `resumeDao().remove`<br>`resumeDao().removeForProfile` | `resumeDao().continueCount`<br>`resumeDao().continueSnapshot`<br>`resumeDao().continueWatching`<br>`resumeDao().continueWatchingForProfile`<br>`resumeDao().forItems`<br>`resumeDao().get`<br>`resumeDao().getForProfile`<br>`resumeDao().observe` |
 | `series` | `seriesDao().deleteCategory`<br>`seriesDao().deleteGenerationsUpTo`<br>`seriesDao().updateDetails` | `seriesDao().allPreview`<br>`seriesDao().allPreviewFiltered`<br>`seriesDao().byId`<br>`seriesDao().byIds`<br>`seriesDao().categoryCount`<br>`seriesDao().categoryLatest`<br>`seriesDao().categoryPreview`<br>`seriesDao().categoryPreviewFiltered`<br>`seriesDao().countAllFiltered`<br>`seriesDao().countInCategoryFiltered`<br>`seriesDao().countSnapshot`<br>`seriesDao().countsByCategory`<br>`seriesDao().landingPreviewSorted`<br>`seriesDao().matchingCategoryCounts`<br>`seriesDao().pagingAll`<br>`seriesDao().pagingAllFiltered`<br>`seriesDao().pagingInCategory`<br>`seriesDao().pagingInCategoryFiltered`<br>`seriesDao().pagingSearch`<br>`seriesDao().pagingSorted`<br>`seriesDao().recentlyAdded`<br>`seriesDao().searchPreview`<br>`seriesDao().suggestionCandidates`<br>`seriesDao().totalCount` |
-| `series_episodes` | `seriesDao().deleteEpisodes` | `seriesDao().episodeById`<br>`seriesDao().episodesByIds`<br>`seriesDao().observeEpisodes` |
+| `series_episodes` | `seriesDao().deleteEpisodes` | `seriesDao().episodeById`<br>`seriesDao().episodesByIds`<br>`seriesDao().episodesInOrder`<br>`seriesDao().observeEpisodes` |
 | `shelf_visits` _(external)_ | — | `shelfVisitDao().get` |
 | `sync_meta` | `syncMetaDao().deleteForAccount` | `syncMetaDao().get`<br>`syncMetaDao().oldestStamp`<br>`syncMetaDao().staleCategories` |
 | `visits` _(external)_ | `visitDao().increment` | `visitDao().get`<br>`visitDao().mostVisited`<br>`visitDao().topThree` |
@@ -367,4 +369,4 @@ Reverse index over each backend method's own inline SQL (there is no separate pr
 
 ---
 
-Indexed 69 routes · 200 backend methods · 162 procs · 23 tables · 65 frontend files · 0 SQL files.
+Indexed 69 routes · 202 backend methods · 164 procs · 23 tables · 65 frontend files · 0 SQL files.

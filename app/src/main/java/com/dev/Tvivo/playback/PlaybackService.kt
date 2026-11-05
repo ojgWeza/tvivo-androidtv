@@ -39,6 +39,8 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.dev.Tvivo.data.local.AppDatabase
+import com.dev.Tvivo.download.AndroidDownloadFileSystem
+import com.dev.Tvivo.download.DownloadDependencies
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.VodRepository
 import com.dev.Tvivo.auth.AccountIdentity
@@ -311,7 +313,7 @@ class PlaybackService : MediaSessionService() {
                             .build()
                     )
                     .build()
-                if (item.url.startsWith("http://", true) || item.url.startsWith("https://", true)) {
+                if (PlaybackSessionPolicy.shouldBeginPlaybackSession(item.url)) {
                     mediaCoordinator.beginPlaybackSession(mediaSessionToken, accountId = item.accountId)
                 }
                 player.setMediaItem(media, if (item.isLive) 0L else item.resumeFromMs.coerceAtLeast(0L))
@@ -389,6 +391,19 @@ class PlaybackService : MediaSessionService() {
                     yield()
                     if (!handoff.isCurrent(generation) || !timerAllowsTransition()) return@launch
                     val item = handoff.current ?: return@launch
+                    if (PlaybackSessionPolicy.isLocalMedia(item.url)) {
+                        if (!item.accountId.isNullOrBlank() && !item.contentType.isNullOrBlank() && !item.itemId.isNullOrBlank()) {
+                            val kind = if (item.contentType == com.dev.Tvivo.data.local.entities.TYPE_SERIES) "episode" else "movie"
+                            val row = AppDatabase.get(this@PlaybackService).downloadDao().get(
+                                item.accountId, kind, item.seriesId, item.itemId)
+                            if (row != null) DownloadDependencies.repository(this@PlaybackService).fail(row, "missing")
+                        }
+                        android.widget.Toast.makeText(this@PlaybackService,
+                            com.dev.Tvivo.R.string.download_missing_playback, android.widget.Toast.LENGTH_LONG).show()
+                        failureKind = PlaybackFailurePolicy.classify(PlaybackAttemptResult.UnsupportedMedia)
+                        markFinalFailure()
+                        return@launch
+                    }
                     val responseCode = generateSequence(error.cause) { it.cause }
                         .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
                         .firstOrNull()?.responseCode
@@ -937,6 +952,28 @@ class PlaybackService : MediaSessionService() {
             item.itemId ?: item.requestId, true, handoff.generation, handoff.generation)
         applyTimerDecision(timerDecision, naturalEnd = true)
         if (timerDecision.stopPlayback || !timerAllowsTransition()) return
+        if (item.contentType == com.dev.Tvivo.data.local.entities.TYPE_SERIES &&
+            PlaybackSessionPolicy.isLocalMedia(item.url) && item.url.startsWith("file://", true) && !item.accountId.isNullOrBlank()) {
+            val db = AppDatabase.get(this)
+            val downloaded = DownloadDependencies.repository(this).observe(item.accountId).first()
+                .filter { it.kind == "episode" && it.seriesId == item.seriesId && it.state == "COMPLETED" }
+            val episodes = db.seriesDao().episodesInOrder(item.accountId, item.seriesId)
+            val nextId = PlaybackSessionPolicy.nextDownloadedEpisode(episodes.map { it.episodeId }, item.itemId.orEmpty(),
+                downloaded.mapTo(mutableSetOf()) { it.mediaId })
+            val nextEpisode = episodes.firstOrNull { it.episodeId == nextId }
+            val next = nextEpisode?.let { episode ->
+                val row = downloaded.firstOrNull { it.mediaId == episode.episodeId } ?: return@let null
+                val file = AndroidDownloadFileSystem(this).playableFile(row.relativePath) ?: return@let null
+                com.dev.Tvivo.playback.PlaybackHandoff.QueueItem(
+                    episode.episodeId, android.net.Uri.fromFile(file).toString(),
+                    episode.title, (episode.durationSecs ?: 0).toLong() * 1000L)
+            }
+            if (next != null) {
+                handoff.play(item.copy(requestId = java.util.UUID.randomUUID().toString(), url = next.url,
+                    title = next.title, itemId = next.id, resumeFromMs = 0L, knownDurationMs = next.knownDurationMs), previousEnded = true)
+                return
+            }
+        }
         val kind = if (item.contentType == com.dev.Tvivo.data.local.entities.TYPE_VOD) StreamKind.Movie else StreamKind.Episode
         val prefs = savedPlaybackModes
         val mode = if (kind == StreamKind.Movie) prefs.movieMode else prefs.episodeMode

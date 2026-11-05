@@ -51,13 +51,15 @@ internal object PlaybackCommands {
     const val CANCEL_NEXT = "com.dev.Tvivo.playback.CANCEL_NEXT"
     const val NEXT_PROMPT = "next_prompt"
     const val NEXT_TITLE = "next_title"
+    const val SERIES_ID = "series_id"
 
     fun command(action: String) = SessionCommand(action, Bundle.EMPTY)
 
     fun item(bundle: Bundle): PlaybackHandoff.Item? {
         val requestId = bundle.getString(REQUEST_ID) ?: return null
         val url = bundle.getString(URL)?.takeIf { it.isNotBlank() } ?: return null
-        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return null
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true) &&
+            !url.startsWith("file://", true) && !url.startsWith("content://", true)) return null
         return PlaybackHandoff.Item(
             requestId, url, bundle.getString(TITLE).orEmpty().ifBlank { "Now playing" },
             bundle.getString(ACCOUNT_ID), bundle.getString(CONTENT_TYPE), bundle.getString(ITEM_ID),
@@ -69,6 +71,7 @@ internal object PlaybackCommands {
                 val durations = bundle.getLongArray("queue_durations")
                 if (index in urls.indices && index in titles.indices) PlaybackHandoff.QueueItem(id, urls[index], titles[index], durations?.getOrNull(index)?.coerceAtLeast(0L) ?: 0L) else null
             }, bundle.getInt("queue_index", -1),
+            bundle.getInt(SERIES_ID, 0),
         )
     }
 
@@ -87,5 +90,6 @@ internal object PlaybackCommands {
         putStringArrayList("queue_titles", ArrayList(item.playlist.map { it.title }))
         putLongArray("queue_durations", item.playlist.map { it.knownDurationMs }.toLongArray())
         putInt("queue_index", item.playlistIndex)
+        putInt(SERIES_ID, item.seriesId)
     }
 }

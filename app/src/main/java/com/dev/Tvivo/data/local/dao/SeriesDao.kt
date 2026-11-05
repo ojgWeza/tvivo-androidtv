@@ -236,6 +236,9 @@ interface SeriesDao {
     )
     fun observeEpisodes(accountId: String, seriesId: Int): Flow<List<EpisodeEntity>>
 
+    @Query("SELECT * FROM series_episodes WHERE accountId = :accountId AND seriesId = :seriesId ORDER BY seasonNumber ASC, episodeNum ASC")
+    suspend fun episodesInOrder(accountId: String, seriesId: Int): List<EpisodeEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEpisodes(rows: List<EpisodeEntity>)
 

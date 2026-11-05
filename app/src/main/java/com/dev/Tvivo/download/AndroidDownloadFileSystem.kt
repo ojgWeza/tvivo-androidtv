@@ -14,6 +14,10 @@ class AndroidDownloadFileSystem(context: Context) : DownloadFileSystem, Transfer
         target
     }.getOrNull()
 
+    /** Returns only a non-empty completed file under filesDir/downloads. */
+    fun playableFile(relativePath: String?): File? = relativePath?.let(::resolve)
+        ?.takeIf { it.isFile && it.length() > 0L }
+
     override fun length(relativePath: String): Long? {
         val target = resolve(relativePath) ?: return null
         val part = resolve("$relativePath.part")

@@ -25,6 +25,7 @@ internal class PlaybackHandoff(
         val knownDurationMs: Long = 0L,
         val playlist: List<QueueItem> = emptyList(),
         val playlistIndex: Int = -1,
+        val seriesId: Int = 0,
     )
 
     data class QueueItem(val id: String, val url: String, val title: String, val knownDurationMs: Long = 0L)

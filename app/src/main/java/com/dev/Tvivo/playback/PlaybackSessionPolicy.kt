@@ -2,6 +2,13 @@ package com.dev.Tvivo.playback
 
 /** Small decisions kept independent of Android so routing and privacy rules stay testable. */
 internal object PlaybackSessionPolicy {
+    fun isLocalMedia(uri: String): Boolean = uri.startsWith("file://", true) || uri.startsWith("content://", true)
+    fun shouldBeginPlaybackSession(uri: String): Boolean = !isLocalMedia(uri) &&
+        (uri.startsWith("http://", true) || uri.startsWith("https://", true))
+    fun nextDownloadedEpisode(orderedEpisodeIds: List<String>, currentId: String, downloadedIds: Set<String>): String? {
+        val index = orderedEpisodeIds.indexOf(currentId)
+        return if (index < 0) null else orderedEpisodeIds.drop(index + 1).firstOrNull(downloadedIds::contains)
+    }
     enum class Action { Stop, Ignore }
 
     fun routeAction(action: String, mayControlSession: Boolean): Action =

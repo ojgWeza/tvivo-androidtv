@@ -47,6 +47,7 @@ import androidx.core.content.ContextCompat
 import com.dev.Tvivo.playback.HeldSeekAccelerator
 import com.dev.Tvivo.playback.PlaybackCommands
 import com.dev.Tvivo.playback.PlaybackDurationPolicy
+import com.dev.Tvivo.playback.PlaybackSessionPolicy
 import com.dev.Tvivo.playback.PlaybackHandoff
 import com.dev.Tvivo.playback.PlaybackFailureKind
 import com.dev.Tvivo.playback.PlaybackService
@@ -463,9 +464,10 @@ class PlayerActivity : ComponentActivity() {
                 }
             },
             playlistIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, -1),
+            seriesId = intent.getIntExtra(EXTRA_SERIES_ID, 0),
         )
         val controller = player ?: return null
-        if (DeepStreamCheckGate.isHeld) {
+        if (DeepStreamCheckGate.isHeld && !PlaybackSessionPolicy.isLocalMedia(item.url)) {
             android.widget.Toast.makeText(this, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
             if (!channelSwitchPending) finish()
             return null
@@ -1429,6 +1431,7 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_EPISODE_IDS = "episode_ids"
         const val EXTRA_EPISODE_URLS = "episode_urls"
+        const val EXTRA_SERIES_ID = "series_id"
         const val EXTRA_EPISODE_TITLES = "episode_titles"
         const val EXTRA_EPISODE_SEASONS = "episode_seasons"
         const val EXTRA_EPISODE_INDEX = "episode_index"
