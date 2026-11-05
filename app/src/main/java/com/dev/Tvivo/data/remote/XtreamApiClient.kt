@@ -32,4 +32,7 @@ object XtreamApiClient {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(XtreamApiService::class.java)
+
+    /** Same timeout/retry configuration for credential-bearing media requests. */
+    fun mediaHttpClient(): OkHttpClient = http
 }

@@ -118,7 +118,10 @@ class SeriesDetailViewModel(
             viewModelScope.launch {
                 DownloadDependencies.repository(application).observe(accountId).collect { rows ->
                     _state.update { it.copy(downloadStates = rows.filter { row -> row.kind == "episode" && row.seriesId == seriesId }
-                        .associate { row -> row.mediaId to row.state }) }
+                        .associate { row ->
+                            val percent = row.expectedBytes?.takeIf { it > 0 }?.let { (row.partialBytes * 100 / it).toInt().coerceIn(0, 99) }
+                            row.mediaId to if (row.state == "DOWNLOADING") "DOWNLOADING:${percent ?: 0}" else row.state
+                        }) }
                 }
             }
             val repository = SeriesRepository(db, credentials, accountId)
@@ -279,7 +282,10 @@ class SeriesDetailViewModel(
                 "series/$seriesId/${episode.episodeId}.$ext")
         }
         when (val result = repo.enqueue(batch)) {
-            is DownloadRepository.EnqueueResult.Accepted -> _state.update { it.copy(downloadMessage = null, downloadWarning = null) }
+            is DownloadRepository.EnqueueResult.Accepted -> {
+                DownloadController.kick(getApplication())
+                _state.update { it.copy(downloadMessage = null, downloadWarning = null) }
+            }
             is DownloadRepository.EnqueueResult.Rejected -> {
                 val used = repo.usedBytes()
                 _state.update { it.copy(downloadWarning = result.evaluation as? DownloadQuota.Evaluation.ExceedsCap,

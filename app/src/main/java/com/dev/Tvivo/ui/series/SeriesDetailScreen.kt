@@ -370,7 +370,10 @@ private fun EpisodeRow(
             if (fileSize == null) Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
             else DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_action), Modifier.testTag("episode-download-${episode.episodeId}")) { onDownload() }
         } else if (!LocalIsTelevision.current && downloadState != null) {
-            Text(stringResource(if (downloadState == "COMPLETED") com.dev.Tvivo.R.string.download_completed else com.dev.Tvivo.R.string.download_queued), color = AppColors.Dim, style = TvType.label)
+            Text(if (downloadState.startsWith("DOWNLOADING:"))
+                stringResource(com.dev.Tvivo.R.string.download_downloading_percent, downloadState.substringAfter(':').toIntOrNull() ?: 0)
+                else stringResource(if (downloadState == "COMPLETED") com.dev.Tvivo.R.string.download_completed else if (downloadState == "PAUSED") com.dev.Tvivo.R.string.download_paused else com.dev.Tvivo.R.string.download_queued),
+                color = AppColors.Dim, style = TvType.label)
         }
     }
 }

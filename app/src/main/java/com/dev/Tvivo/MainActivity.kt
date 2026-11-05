@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch(Dispatchers.IO) { com.dev.Tvivo.download.DownloadController.reconcileAndKick(applicationContext) }
         val appearance = PlayerPreferencesStore(applicationContext)
         initialThemeMode = runBlocking { appearance.themeMode.first() }
         appearance.syncSystemTheme(initialThemeMode)

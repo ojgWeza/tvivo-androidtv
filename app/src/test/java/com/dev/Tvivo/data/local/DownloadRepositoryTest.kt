@@ -75,4 +75,36 @@ class DownloadRepositoryTest {
         } finally { db.close() }
     }
 
+    @Test fun processDeathRequeuesDownloadingRowWithMeasuredPartLength() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val files = FakeFiles().apply { lengths["movie"] = 37 }
+        try {
+            val row = DownloadEntity("acct", "movie", 0, "42", state = "DOWNLOADING", reservedBytes = 100,
+                relativePath = "movie", createdAt = 1, updatedAt = 1)
+            db.downloadDao().upsert(row)
+            val repo = DownloadRepository(db, db.downloadDao(), MediaFileSizeRepository(db.mediaFileSizeDao()), files, { 100 })
+            val recovered = repo.reconcileAfterProcessDeath().single()
+            assertEquals("QUEUED", recovered.state)
+            assertEquals(37L, recovered.partialBytes)
+            assertEquals(100L, recovered.reservedBytes)
+        } finally { db.close() }
+    }
+
+    @Test fun cancelDeletesPartialFileAndReleasesReservation() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val files = FakeFiles().apply { lengths["movie"] = 37 }
+        try {
+            val row = DownloadEntity("acct", "movie", 0, "42", state = "QUEUED", partialBytes = 37,
+                reservedBytes = 100, relativePath = "movie", createdAt = 1, updatedAt = 1)
+            db.downloadDao().upsert(row)
+            val repo = DownloadRepository(db, db.downloadDao(), MediaFileSizeRepository(db.mediaFileSizeDao()), files, { 100 })
+            repo.cancel(row, deletePartial = true)
+            val cancelled = db.downloadDao().getAll().single()
+            assertEquals("CANCELLED", cancelled.state)
+            assertEquals(0, cancelled.partialBytes)
+            assertEquals(0L, cancelled.reservedBytes)
+            assertTrue(files.lengths.isEmpty())
+        } finally { db.close() }
+    }
+
 }

@@ -23,6 +23,7 @@ import com.dev.Tvivo.download.DownloadRequest
 import com.dev.Tvivo.download.DownloadRepository
 import com.dev.Tvivo.download.DownloadQuota
 import com.dev.Tvivo.download.DownloadPlanner
+import com.dev.Tvivo.download.DownloadController
 import com.dev.Tvivo.ui.home.ContentType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -175,7 +176,9 @@ class ItemDetailViewModel(
                         launch {
                             DownloadDependencies.repository(getApplication()).observe(accountId).collect { rows ->
                                 val row = rows.firstOrNull { it.kind == "movie" && it.mediaId == itemId.toString() }
-                                _state.update { it.copy(downloadState = row?.state) }
+                                val percent = row?.expectedBytes?.takeIf { it > 0 }
+                                    ?.let { (row.partialBytes * 100 / it).toInt().coerceIn(0, 99) }
+                                _state.update { it.copy(downloadState = if (row?.state == "DOWNLOADING") "DOWNLOADING:${percent ?: 0}" else row?.state) }
                             }
                         }
                         val cached = row.plot?.takeIf { p -> p.isNotBlank() }
@@ -280,7 +283,10 @@ class ItemDetailViewModel(
             "movie/$itemId/media.$extension")))
         val used = if (result is DownloadRepository.EnqueueResult.Rejected) repo.usedBytes() else 0L
         _state.update { current -> when (result) {
-            is DownloadRepository.EnqueueResult.Accepted -> current.copy(downloadState = "QUEUED", downloadMessage = null, downloadWarning = null)
+            is DownloadRepository.EnqueueResult.Accepted -> {
+                DownloadController.kick(getApplication())
+                current.copy(downloadState = "QUEUED", downloadMessage = null, downloadWarning = null)
+            }
             is DownloadRepository.EnqueueResult.Rejected -> current.copy(downloadWarning = result.evaluation as? DownloadQuota.Evaluation.ExceedsCap,
                 downloadWarningUsedBytes = used, downloadWarningItemCount = 1)
         } }

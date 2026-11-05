@@ -182,14 +182,18 @@ fun ItemDetailScreen(
                     }
                 }
                 state.downloadState?.let { downloadState ->
-                    val label = when (downloadState) {
-                        "QUEUED", "DOWNLOADING" -> com.dev.Tvivo.R.string.download_queued
-                        "PAUSED" -> com.dev.Tvivo.R.string.download_paused
-                        "COMPLETED" -> com.dev.Tvivo.R.string.download_completed
-                        "FAILED" -> com.dev.Tvivo.R.string.download_failed
+                    val label = when {
+                        downloadState.startsWith("DOWNLOADING:") -> com.dev.Tvivo.R.string.download_downloading_percent
+                        downloadState == "QUEUED" -> com.dev.Tvivo.R.string.download_queued
+                        downloadState == "PAUSED" -> com.dev.Tvivo.R.string.download_paused
+                        downloadState == "COMPLETED" -> com.dev.Tvivo.R.string.download_completed
+                        downloadState == "FAILED" -> com.dev.Tvivo.R.string.download_failed
                         else -> null
                     }
-                    if (!LocalIsTelevision.current) label?.let { Text(stringResource(it), color = AppColors.Dim, style = TvType.label) }
+                    if (!LocalIsTelevision.current) label?.let {
+                        val text = if (downloadState.startsWith("DOWNLOADING:")) stringResource(it, downloadState.substringAfter(':').toIntOrNull() ?: 0) else stringResource(it)
+                        Text(text, color = AppColors.Dim, style = TvType.label)
+                    }
                 }
                 state.trailer?.let { trailer ->
                     DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_watch_trailer), Modifier.testTag("detail-trailer")) {

@@ -495,6 +495,14 @@
     <string name="download_paused">متوقف مؤقتاً</string>
     <string name="download_completed">مكتمل</string>
     <string name="download_failed">فشل</string>
+    <string name="download_starting">جارٍ تجهيز التنزيل</string>
+    <string name="download_progress">جارٍ التنزيل</string>
+    <string name="download_complete">اكتمل التنزيل</string>
+    <string name="download_failed_storage">توقف التنزيل: مساحة التخزين غير كافية</string>
+    <string name="download_failed_generic">فشل التنزيل</string>
+    <string name="download_downloading_percent">جارٍ التنزيل %1$d٪</string>
+    <string name="download_pause_action">إيقاف مؤقت</string>
+    <string name="download_cancel_action">إلغاء</string>
     <string name="download_unknown">الحجم غير معروف — شغّل البث</string>
     <string name="download_season">تنزيل الموسم</string>
     <string name="download_cap_warning">الاستخدام الإجمالي المقدّر: %1$.2f جيجابايت من حدك البالغ %2$d جيجابايت، متجاوزاً الحد بمقدار %3$.2f جيجابايت. المستخدم حالياً: %4$.2f جيجابايت. الحد مُلزِم، لذلك لا يمكن إضافة الطلب إلى القائمة. غيّر الحد من الإعدادات أو وفّر مساحة.</string>

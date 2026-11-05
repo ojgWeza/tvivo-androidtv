@@ -30,7 +30,7 @@ class DownloadRepository(
     private val files: DownloadFileSystem,
     private val capBytes: suspend () -> Long,
     private val clockMillis: () -> Long = System::currentTimeMillis
-) {
+) : TransferRepository {
     sealed interface EnqueueResult {
         data class Accepted(val evaluation: DownloadQuota.Evaluation.Fits) : EnqueueResult
         data class Rejected(val evaluation: DownloadQuota.Evaluation) : EnqueueResult
@@ -76,13 +76,13 @@ class DownloadRepository(
         EnqueueResult.Accepted(evaluation)
     }
 
-    suspend fun markProgress(row: DownloadEntity, partialBytes: Long) {
+    override suspend fun markProgress(row: DownloadEntity, partialBytes: Long) {
         require(partialBytes >= 0)
         dao.updateProgress(row.accountId, row.kind, row.seriesId, row.mediaId, partialBytes, clockMillis())
     }
 
     suspend fun pause(row: DownloadEntity) = setState(row, "PAUSED", row.reservedBytes)
-    suspend fun resume(row: DownloadEntity) = setState(row, "QUEUED", row.reservedBytes)
+    override suspend fun resume(row: DownloadEntity) = setState(row, "QUEUED", row.reservedBytes)
     suspend fun cancel(row: DownloadEntity, deletePartial: Boolean = true) {
         database.withTransaction {
             if (deletePartial) row.relativePath?.let(files::delete)
@@ -90,7 +90,10 @@ class DownloadRepository(
             if (deletePartial) dao.updateProgress(row.accountId, row.kind, row.seriesId, row.mediaId, 0, clockMillis())
         }
     }
-    suspend fun complete(row: DownloadEntity) = setState(row, "COMPLETED", 0)
+    override suspend fun complete(row: DownloadEntity) = setState(row, "COMPLETED", 0)
+    override suspend fun updateValidators(row: DownloadEntity, etag: String?, lastModified: String?) {
+        dao.upsert(row.copy(etag = etag, lastModified = lastModified, updatedAt = clockMillis()))
+    }
     suspend fun fail(row: DownloadEntity, reason: String) {
         require(reason.isNotBlank())
         database.withTransaction { dao.updateState(row.accountId, row.kind, row.seriesId, row.mediaId, "FAILED", 0, clockMillis(), reason) }
@@ -104,6 +107,15 @@ class DownloadRepository(
 
     /** Repairs persisted byte counts using filesystem truth; no paths escape the injected adapter. */
     suspend fun reconcile(): List<DownloadEntity> = database.withTransaction { reconcileLocked() }
+
+    /** Startup-only recovery: a process cannot still own a persisted DOWNLOADING row. */
+    suspend fun reconcileAfterProcessDeath(): List<DownloadEntity> = database.withTransaction {
+        reconcileLocked().map { row ->
+            if (row.state != "DOWNLOADING") row else row.copy(state = "QUEUED", updatedAt = clockMillis()).also {
+                dao.upsert(it)
+            }
+        }
+    }
 
     private suspend fun reconcileLocked(): List<DownloadEntity> {
         val repaired = mutableListOf<DownloadEntity>()

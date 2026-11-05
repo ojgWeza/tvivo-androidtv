@@ -483,6 +483,14 @@
     <string name="download_paused">Paused</string>
     <string name="download_completed">Completed</string>
     <string name="download_failed">Failed</string>
+    <string name="download_starting">Preparing download</string>
+    <string name="download_progress">Downloading</string>
+    <string name="download_complete">Download complete</string>
+    <string name="download_failed_storage">Download stopped: free storage is insufficient</string>
+    <string name="download_failed_generic">Download failed</string>
+    <string name="download_downloading_percent">Downloading %1$d%%</string>
+    <string name="download_pause_action">Pause</string>
+    <string name="download_cancel_action">Cancel</string>
     <string name="download_unknown">Size unknown — stream instead</string>
     <string name="download_season">Download season</string>
     <string name="download_cap_warning">Estimated total use: %1$.2f GB of your %2$d GB limit, exceeding it by %3$.2f GB. Currently used: %4$.2f GB. The limit is enforced, so this request cannot be queued. Change the limit in Settings or free space.</string>
