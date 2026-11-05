@@ -3,7 +3,10 @@ package com.dev.Tvivo.data.repository
 import com.dev.Tvivo.data.local.dao.MediaFileSizeDao
 import com.dev.Tvivo.data.remote.HttpFileSizeProbe
 import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
+import com.dev.Tvivo.playback.MediaConnectionCoordinator
 import kotlinx.coroutines.flow.Flow
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 
 /** Persistence policy for serialized, caller-owned movie and episode size probes. */
 class MediaFileSizeRepository(
@@ -34,6 +37,31 @@ class MediaFileSizeRepository(
         if (row.exactBytes != null) return false
         val lastProbeAt = row.lastProbeAt ?: return true
         return clockMillis() - lastProbeAt >= UNKNOWN_REPROBE_INTERVAL_MS
+    }
+
+    /** Explicit call site for a future screen/worker; never probes during playback or a download. */
+    suspend fun probeWhenIdle(
+        accountId: String,
+        kind: String,
+        seriesId: Int,
+        mediaId: String,
+        streamUrl: String,
+        probe: HttpFileSizeProbe,
+        coordinator: MediaConnectionCoordinator = MediaConnectionCoordinator.shared,
+    ): HttpFileSizeProbe.Result {
+        requireValidIdentity(kind, seriesId, mediaId)
+        return try {
+            coordinator.withSlot(MediaConnectionCoordinator.Kind.PROBE, kind, accountId) {
+                probe.probe(streamUrl, if (kind == "movie") HttpFileSizeProbe.MediaKind.MOVIE
+                    else HttpFileSizeProbe.MediaKind.EPISODE, retryConnectFailures = true).also {
+                    recordProbeResult(accountId, kind, seriesId, mediaId, it)
+                }
+            }
+        } catch (_: SocketTimeoutException) {
+            HttpFileSizeProbe.Result.Failed(HttpFileSizeProbe.Failure.TIMEOUT)
+        } catch (_: ConnectException) {
+            HttpFileSizeProbe.Result.Failed(HttpFileSizeProbe.Failure.NETWORK)
+        }
     }
 
     /** Call only after [HttpFileSizeProbe.probe] while the app-wide media slot is held. */

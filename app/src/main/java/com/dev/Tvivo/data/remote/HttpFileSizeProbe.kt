@@ -2,16 +2,23 @@ package com.dev.Tvivo.data.remote
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** Header-only size lookup for progressive movie/episode URLs. Caller must own the media slot. */
-class HttpFileSizeProbe(
+open class HttpFileSizeProbe(
     private val client: OkHttpClient = OkHttpClient(),
     private val clockMillis: () -> Long = System::currentTimeMillis
 ) {
@@ -25,7 +32,7 @@ class HttpFileSizeProbe(
     enum class Failure { UNAUTHORIZED, FORBIDDEN, RATE_LIMITED, SERVER, TIMEOUT, NETWORK }
     enum class MediaKind { MOVIE, EPISODE }
 
-    suspend fun probe(streamUrl: String, kind: MediaKind): Result = withContext(Dispatchers.IO) {
+    open suspend fun probe(streamUrl: String, kind: MediaKind, retryConnectFailures: Boolean = false): Result = withContext(Dispatchers.IO) {
         val parsedUrl = streamUrl.toHttpUrlOrNull()
             ?: return@withContext Result.Unknown(Reason.UNSUPPORTED_RESPONSE)
         val expectedSegment = if (kind == MediaKind.MOVIE) "movie" else "series"
@@ -54,6 +61,12 @@ class HttpFileSizeProbe(
                     else -> Result.Unknown(Reason.UNSUPPORTED_RESPONSE)
                 }
             }
+        } catch (failure: ConnectException) {
+            if (retryConnectFailures) throw failure
+            Result.Failed(Failure.NETWORK)
+        } catch (failure: SocketTimeoutException) {
+            if (retryConnectFailures) throw failure
+            Result.Failed(Failure.TIMEOUT)
         } catch (_: InterruptedIOException) {
             Result.Failed(Failure.TIMEOUT)
         } catch (_: IOException) {
@@ -63,13 +76,25 @@ class HttpFileSizeProbe(
         }
     }
 
-    private fun request(url: String, method: String, started: Long, range: Boolean = false): Response {
+    private suspend fun request(url: String, method: String, started: Long, range: Boolean = false): Response {
         val remaining = (TIMEOUT_MS - (clockMillis() - started)).coerceAtLeast(1)
         val request = Request.Builder().url(url).method(method, null)
             .apply { if (range) header("Range", "bytes=0-0") }.build()
         val call = client.newCall(request)
         call.timeout().timeout(remaining, TimeUnit.MILLISECONDS)
-        return call.execute()
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, failure: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(failure)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (continuation.isActive) continuation.resume(response) { response.close() }
+                    else response.close()
+                }
+            })
+        }
     }
 
     private fun responseFailure(code: Int): Failure? = when (code) {

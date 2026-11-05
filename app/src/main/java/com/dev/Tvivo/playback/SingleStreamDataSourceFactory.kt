@@ -80,6 +80,8 @@ internal class SingleStreamDataSourceFactory(
     private val upstream: DataSource.Factory,
     private val accountPartition: () -> String? = { null },
     private val onRead: (Int) -> Unit = {},
+    private val coordinator: MediaConnectionCoordinator? = null,
+    private val playbackToken: Any? = null,
 ) : DataSource.Factory {
     // Service replacement can create a new factory before the previous service is gone.
     // Keep the release-before-open rule across both factories, not only within one player.
@@ -91,15 +93,36 @@ internal class SingleStreamDataSourceFactory(
 
     override fun createDataSource(): DataSource = object : DataSource {
         private val delegate = upstream.createDataSource()
+        private var tracked = false
 
-        override fun open(dataSpec: DataSpec): Long = gate.open(this, { delegate.close() }) { recentlyClosed ->
-            openAfterRecentClose(
-                recentlyClosed,
-                { delegate.open(dataSpec) },
-                { delegate.close() },
-                accountPartition(),
-                { it is HttpDataSource.InvalidResponseCodeException && it.responseCode == 403 }
-            )
+        override fun open(dataSpec: DataSpec): Long = gate.open(this, {
+            try { delegate.close() } finally { closeTracked() }
+        }) { recentlyClosed ->
+            if (dataSpec.uri.scheme.equals("http", true) || dataSpec.uri.scheme.equals("https", true)) {
+                if (coordinator != null && playbackToken != null) {
+                    coordinator.awaitPlaybackReadyBlocking(playbackToken)
+                    tracked = true
+                }
+            }
+            try {
+                openAfterRecentClose(
+                    recentlyClosed,
+                    { delegate.open(dataSpec) },
+                    { delegate.close() },
+                    accountPartition(),
+                    { it is HttpDataSource.InvalidResponseCodeException && it.responseCode == 403 }
+                )
+            } catch (failure: Exception) {
+                closeTracked()
+                throw failure
+            }
+        }
+
+        private fun closeTracked() {
+            if (tracked) {
+                tracked = false
+                coordinator?.playbackSourceClosed(playbackToken ?: return)
+            }
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int =

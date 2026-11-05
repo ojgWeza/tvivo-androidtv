@@ -75,6 +75,8 @@ import kotlinx.coroutines.flow.first
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mediaCoordinator = MediaConnectionCoordinator.shared
+    private val mediaSessionToken = Any()
     private lateinit var player: ExoPlayer
     private var playerReleased = false
     private lateinit var session: MediaSession
@@ -140,7 +142,7 @@ class PlaybackService : MediaSessionService() {
                             lastStreamDataAtMs = SystemClock.elapsedRealtime()
                             streamEof = false
                         } else if (count < 0) streamEof = true
-                    }), extractors))
+                    }, coordinator = mediaCoordinator, playbackToken = mediaSessionToken), extractors))
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
@@ -256,8 +258,12 @@ class PlaybackService : MediaSessionService() {
                 if (NetworkPlaybackState.active) DeepStreamCheckGate.recordStreamStopped()
                 NetworkPlaybackState.active = false
                 player.playWhenReady = false
-                player.stop()
-                player.clearMediaItems()
+                try {
+                    player.stop()
+                    player.clearMediaItems()
+                } finally {
+                    mediaCoordinator.endPlaybackSession(mediaSessionToken)
+                }
             }
 
             override fun open(item: PlaybackHandoff.Item, generation: Long) {
@@ -305,6 +311,9 @@ class PlaybackService : MediaSessionService() {
                             .build()
                     )
                     .build()
+                if (item.url.startsWith("http://", true) || item.url.startsWith("https://", true)) {
+                    mediaCoordinator.beginPlaybackSession(mediaSessionToken, accountId = item.accountId)
+                }
                 player.setMediaItem(media, if (item.isLive) 0L else item.resumeFromMs.coerceAtLeast(0L))
                 player.prepare()
                 player.playWhenReady = true
@@ -1149,7 +1158,11 @@ class PlaybackService : MediaSessionService() {
             player.clearMediaItems()
         }
         if (!sessionReleased) session.release()
-        if (!playerReleased) player.release()
+        try {
+            if (!playerReleased) player.release()
+        } finally {
+            mediaCoordinator.endPlaybackSession(mediaSessionToken)
+        }
         scope.cancel()
         super.onDestroy()
     }

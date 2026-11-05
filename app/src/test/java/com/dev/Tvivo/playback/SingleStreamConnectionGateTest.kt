@@ -19,6 +19,30 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SingleStreamConnectionGateTest {
+    @Test fun idleCoordinatedOpenKeepsOriginalDataSourceSequence() {
+        val events = mutableListOf<String>()
+        val upstream = object : DataSource.Factory {
+            override fun createDataSource(): DataSource = object : DataSource {
+                override fun open(dataSpec: DataSpec): Long { events += "open"; return 1L }
+                override fun read(buffer: ByteArray, offset: Int, length: Int) = -1
+                override fun getUri(): Uri? = null
+                override fun close() { events += "close" }
+                override fun addTransferListener(transferListener: TransferListener) = Unit
+            }
+        }
+        val coordinator = MediaConnectionCoordinator(quietGapMillis = 6_000)
+        val token = Any()
+        coordinator.beginPlaybackSession(token)
+        val source = SingleStreamDataSourceFactory(upstream,
+            coordinator = coordinator, playbackToken = token).createDataSource()
+        assertEquals(1L, source.open(DataSpec(Uri.parse("https://example.invalid/movie.mp4"))))
+        coordinator.endPlaybackSession(token)
+        assertTrue(coordinator.state.value.playbackSessionActive)
+        source.close()
+        assertEquals(listOf("open", "close"), events)
+        assertFalse(coordinator.state.value.playbackSessionActive)
+    }
+
     @Test fun overlappingRangeOpenClosesPreviousConnectionFirst() {
         val gate = SingleStreamConnectionGate()
         val events = mutableListOf<String>()
