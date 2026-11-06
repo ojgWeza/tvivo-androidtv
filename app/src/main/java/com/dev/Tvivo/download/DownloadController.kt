@@ -13,14 +13,16 @@ object DownloadController {
     private const val UNIQUE_WORK = "phone-download-transfer"
 
     fun kick(context: Context) {
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+        val request = buildRequest()
+        WorkManager.getInstance(context.applicationContext)
+            .enqueueUniqueWork(UNIQUE_WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+    }
+
+    internal fun buildRequest() = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED)
                 .setRequiresBatteryNotLow(true).setRequiresStorageNotLow(true).build())
             .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context.applicationContext)
-            .enqueueUniqueWork(UNIQUE_WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
-    }
 
     suspend fun pause(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity) {
         DownloadTransfer.requestAction(row, DownloadTransfer.UserAction.Pause)
