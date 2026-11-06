@@ -254,6 +254,9 @@ class SeriesDetailViewModel(
         primaryProbeRequested = true
         sizeProbeJob?.cancel()
         sizeProbeJob = viewModelScope.launch {
+            val completed = DownloadDependencies.repository(getApplication()).observe(account).first()
+                .any { it.kind == "episode" && it.seriesId == seriesId && it.mediaId == episodeId && it.state == "COMPLETED" }
+            if (completed) return@launch
             val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
             if (!sizes.shouldProbe(account, "episode", seriesId, episodeId)) {
                 NetworkEventRecorder.occurrence(NetworkEventSource.SIZE_PROBE, account,

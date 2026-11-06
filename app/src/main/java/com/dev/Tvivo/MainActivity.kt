@@ -215,13 +215,14 @@ private fun playItem(
     title: String,
     extension: String?,
     resumeFromMs: Long,
-    knownDurationMs: Long = 0L
+    knownDurationMs: Long = 0L,
+    playbackUrl: String? = null
 ) {
     if (DeepStreamCheckGate.isHeld) {
         android.widget.Toast.makeText(context, R.string.network_check_in_progress, android.widget.Toast.LENGTH_SHORT).show()
         return
     }
-    val url = if (isLive) {
+    val url = playbackUrl ?: if (isLive) {
         StreamUrlBuilder.live(credentials, itemId, extension ?: "ts")
     } else {
         StreamUrlBuilder.movie(credentials, itemId, extension ?: "mp4")
@@ -251,16 +252,19 @@ private fun playItem(
     }
 }
 
+private suspend fun resolveDownloadedUrl(context: android.content.Context, row: DownloadEntity): String? {
+    val file = if (row.state == "COMPLETED") AndroidDownloadFileSystem(context).playableFile(row.relativePath) else null
+    if (row.state == "COMPLETED" && file == null) {
+        DownloadDependencies.repository(context).fail(row, "missing")
+        withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, R.string.download_missing_playback, android.widget.Toast.LENGTH_LONG).show() }
+        return null
+    }
+    return com.dev.Tvivo.download.DownloadPlaybackResolver.resolve(row, file?.let { android.net.Uri.fromFile(it).toString() })
+}
+
 private fun playDownloaded(context: android.content.Context, row: DownloadEntity, title: String) {
     if (row.state != "COMPLETED") return
-    val file = AndroidDownloadFileSystem(context).playableFile(row.relativePath)
-    if (file == null) {
-        (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
-            DownloadDependencies.repository(context).fail(row, "missing")
-            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, R.string.download_missing_playback, android.widget.Toast.LENGTH_LONG).show() }
-        }
-        return
-    }
+    val file = AndroidDownloadFileSystem(context).playableFile(row.relativePath) ?: return
     context.startActivity(Intent(context, PlayerActivity::class.java)
         .putExtra(PlayerActivity.EXTRA_URL, android.net.Uri.fromFile(file).toString())
         .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
@@ -965,29 +969,21 @@ private fun TvivoApp() {
                 AccountIdentity.of(current.credentials)
             }
             val detailIsLive = current.type == ContentType.LIVE
+            val detailIsTelevision = LocalIsTelevision.current
             val page: @Composable () -> Unit = { ItemDetailScreen(
                 contentType = current.type,
                 itemId = current.itemId,
                 credentials = current.credentials,
                 insideShell = !LocalIsTelevision.current,
                 onPlay = { resumeFromMs, extension, title, knownDurationMs ->
-                    playItem(
-                        context = context,
-                        credentials = current.credentials,
-                        accountId = accountId,
-                        isLive = detailIsLive,
-                        itemId = current.itemId,
-                        title = title,
-                        extension = extension,
-                        resumeFromMs = resumeFromMs,
-                        knownDurationMs = knownDurationMs
-                    )
-                },
-                onPlayDownloaded = {
                     (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
-                        val row = DownloadDependencies.repository(context).observe(accountId).first()
-                            .firstOrNull { it.kind == "movie" && it.mediaId == current.itemId.toString() && it.state == "COMPLETED" }
-                        if (row != null) withContext(Dispatchers.Main) { playDownloaded(context, row, "${current.itemId}") }
+                        val localUrl = if (!detailIsLive && !detailIsTelevision) {
+                            val row = DownloadDependencies.repository(context).observe(accountId).first()
+                                .firstOrNull { it.kind == "movie" && it.mediaId == current.itemId.toString() }
+                            row?.let { resolveDownloadedUrl(context, it) }
+                        } else null
+                        withContext(Dispatchers.Main) { playItem(context, current.credentials, accountId, detailIsLive,
+                            current.itemId, title, extension, resumeFromMs, knownDurationMs, localUrl) }
                     }
                 },
                 // A show's Play is "show me the episodes" — `series_id` addresses no
@@ -1074,15 +1070,6 @@ private fun TvivoApp() {
                     }
                 },
                 onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) },
-                onPlayDownloaded = { episode ->
-                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
-                        val row = DownloadDependencies.repository(context).observe(accountId).first()
-                            .firstOrNull { it.kind == "episode" && it.seriesId == current.seriesId && it.mediaId == episode.episodeId && it.state == "COMPLETED" }
-                        if (row != null) withContext(Dispatchers.Main) {
-                            playDownloaded(context, row, "S${episode.seasonNumber} · E${episode.episodeNum}: ${episode.title}")
-                        }
-                    }
-                }
             ) }
             if (LocalIsTelevision.current) page() else AppShell(
                 selected = detailOriginTab,

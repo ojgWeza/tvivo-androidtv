@@ -60,7 +60,6 @@ fun ItemDetailScreen(
     itemId: Int,
     credentials: Credentials? = null,
     onPlay: (resumeFromMs: Long, extension: String?, title: String, knownDurationMs: Long) -> Unit,
-    onPlayDownloaded: () -> Unit = {},
     onOpenEpisodes: () -> Unit,
     insideShell: Boolean = false,
     stateOverride: ItemDetailUiState? = null,
@@ -162,9 +161,6 @@ fun ItemDetailScreen(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
                         state.extension, state.title,
                         state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
-                }
-                if (!isLive && !isSeries && !LocalIsTelevision.current && state.downloadState == "COMPLETED") {
-                    DetailTextButton(stringResource(com.dev.Tvivo.R.string.downloads_play_downloaded), Modifier.testTag("detail-play-downloaded"), onPlayDownloaded)
                 }
                 if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
                     vm?.cancelSizeProbeForPlay()

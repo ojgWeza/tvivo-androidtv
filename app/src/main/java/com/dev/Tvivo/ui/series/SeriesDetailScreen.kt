@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
 /** One page from a series card to an episode. Back is owned by MainActivity. */
 @Composable
 fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<EpisodeEntity>) -> Unit,
-    insideShell: Boolean = false, onOpenSettings: () -> Unit = {}, onPlayDownloaded: (EpisodeEntity) -> Unit = {}) {
+    insideShell: Boolean = false, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val application = context.applicationContext as android.app.Application
     val vm: SeriesDetailViewModel = viewModel(key = "series:$seriesId", factory = viewModelFactory {
@@ -145,7 +145,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                 if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
             }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
             header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg),
-            onPlayDownloaded = onPlayDownloaded)
+            )
     } else {
         Row(Modifier.fillMaxSize().background(AppColors.Bg)
             .then(if (LocalIsTelevision.current || insideShell) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
@@ -158,7 +158,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                     if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
                 }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
                 header = null, modifier = Modifier.weight(1f).fillMaxSize(),
-                onPlayDownloaded = onPlayDownloaded)
+                )
         }
     }
 
@@ -230,7 +230,6 @@ internal fun SeriesEpisodeList(
     onDownloadSeason: () -> Unit,
     header: (@Composable () -> Unit)?,
     modifier: Modifier,
-    onPlayDownloaded: (EpisodeEntity) -> Unit = {}
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
@@ -299,7 +298,7 @@ internal fun SeriesEpisodeList(
                 onFocus = { onFocusedEpisode(episode.seasonNumber, episode.episodeId) },
                 onPlay = { onPlay(episode) }, onMenu = { onMenu(episode) },
                 downloadState = state.downloadStates[episode.episodeId],
-                onDownload = { onDownload(episode) }, onPlayDownloaded = { onPlayDownloaded(episode) })
+                onDownload = { onDownload(episode) })
         }
     }
 }
@@ -318,8 +317,7 @@ private fun EpisodeRow(
     onPlay: () -> Unit,
     onMenu: () -> Unit,
     downloadState: String?,
-    onDownload: () -> Unit,
-    onPlayDownloaded: () -> Unit
+    onDownload: () -> Unit
 ) {
     val context = LocalContext.current
     val displayTitle = if (EpisodeTitlePolicy.isGenericTitle(episode.title))
@@ -381,10 +379,6 @@ private fun EpisodeRow(
                 stringResource(com.dev.Tvivo.R.string.download_downloading_percent, downloadState.substringAfter(':').toIntOrNull() ?: 0)
                 else stringResource(if (downloadState == "COMPLETED") com.dev.Tvivo.R.string.download_completed else if (downloadState == "PAUSED") com.dev.Tvivo.R.string.download_paused else com.dev.Tvivo.R.string.download_queued),
                 color = AppColors.Dim, style = TvType.label)
-        }
-        if (!LocalIsTelevision.current && downloadState == "COMPLETED") {
-            DetailTextButton(stringResource(com.dev.Tvivo.R.string.downloads_play_downloaded),
-                Modifier.testTag("episode-play-downloaded-${episode.episodeId}"), onPlayDownloaded)
         }
     }
 }

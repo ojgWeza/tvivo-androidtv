@@ -214,7 +214,9 @@ class ItemDetailViewModel(
                         // the title and Play are all up, and the description fills in
                         // underneath them or does not.
                         if (cached == null) retryPlot()
-                        requestMovieSizeProbe(accountId, row.containerExtension ?: "mkv")
+                        val completedDownload = DownloadDependencies.repository(getApplication()).observe(accountId).first()
+                            .any { it.kind == "movie" && it.mediaId == itemId.toString() && it.state == "COMPLETED" }
+                        if (!completedDownload) requestMovieSizeProbe(accountId, row.containerExtension ?: "mkv")
                     }
                 }
             }
