@@ -1,6 +1,6 @@
 package com.dev.Tvivo.home
 
-enum class ShellTab { MyTvivo, Movies, Series, Live, Search, Settings }
+enum class ShellTab { MyTvivo, Movies, Series, Live, Search, Settings, Downloads }
 
 object ShellNavigation {
     sealed interface BackAction {

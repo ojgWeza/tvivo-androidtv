@@ -478,6 +478,16 @@ private fun TvivoApp() {
     ) {
         when (val current = route) {
             is Route.Main -> {
+                if (current.tab == ShellTab.Downloads) {
+                    val destination = topLevelHistory.lastOrNull()
+                        ?.let { name -> ShellTab.entries.firstOrNull { it.name == name } }
+                        ?.takeUnless { it == ShellTab.Downloads || it == ShellTab.Search }
+                        ?: ShellTab.MyTvivo
+                    topLevelHistory = ArrayList(topLevelHistory.dropLast(1))
+                    savedTab = destination
+                    route = Route.Main(current.credentials, destination)
+                    return@BackHandler
+                }
                 if (shouldReturnToSearchAfterSeeAll(searchSeeAllReturn, current.tab == ShellTab.Search)) {
                     searchSeeAllReturn = false
                     savedTab = ShellTab.Search
@@ -792,6 +802,12 @@ private fun TvivoApp() {
                                 focusSettingsNetworkDiagnostics = true
                                 route = Route.NetworkDiagnostics(current.credentials)
                             }
+                        )
+                        ShellTab.Downloads -> DownloadsScreen(
+                            credentials = current.credentials,
+                            accountId = accountId,
+                            onOpenSettings = { select(ShellTab.Settings) },
+                            onPlayDownloaded = { row -> playDownloaded(context, row, row.mediaId) }
                         )
                         else -> {
                             val type = when (current.tab) {

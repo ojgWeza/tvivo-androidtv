@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -39,7 +40,8 @@ class AppShellNavigationTest {
         }
         rule.onNodeWithTag("shell-Movies").performClick()
         rule.runOnIdle { assertEquals(ShellTab.Movies, selected) }
-        rule.onNodeWithTag("shell-Settings").performClick()
+        rule.onNodeWithTag("shell-More").performClick()
+        rule.onNodeWithText("Settings").performClick()
         rule.runOnIdle { assertEquals(ShellTab.Settings, selected) }
         rule.onNodeWithTag("shell-Search").assertDoesNotExist()
         rule.onNodeWithTag("shell-action-Search").performClick()

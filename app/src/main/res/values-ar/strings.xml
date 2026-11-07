@@ -80,6 +80,8 @@
     <string name="nav_live">مباشر</string>
     <string name="nav_search">بحث</string>
     <string name="nav_settings">الإعدادات</string>
+    <string name="nav_more">المزيد</string>
+    <string name="nav_downloads">التنزيلات</string>
     <string name="shelf_continue_watching">تابع المشاهدة</string>
     <string name="shelf_recently_added">أُضيفت مؤخرًا</string>
     <string name="shelf_last_watched">آخر ما شاهدته</string>

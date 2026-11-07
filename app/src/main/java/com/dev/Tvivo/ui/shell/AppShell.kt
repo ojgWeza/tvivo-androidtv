@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import androidx.tv.material3.Icon
@@ -47,6 +48,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.ArrowDropDown
 import com.dev.Tvivo.ui.common.LiveTvIcon
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -125,6 +128,7 @@ fun AppShell(
                     ShellTab.Live -> R.string.nav_live_tv
                     ShellTab.Search -> R.string.nav_search
                     ShellTab.Settings -> R.string.nav_settings
+                    ShellTab.Downloads -> R.string.nav_downloads
                 }), color = AppColors.Ink, style = TvType.title, modifier = Modifier.weight(1f))
                 ShellActionButton(stringResource(R.string.nav_search), Icons.Default.Search,
                     enabled = true, onClick = { onSelect(ShellTab.Search) })
@@ -135,9 +139,10 @@ fun AppShell(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                listOf(ShellTab.MyTvivo, ShellTab.Movies, ShellTab.Series, ShellTab.Live, ShellTab.Settings).forEach { tab ->
+                listOf(ShellTab.MyTvivo, ShellTab.Movies, ShellTab.Series, ShellTab.Live).forEach { tab ->
                     TabButton(tab, selected, onSelect, compact = true, modifier = Modifier.weight(1f))
                 }
+                MoreMenu(selected, onSelect, Modifier.weight(1f))
             }
         }
     } else {
@@ -149,9 +154,33 @@ fun AppShell(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(AppIdentity.name().uppercase(), color = AppColors.Ink, style = TvType.title)
-                ShellTab.entries.forEach { tab -> TabButton(tab, selected, onSelect) }
+                ShellTab.entries.filter { it != ShellTab.Search }.forEach { tab -> TabButton(tab, selected, onSelect) }
             }
             Box(Modifier.weight(1f)) { content() }
+        }
+    }
+}
+
+@Composable
+private fun MoreMenu(selected: ShellTab, onSelect: (ShellTab) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.nav_more)
+    val isSelected = selected == ShellTab.Settings || selected == ShellTab.Downloads
+    Box(modifier.heightIn(min = 48.dp).testTag("shell-More")
+        .semantics { contentDescription = label; this.selected = isSelected }
+        .tvFocusFrame().tvClickable { expanded = true }, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Default.MoreVert, contentDescription = null,
+                tint = if (isSelected) AppColors.AccentText else AppColors.Ink, modifier = Modifier.size(20.dp))
+            Text(stringResource(R.string.nav_more), color = if (isSelected) AppColors.AccentText else AppColors.Ink,
+                style = TvType.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(R.string.nav_settings)) },
+                onClick = { expanded = false; onSelect(ShellTab.Settings) })
+            androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(R.string.nav_downloads)) },
+                modifier = Modifier.testTag("more-downloads"),
+                onClick = { expanded = false; onSelect(ShellTab.Downloads) })
         }
     }
 }
@@ -172,10 +201,14 @@ private fun TabButton(
         ShellTab.Live -> stringResource(if (compact) R.string.nav_live else R.string.nav_live_tv)
         ShellTab.Search -> stringResource(R.string.nav_search)
         ShellTab.Settings -> stringResource(R.string.nav_settings)
+        ShellTab.Downloads -> stringResource(R.string.nav_downloads)
     }
     val ink = if (tab == selected) AppColors.AccentText else AppColors.Ink
     val iconsOnly = compact && LocalConfiguration.current.fontScale >= 1.6f
-    val buttonModifier = modifier.testTag("shell-${tab.name}").semantics { contentDescription = title }
+    val buttonModifier = modifier.testTag("shell-${tab.name}").semantics {
+        contentDescription = title
+        this.selected = tab == selected
+    }
         .heightIn(min = 56.dp)
         .tvFocusFrame().tvClickable { onSelect(tab) }
         .then(if (compact && tab == selected && LocalIsTelevision.current) Modifier.border(2.dp, AppColors.AccentText, RoundedCornerShape(12.dp)) else Modifier)
@@ -190,8 +223,15 @@ private fun TabButton(
                 ShellTab.Live -> Icon(LiveTvIcon, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
                 ShellTab.Search -> Icon(Icons.Default.Search, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+                ShellTab.Downloads -> Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
             }
             if (!iconsOnly) Text(title, color = ink, style = TvType.label,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    } else if (tab == ShellTab.Downloads) {
+        Row(buttonModifier, verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+            Text(title, color = ink, style = TvType.label, modifier = Modifier.padding(start = 10.dp),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } else if (underlineSelected) {
