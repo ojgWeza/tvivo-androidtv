@@ -46,7 +46,7 @@ object DownloadController {
 
     suspend fun cancel(context: Context, row: com.dev.Tvivo.data.local.entities.DownloadEntity) {
         DownloadTransfer.requestAction(row, DownloadTransfer.UserAction.Cancel)
-        DownloadDependencies.repository(context).cancel(row, deletePartial = true)
+        DownloadDependencies.repository(context).cancelAndRemove(row)
         kick(context)
     }
 

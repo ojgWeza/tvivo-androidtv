@@ -2,6 +2,12 @@ package com.dev.Tvivo.ui.detail
 
 import android.content.Intent
 import android.net.Uri
+import android.Manifest
+import android.os.Build
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,6 +86,10 @@ fun ItemDetailScreen(
     val scope = rememberCoroutineScope()
     val isSeries = contentType == ContentType.SERIES
     val isLive = contentType == ContentType.LIVE
+    val isTelevision = LocalIsTelevision.current
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        vm?.downloadMovie()
+    }
     var pendingPlay by remember(itemId) { mutableStateOf(false) }
     LaunchedEffect(state.isLoading, state.notFound, pendingPlay) {
         if (pendingPlay && !state.isLoading) {
@@ -182,7 +192,13 @@ fun ItemDetailScreen(
                         Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
                     } else {
                         DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_action), Modifier.testTag("movie-download")) {
-                            vm?.downloadMovie()
+                            if (com.dev.Tvivo.download.DownloadNotificationPermissionPolicy.shouldAsk(Build.VERSION.SDK_INT,
+                                    isTelevision,
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+                                    context.getSharedPreferences("download-notifications", 0).getBoolean("requested", false))) {
+                                context.getSharedPreferences("download-notifications", 0).edit().putBoolean("requested", true).apply()
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else vm?.downloadMovie()
                         }
                     }
                 }

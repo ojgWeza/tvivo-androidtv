@@ -90,6 +90,18 @@ class DownloadRepositoryTest {
         } finally { db.close() }
     }
 
+    @Test fun completedReconcileKeepsDownloadedFileSizeForDisplay() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val files = FakeFiles().apply { lengths["finished"] = 155_400_000L }
+        try {
+            val row = DownloadEntity("acct", "movie", 0, "42", state = "COMPLETED", expectedBytes = 155_400_000L,
+                partialBytes = 0, relativePath = "finished", createdAt = 1, updatedAt = 1)
+            db.downloadDao().upsert(row)
+            val repo = DownloadRepository(db, db.downloadDao(), MediaFileSizeRepository(db.mediaFileSizeDao()), files, { 1_000 })
+            assertEquals(155_400_000L, repo.reconcile().single().partialBytes)
+        } finally { db.close() }
+    }
+
     @Test fun cancelDeletesPartialFileAndReleasesReservation() = runTest {
         val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
         val files = FakeFiles().apply { lengths["movie"] = 37 }
@@ -103,6 +115,20 @@ class DownloadRepositoryTest {
             assertEquals("CANCELLED", cancelled.state)
             assertEquals(0, cancelled.partialBytes)
             assertEquals(0L, cancelled.reservedBytes)
+            assertTrue(files.lengths.isEmpty())
+        } finally { db.close() }
+    }
+
+    @Test fun cancelAndRemoveDeletesPartialFileAndRow() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val files = FakeFiles().apply { lengths["movie"] = 37 }
+        try {
+            val row = DownloadEntity("acct", "movie", 0, "42", state = "DOWNLOADING", partialBytes = 37,
+                reservedBytes = 100, relativePath = "movie", createdAt = 1, updatedAt = 1)
+            db.downloadDao().upsert(row)
+            val repo = DownloadRepository(db, db.downloadDao(), MediaFileSizeRepository(db.mediaFileSizeDao()), files, { 100 })
+            repo.cancelAndRemove(row)
+            assertTrue(db.downloadDao().getAll().isEmpty())
             assertTrue(files.lengths.isEmpty())
         } finally { db.close() }
     }

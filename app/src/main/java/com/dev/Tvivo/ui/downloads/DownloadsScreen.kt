@@ -15,6 +15,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import com.dev.Tvivo.R
@@ -39,7 +45,7 @@ internal fun groupDownloads(rows: List<DownloadDisplayRow>): Pair<List<DownloadD
 private const val ENABLE_DOWNLOADED_PLAY = true
 
 @Composable
-fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings: () -> Unit, onPlayDownloaded: (DownloadEntity) -> Unit = {}) {
+fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings: () -> Unit, onPlayDownloaded: (DownloadEntity, String) -> Unit = { _, _ -> }) {
     val context = LocalContext.current
     val vodCatalog = remember(context, credentials, accountId) { VodRepository(com.dev.Tvivo.data.local.AppDatabase.get(context.applicationContext), credentials, accountId) }
     val seriesCatalog = remember(context, credentials, accountId) { SeriesRepository(com.dev.Tvivo.data.local.AppDatabase.get(context.applicationContext), credentials, accountId) }
@@ -71,6 +77,9 @@ fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings:
     }
     val (active, completed) = groupDownloads(displayRows)
     val usage = DownloadQuota.usage(used, reserved, preferences.capGb)
+    val notificationsDenied = !com.dev.Tvivo.ui.adaptive.LocalIsTelevision.current && Build.VERSION.SDK_INT >= 33 &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+        context.getSharedPreferences("download-notifications", 0).getBoolean("requested", false)
     Column(Modifier.fillMaxSize().background(AppColors.Bg).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -79,6 +88,12 @@ fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings:
         }
         Text(stringResource(R.string.downloads_usage, usage.usedGb, usage.capGb.toDouble(), usage.reservedGb),
             color = AppColors.Dim, style = TvType.body, modifier = Modifier.testTag("downloads-usage"))
+        if (notificationsDenied) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.download_notifications_hint), color = AppColors.Dim, style = TvType.label, modifier = Modifier.weight(1f))
+            Action(stringResource(R.string.download_notifications_allow), "allow-download-notifications") {
+                context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+            }
+        }
         if (retryBlocked) Text(stringResource(R.string.downloads_retry_blocked), color = AppColors.AccentText,
             style = TvType.label, modifier = Modifier.testTag("downloads-retry-blocked"))
         if (displayRows.isEmpty()) DownloadsEmptyState()
@@ -88,7 +103,7 @@ fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings:
                 scope.launch { when (action) {
                     "pause" -> DownloadController.pause(context, row)
                     "resume" -> DownloadController.resume(context, row)
-                    "cancel" -> { DownloadController.cancel(context, row); repo.remove(row) }
+                    "cancel" -> DownloadController.cancel(context, row)
                     "retry" -> { retryBlocked = DownloadController.retry(context, row) is com.dev.Tvivo.download.DownloadRepository.EnqueueResult.Rejected }
                     else -> confirmRows = listOf(row)
                 } }
@@ -121,7 +136,7 @@ internal fun DownloadsEmptyState() {
 
 @Composable
 internal fun DownloadRows(rows: List<DownloadDisplayRow>, onAction: (DownloadEntity, String) -> Unit,
-    onDeleteSeries: (List<DownloadEntity>) -> Unit, onPlayDownloaded: (DownloadEntity) -> Unit) {
+    onDeleteSeries: (List<DownloadEntity>) -> Unit, onPlayDownloaded: (DownloadEntity, String) -> Unit) {
     val groups = rows.groupBy { if (it.row.kind == "episode") it.row.seriesId else 0 }
     groups.forEach { (_, grouped) ->
         val series = grouped.firstOrNull()?.seriesTitle.orEmpty()
@@ -153,7 +168,7 @@ internal fun DownloadRows(rows: List<DownloadDisplayRow>, onAction: (DownloadEnt
                         "FAILED" -> { Action(stringResource(R.string.downloads_retry), "retry-${row.mediaId}") { onAction(row, "retry") }; Action(stringResource(R.string.downloads_delete), "delete-${row.mediaId}") { onAction(row, "delete") } }
                         "COMPLETED" -> {
                             if (ENABLE_DOWNLOADED_PLAY) Action(stringResource(R.string.downloads_play), "play-${row.mediaId}") {
-                                onPlayDownloaded(row)
+                                onPlayDownloaded(row, item.title)
                             }
                             Action(stringResource(R.string.downloads_delete), "delete-${row.mediaId}") { onAction(row, "delete") }
                         }

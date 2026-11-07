@@ -1,5 +1,6 @@
 package com.dev.Tvivo.ui.downloads
 
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -51,7 +52,7 @@ class DownloadsScreenTest {
             TvivoTheme {
                 CompositionLocalProvider(LocalIsTelevision provides false) {
                     DownloadRows(listOf(DownloadDisplayRow(row("FAILED", reason = "authorization"), "Film")),
-                        onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = {})
+                        onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = { _, _ -> })
                 }
             }
         }
@@ -60,21 +61,24 @@ class DownloadsScreenTest {
     }
 
     @Test fun completedPlayActionIsAvailableOnlyForCompletedRows() {
+        var playedTitle: String? = null
         compose.setContent {
             TvivoTheme {
                 CompositionLocalProvider(LocalIsTelevision provides false) {
                     DownloadRows(listOf(DownloadDisplayRow(row("COMPLETED"), "Film")),
-                        onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = {})
+                        onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = { _, title -> playedTitle = title })
                 }
             }
         }
         compose.onNodeWithTag("play-8").assertIsDisplayed()
         compose.onNodeWithTag("delete-8").assertIsDisplayed()
+        compose.onNodeWithTag("play-8").performClick()
+        assertEquals("Film", playedTitle)
     }
 
     @Test fun activePlayActionIsHidden() {
         compose.setContent { TvivoTheme { CompositionLocalProvider(LocalIsTelevision provides false) {
-            DownloadRows(listOf(DownloadDisplayRow(row("QUEUED"), "Film")), onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = {})
+            DownloadRows(listOf(DownloadDisplayRow(row("QUEUED"), "Film")), onAction = { _, _ -> }, onDeleteSeries = {}, onPlayDownloaded = { _, _ -> })
         } } }
         compose.onNodeWithTag("play-8").assertDoesNotExist()
     }

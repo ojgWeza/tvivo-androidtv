@@ -90,6 +90,12 @@ class DownloadRepository(
             if (deletePartial) dao.updateProgress(row.accountId, row.kind, row.seriesId, row.mediaId, 0, clockMillis())
         }
     }
+    suspend fun cancelAndRemove(row: DownloadEntity) {
+        database.withTransaction {
+            row.relativePath?.let(files::delete)
+            dao.delete(row.accountId, row.kind, row.seriesId, row.mediaId)
+        }
+    }
     override suspend fun complete(row: DownloadEntity) = setState(row, "COMPLETED", 0)
     override suspend fun updateValidators(row: DownloadEntity, etag: String?, lastModified: String?) {
         dao.upsert(row.copy(etag = etag, lastModified = lastModified, updatedAt = clockMillis()))
@@ -121,10 +127,14 @@ class DownloadRepository(
         val repaired = mutableListOf<DownloadEntity>()
         dao.getAll().forEach { row ->
             val actual = row.relativePath?.let(files::length)
-            val isFinished = row.state in setOf("COMPLETED", "CANCELLED")
             val missingComplete = row.state == "COMPLETED" && (actual == null || actual == 0L)
             val state = if (missingComplete) "FAILED" else row.state
-            val partial = if (isFinished || missingComplete) 0 else actual?.coerceAtLeast(0) ?: 0
+            val partial = when {
+                missingComplete -> 0
+                row.state == "COMPLETED" -> actual?.coerceAtLeast(0) ?: row.partialBytes
+                row.state == "CANCELLED" -> 0
+                else -> actual?.coerceAtLeast(0) ?: 0
+            }
             val reservation = if (state in ACTIVE_STATES) row.reservedBytes else 0
             val reason = if (missingComplete) "missing" else row.failureReason
             val changed = row.copy(state = state, partialBytes = partial, reservedBytes = reservation,

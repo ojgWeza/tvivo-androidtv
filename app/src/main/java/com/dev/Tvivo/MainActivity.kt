@@ -807,7 +807,7 @@ private fun TvivoApp() {
                             credentials = current.credentials,
                             accountId = accountId,
                             onOpenSettings = { select(ShellTab.Settings) },
-                            onPlayDownloaded = { row -> playDownloaded(context, row, row.mediaId) }
+                            onPlayDownloaded = { row, title -> playDownloaded(context, row, title) }
                         )
                         else -> {
                             val type = when (current.tab) {
@@ -909,7 +909,7 @@ private fun TvivoApp() {
                 Box(Modifier.weight(1f)) {
                     DownloadsScreen(credentials = current.credentials, accountId = remember(current.credentials) { AccountIdentity.of(current.credentials) },
                         onOpenSettings = { route = Route.Main(current.credentials, ShellTab.Settings) },
-                        onPlayDownloaded = { row -> playDownloaded(context, row, row.mediaId) })
+                        onPlayDownloaded = { row, title -> playDownloaded(context, row, title) })
                 }
             } else route = Route.Main(current.credentials, ShellTab.MyTvivo)
         }

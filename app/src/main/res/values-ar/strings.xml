@@ -511,6 +511,8 @@
     <string name="download_cancel">إلغاء</string>
     <string name="download_change_limit">تغيير الحد من الإعدادات</string>
     <string name="downloads_title">التنزيلات</string>
+    <string name="download_notifications_hint">اسمح بالإشعارات لمتابعة تقدم التنزيل.</string>
+    <string name="download_notifications_allow">السماح بالإشعارات</string>
     <string name="downloads_storage_limit">حد التخزين</string>
     <string name="downloads_wifi_only">شبكة Wi-Fi فقط</string>
     <string name="downloads_usage">المستخدم %1$.2f من %2$.2f جيجابايت (%3$.2f جيجابايت محجوزة)</string>

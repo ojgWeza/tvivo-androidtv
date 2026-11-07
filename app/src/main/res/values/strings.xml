@@ -499,6 +499,8 @@
     <string name="download_cancel">Cancel</string>
     <string name="download_change_limit">Change limit in Settings</string>
     <string name="downloads_title">Downloads</string>
+    <string name="download_notifications_hint">Allow notifications to see download progress.</string>
+    <string name="download_notifications_allow">Allow notifications</string>
     <string name="downloads_storage_limit">Storage limit</string>
     <string name="downloads_wifi_only">Wi-Fi only</string>
     <string name="downloads_usage">Used %1$.2f of %2$.2f GB (%3$.2f GB reserved)</string>

@@ -1,6 +1,12 @@
 package com.dev.Tvivo.ui.series
 
 import android.view.KeyEvent
+import android.Manifest
+import android.os.Build
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -67,12 +73,28 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
         initializer { SeriesDetailViewModel(application, createSavedStateHandle(), seriesId) }
     })
     val state by vm.state.collectAsStateWithLifecycle()
+    val isTelevision = LocalIsTelevision.current
     val scope = rememberCoroutineScope()
     val primaryFocus = remember { FocusRequester() }
     var initialFocusDone by remember(seriesId) { mutableStateOf(false) }
     var resumePrompt by remember { mutableStateOf<Pair<EpisodeEntity, Long>?>(null) }
     var menuEpisode by remember { mutableStateOf<EpisodeEntity?>(null) }
     val compact = LocalWindowSizeClass.current == WindowSizeClass.Compact
+    val queueAfterPermission = remember { mutableStateOf<(() -> Unit)?>(null) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        queueAfterPermission.value?.invoke()
+        queueAfterPermission.value = null
+    }
+    fun queueDownload(action: () -> Unit) {
+        if (com.dev.Tvivo.download.DownloadNotificationPermissionPolicy.shouldAsk(Build.VERSION.SDK_INT,
+                isTelevision,
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+                context.getSharedPreferences("download-notifications", 0).getBoolean("requested", false))) {
+            queueAfterPermission.value = action
+            context.getSharedPreferences("download-notifications", 0).edit().putBoolean("requested", true).apply()
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else action()
+    }
 
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner, vm) {
@@ -143,7 +165,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
             vm::rememberEpisodeFocus, vm::refresh,
             onPlay = { play(it, true) }, onMenu = {
                 if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
-            }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
+            }, onDownload = { ep -> queueDownload { vm.downloadEpisode(ep) } }, onDownloadSeason = { queueDownload(vm::downloadSeason) },
             header = hero, modifier = Modifier.fillMaxSize().background(AppColors.Bg),
             )
     } else {
@@ -156,7 +178,7 @@ fun SeriesDetailScreen(seriesId: Int, onPlayEpisode: (EpisodeEntity, Long, List<
                 vm::rememberEpisodeFocus, vm::refresh,
                 onPlay = { play(it, true) }, onMenu = {
                     if (state.playback[it.episodeId]?.positionMs != null) menuEpisode = it
-                }, onDownload = vm::downloadEpisode, onDownloadSeason = vm::downloadSeason,
+                }, onDownload = { ep -> queueDownload { vm.downloadEpisode(ep) } }, onDownloadSeason = { queueDownload(vm::downloadSeason) },
                 header = null, modifier = Modifier.weight(1f).fillMaxSize(),
                 )
         }
