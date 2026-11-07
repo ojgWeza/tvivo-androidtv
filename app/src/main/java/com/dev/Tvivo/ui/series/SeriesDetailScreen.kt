@@ -298,6 +298,7 @@ internal fun SeriesEpisodeList(
                 onFocus = { onFocusedEpisode(episode.seasonNumber, episode.episodeId) },
                 onPlay = { onPlay(episode) }, onMenu = { onMenu(episode) },
                 downloadState = state.downloadStates[episode.episodeId],
+                isTelevision = isTelevision,
                 onDownload = { onDownload(episode) })
         }
     }
@@ -317,6 +318,7 @@ private fun EpisodeRow(
     onPlay: () -> Unit,
     onMenu: () -> Unit,
     downloadState: String?,
+    isTelevision: Boolean,
     onDownload: () -> Unit
 ) {
     val context = LocalContext.current
@@ -371,10 +373,10 @@ private fun EpisodeRow(
                     .height(4.dp).background(AppColors.Accent))
             }
         }
-        if (!LocalIsTelevision.current && downloadState !in setOf("QUEUED", "PAUSED", "DOWNLOADING", "COMPLETED")) {
+        if (!isTelevision && downloadState !in setOf("QUEUED", "PAUSED", "DOWNLOADING", "COMPLETED")) {
             if (fileSize == null) Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
             else DetailTextButton(stringResource(com.dev.Tvivo.R.string.download_action), Modifier.testTag("episode-download-${episode.episodeId}")) { onDownload() }
-        } else if (!LocalIsTelevision.current && downloadState != null) {
+        } else if (!isTelevision && downloadState != null) {
             Text(if (downloadState.startsWith("DOWNLOADING:"))
                 stringResource(com.dev.Tvivo.R.string.download_downloading_percent, downloadState.substringAfter(':').toIntOrNull() ?: 0)
                 else stringResource(if (downloadState == "COMPLETED") com.dev.Tvivo.R.string.download_completed else if (downloadState == "PAUSED") com.dev.Tvivo.R.string.download_paused else com.dev.Tvivo.R.string.download_queued),

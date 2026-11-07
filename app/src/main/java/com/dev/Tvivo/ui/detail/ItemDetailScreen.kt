@@ -65,7 +65,9 @@ fun ItemDetailScreen(
     stateOverride: ItemDetailUiState? = null,
     onToggleFavouriteOverride: () -> Unit = {},
     onClearResumeOverride: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    playbackUrlOverride: String? = null,
+    onPlayUrlOverride: ((String) -> Unit)? = null
 ) {
     val application = LocalContext.current.applicationContext as android.app.Application
     val context = LocalContext.current
@@ -157,7 +159,7 @@ fun ItemDetailScreen(
                     Modifier.testTag("detail-play").focusRequester(primaryFocus)) {
                     vm?.cancelSizeProbeForPlay()
                     if (state.isLoading) pendingPlay = true
-                    else if (isSeries) onOpenEpisodes() else onPlay(
+                    else if (isSeries) onOpenEpisodes() else if (playbackUrlOverride != null && onPlayUrlOverride != null) onPlayUrlOverride(playbackUrlOverride) else onPlay(
                         if (movie.primary == MovieActionKind.Resume) resume ?: 0L else 0L,
                         state.extension, state.title,
                         state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
@@ -166,7 +168,7 @@ fun ItemDetailScreen(
                     vm?.cancelSizeProbeForPlay()
                     scope.launch {
                         if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
-                        onPlay(0L, state.extension, state.title,
+                        if (playbackUrlOverride != null && onPlayUrlOverride != null) onPlayUrlOverride(playbackUrlOverride) else onPlay(0L, state.extension, state.title,
                             state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
                     }
                 }

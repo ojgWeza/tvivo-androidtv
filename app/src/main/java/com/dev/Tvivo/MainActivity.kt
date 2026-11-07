@@ -1011,6 +1011,7 @@ private fun TvivoApp() {
             val accountId = remember(current.credentials) {
                 AccountIdentity.of(current.credentials)
             }
+            val seriesIsTelevision = LocalIsTelevision.current
             val page: @Composable () -> Unit = { SeriesDetailScreen(
                 seriesId = current.seriesId,
                 insideShell = !LocalIsTelevision.current,
@@ -1021,13 +1022,20 @@ private fun TvivoApp() {
                     }
                     // Episodes live on their own path segment and carry their own id —
                     // a string, straight from the panel, never round-tripped through Int.
-                    val url = StreamUrlBuilder.episode(
-                        current.credentials,
-                        episode.episodeId,
-                        episode.containerExtension ?: "mkv"
-                    )
+                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                    val rows = (if (!seriesIsTelevision) DownloadDependencies.repository(context).observe(accountId).first() else emptyList())
+                        .filter { it.kind == "episode" && it.seriesId == current.seriesId }
+                    suspend fun episodeUrl(item: com.dev.Tvivo.data.local.entities.EpisodeEntity): String {
+                        val row = rows.firstOrNull { it.mediaId == item.episodeId }
+                        val streamUrl = StreamUrlBuilder.episode(current.credentials, item.episodeId, item.containerExtension ?: "mkv")
+                        return com.dev.Tvivo.download.DownloadPlaybackResolver.resolveOrStream(
+                            row, row?.let { resolveDownloadedUrl(context, it) }, streamUrl)
+                    }
                     val queue = episodes.sortedWith(compareBy({ it.seasonNumber }, { it.episodeNum }))
-                    context.startActivity(
+                    val queueUrls = queue.map { episodeUrl(it) }
+                    val url = queueUrls.getOrNull(queue.indexOfFirst { it.episodeId == episode.episodeId })
+                        ?: StreamUrlBuilder.episode(current.credentials, episode.episodeId, episode.containerExtension ?: "mkv")
+                    withContext(Dispatchers.Main) { context.startActivity(
                         Intent(context, PlayerActivity::class.java)
                             .putExtra(PlayerActivity.EXTRA_URL, url)
                             .putExtra(PlayerActivity.EXTRA_IS_LIVE, false)
@@ -1044,9 +1052,7 @@ private fun TvivoApp() {
                                 episode.durationSecs?.takeIf { it > 0 }?.toLong()?.times(1000L) ?: 0L)
                             .putExtra(PlayerActivity.EXTRA_REQUEST_ID, java.util.UUID.randomUUID().toString())
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_IDS, ArrayList(queue.map { it.episodeId }))
-                            .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_URLS, ArrayList(queue.map {
-                                StreamUrlBuilder.episode(current.credentials, it.episodeId, it.containerExtension ?: "mkv")
-                            }))
+                            .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_URLS, ArrayList(queueUrls))
                             .putStringArrayListExtra(PlayerActivity.EXTRA_EPISODE_TITLES, ArrayList(queue.map {
                                 "S${it.seasonNumber} · E${it.episodeNum}: ${it.title}"
                             }))
@@ -1056,8 +1062,7 @@ private fun TvivoApp() {
                                 it.durationSecs?.takeIf { seconds -> seconds > 0 }?.toLong()?.times(1000L) ?: 0L
                             }.toLongArray())
                             .putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, queue.indexOfFirst { it.episodeId == episode.episodeId })
-                    )
-                    (context as? ComponentActivity)?.lifecycleScope?.launch(Dispatchers.IO) {
+                    ) }
                         AppDatabase.get(context).recentlyPlayedDao().record(
                             RecentlyPlayedEntity(
                                 profileId = accountId,

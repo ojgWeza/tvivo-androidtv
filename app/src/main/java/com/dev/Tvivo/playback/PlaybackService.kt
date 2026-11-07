@@ -39,7 +39,6 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.dev.Tvivo.data.local.AppDatabase
-import com.dev.Tvivo.download.AndroidDownloadFileSystem
 import com.dev.Tvivo.download.DownloadDependencies
 import com.dev.Tvivo.data.repository.PlaybackStateRepository
 import com.dev.Tvivo.data.repository.VodRepository
@@ -954,20 +953,8 @@ class PlaybackService : MediaSessionService() {
         if (timerDecision.stopPlayback || !timerAllowsTransition()) return
         if (item.contentType == com.dev.Tvivo.data.local.entities.TYPE_SERIES &&
             PlaybackSessionPolicy.isLocalMedia(item.url) && item.url.startsWith("file://", true) && !item.accountId.isNullOrBlank()) {
-            val db = AppDatabase.get(this)
-            val downloaded = DownloadDependencies.repository(this).observe(item.accountId).first()
-                .filter { it.kind == "episode" && it.seriesId == item.seriesId && it.state == "COMPLETED" }
-            val episodes = db.seriesDao().episodesInOrder(item.accountId, item.seriesId)
-            val nextId = PlaybackSessionPolicy.nextDownloadedEpisode(episodes.map { it.episodeId }, item.itemId.orEmpty(),
-                downloaded.mapTo(mutableSetOf()) { it.mediaId })
-            val nextEpisode = episodes.firstOrNull { it.episodeId == nextId }
-            val next = nextEpisode?.let { episode ->
-                val row = downloaded.firstOrNull { it.mediaId == episode.episodeId } ?: return@let null
-                val file = AndroidDownloadFileSystem(this).playableFile(row.relativePath) ?: return@let null
-                com.dev.Tvivo.playback.PlaybackHandoff.QueueItem(
-                    episode.episodeId, android.net.Uri.fromFile(file).toString(),
-                    episode.title, (episode.durationSecs ?: 0).toLong() * 1000L)
-            }
+            val currentIndex = item.playlist.indexOfFirst { it.id == item.itemId }
+            val next = item.playlist.getOrNull(currentIndex + 1).takeIf { currentIndex >= 0 }
             if (next != null) {
                 handoff.play(item.copy(requestId = java.util.UUID.randomUUID().toString(), url = next.url,
                     title = next.title, itemId = next.id, resumeFromMs = 0L, knownDurationMs = next.knownDurationMs), previousEnded = true)

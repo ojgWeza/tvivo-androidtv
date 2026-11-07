@@ -12,4 +12,8 @@ object DownloadPlaybackResolver {
         }
         return playableUrl
     }
+
+    fun resolveOrStream(row: DownloadEntity?, playableUrl: String?, streamUrl: String,
+                        markMissing: () -> Unit = {}): String =
+        resolve(row, playableUrl, markMissing) ?: streamUrl
 }
