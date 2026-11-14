@@ -30,4 +30,12 @@ public sealed class GenreTextFormatterTests
         Assert.Equal("⁦File size: 1.4 GB⁩", GenreTextFormatter.IsolateLtr("File size: 1.4 GB"));
         Assert.Null(GenreTextFormatter.IsolateLtr(null));
     }
+
+    [Fact]
+    public void Lost_backslash_unicode_runs_are_decoded()
+    {
+        Assert.Equal("دراما", GenreTextFormatter.Truncate("u062fu0631u0627u0645u0627"));
+        Assert.Equal("دراما, Action", GenreTextFormatter.Truncate("\u062f\u0631\u0627\u0645\u0627, Action"));
+        Assert.Equal("Menu1234 Lou0041", GenreTextFormatter.Truncate("Menu1234 Lou0041"));
+    }
 }
