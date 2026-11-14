@@ -22,4 +22,12 @@ public sealed class GenreTextFormatterTests
 
     [Fact]
     public void Blank_is_passed_through() => Assert.Null(GenreTextFormatter.Truncate(null));
+
+    [Fact]
+    public void Arabic_genre_and_english_size_are_isolated_from_each_other()
+    {
+        Assert.Equal("⁨دراما⁩", GenreTextFormatter.IsolateAuto("دراما"));
+        Assert.Equal("⁦File size: 1.4 GB⁩", GenreTextFormatter.IsolateLtr("File size: 1.4 GB"));
+        Assert.Null(GenreTextFormatter.IsolateLtr(null));
+    }
 }

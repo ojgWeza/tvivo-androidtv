@@ -6252,8 +6252,8 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             Channel.Metadata.GetValueOrDefault("year"),
             Channel.Metadata.TryGetValue("rating", out var rating) && CatalogRatingFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
-            GenreTextFormatter.Truncate(Channel.Metadata.GetValueOrDefault("genre")),
-            FileSizeText,
+            GenreTextFormatter.IsolateAuto(GenreTextFormatter.Truncate(Channel.Metadata.GetValueOrDefault("genre"))),
+            GenreTextFormatter.IsolateLtr(FileSizeText),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         public string DetailsAutomationName => string.Join(" · ", new[]
         {

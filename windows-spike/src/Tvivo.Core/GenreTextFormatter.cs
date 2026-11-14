@@ -17,4 +17,12 @@ public static class GenreTextFormatter
         if (cut < maxLength / 2) cut = maxLength;
         return text[..cut].TrimEnd(' ', ',', '/', '-') + "…";
     }
+
+    // Details lines mix provider text (often Arabic) with English "File size: 1.4 GB". Without isolation the
+    // bidi algorithm lets the Arabic run reorder its neighbours and the line reads as gibberish.
+    public static string? IsolateAuto(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? text : "\u2068" + text + "\u2069";
+
+    public static string? IsolateLtr(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? text : "\u2066" + text + "\u2069";
 }

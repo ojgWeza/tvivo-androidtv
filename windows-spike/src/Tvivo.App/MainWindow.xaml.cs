@@ -4018,8 +4018,8 @@ public sealed partial class MainWindow : Window
         {
             metadata.Year,
             CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
-            GenreTextFormatter.Truncate(metadata.Genre),
-            size is null ? null : $"File\u00A0size:\u00A0{size}",
+            GenreTextFormatter.IsolateAuto(GenreTextFormatter.Truncate(metadata.Genre)),
+            size is null ? null : GenreTextFormatter.IsolateLtr($"File\u00A0size:\u00A0{size}"),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
         if (!string.IsNullOrWhiteSpace(metadata.Plot)) about.Add(metadata.Plot);
