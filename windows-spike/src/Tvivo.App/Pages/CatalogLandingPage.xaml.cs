@@ -87,6 +87,11 @@ public sealed partial class CatalogLandingPage : UserControl
     private int _spotlightVisibleFirst = -1;
     private int _spotlightVisibleLast = -1;
     private readonly DispatcherTimer _spotlightSlideTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    // The carousel turns by itself and never reacts to the mouse wheel (the wheel scrolls the page). Any user
+    // choice (hover on a new item, keys, buttons, click) restarts this timer, so the item they picked stays up
+    // for a full interval before auto-rotation resumes.
+    private readonly DispatcherTimer _spotlightAutoTimer = new() { Interval = TimeSpan.FromSeconds(12) };
+    private Windows.Foundation.Point _spotlightLastPointer;
     private double _spotlightSlideFrom;
     private double _spotlightSlideTo;
     private long _spotlightSlideStartedAt;
@@ -336,6 +341,9 @@ public sealed partial class CatalogLandingPage : UserControl
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         SpotlightStripItems.ItemsSource = _spotlightVisibleCards;
         _spotlightSlideTimer.Tick += SpotlightSlideTimer_Tick;
+        _spotlightAutoTimer.Tick += SpotlightAutoTimer_Tick;
+        SpotlightStripViewer.AddHandler(UIElement.PointerMovedEvent,
+            new PointerEventHandler((_, e) => _spotlightLastPointer = e.GetCurrentPoint(null).Position), true);
         SpotlightStripViewer.AddHandler(UIElement.PointerWheelChangedEvent,
             new PointerEventHandler(SpotlightStripViewer_PointerWheelChanged), true);
         CatalogPageRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightPage_KeyDown), true);
@@ -390,6 +398,8 @@ public sealed partial class CatalogLandingPage : UserControl
     public void SetActive(bool active)
     {
         _isActive = active;
+        if (active) _spotlightAutoTimer.Start();
+        else _spotlightAutoTimer.Stop();
         if (!active)
         {
             if (_spotlightReturnId is not null && _spotlightReturnId == _spotlightState.ActivatedItemId)
@@ -527,6 +537,8 @@ public sealed partial class CatalogLandingPage : UserControl
         CancelSpotlightAsyncWork();
         _spotlightSlideTimer.Stop();
         _spotlightSlideTimer.Tick -= SpotlightSlideTimer_Tick;
+        _spotlightAutoTimer.Stop();
+        _spotlightAutoTimer.Tick -= SpotlightAutoTimer_Tick;
         SpotlightStripItems.LayoutUpdated -= SpotlightStripItems_LayoutUpdated;
         _epgTimer.Stop();
         _epgTimer.Tick -= EpgTimer_Tick;
@@ -3160,6 +3172,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (index < 0 || index >= _spotlightCards.Count) return;
         if (index == _spotlightState.OpenIndex) return;
+        if (via != "auto") RestartSpotlightAutoRotate();
         CancelSpotlightResolution();
         _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
         _spotlightState = via switch
@@ -3205,9 +3218,20 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
+    private Windows.Foundation.Point? _spotlightHoverAnchor;
+
     private async void SpotlightItem_PointerEntered(object sender, PointerRoutedEventArgs args)
     {
         if (sender is not Button { DataContext: CatalogCard card }) return;
+        // Hover intent: opening an item widens it and re-centres the strip, which slides a different item under a
+        // motionless mouse and raises PointerEntered for it. Only a real pointer movement may start a dwell,
+        // otherwise hover chases the layout forever.
+        var position = args.GetCurrentPoint(null).Position;
+        if (_spotlightHoverAnchor is { } anchor &&
+            Math.Abs(anchor.X - position.X) < 2 && Math.Abs(anchor.Y - position.Y) < 2)
+            return;
+        _spotlightHoverAnchor = null;
+        RestartSpotlightAutoRotate();
         _spotlightDwellCts?.Cancel();
         var cancellation = _spotlightDwellCts = new CancellationTokenSource();
         var renderGeneration = Interlocked.Read(ref _spotlightRenderGeneration);
@@ -3226,7 +3250,10 @@ public sealed partial class CatalogLandingPage : UserControl
                     if (!cancellation.IsCancellationRequested && _isActive &&
                         _spotlightRenderGeneration == renderGeneration &&
                         card.SpotlightIndex != _spotlightState.OpenIndex)
-                        OpenSpotlight(card.SpotlightIndex, "hover");
+                        {
+                            _spotlightHoverAnchor = position;
+                            OpenSpotlight(card.SpotlightIndex, "hover");
+                        }
                 }
                 finally { Complete(); }
             })) Complete();
@@ -3358,10 +3385,25 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightStripViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
     {
-        var delta = args.GetCurrentPoint(SpotlightStripViewer).Properties.MouseWheelDelta;
-        if (delta == 0 || _spotlightCards.Count == 0) return;
-        MoveSpotlight(delta > 0 ? -1 : 1, false);
-        args.Handled = true;
+        // The wheel never moves the carousel. The inner ScrollViewer may mark it handled even with its
+        // vertical axis off, so restore bubbling and let the page scroll.
+        args.Handled = false;
+    }
+
+    private void SpotlightAutoTimer_Tick(object? sender, object args)
+    {
+        if (!_isActive || _spotlightCards.Count < 2 || _spotlightState.ActivatedItemId is not null) return;
+        var current = _spotlightState.OpenIndex ?? _spotlightState.SelectedIndex;
+        // A turn changes the layout under a resting mouse; that must not read as a hover on a new item.
+        _spotlightHoverAnchor = _spotlightLastPointer;
+        OpenSpotlight((Math.Max(current, -1) + 1) % _spotlightCards.Count, "auto");
+    }
+
+    private void RestartSpotlightAutoRotate()
+    {
+        if (!_spotlightAutoTimer.IsEnabled) return;
+        _spotlightAutoTimer.Stop();
+        _spotlightAutoTimer.Start();
     }
 
     private void MoveSpotlight(int delta, bool keyboard)
@@ -3374,6 +3416,7 @@ public sealed partial class CatalogLandingPage : UserControl
             ? _spotlightState.Focus(delta < 0 ? _spotlightVisibleFirst : _spotlightVisibleLast)
             : _spotlightState.Move(delta);
         if (next.SelectedIndex == _spotlightState.SelectedIndex && next.OpenIndex == _spotlightState.OpenIndex) return;
+        RestartSpotlightAutoRotate();
         var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
         var transferFocus = keyboard || ReferenceEquals(focusedElement, SpotlightPreviousButton) ||
             ReferenceEquals(focusedElement, SpotlightNextButton);
@@ -6209,7 +6252,7 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             Channel.Metadata.GetValueOrDefault("year"),
             Channel.Metadata.TryGetValue("rating", out var rating) && CatalogRatingFormatter.Format(rating) is { } formattedRating ? $"★ {formattedRating}" : null,
-            Channel.Metadata.GetValueOrDefault("genre"),
+            GenreTextFormatter.Truncate(Channel.Metadata.GetValueOrDefault("genre")),
             FileSizeText,
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         public string DetailsAutomationName => string.Join(" · ", new[]

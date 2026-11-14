@@ -2037,7 +2037,18 @@ public sealed partial class MainWindow : Window
         _movieQueueIds = ids.Contains(selected.Id, StringComparer.Ordinal) ? ids : ids.Append(selected.Id).ToArray();
         _movieQueueFinishedIds = finishedIds;
         _movieQueueCategoryId = selected.GroupId;
-        _playerSiblings = new[] { selected };
+        // Old view: the playlist shows only the folder this movie is played from, never other folders.
+        var fallbackTitle = PlayerSideTitleResolver.ForMovie(selected.Metadata.GetValueOrDefault("genre"));
+        await LoadPlayerCategoryTitleAsync(selected, selectionGeneration, fallbackTitle);
+        var channels = await _catalogLandingPage.GetFullCategoryChannelsForAsync(selected);
+        if (selectionGeneration != Volatile.Read(ref _itemSelectionGeneration) ||
+            _currentPage != ShellPage.Player || _nowPlayingChannel?.Id != selected.Id)
+            return;
+        _playerSiblings = channels
+            .Where(channel => channel.Source.Kind == StreamKind.Movie)
+            .Append(selected)
+            .DistinctBy(channel => channel.Id)
+            .ToArray();
         SetPlayerList(_playerSiblings, selected);
         UpdateEpisodeNavigationButtons();
     }
@@ -4007,7 +4018,7 @@ public sealed partial class MainWindow : Window
         {
             metadata.Year,
             CatalogRatingFormatter.Format(metadata.Rating) is { } rating ? $"★ {rating}" : null,
-            metadata.Genre,
+            GenreTextFormatter.Truncate(metadata.Genre),
             size is null ? null : $"File\u00A0size:\u00A0{size}",
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var about = new List<string>();
@@ -6369,7 +6380,7 @@ public sealed partial class MainWindow : Window
     private void SetWindowMiniCompactControls(bool isWindowMini)
     {
         CompactMinimizeButton.Visibility = isWindowMini ? Visibility.Visible : Visibility.Collapsed;
-        const string closeName = "Stop playback";
+        const string closeName = "Close and stop playback";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactCloseButton, closeName);
         ToolTipService.SetToolTip(CompactCloseButton, closeName);
     }

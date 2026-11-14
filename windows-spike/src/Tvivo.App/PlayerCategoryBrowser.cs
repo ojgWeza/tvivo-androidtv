@@ -59,9 +59,13 @@ public sealed partial class MainWindow
         public bool IsHeader => CategoryId is not null && Channel is null;
     }
 
+    // Off by owner request (2026-11-14): the playlist shows only the playing item's own folder, not an accordion of all folders.
+    private static readonly bool PlayerFolderBrowserEnabled = false;
+
     private void StartPlayerCategoryBrowser(StreamKind kind)
     {
-        if (kind is not (StreamKind.Movie or StreamKind.Episode) || _catalogLandingPage.Account is not { } account)
+        if (!PlayerFolderBrowserEnabled || kind is not (StreamKind.Movie or StreamKind.Episode) ||
+            _catalogLandingPage.Account is not { } account)
         {
             _categoryState?.Exit();
             _categoryRows.Clear();

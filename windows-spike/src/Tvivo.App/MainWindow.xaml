@@ -29,13 +29,13 @@
             <Grid x:Name="TitleBarDragRegion" Grid.Column="1" Background="Transparent"
                   AutomationProperties.AccessibilityView="Raw" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                <Button x:Name="WindowStateButton" Content="&#xE922;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="WindowStateButton_Click"
-                        Style="{StaticResource AppCaptionButtonStyle}"
-                        AutomationProperties.Name="Switch to windowed mode"
-                        ToolTipService.ToolTip="{x:Null}" />
                 <Button x:Name="MinimizeWindowButton" Content="&#xE921;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="MinimizeWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
                         AutomationProperties.Name="Minimize window"
+                        ToolTipService.ToolTip="{x:Null}" />
+                <Button x:Name="WindowStateButton" Content="&#xE922;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="WindowStateButton_Click"
+                        Style="{StaticResource AppCaptionButtonStyle}"
+                        AutomationProperties.Name="Switch to windowed mode"
                         ToolTipService.ToolTip="{x:Null}" />
                 <Button x:Name="CloseWindowButton" Content="&#xE8BB;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Click="CloseWindowButton_Click"
                         Style="{StaticResource AppCaptionButtonStyle}"
@@ -388,18 +388,18 @@
                                         Style="{StaticResource AppIconButtonStyle}" MinWidth="44" MinHeight="44"
                                         AutomationProperties.Name="Sleep timer" AutomationProperties.AutomationId="CompactSleepTimerButton"
                                         ToolTipService.ToolTip="Sleep timer" Click="CompactSleepTimerButton_Click" />
-                                <Button x:Name="CompactExpandButton" Grid.Column="3" Content="&#xE8A7;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
-                                        ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
-                                <Button x:Name="CompactCloseButton" Grid.Column="4" Content="&#x25A0;"
-                                        FontFamily="Segoe UI Symbol, Segoe UI" Style="{StaticResource AppIconButtonStyle}"
-                                        AutomationProperties.Name="Stop playback" AutomationProperties.AutomationId="CompactCloseButton"
-                                        ToolTipService.ToolTip="Stop playback" Click="CompactCloseButton_Click" />
-                                <Button x:Name="CompactMinimizeButton" Grid.Column="5" Content="&#xE921;"
+                                <Button x:Name="CompactMinimizeButton" Grid.Column="3" Content="&#xE921;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                         AutomationProperties.Name="Minimize" AutomationProperties.AutomationId="CompactMinimizeButton"
                                         ToolTipService.ToolTip="Minimize" Click="CompactMinimizeButton_Click" />
+                                <Button x:Name="CompactExpandButton" Grid.Column="4" Content="&#xE8A7;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
+                                        ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
+                                <Button x:Name="CompactCloseButton" Grid.Column="5" Content="&#xE8BB;"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        AutomationProperties.Name="Close and stop playback" AutomationProperties.AutomationId="CompactCloseButton"
+                                        ToolTipService.ToolTip="Close and stop playback" Click="CompactCloseButton_Click" />
                             </Grid>
                         </Border>
                         <Border Grid.Row="2" Padding="10,6,10,8" Background="{ThemeResource AppMediaScrimBrush}"
