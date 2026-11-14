@@ -38,4 +38,8 @@ public sealed class GenreTextFormatterTests
         Assert.Equal("دراما, Action", GenreTextFormatter.Truncate("\u062f\u0631\u0627\u0645\u0627, Action"));
         Assert.Equal("Menu1234 Lou0041", GenreTextFormatter.Truncate("Menu1234 Lou0041"));
     }
+
+    [Fact]
+    public void Slash_separated_genres_become_a_comma_list() =>
+        Assert.Equal("Drama, Crime, Romance", GenreTextFormatter.Truncate("Drama/Crime / Romance"));
 }

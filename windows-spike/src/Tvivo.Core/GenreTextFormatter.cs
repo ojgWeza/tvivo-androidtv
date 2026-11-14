@@ -13,6 +13,9 @@ public static class GenreTextFormatter
     private static readonly Regex EscapedRun = new(@"(?:\\?u[0-9a-fA-F]{4}){2,}", RegexOptions.Compiled);
     private static readonly Regex EscapedUnit = new(@"\\?u([0-9a-fA-F]{4})", RegexOptions.Compiled);
 
+    // "a/b/c" wraps and reorders badly in right-to-left text; present it as a comma list.
+    private static readonly Regex Slashes = new(@"\s*/\s*", RegexOptions.Compiled);
+
     public static string? DecodeEscapes(string? text) =>
         string.IsNullOrEmpty(text) ? text : EscapedRun.Replace(text, run => EscapedUnit.Replace(run.Value,
             unit => ((char)int.Parse(unit.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToString()));
@@ -22,7 +25,7 @@ public static class GenreTextFormatter
     public static string? Truncate(string? genre, int maxLength = DefaultMaxLength)
     {
         if (string.IsNullOrWhiteSpace(genre)) return genre;
-        var text = DecodeEscapes(genre)!.Trim();
+        var text = Slashes.Replace(DecodeEscapes(genre)!.Trim(), ", ");
         if (text.Length <= maxLength) return text;
         var window = text[..maxLength];
         var cut = Math.Max(window.LastIndexOf(','), window.LastIndexOf('/'));

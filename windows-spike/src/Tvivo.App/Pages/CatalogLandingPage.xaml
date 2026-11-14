@@ -128,10 +128,14 @@
                                            FontSize="16"
                                            TextWrapping="Wrap" MaxLines="2"
                                            TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{Binding DetailsLine}" AutomationProperties.Name="{Binding DetailsAutomationName}"
+                                <TextBlock Text="{Binding CardDetailsLine}" AutomationProperties.Name="{Binding DetailsAutomationName}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"
                                            FontSize="16" MaxLines="2" TextWrapping="Wrap"
                                            TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding FileSizeText}" Visibility="{Binding CardFileSizeVisibility}"
+                                           Foreground="{ThemeResource AppOnMediaMutedBrush}"
+                                           FontSize="16" MaxLines="1" TextWrapping="NoWrap"
+                                           TextTrimming="None" />
                                 <TextBlock Text="{Binding TimeLeft}"
                                            Visibility="{Binding ContinueProgressVisibility}"
                                            Foreground="{ThemeResource AppOnMediaMutedBrush}"

@@ -6255,6 +6255,14 @@ public sealed partial class CatalogLandingPage : UserControl
             GenreTextFormatter.IsolateAuto(GenreTextFormatter.Truncate(Channel.Metadata.GetValueOrDefault("genre"))),
             GenreTextFormatter.IsolateLtr(FileSizeText),
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        // Card face: size sits on its own line so a long or right-to-left genre can never squeeze it out.
+        public string CardDetailsLine => Channel is null ? string.Empty : string.Join(" · ", new[]
+        {
+            Channel.Metadata.GetValueOrDefault("year"),
+            Channel.Metadata.TryGetValue("rating", out var cardRating) && CatalogRatingFormatter.Format(cardRating) is { } cardFormattedRating ? $"★ {cardFormattedRating}" : null,
+            GenreTextFormatter.IsolateAuto(GenreTextFormatter.Truncate(Channel.Metadata.GetValueOrDefault("genre"))),
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        public Visibility CardFileSizeVisibility => FileSizeText is null ? Visibility.Collapsed : Visibility.Visible;
         public string DetailsAutomationName => string.Join(" · ", new[]
         {
             DetailsLine,
@@ -6301,6 +6309,9 @@ public sealed partial class CatalogLandingPage : UserControl
         {
             _hoverMetadata = metadata;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardDetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FileSizeText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardFileSizeVisibility)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsAutomationName)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightSummary)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpotlightDetails)));
@@ -6374,6 +6385,9 @@ public sealed partial class CatalogLandingPage : UserControl
         public void NotifyMetadataChanged()
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardDetailsLine)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FileSizeText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardFileSizeVisibility)));
         }
 
         private static string FormatLocalTime(DateTimeOffset utcTime) =>
