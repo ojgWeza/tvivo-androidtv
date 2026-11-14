@@ -266,3 +266,10 @@ See `PROJECT-BIBLE.md` §5 for rationale. These include:
 - Second TV target (LG webOS)
 - Favorite folders (separate persistence item with own plan)
 - Home Settings screen (unscoped, no priority)
+
+## WinUI follow-ups from 2026-11-14 (v1.1.3)
+- [ ] Owner to look at the running app: caption/mini button order, movie playlist shows only its folder, carousel hover no longer chases the mouse, 12 s auto-rotate, wheel scrolls the page, "هي فوضى" genre and size lines.
+- [ ] Install-test `Tvivo-1.1.3-x64.msi` (upgrade over 1.1.1/1.1.2) on a real machine; Windows 10 package for 1.1.3 not built.
+- [ ] Decide whether to delete the dead folder-accordion code (`PlayerCategoryBrowser.cs`, `PlayerFolderBrowserEnabled = false`) or bring it back as an option.
+- [ ] Lost-backslash unicode text may also appear in plot/cast (only genre is decoded); fix at ingestion if it shows up.
+- [ ] Series episode playlist now also uses the plain list (accordion off); confirm that is wanted.
