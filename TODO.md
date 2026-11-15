@@ -273,3 +273,7 @@ See `PROJECT-BIBLE.md` §5 for rationale. These include:
 - [ ] Decide whether to delete the dead folder-accordion code (`PlayerCategoryBrowser.cs`, `PlayerFolderBrowserEnabled = false`) or bring it back as an option.
 - [ ] Lost-backslash unicode text may also appear in plot/cast (only genre is decoded); fix at ingestion if it shows up.
 - [ ] Series episode playlist now also uses the plain list (accordion off); confirm that is wanted.
+
+## WinUI follow-ups from 2026-11-15
+- [ ] Android parity: Watched shelves + mini idle-hide pending (Windows implemented).
+- [ ] Sticky finished flag: replaying a finished final episode and stopping midway keeps it finished, so the series stays in Watched Series and is not in Continue Watching until marked unwatched (no UI for that exists yet).

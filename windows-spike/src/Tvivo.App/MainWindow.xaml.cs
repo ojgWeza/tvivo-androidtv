@@ -321,7 +321,6 @@ public sealed partial class MainWindow : Window
         CompactChrome.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(CompactChrome_PointerReleased), true);
         CompactChrome.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(CompactChrome_PointerCaptureLost), true);
         CompactChrome.GotFocus += CompactChrome_GotFocus;
-        CompactChrome.LostFocus += CompactChrome_LostFocus;
         WindowRoot.SizeChanged += WindowRoot_SizeChanged;
         ContentSurfaceHost.Loaded += ContentSurfaceHost_Loaded;
         ContentSurfaceHost.SizeChanged += ContentSurfaceHost_SizeChanged;
@@ -2167,6 +2166,7 @@ public sealed partial class MainWindow : Window
                 UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));
                 _currentSeriesMetadata = details.Metadata;
                 _playerSeriesSeasons = details.Seasons;
+                RecordSeriesFinalEpisode(account, series.Id, details.Seasons);
                 ApplyMetadataToChannel(series, CatalogItemType.Series, details.Metadata);
                 SetPlayerMetadata(details.Metadata ?? new CatalogMetadata(), CatalogItemType.Series);
                 _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
@@ -4974,7 +4974,11 @@ public sealed partial class MainWindow : Window
             var failed = _playbackFailurePolicy.HasFailed(_activePlaybackSessionGeneration);
             var finished = !forceInProgress && !failed && EpisodeCompletion.IsFinished(position, duration, ended);
             var completionChanged = finished != _seriesCompletionRecorded;
-            QueueProgressSave(account, "episode", channel.Id, _currentSeriesId, position, duration, finished, force);
+            var finalEpisodeId = _playerSeriesSeasons
+                .OrderBy(season => season.Number)
+                .SelectMany(season => season.Episodes.OrderBy(episode => episode.EpisodeNumber))
+                .LastOrDefault()?.Id;
+            QueueProgressSave(account, "episode", channel.Id, _currentSeriesId, position, duration, finished, force, finalEpisodeId);
             _seriesCompletionRecorded = finished;
             SetEpisodeProgressInMemory(channel.Id, position, duration, finished);
             // Keep the row bar in step with what was just saved, without re-reading the database.
@@ -4993,6 +4997,21 @@ public sealed partial class MainWindow : Window
         _lastResumeSavedAt = now;
     }
 
+    // Watched Series needs to know which episode ends the series; record it whenever the episode list is loaded
+    // so series finished before this existed are picked up the next time they are opened.
+    private void RecordSeriesFinalEpisode(ProviderAccount account, string seriesId, IReadOnlyList<SeriesSeason> seasons)
+    {
+        var finalId = seasons.OrderBy(season => season.Number)
+            .SelectMany(season => season.Episodes.OrderBy(episode => episode.EpisodeNumber))
+            .LastOrDefault()?.Id;
+        if (string.IsNullOrEmpty(finalId)) return;
+        _ = Task.Run(() =>
+        {
+            try { _catalogRepository.RecordSeriesFinalEpisode(account, seriesId, finalId); }
+            catch (Exception exception) { LaunchDiagnostics.Write($"event=series.final-episode.failed error={exception.GetType().Name}"); }
+        });
+    }
+
     private void SetEpisodeProgressInMemory(string episodeId, long position, long? duration, bool finished)
     {
         var updated = _seriesEpisodeProgress.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
@@ -5003,7 +5022,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void QueueProgressSave(ProviderAccount account, string kind, string itemId, string? seriesId,
-        long position, long? duration, bool finished, bool force)
+        long position, long? duration, bool finished, bool force, string? seriesFinalEpisodeId = null)
     {
         var generation = Interlocked.Increment(ref _progressWriteGeneration);
         lock (_progressWriteLock)
@@ -5013,7 +5032,7 @@ public sealed partial class MainWindow : Window
             {
                 await previous.ConfigureAwait(false);
                 if (!force && generation != Volatile.Read(ref _progressWriteGeneration)) return;
-                try { _catalogRepository.SaveProgress(account, kind, itemId, seriesId, position, duration, finished); }
+                try { _catalogRepository.SaveProgress(account, kind, itemId, seriesId, position, duration, finished, seriesFinalEpisodeId); }
                 catch (Exception exception)
                 {
                     LaunchDiagnostics.Write($"event=resume.save.failed error={exception.GetType().Name}");
@@ -5136,7 +5155,11 @@ public sealed partial class MainWindow : Window
             _cinemaWindowActive = false;
             StopHeldSeek(commit: true, released: false);
             if (_isCinemaMode) StopCinemaCursorIdleTimer(showCursor: true);
-            if (_playerPresentation == PlayerPresentation.Compact) SetCompactControlsVisible(true);
+            if (_playerPresentation == PlayerPresentation.Compact && _engine.IsPlaying && !_engine.IsBuffering)
+            {
+                _cinemaCursorIdleTimer.Stop();
+                _cinemaCursorIdleTimer.Start();
+            }
         }
         else
         {
@@ -6024,12 +6047,12 @@ public sealed partial class MainWindow : Window
             var hidePointer = CompactPointerHidePolicy.ShouldHide(
                 idleElapsed, compactPlaybackActive, _engine.IsBuffering,
                 pointerOverChrome, _compactGeometryGestureActive || _compactVideoPointerActive || _compactWindowDragActive,
-                compactFlyoutOpen || HasCompactKeyboardNavigationFocus(), _cinemaWindowActive);
+                compactFlyoutOpen || HasCompactKeyboardNavigationFocus());
             var keepVisible = CompactOverlayPolicy.ShouldShow(
                 compactPlaybackActive, _engine.IsBuffering, pointerOverChrome,
                 _compactGeometryGestureActive && !_compactGeometryResize,
                 _compactGeometryGestureActive && _compactGeometryResize,
-                idleElapsed) || !_cinemaWindowActive || HasCompactKeyboardNavigationFocus() || compactFlyoutOpen ||
+                idleElapsed) || HasCompactKeyboardNavigationFocus() || compactFlyoutOpen ||
                 _compactVideoPointerActive || _compactWindowDragActive;
             SetCompactControlsVisible(keepVisible, hidePointer);
             return;
@@ -6144,8 +6167,6 @@ public sealed partial class MainWindow : Window
     }
 
     private void CompactChrome_GotFocus(object sender, RoutedEventArgs args) => ShowCompactControls();
-
-    private void CompactChrome_LostFocus(object sender, RoutedEventArgs args) => ShowCompactControls();
 
     private void ShowCompactControls()
     {

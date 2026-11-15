@@ -112,11 +112,11 @@ public sealed class Round2PolicyTests
     [Fact]
     public void Search_close_pointer_and_session_guards_cover_all_boolean_combinations()
     {
-        foreach (var mask in Enumerable.Range(0, 128))
+        foreach (var mask in Enumerable.Range(0, 64))
         {
-            var flags = Enumerable.Range(0, 7).Select(bit => (mask & (1 << bit)) != 0).ToArray();
-            Assert.Equal(flags[0] && flags[1] && !flags[2] && !flags[3] && !flags[4] && !flags[5] && flags[6],
-                CompactPointerHidePolicy.ShouldHide(flags[0], flags[1], flags[2], flags[3], flags[4], flags[5], flags[6]));
+            var flags = Enumerable.Range(0, 6).Select(bit => (mask & (1 << bit)) != 0).ToArray();
+            Assert.Equal(flags[0] && flags[1] && !flags[2] && !flags[3] && !flags[4] && !flags[5],
+                CompactPointerHidePolicy.ShouldHide(flags[0], flags[1], flags[2], flags[3], flags[4], flags[5]));
         }
         Assert.Equal("alt-f4", WindowCloseRequestPolicy.ClassifyNative(true, true));
         Assert.Equal("taskbar", WindowCloseRequestPolicy.ClassifyNative(true, false));

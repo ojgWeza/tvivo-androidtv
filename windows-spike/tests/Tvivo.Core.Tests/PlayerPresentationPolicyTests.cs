@@ -83,6 +83,12 @@ public sealed class PlayerPresentationPolicyTests
         Assert.Equal(expected, CompactOverlayPolicy.ShouldShow(
             isPlaying, isBuffering, pointerOverControls, isDragging, isResizing, idleElapsed));
 
+    [Fact]
+    public void Compact_overlay_hides_after_idle_even_without_window_activation() =>
+        Assert.False(CompactOverlayPolicy.ShouldShow(
+            isPlaying: true, isBuffering: false, pointerOverControls: false,
+            isDragging: false, isResizing: false, idleElapsed: true));
+
     [Theory]
     [InlineData(PlayerPresentation.Full, PlayerPageKind.Player, true)]
     [InlineData(PlayerPresentation.Full, PlayerPageKind.Catalog, false)]

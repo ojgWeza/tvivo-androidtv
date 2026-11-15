@@ -256,7 +256,7 @@ public sealed class AppSmokeTests
     }
 
     [Fact]
-    public void My_Tvivo_shelves_are_continue_then_added_then_favorites_without_recently_played()
+    public void My_Tvivo_shelves_are_continue_then_added_then_favorites_then_watched()
     {
         Assert.Equal(new[]
         {
@@ -269,12 +269,15 @@ public sealed class AppSmokeTests
             "Favorite Movies",
             "Favorite Series",
             "Favorite Live TV",
+            "Watched Movies",
+            "Watched Series",
         }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Title));
         Assert.Equal(new[]
         {
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
             CatalogItemType.Movie, CatalogItemType.Series, CatalogItemType.Live,
+            CatalogItemType.Movie, CatalogItemType.Series,
         }, MyTvivoShelfDefinitions.All.Select(shelf => shelf.Type));
     }
 

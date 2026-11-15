@@ -271,13 +271,16 @@ internal static class LaunchDiagnostics
 #endif
     }
 
-    public static void WriteException(string message, Exception exception) =>
-        Write($"{message}: {exception.GetType().Name} (message omitted)");
+    public static void WriteException(string message, Exception exception)
+    {
+        var label = Scrubber.HasActiveSecrets ? message : "Exception before account registration";
+        Write($"{label}: {exception.GetType().Name} (message omitted)");
+    }
 
     public static void WriteExceptionDetails(string message, Exception exception)
     {
-        var label = Scrubber.HasActiveSecrets ? message : "Exception before account registration";
         WriteException(message, exception);
+        var label = Scrubber.HasActiveSecrets ? message : "Exception before account registration";
         Write($"{label} hresult: 0x{exception.HResult:X8}");
         for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
         {

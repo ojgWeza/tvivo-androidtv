@@ -440,6 +440,7 @@ public sealed partial class MainWindow
         _currentSeriesAccount = account;
         _currentSeriesMetadata = details.Metadata;
         _playerSeriesSeasons = details.Seasons;
+        RecordSeriesFinalEpisode(account, series.Id, details.Seasons);
         _playerSiblings = details.Seasons.SelectMany(season => season.Episodes)
             .Select(episode => ToEpisodeChannel(account, series.Id, episode)).ToArray();
         UpdateSeriesFavoriteButton(_catalogRepository.IsFavorite(account, CatalogItemType.Series, series.Id));

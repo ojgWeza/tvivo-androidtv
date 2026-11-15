@@ -999,6 +999,65 @@ public sealed class SqliteCatalogRepositoryTests
     }
 
     [Fact]
+    public void Watched_movies_include_finished_and_legacy_near_end_but_midway_rewatch_returns_to_continue()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Movie, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "finished", "", "Finished"),
+                ChannelFor(account, "legacy-near-end", "", "Legacy near end"),
+                ChannelFor(account, "rewatched", "", "Rewatched"),
+            });
+            repo.SaveProgress(account, "movie", "finished", null, 0, 7_200_000, true);
+            repo.SaveProgress(account, "movie", "legacy-near-end", null, 7_200_000 - 600_000, 7_200_000, false);
+            repo.SaveProgress(account, "movie", "rewatched", null, 3_600_000, 7_200_000, false);
+
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "catalog.sqlite")};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE media_progress SET updated_at=CASE item_id WHEN 'finished' THEN 300 WHEN 'legacy-near-end' THEN 200 WHEN 'rewatched' THEN 100 END WHERE account_id=$account AND kind='movie'";
+                command.Parameters.AddWithValue("$account", account.AccountId);
+                command.ExecuteNonQuery();
+            }
+
+            Assert.Equal(new[] { "finished", "legacy-near-end" }, repo.GetWatched(account, CatalogItemType.Movie).Select(item => item.Id));
+            Assert.Equal(new[] { "rewatched" }, repo.GetContinueWatching(account, CatalogItemType.Movie).Select(item => item.Id));
+            Assert.Equal(new[] { "rewatched" }, repo.GetContinueWatching(account).Select(item => item.Id));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Watched_series_requires_finished_final_episode_and_zero_resume()
+    {
+        var repo = Create(out var dir);
+        try
+        {
+            var account = Account();
+            repo.ReplaceSnapshot(account, CatalogItemType.Series, Array.Empty<ChannelGroup>(), new[]
+            {
+                ChannelFor(account, "finished-show", "", "Finished show"),
+                ChannelFor(account, "resumed-show", "", "Resumed show"),
+                ChannelFor(account, "midway-show", "", "Midway show"),
+            });
+            // Finished the last episode of the series.
+            repo.SaveProgress(account, "episode", "ep-last", "finished-show", 0, 1000, true, "ep-last");
+            // Midway show: first episode finished, the final one not yet played.
+            repo.SaveProgress(account, "episode", "ep-1", "midway-show", 0, 1000, true, "ep-9");
+            // Final episode only half watched.
+            repo.SaveProgress(account, "episode", "ep-9b", "resumed-show", 500, 1000, false, "ep-9b");
+
+            Assert.Equal(new[] { "finished-show" }, repo.GetWatched(account, CatalogItemType.Series).Select(item => item.Id));
+            Assert.Empty(repo.GetWatched(account, CatalogItemType.Live));
+        }
+        finally { repo.Dispose(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Shelf_descriptors_include_category_title_matches_and_previews_stay_bounded()
     {
         using var repo = Create(out var dir); var account = Account();

@@ -245,8 +245,7 @@ public static class CompactPointerHidePolicy
         bool isBuffering,
         bool pointerOverChrome,
         bool gestureActive,
-        bool flyoutOpen,
-        bool windowActive) =>
+        bool flyoutOpen) =>
         idleElapsed && isPlaying && !isBuffering && !pointerOverChrome &&
-        !gestureActive && !flyoutOpen && windowActive;
+        !gestureActive && !flyoutOpen;
 }

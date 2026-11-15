@@ -12,11 +12,10 @@ public sealed class EpisodeCompletionTests
         => Assert.False(EpisodeCompletion.IsFinished(18 * 60_000, Twenty, ended: false));
 
     [Fact]
-    public void Long_episodes_use_the_film_credits_window()
+    public void Episodes_use_the_smaller_of_four_minutes_and_eight_percent()
     {
-        Assert.False(EpisodeCompletion.IsFinished(Twenty - 120_000, Twenty, false));
-        Assert.False(EpisodeCompletion.IsFinished(Twenty - 60_001, Twenty, false));
-        Assert.True(EpisodeCompletion.IsFinished(Twenty - 60_000, Twenty, false));
+        Assert.False(EpisodeCompletion.IsFinished(Twenty - 96_001, Twenty, false));
+        Assert.True(EpisodeCompletion.IsFinished(Twenty - 96_000, Twenty, false));
     }
 
     [Fact]
@@ -53,19 +52,30 @@ public sealed class EpisodeCompletionTests
     private const long Film = 100 * 60_000;
 
     [Fact]
-    public void A_film_is_finished_only_in_its_last_four_minutes()
+    public void Two_hour_film_boundary_is_ten_minutes()
     {
-        Assert.False(MovieCompletion.IsFinished(Film - 5 * 60_000, Film, false));
-        Assert.True(MovieCompletion.IsFinished(Film - 4 * 60_000, Film, false));
-        Assert.True(MovieCompletion.IsFinished(Film - 60_000, Film, false));
+        const long TwoHours = 120 * 60_000;
+        Assert.True(MovieCompletion.IsFinished(TwoHours - 9 * 60_000 - 59_000, TwoHours, false));
+        Assert.False(MovieCompletion.IsFinished(TwoHours - 10 * 60_000 - 1_000, TwoHours, false));
     }
 
     [Fact]
-    public void The_film_credits_window_never_exceeds_five_percent_of_a_short_runtime()
+    public void Movie_tail_uses_ten_percent_for_ninety_minutes_and_twenty_minutes()
     {
-        const long Short = 40 * 60_000; // 5% = 2 minutes
-        Assert.False(MovieCompletion.IsFinished(Short - 3 * 60_000, Short, false));
+        const long Ninety = 90 * 60_000;
+        const long Short = 20 * 60_000;
+        Assert.False(MovieCompletion.IsFinished(Ninety - 9 * 60_000 - 1, Ninety, false));
+        Assert.True(MovieCompletion.IsFinished(Ninety - 9 * 60_000, Ninety, false));
+        Assert.False(MovieCompletion.IsFinished(Short - 2 * 60_000 - 1, Short, false));
         Assert.True(MovieCompletion.IsFinished(Short - 2 * 60_000, Short, false));
+    }
+
+    [Fact]
+    public void Forty_five_minute_episode_boundary_is_eight_percent()
+    {
+        const long Duration = 45 * 60_000;
+        Assert.True(EpisodeCompletion.IsFinished(Duration - 3 * 60_000 - 30_000, Duration, false));
+        Assert.False(EpisodeCompletion.IsFinished(Duration - 3 * 60_000 - 42_000, Duration, false));
     }
 
     [Fact]

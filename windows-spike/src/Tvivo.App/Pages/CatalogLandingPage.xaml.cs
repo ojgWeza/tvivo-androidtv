@@ -1639,7 +1639,7 @@ public sealed partial class CatalogLandingPage : UserControl
             var activityDirty = _activityDataDirty;
             var favoriteDirty = _favoriteDataDirty;
             bool ShouldReplace(string id) =>
-                (activityDirty && (id is "__continue" or "__recent_played" || id.StartsWith("__my_continue_", StringComparison.Ordinal) || id.StartsWith("__my_played_", StringComparison.Ordinal))) ||
+                (activityDirty && (id is "__continue" or "__recent_played" || id.StartsWith("__my_continue_", StringComparison.Ordinal) || id.StartsWith("__my_played_", StringComparison.Ordinal) || id.StartsWith("__my_watched_", StringComparison.Ordinal))) ||
                 (favoriteDirty && (id == "__favorites" || id.StartsWith("__my_favorites_", StringComparison.Ordinal)));
             var shelves = MergeDirtyShelves(current.Shelves, refreshed.Shelves, ShouldReplace);
             var spotlight = MergeDirtyShelves(current.SpotlightShelves, refreshed.SpotlightShelves, ShouldReplace);
@@ -2193,6 +2193,7 @@ public sealed partial class CatalogLandingPage : UserControl
         MyTvivoShelfKind.ContinueWatching => _repository.GetContinueWatching(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.RecentlyAdded => _repository.GetRecentlyAdded(account, definition.Type, _connection, int.MaxValue, filter),
         MyTvivoShelfKind.Favorites => _repository.GetFavorites(account, definition.Type, _connection, int.MaxValue, filter),
+        MyTvivoShelfKind.Watched => _repository.GetWatched(account, definition.Type, _connection, int.MaxValue, filter),
         _ => Array.Empty<Channel>(),
     };
 

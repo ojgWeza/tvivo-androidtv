@@ -137,6 +137,11 @@ public sealed class SqliteCatalogRepository : IDisposable
         using var refreshState = connection.CreateCommand();
         refreshState.CommandText = "CREATE TABLE IF NOT EXISTS catalog_refresh_state(account_id TEXT NOT NULL,type TEXT NOT NULL,last_success_utc_ms INTEGER NOT NULL,PRIMARY KEY(account_id,type))";
         refreshState.ExecuteNonQuery();
+        // The provider owns the episode list, so the player records which episode ends the series;
+        // "Watched Series" is true only once that episode is finished.
+        using var finalEpisode = connection.CreateCommand();
+        finalEpisode.CommandText = "CREATE TABLE IF NOT EXISTS series_final_episode(account_id TEXT NOT NULL,series_id TEXT NOT NULL,episode_id TEXT NOT NULL,PRIMARY KEY(account_id,series_id))";
+        finalEpisode.ExecuteNonQuery();
     }
 
     private static void MigrateMediaProgress(SqliteConnection connection)
@@ -963,13 +968,36 @@ public sealed class SqliteCatalogRepository : IDisposable
             "EXISTS (SELECT 1 FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id)",
             "(SELECT f.added_at FROM favorites f WHERE f.account_id=items.account_id AND f.type=items.type AND f.item_id=items.id) DESC, items.type, items.id", limit, filter, artworkFirst: true);
 
+    public IReadOnlyList<Channel> GetWatched(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
+    {
+        if (type == CatalogItemType.Movie)
+        {
+            var nearEnd = MovieNearEndPredicate("p");
+            return GetOrderedItems(account, type, connection,
+                $"EXISTS (SELECT 1 FROM media_progress p WHERE p.account_id=items.account_id AND p.kind='movie' AND p.item_id=items.id AND (p.finished=1 OR ({nearEnd})))",
+                "(SELECT p.updated_at FROM media_progress p WHERE p.account_id=items.account_id AND p.kind='movie' AND p.item_id=items.id) DESC, id ASC",
+                limit, filter, artworkFirst: true);
+        }
+        if (type == CatalogItemType.Series)
+            return GetOrderedItems(account, type, connection,
+                "items.resume_ms=0 AND EXISTS (SELECT 1 FROM series_final_episode fe JOIN media_progress p ON p.account_id=fe.account_id AND p.kind='episode' AND p.item_id=fe.episode_id WHERE fe.account_id=items.account_id AND fe.series_id=items.id AND p.finished=1)",
+                "(SELECT p.updated_at FROM series_final_episode fe JOIN media_progress p ON p.account_id=fe.account_id AND p.kind='episode' AND p.item_id=fe.episode_id WHERE fe.account_id=items.account_id AND fe.series_id=items.id) DESC, id ASC",
+                limit, filter, artworkFirst: true);
+        return Array.Empty<Channel>();
+    }
+
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, CatalogItemType type, ProviderConnection? connection = null, int limit = 100, string? filter = null)
-        => GetOrderedItems(account, type, connection, "resume_ms > 0", "resume_updated_at DESC, id ASC", limit, filter, artworkFirst: true);
+        => GetOrderedItems(account, type, connection,
+            type == CatalogItemType.Movie ? $"resume_ms > 0 AND NOT EXISTS (SELECT 1 FROM media_progress p WHERE p.account_id=items.account_id AND p.kind='movie' AND p.item_id=items.id AND {MovieNearEndPredicate("p")})" : "resume_ms > 0",
+            "resume_updated_at DESC, id ASC", limit, filter, artworkFirst: true);
 
     public IReadOnlyList<Channel> GetContinueWatching(ProviderAccount account, ProviderConnection? connection = null, int limit = 50)
         => GetOrderedItemsAcrossTypes(account, connection,
-            "items.resume_ms > 0 AND items.type IN ('Movie','Series')",
+            $"items.resume_ms > 0 AND items.type IN ('Movie','Series') AND (items.type!='Movie' OR NOT EXISTS (SELECT 1 FROM media_progress p WHERE p.account_id=items.account_id AND p.kind='movie' AND p.item_id=items.id AND {MovieNearEndPredicate("p")}))",
             "items.resume_updated_at DESC, items.type, items.id", limit, null, artworkFirst: true);
+
+    private static string MovieNearEndPredicate(string alias) =>
+        $"{alias}.duration_ms>0 AND {alias}.duration_ms>={MovieCompletion.MinimumTailDurationMilliseconds} AND {alias}.duration_ms-{alias}.resume_ms<=MIN({MovieCompletion.MaximumTailMilliseconds},{alias}.duration_ms*{MovieCompletion.TailShare.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
 
     // Where an episode should start: its own saved position, never the series-wide one (which
     // belongs to whichever episode was played last). Finished or never-played episodes start at 0.
@@ -1147,7 +1175,19 @@ public sealed class SqliteCatalogRepository : IDisposable
         return command.ExecuteScalar() as string;
     }
 
-    public void SaveProgress(ProviderAccount account, string kind, string itemId, string? seriesId, long resumeMs, long? durationMs, bool finished)
+    public void RecordSeriesFinalEpisode(ProviderAccount account, string seriesId, string episodeId)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        RecordSeriesFinalEpisode(connection, transaction, account.AccountId, seriesId, episodeId);
+        transaction.Commit();
+    }
+
+    private static void RecordSeriesFinalEpisode(SqliteConnection connection, SqliteTransaction transaction, string accountId, string seriesId, string episodeId) =>
+        Execute(connection, transaction, "INSERT INTO series_final_episode(account_id,series_id,episode_id) VALUES($a,$series,$episode) ON CONFLICT(account_id,series_id) DO UPDATE SET episode_id=excluded.episode_id",
+            ("$a", accountId), ("$series", seriesId), ("$episode", episodeId));
+
+    public void SaveProgress(ProviderAccount account, string kind, string itemId, string? seriesId, long resumeMs, long? durationMs, bool finished, string? seriesFinalEpisodeId = null)
     {
         kind = kind.ToLowerInvariant();
         if (kind is not ("movie" or "episode")) throw new ArgumentOutOfRangeException(nameof(kind));
@@ -1165,6 +1205,8 @@ public sealed class SqliteCatalogRepository : IDisposable
         {
             Execute(connection, transaction, "UPDATE items SET resume_ms=$resume,resume_updated_at=$now WHERE account_id=$a AND type='Series' AND id=$series", ("$resume", saved ? 0 : position), ("$now", now), ("$a", account.AccountId), ("$series", seriesId));
             Execute(connection, transaction, "INSERT INTO series_playback(account_id,series_id,last_episode_id,finished,updated_at) VALUES($a,$series,$id,$finished,$now) ON CONFLICT(account_id,series_id) DO UPDATE SET last_episode_id=excluded.last_episode_id,finished=excluded.finished,updated_at=excluded.updated_at", ("$a", account.AccountId), ("$series", seriesId), ("$id", itemId), ("$finished", saved ? 1 : 0), ("$now", now));
+            if (!string.IsNullOrEmpty(seriesFinalEpisodeId))
+                RecordSeriesFinalEpisode(connection, transaction, account.AccountId, seriesId, seriesFinalEpisodeId);
         }
         transaction.Commit();
     }

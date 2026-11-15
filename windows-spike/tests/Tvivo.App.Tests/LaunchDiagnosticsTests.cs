@@ -85,8 +85,9 @@ public sealed class LaunchDiagnosticsTests : IDisposable
 
         var log = File.ReadAllText(LaunchDiagnostics.LogPath);
         Assert.Contains("Playback failed", log, StringComparison.Ordinal);
-        Assert.Contains("Decoder failed", log, StringComparison.Ordinal);
-        Assert.Contains("[redacted-url]", log, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException (message omitted)", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("Decoder failed", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://private.example", log, StringComparison.Ordinal);
         Assert.DoesNotContain(nameof(ThrowDiagnosticFailure), log, StringComparison.Ordinal);
         Assert.DoesNotContain("private.example", log, StringComparison.Ordinal);
     }
@@ -106,8 +107,9 @@ public sealed class LaunchDiagnosticsTests : IDisposable
 
         var log = File.ReadAllText(LaunchDiagnostics.LogPath);
         Assert.Contains("Launch failed", log, StringComparison.Ordinal);
-        Assert.Contains("Decoder failed", log, StringComparison.Ordinal);
-        Assert.Contains("[redacted-url]", log, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException (message omitted)", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("Decoder failed", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://private.example", log, StringComparison.Ordinal);
         Assert.DoesNotContain(nameof(ThrowDiagnosticFailure), log, StringComparison.Ordinal);
         Assert.DoesNotContain("private.example", log, StringComparison.Ordinal);
     }
@@ -169,12 +171,12 @@ public sealed class LaunchDiagnosticsTests : IDisposable
     [Fact]
     public void Export_is_bounded_to_recent_lines_and_characters()
     {
-        for (var i = 0; i < 250; i++) LaunchDiagnostics.Write($"line {i} {new string('x', 120)}");
+        for (var i = 0; i < 500; i++) LaunchDiagnostics.Write($"line {i} {new string('x', 120)}");
 
         var export = LaunchDiagnostics.ExportRecent();
 
         Assert.DoesNotContain("line 0 ", export, StringComparison.Ordinal);
-        Assert.Contains("line 249 ", export, StringComparison.Ordinal);
+        Assert.Contains("line 499 ", export, StringComparison.Ordinal);
         Assert.InRange(export.Length, 1, 65536);
         Assert.Contains("Diagnostics appVersion=", export, StringComparison.Ordinal);
         Assert.Contains("session=", export, StringComparison.Ordinal);
@@ -205,7 +207,7 @@ public sealed class LaunchDiagnosticsTests : IDisposable
         Assert.DoesNotContain("event=artwork.loaded", export, StringComparison.Ordinal);
         Assert.DoesNotContain("BACK-TRACE compositor-frame", export, StringComparison.Ordinal);
         Assert.Contains("event=artwork.failure", export, StringComparison.Ordinal);
-        Assert.DoesNotContain("marker=4", export, StringComparison.Ordinal);
+        Assert.DoesNotContain("marker=4" + Environment.NewLine, export, StringComparison.Ordinal);
         Assert.Contains("marker=404", export, StringComparison.Ordinal);
         Assert.InRange(export.Split(Environment.NewLine).Length, 3, 402);
     }

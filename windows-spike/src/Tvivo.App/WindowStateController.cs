@@ -29,6 +29,7 @@ internal sealed class WindowStateController : IDisposable
     private const uint WmGetMinMaxInfo = 0x0024;
     private const uint WmSize = 0x0005;
     private const uint WmWindowPosChanged = 0x0047;
+    private const uint WmNcCalcSize = 0x0083;
     private const uint WmEnterSizeMove = 0x0231;
     private const uint WmExitSizeMove = 0x0232;
 
@@ -148,6 +149,7 @@ internal sealed class WindowStateController : IDisposable
             presenter.IsAlwaysOnTop = true;
         SetBounds(new Rect { Left = x, Top = y, Right = x + width, Bottom = y + height }, SwpFrameChanged | SwpNoActivate);
         IsWindowMini = true;
+        RecalculateFrame();
         return geometry;
     }
 
@@ -158,6 +160,7 @@ internal sealed class WindowStateController : IDisposable
         // cannot re-assert topmost after an intentional exit.
         IsWindowMini = false;
         _miniModeRequestQueued = false;
+        RecalculateFrame();
         if (_window.AppWindow.Presenter is OverlappedPresenter presenter)
             presenter.IsAlwaysOnTop = false;
         var placement = _miniPreviousPlacement;
@@ -177,6 +180,16 @@ internal sealed class WindowStateController : IDisposable
         const int scMinimize = 0xF020;
         const int scMaximize = 0xF030;
         const int scRestore = 0xF120;
+        if (IsWindowMini && message == WmNcCalcSize && wParam != 0)
+        {
+            var parameters = Marshal.PtrToStructure<NcCalcSizeParams>(lParam);
+            var top = parameters.Rect0.Top;
+            var ncCalcResult = DefSubclassProc(hwnd, message, wParam, lParam);
+            parameters = Marshal.PtrToStructure<NcCalcSizeParams>(lParam);
+            parameters.Rect0.Top = top;
+            Marshal.StructureToPtr(parameters, lParam, false);
+            return ncCalcResult;
+        }
         if (message == WmSysCommand && ((int)wParam & 0xFFF0) == ScClose)
             _closeRequested?.Invoke(WindowCloseRequestPolicy.ClassifyNative(systemCloseCommand: true,
                 altHeld: (GetKeyState(VkMenu) & KeyDownMask) != 0));
@@ -522,10 +535,24 @@ internal sealed class WindowStateController : IDisposable
         LaunchDiagnostics.Write($"WINDOW-STATE utc={DateTimeOffset.UtcNow:O} SetWindowPos-complete");
     }
 
+    private void RecalculateFrame()
+    {
+        var flags = SwpFrameChanged | SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate;
+        if (!SetWindowPos(_hwnd, 0, 0, 0, 0, 0, flags))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
     private static WindowPlacement NewWindowPlacement() => new() { Length = (uint)Marshal.SizeOf<WindowPlacement>() };
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NcCalcSizeParams
+    {
+        public Rect Rect0, Rect1, Rect2;
+        public nint WindowPos;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Point { public int X, Y; }

@@ -8,6 +8,7 @@ public enum MyTvivoShelfKind
     ContinueWatching,
     RecentlyAdded,
     Favorites,
+    Watched,
 }
 
 public sealed record MyTvivoShelfDefinition(
@@ -29,6 +30,8 @@ public static class MyTvivoShelfDefinitions
         new MyTvivoShelfDefinition("__my_favorites_movie", "Favorite Movies", CatalogItemType.Movie, MyTvivoShelfKind.Favorites),
         new MyTvivoShelfDefinition("__my_favorites_series", "Favorite Series", CatalogItemType.Series, MyTvivoShelfKind.Favorites),
         new MyTvivoShelfDefinition("__my_favorites_live", "Favorite Live TV", CatalogItemType.Live, MyTvivoShelfKind.Favorites),
+        new MyTvivoShelfDefinition("__my_watched_movie", "Watched Movies", CatalogItemType.Movie, MyTvivoShelfKind.Watched),
+        new MyTvivoShelfDefinition("__my_watched_series", "Watched Series", CatalogItemType.Series, MyTvivoShelfKind.Watched),
     });
 
     /// <summary>
