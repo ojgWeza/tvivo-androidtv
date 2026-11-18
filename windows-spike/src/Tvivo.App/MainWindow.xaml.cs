@@ -284,6 +284,7 @@ public sealed partial class MainWindow : Window
         _catalogRepository = App.Services.GetRequiredService<SqliteCatalogRepository>();
         _fileSizeProbe = App.Services.GetRequiredService<IFileSizeProbe>();
         InitializeComponent();
+        BuildPlaybackSpeedFlyouts();
         SleepTimerStateChanged += MainWindow_SleepTimerStateChanged;
         WindowRoot.ActualThemeChanged += WindowRoot_ActualThemeChanged;
         // Sliders mark pointer presses handled, so listen for handled events too.
@@ -627,11 +628,58 @@ public sealed partial class MainWindow : Window
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         if (native)
         {
-            _nativeEngine.Player.PlaybackSession.PlaybackRate = 1;
             NativePlayerElement.AreTransportControlsEnabled = false;
         }
+        RefreshPlaybackSpeedControls();
         ApplyPlayerLayout();
         TraceBackTransition($"playback-surface-visibility engine={(native ? "native" : "vlc")} {VideoSurfaceState()}");
+    }
+
+    private void BuildPlaybackSpeedFlyouts()
+    {
+        foreach (var speed in PlaybackSpeedPolicy.Speeds)
+        {
+            var label = PlaybackSpeedPolicy.Label(speed);
+            var item = new MenuFlyoutItem { Text = label, Tag = speed, FontSize = 18 };
+            AutomationProperties.SetName(item, $"Playback speed {label}");
+            item.Click += PlaybackSpeedChoice_Click;
+            PlaybackSpeedFlyout.Items.Add(item);
+            var compactItem = new MenuFlyoutItem
+            {
+                Text = label,
+                Tag = speed,
+                FontSize = 18
+            };
+            AutomationProperties.SetName(compactItem, $"Playback speed {label}");
+            compactItem.Click += PlaybackSpeedChoice_Click;
+            CompactSpeedFlyout.Items.Add(compactItem);
+        }
+        RefreshPlaybackSpeedControls();
+    }
+
+    private void RefreshPlaybackSpeedControls()
+    {
+        var enabled = _currentSource?.Kind != StreamKind.Live && _engine is IPlaybackRateEngine;
+        var label = PlaybackSpeedPolicy.Label(_engine is IPlaybackRateEngine rateEngine &&
+            PlaybackSpeedPolicy.IsSupported(rateEngine.PlaybackRate) ? rateEngine.PlaybackRate : 1);
+        foreach (var button in new[] { PlaybackSpeedButton, CompactSpeedButton })
+        {
+            button.Content = label;
+            button.IsEnabled = enabled;
+            AutomationProperties.SetName(button, $"Playback speed, {label}");
+            ToolTipService.SetToolTip(button, $"Playback speed: {label}");
+        }
+    }
+
+    private void PlaybackSpeedButton_Click(object sender, RoutedEventArgs args) =>
+        RefreshPlaybackSpeedControls();
+
+    private void PlaybackSpeedChoice_Click(object sender, RoutedEventArgs args)
+    {
+        if (_currentSource?.Kind == StreamKind.Live || sender is not MenuFlyoutItem { Tag: double speed } ||
+            !PlaybackSpeedPolicy.IsSupported(speed) || _engine is not IPlaybackRateEngine rateEngine) return;
+        rateEngine.PlaybackRate = speed;
+        RefreshPlaybackSpeedControls();
     }
 
     private void SetPlaybackSurfaceVisibility(bool visible, bool allowCurtain = false)
@@ -3224,6 +3272,9 @@ public sealed partial class MainWindow : Window
             ? PlayerResetEntryKind.SameMediaRecovery
             : engineFallbackAttempt ? PlayerResetEntryKind.EngineFallback : entryKind;
         var playbackStart = ResetPlayerForNewPlayback(resetKind, keepFrame: isRecovery);
+        if (PlayerResetPolicy.RequiresReset(resetKind) && _engine is IPlaybackRateEngine rateEngine)
+            rateEngine.PlaybackRate = 1;
+        RefreshPlaybackSpeedControls();
         var generation = playbackStart.Generation;
         var sessionCts = playbackStart.SessionCts;
         if (!isRecovery)

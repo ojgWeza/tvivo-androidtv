@@ -2902,7 +2902,11 @@ public sealed partial class CatalogLandingPage : UserControl
                 return;
 
             applyScope = PerfScope.Begin("ApplySnapshot");
-            Interlocked.Increment(ref _pageQueryGeneration);
+            // A cached-page request uses this generation in its isCurrent predicate.
+            // Advancing it here would invalidate that request before its post-await
+            // checks, leaving the previous search surface rendered.
+            if (CatalogSnapshotApplyPolicy.ShouldInvalidatePageRequests(isCurrent is not null))
+                Interlocked.Increment(ref _pageQueryGeneration);
             _activeMode = snapshot.Mode;
             _groups = snapshot.Groups;
             _selectedGroupId = snapshot.SelectedGroupId;

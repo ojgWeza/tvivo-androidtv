@@ -29,7 +29,7 @@ public sealed class VlcPlaybackStateChangedEventArgs : EventArgs
     public VlcPlaybackState State { get; }
 }
 
-public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
+public sealed class VlcPlaybackEngine : IPlaybackEngine, IPlaybackRateEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan TrackProbeDeadline = TimeSpan.FromSeconds(10);
@@ -81,6 +81,14 @@ public sealed class VlcPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, 
     public bool IsEnded => _player?.State == VLCState.Ended;
     public int? HttpStatus => _warnings?.HttpStatus;
     public bool IsStopped => _player?.State == VLCState.Stopped;
+    public double PlaybackRate
+    {
+        get => _player?.Rate ?? 1;
+        set
+        {
+            if (_player is { } player) player.SetRate((float)value);
+        }
+    }
     public long Time => _player?.Time ?? 0;
     public long Length => _player?.Length ?? 0;
     public PlaybackTimeline Timeline => new(Time, Length > 0 ? Length : null);

@@ -9,7 +9,7 @@ using Windows.Media.Playback;
 
 namespace Tvivo.Playback;
 
-public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
+public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, IPlaybackRateEngine, ITrackSelectingEngine, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
     private static readonly NativeLogProvider NativeLog = new();
@@ -34,6 +34,11 @@ public sealed class FFmpegInteropPlaybackEngine : IPlaybackEngine, ITrackSelecti
     public event EventHandler? TracksChanged;
 
     public MediaPlayer Player => _player;
+    public double PlaybackRate
+    {
+        get => _player.PlaybackSession.PlaybackRate;
+        set => _player.PlaybackSession.PlaybackRate = (float)value;
+    }
     public bool HasMedia => _playbackItem is not null;
     public PlaybackSessionToken? CurrentSession => _currentSession;
     public void PublishPendingWarnings()

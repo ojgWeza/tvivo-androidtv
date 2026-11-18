@@ -212,6 +212,11 @@ public interface IPlaybackEngine
     Task StopAsync(PlaybackSessionToken session, CancellationToken cancellationToken = default);
 }
 
+public interface IPlaybackRateEngine
+{
+    double PlaybackRate { get; set; }
+}
+
 public interface ITrackSelectingEngine
 {
     PlaybackTrackSnapshot GetTracks();

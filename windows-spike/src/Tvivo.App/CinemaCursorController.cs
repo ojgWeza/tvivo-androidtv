@@ -90,7 +90,13 @@ internal sealed class CinemaCursorController : IDisposable
         if (!CinemaPointerMovementPolicy.ShouldWakeForPointerPoll(
             elapsedMilliseconds,
             outsidePopup,
-            _hideBaseline.X, _hideBaseline.Y, current.X, current.Y, thresholdPixels)) return false;
+            _hideBaseline.X, _hideBaseline.Y, current.X, current.Y, thresholdPixels))
+        {
+            // SetCursor is thread-local and another window may replace it while the
+            // pointer remains idle. Reassert the hidden cursor on every poll.
+            SetCursor(0);
+            return false;
+        }
 
         RequestShow("pointer-poll");
         return true;
@@ -101,7 +107,11 @@ internal sealed class CinemaCursorController : IDisposable
         // Keep the Win32 screen-pixel coordinates from GetCursorPos intact across monitors;
         // XAML-scaled coordinates would place the hit target away from the actual hotspot.
         var hitTarget = WindowFromPoint(point);
-        if (hitTarget == 0 || (hitTarget != _rootHwnd && !IsChild(_rootHwnd, hitTarget)))
+        // The video surface may hit-test to a separate top-level HWND in this
+        // process. The owned popup still covers that cursor location; ignore only
+        // windows belonging to another process.
+        if (hitTarget == 0 || GetWindowThreadProcessId(hitTarget, out var hitProcess) == 0 ||
+            hitProcess != GetCurrentProcessId())
             return;
 
         if (!RegisterPopupWindowClass())
@@ -255,6 +265,7 @@ internal sealed class CinemaCursorController : IDisposable
 
             if (message == WmMouseMove)
             {
+                SetCursor(0);
                 if (GetCursorPos(out var point) &&
                     CinemaPointerMovementPolicy.ShouldWakeForPointerMove(
                         Environment.TickCount64 - controller._popupCreatedAtTick,
@@ -415,4 +426,7 @@ internal sealed class CinemaCursorController : IDisposable
 
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentProcessId();
 }

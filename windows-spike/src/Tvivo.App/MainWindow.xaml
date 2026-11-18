@@ -438,6 +438,7 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <Button x:Name="CompactPreviousButton" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                             Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
@@ -464,7 +465,12 @@
                                             Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
                                             AutomationProperties.Name="Next episode" AutomationProperties.AutomationId="CompactNextButton"
                                             ToolTipService.ToolTip="Next episode" Click="NextEpisode_Click" />
-                                    <Button x:Name="CompactAudioSubtitlesButton" Grid.Column="6" Content="&#xED1E;"
+                                    <Button x:Name="CompactSpeedButton" Grid.Column="6" Content="1x" FontSize="17" MinWidth="54"
+                                            AutomationProperties.Name="Playback speed, 1x" AutomationProperties.AutomationId="CompactSpeedButton"
+                                            ToolTipService.ToolTip="Playback speed" Click="PlaybackSpeedButton_Click">
+                                        <Button.Flyout><MenuFlyout x:Name="CompactSpeedFlyout" /></Button.Flyout>
+                                    </Button>
+                                    <Button x:Name="CompactAudioSubtitlesButton" Grid.Column="7" Content="&#xED1E;"
                                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                             Visibility="Collapsed" AutomationProperties.Name="Audio and subtitles"
                                             AutomationProperties.AutomationId="CompactAudioSubtitlesButton"
@@ -473,11 +479,11 @@
                                             <MenuFlyout x:Name="CompactAudioSubtitlesFlyout" />
                                         </Button.Flyout>
                                     </Button>
-                                    <Button x:Name="CompactMuteButton" Grid.Column="7" Content="&#xE767;"
+                                    <Button x:Name="CompactMuteButton" Grid.Column="8" Content="&#xE767;"
                                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
                                             AutomationProperties.Name="Mute" AutomationProperties.AutomationId="CompactMuteButton"
                                             ToolTipService.ToolTip="Mute" Click="ToggleMute_Click" />
-                                    <Slider x:Name="CompactVolumeSlider" Grid.Column="8" Width="80" Minimum="0" Maximum="100" Value="100"
+                                    <Slider x:Name="CompactVolumeSlider" Grid.Column="9" Width="80" Minimum="0" Maximum="100" Value="100"
                                             VerticalAlignment="Center" IsThumbToolTipEnabled="False"
                                             ValueChanged="CompactVolumeSlider_ValueChanged"
                                             AutomationProperties.Name="Volume" AutomationProperties.AutomationId="CompactVolumeSlider" />
@@ -598,6 +604,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
                         <Button x:Name="RewindButton" Grid.Column="2" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
@@ -624,6 +631,12 @@
                             <Button.Flyout>
                                 <MenuFlyout x:Name="AudioSubtitlesFlyout" />
                             </Button.Flyout>
+                        </Button>
+                        <Button x:Name="PlaybackSpeedButton" Grid.Column="13" Content="1x" FontSize="18" MinWidth="58" MinHeight="48"
+                                Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Playback speed, 1x"
+                                AutomationProperties.AutomationId="PlaybackSpeedButton" ToolTipService.ToolTip="Playback speed"
+                                Click="PlaybackSpeedButton_Click">
+                            <Button.Flyout><MenuFlyout x:Name="PlaybackSpeedFlyout" /></Button.Flyout>
                         </Button>
                         <Button x:Name="VolumeButton" Grid.Column="8" Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppIconButtonStyle}" DoubleTapped="VolumeButton_DoubleTapped">
                             <Button.Flyout>
