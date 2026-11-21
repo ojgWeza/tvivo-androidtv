@@ -670,8 +670,9 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetName(button, $"Playback speed, {label}");
             ToolTipService.SetToolTip(button, $"Playback speed: {label}");
         }
-        MorePlaybackSpeedButton.Content = $"Playback speed, {label}";
+        MorePlaybackSpeedButton.Content = label;
         AutomationProperties.SetName(MorePlaybackSpeedButton, $"Playback speed, {label}");
+        ToolTipService.SetToolTip(MorePlaybackSpeedButton, $"Playback speed, {label}");
         MorePlaybackSpeedButton.IsEnabled = enabled;
         MoreAudioSubtitlesButton.IsEnabled = AudioSubtitlesButton.IsEnabled;
     }
@@ -1660,19 +1661,7 @@ public sealed partial class MainWindow : Window
         {
             if (!_windowState.IsWindowMini) BeginCompactGeometryGesture(sender, args, resizeZone.Edges);
         }
-        else if (!UseMiniCaptionRegion && _windowState.IsWindowMini && IsVisualDescendantOf(source, CompactDragRegion) &&
-                 !IsVisualDescendantOf(source, CompactExpandButton) &&
-                 !IsVisualDescendantOf(source, CompactCloseButton) &&
-                 !IsVisualDescendantOf(source, CompactMinimizeButton))
-        {
-            if (args.GetCurrentPoint(CompactChrome).Properties.IsLeftButtonPressed)
-            {
-                _compactWindowDragActive = true;
-                ShowCompactControls("window-drag");
-                _windowState.BeginWindowDrag();
-            }
-        }
-        else if (IsVisualDescendantOf(source, CompactTitleText))
+        else if (!_windowState.IsWindowMini && IsVisualDescendantOf(source, CompactTitleText))
         {
             BeginCompactGeometryGesture(sender, args, CompactResizeEdges.None);
         }
@@ -4466,7 +4455,7 @@ public sealed partial class MainWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         CompactSleepTimerHint.Visibility = miniPlayer && _sleepTimerHintVisible && armed
             ? Visibility.Visible : Visibility.Collapsed;
-        CompactSleepTimerButton.Visibility = miniPlayer ? Visibility.Visible : Visibility.Collapsed;
+        CompactSleepTimerButton.Visibility = Visibility.Collapsed;
         if (_sleepTimerEnded)
             NextEpisodePrompt.Visibility = Visibility.Collapsed;
 
@@ -4484,9 +4473,7 @@ public sealed partial class MainWindow : Window
             ? $"Sleep timer, {accessibleRemaining}"
             : "Sleep timer";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SleepTimerButton, timerButtonName);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactSleepTimerButton, timerButtonName);
         ToolTipService.SetToolTip(SleepTimerButton, status.Length == 0 ? "Sleep timer" : status);
-        ToolTipService.SetToolTip(CompactSleepTimerButton, status.Length == 0 ? "Sleep timer" : status);
         if (SleepTimerFlyout.IsOpen) PrepareSleepTimerFlyout();
     }
 
@@ -5785,16 +5772,8 @@ public sealed partial class MainWindow : Window
         UpdateMiniCaptionRegions();
     }
 
-    // EXPERIMENT (opt-in with TVIVO_MINI_CAPTION=1): let Windows drive the mini-window drag via the
-    // documented InputNonClientPointerSource caption region instead of the WM_NCLBUTTONDOWN/HTCAPTION
-    // message, which can leave the move loop stuck to the mouse after release. The docs only show this
-    // alongside ExtendsContentIntoTitleBar, which we never use; this checks it works without it.
-    private static readonly bool UseMiniCaptionRegion =
-        Environment.GetEnvironmentVariable("TVIVO_MINI_CAPTION") == "1";
-
     private void UpdateMiniCaptionRegions()
     {
-        if (!UseMiniCaptionRegion) return;
         try
         {
             var source = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
@@ -5813,7 +5792,7 @@ public sealed partial class MainWindow : Window
             }
             var passthrough = new List<Windows.Graphics.RectInt32>();
             foreach (var button in new FrameworkElement[]
-                     { CompactExpandButton, CompactCloseButton, CompactMinimizeButton, CompactSleepTimerButton })
+                     { CompactExpandButton, CompactCloseButton, CompactMinimizeButton })
                 if (button.Visibility == Visibility.Visible && button.ActualWidth > 0) passthrough.Add(Px(button));
             var caption = Px(CompactDragRegion);
             source.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Caption, new[] { caption });
@@ -6364,7 +6343,7 @@ public sealed partial class MainWindow : Window
 
     private IEnumerable<Button> CompactTooltipButtons() => new[]
     {
-        CompactCloseButton, CompactMinimizeButton, CompactExpandButton, CompactSleepTimerButton,
+        CompactCloseButton, CompactMinimizeButton, CompactExpandButton,
         CompactPreviousButton, CompactRewindButton, CompactPauseButton,
         CompactForwardButton, CompactNextButton, CompactSpeedButton, CompactAudioSubtitlesButton, CompactMuteButton,
     };
@@ -6523,7 +6502,7 @@ public sealed partial class MainWindow : Window
                  {
                      PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
                      RetryPlaybackButton,
-                     PlaybackSpeedButton, AudioSubtitlesButton, VolumeButton, SleepTimerButton, CompactSleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
+                     PlaybackSpeedButton, AudioSubtitlesButton, VolumeButton, SleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
         StatusText.Foreground = ThemeBrush("AppTextBrush");
