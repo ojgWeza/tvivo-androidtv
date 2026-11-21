@@ -29,6 +29,12 @@ public sealed partial class AccountPage : UserControl
     private int _spotlightFolderLoadGeneration;
     private readonly Dictionary<(SpotlightPageKind Page, CatalogItemType Type), SpotlightSourceControls> _spotlightSources = new();
 
+    private void SettingsScroll_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        // Explicit width: the star columns of the two-column tabs otherwise measure wider than the window.
+        SettingsContent.Width = Math.Max(320, Math.Min(1120, args.NewSize.Width - 48));
+    }
+
     // Two columns when the settings column is wide enough, one column below that. Each control exists once;
     // only the right-hand block moves between (row 0, column 1) and (row 1, column 0).
     private void SettingsContent_SizeChanged(object sender, SizeChangedEventArgs args)

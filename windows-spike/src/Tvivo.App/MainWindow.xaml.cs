@@ -5793,7 +5793,7 @@ public sealed partial class MainWindow : Window
             SaveWindowMiniGeometryIfChanged();
             WindowChrome.Visibility = Visibility.Visible;
             MainHeader.Visibility = Visibility.Visible;
-            WindowRoot.RowDefinitions[1].Height = new GridLength(60);
+            WindowRoot.RowDefinitions[1].Height = new GridLength(72);
             SetCompactResizeZonesVisible(true);
             _currentPage = null;
             if (expandToPlayer)
@@ -6062,7 +6062,7 @@ public sealed partial class MainWindow : Window
         _cinemaPointerMoveDiagnosticWritten = false;
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
-        ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 60);
+        ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 72);
         PlayerPage.Padding = enabled ? new Thickness(0) : new Thickness(16);
         PlayerNavigation.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         PlayerNavigationRow.Height = enabled ? new GridLength(0) : GridLength.Auto;

@@ -7,7 +7,7 @@
     <Grid x:Name="WindowRoot" Background="{ThemeResource AppCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="44" />
-            <RowDefinition Height="60" />
+            <RowDefinition Height="72" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 

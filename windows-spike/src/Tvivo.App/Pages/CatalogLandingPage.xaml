@@ -361,7 +361,7 @@
                     </Grid>
                     <ListView x:Name="ShelvesItems"
                               Grid.Row="1"
-                              Margin="0,-18,0,0"
+                              Margin="-48,-18,-48,0"
                               Loaded="ShelvesItems_Loaded"
                               Unloaded="ShelvesItems_Unloaded"
                               ShowsScrollingPlaceholders="False"
@@ -375,7 +375,7 @@
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Padding" Value="48,0" />
                                 <Setter Property="Margin" Value="0" />
                                 <Setter Property="MinHeight" Value="0" />
                                 <Setter Property="Background" Value="Transparent" />
@@ -432,7 +432,7 @@
                         </ListView.ItemContainerStyle>
                         <ListView.Header>
                         <StackPanel>
-                            <Border x:Name="SpotlightPanel" Margin="0,0,0,30" Padding="12,8" CornerRadius="16">
+                            <Border x:Name="SpotlightPanel" Margin="0,0,0,30" Padding="0,8" CornerRadius="0">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                         <GradientStop Color="{ThemeResource AppSurfaceRaisedColor}" Offset="0" />
@@ -441,13 +441,11 @@
                                 </Border.Background>
                                 <Grid RowSpacing="6">
                                     <Grid.RowDefinitions><RowDefinition Height="320" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                                    <Grid ColumnSpacing="4">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="44" /><ColumnDefinition Width="*" /><ColumnDefinition Width="44" /></Grid.ColumnDefinitions>
-                                        <Button x:Name="SpotlightPreviousButton" Grid.Column="0" Width="44" Height="44"
-                                                VerticalAlignment="Center" Content="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="20"
-                                                Foreground="{ThemeResource AppTextBrush}" Background="{ThemeResource AppPanelSurfaceBrush}"
-                                                AutomationProperties.Name="Previous Spotlight item" Click="SpotlightPreviousButton_Click" />
-                                    <ScrollViewer x:Name="SpotlightStripViewer" Grid.Column="1" HorizontalScrollMode="Enabled"
+                                    <Grid x:Name="SpotlightCarouselHost" PointerEntered="SpotlightCarousel_PointerEntered"
+                                          PointerExited="SpotlightCarousel_PointerExited" PointerPressed="SpotlightCarousel_PointerPressed"
+                                          PointerReleased="SpotlightCarousel_PointerReleased" GotFocus="SpotlightCarousel_GotFocus"
+                                          LostFocus="SpotlightCarousel_LostFocus">
+                                    <ScrollViewer x:Name="SpotlightStripViewer" HorizontalScrollMode="Enabled"
                                                   HorizontalScrollBarVisibility="Visible" VerticalScrollMode="Disabled"
                                                   VerticalScrollBarVisibility="Disabled" ViewChanged="SpotlightStripViewer_ViewChanged"
                                                   SizeChanged="SpotlightStripViewer_SizeChanged">
@@ -498,12 +496,30 @@
                                             <Border x:Name="SpotlightTrailingSpace" IsHitTestVisible="False" />
                                         </StackPanel>
                                     </ScrollViewer>
-                                        <Button x:Name="SpotlightNextButton" Grid.Column="2" Width="44" Height="44"
-                                                VerticalAlignment="Center" Content="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="20"
-                                                Foreground="{ThemeResource AppTextBrush}" Background="{ThemeResource AppPanelSurfaceBrush}"
-                                                AutomationProperties.Name="Next Spotlight item" Click="SpotlightNextButton_Click" />
+                                        <Button x:Name="SpotlightPreviousButton" Width="44" Height="44" Padding="4"
+                                                HorizontalAlignment="Left" VerticalAlignment="Center" Canvas.ZIndex="2"
+                                                Background="Transparent" BorderBrush="Transparent" Foreground="{ThemeResource AppTextBrush}"
+                                                Content="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                                                AutomationProperties.Name="Previous Spotlight item" AutomationProperties.AutomationId="SpotlightPreviousButton"
+                                                Click="SpotlightPreviousButton_Click">
+                                            <Button.ContentTemplate><DataTemplate><Border Width="36" Height="36" CornerRadius="18"
+                                                Background="{ThemeResource AppScrollPillBrush}" BorderBrush="{ThemeResource AppScrollPillBorderBrush}" BorderThickness="1">
+                                                <TextBlock Text="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="{ThemeResource AppTextBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" /></Border></DataTemplate></Button.ContentTemplate>
+                                        </Button>
+                                        <Button x:Name="SpotlightNextButton" Width="44" Height="44" Padding="4"
+                                                HorizontalAlignment="Right" VerticalAlignment="Center" Canvas.ZIndex="2"
+                                                Background="Transparent" BorderBrush="Transparent" Foreground="{ThemeResource AppTextBrush}"
+                                                Content="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                                                AutomationProperties.Name="Next Spotlight item" AutomationProperties.AutomationId="SpotlightNextButton"
+                                                Click="SpotlightNextButton_Click">
+                                            <Button.ContentTemplate><DataTemplate><Border Width="36" Height="36" CornerRadius="18"
+                                                Background="{ThemeResource AppScrollPillBrush}" BorderBrush="{ThemeResource AppScrollPillBorderBrush}" BorderThickness="1">
+                                                <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="{ThemeResource AppTextBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" /></Border></DataTemplate></Button.ContentTemplate>
+                                        </Button>
                                     </Grid>
-                                    <Grid Grid.Row="1" ColumnSpacing="16">
+                                    <Grid Grid.Row="1" ColumnSpacing="16" Margin="48,0">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                         <TextBlock x:Name="SpotlightPositionText" FontSize="16" Foreground="{ThemeResource AppTextBrush}"
                                                    AutomationProperties.LiveSetting="Polite" />
@@ -606,7 +622,16 @@
                     </GridView>
 
                     <!-- Scroll helper: jump to top / page up / page down / bottom, sitting in the page's right padding. -->
-                    <StackPanel x:Name="ScrollNavPanel"
+                    <Button x:Name="ScrollNavRevealButton" Grid.Row="1" Content="&#xE712;"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="40" Height="44" Padding="0"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,-48,0"
+                            Style="{StaticResource AppIconButtonStyle}" Click="ScrollNavRevealButton_Click"
+                            PointerEntered="ScrollNavRevealButton_PointerEntered" PointerExited="ScrollNavRevealButton_PointerExited"
+                            GotFocus="ScrollNavRevealButton_GotFocus" LostFocus="ScrollNavRevealButton_LostFocus"
+                            ToolTipService.ToolTip="Show page scroll controls" AutomationProperties.Name="Show page scroll controls"
+                            AutomationProperties.AutomationId="ScrollNavRevealButton" />
+                    <StackPanel x:Name="ScrollNavPanel" PointerEntered="ScrollNavPanel_PointerEntered"
+                                PointerExited="ScrollNavPanel_PointerExited" GotFocus="ScrollNavPanel_GotFocus" LostFocus="ScrollNavPanel_LostFocus"
                                 Grid.Row="1"
                                 Spacing="2"
                                 Width="48"
@@ -617,19 +642,19 @@
                                 BorderThickness="1"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
-                                Margin="0,0,-44,0">
+                                Margin="0,0,-48,0" Visibility="Collapsed">
                         <Button Content="&#xE74A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollTop_Click"
-                                ToolTipService.ToolTip="Jump to top" AutomationProperties.Name="Jump to top" />
+                                ToolTipService.ToolTip="Jump to top" AutomationProperties.Name="Jump to top" AutomationProperties.AutomationId="ScrollTopButton" />
                         <Button Content="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageUp_Click"
-                                ToolTipService.ToolTip="Page up" AutomationProperties.Name="Page up" />
+                                ToolTipService.ToolTip="Page up" AutomationProperties.Name="Page up" AutomationProperties.AutomationId="ScrollPageUpButton" />
                         <Button Content="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollPageDown_Click"
-                                ToolTipService.ToolTip="Page down" AutomationProperties.Name="Page down" />
+                                ToolTipService.ToolTip="Page down" AutomationProperties.Name="Page down" AutomationProperties.AutomationId="ScrollPageDownButton" />
                         <Button Content="&#xE74B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Width="44" Height="44" MinWidth="44" MinHeight="44" Padding="0"
                                 Style="{StaticResource AppIconButtonStyle}" Click="ScrollBottom_Click"
-                                ToolTipService.ToolTip="Jump to bottom" AutomationProperties.Name="Jump to bottom" />
+                                ToolTipService.ToolTip="Jump to bottom" AutomationProperties.Name="Jump to bottom" AutomationProperties.AutomationId="ScrollBottomButton" />
                     </StackPanel>
 
                     <StackPanel x:Name="PagerPanel"

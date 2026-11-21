@@ -87,6 +87,13 @@ public sealed partial class CatalogLandingPage : UserControl
     private int _spotlightVisibleFirst = -1;
     private int _spotlightVisibleLast = -1;
     private readonly DispatcherTimer _spotlightSlideTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    private readonly DispatcherTimer _spotlightArrowIdleTimer = new() { Interval = TimeSpan.FromMilliseconds(900) };
+    private readonly DispatcherTimer _scrollNavIdleTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
+    private bool _spotlightPointerOver;
+    private bool _spotlightTouchReveal;
+    private bool _spotlightIsScrolling;
+    private bool _scrollNavPointerOver;
+    private bool _scrollNavRequested;
     // The carousel turns by itself and never reacts to the mouse wheel (the wheel scrolls the page). Any user
     // choice (hover on a new item, keys, buttons, click) restarts this timer, so the item they picked stays up
     // for a full interval before auto-rotation resumes.
@@ -344,6 +351,8 @@ public sealed partial class CatalogLandingPage : UserControl
         CatalogPageRoot.ActualThemeChanged += CatalogPageRoot_ActualThemeChanged;
         SpotlightStripItems.ItemsSource = _spotlightVisibleCards;
         _spotlightSlideTimer.Tick += SpotlightSlideTimer_Tick;
+        _spotlightArrowIdleTimer.Tick += (_, _) => { _spotlightArrowIdleTimer.Stop(); UpdateSpotlightArrowVisibility(); };
+        _scrollNavIdleTimer.Tick += (_, _) => { _scrollNavIdleTimer.Stop(); _scrollNavRequested = false; UpdateScrollNavVisibility(); };
         _spotlightAutoTimer.Tick += SpotlightAutoTimer_Tick;
         SpotlightStripViewer.AddHandler(UIElement.PointerMovedEvent,
             new PointerEventHandler(SpotlightStripViewer_PointerMoved), true);
@@ -540,6 +549,8 @@ public sealed partial class CatalogLandingPage : UserControl
         CancelSpotlightAsyncWork();
         _spotlightSlideTimer.Stop();
         _spotlightSlideTimer.Tick -= SpotlightSlideTimer_Tick;
+        _spotlightArrowIdleTimer.Stop();
+        _scrollNavIdleTimer.Stop();
         _spotlightAutoTimer.Stop();
         _spotlightAutoTimer.Tick -= SpotlightAutoTimer_Tick;
         SpotlightStripItems.LayoutUpdated -= SpotlightStripItems_LayoutUpdated;
@@ -3462,7 +3473,9 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
         if (args.IsIntermediate && !_spotlightSlideTimer.IsEnabled) StartSpotlightLayout();
+        _spotlightIsScrolling = args.IsIntermediate;
         RefreshSpotlightWindow(SpotlightStripViewer.HorizontalOffset);
+        UpdateSpotlightArrowVisibility();
         UpdateSpotlightArtworkWindow();
         if (!args.IsIntermediate && !_spotlightSlideTimer.IsEnabled) _spotlightHoverPolicy.OnLayoutSettled();
     }
@@ -3473,6 +3486,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
         UpdateSpotlightCardStates();
         RefreshSpotlightWindow(_spotlightState.Layout.ScrollTarget, force: true);
+        UpdateSpotlightArrowVisibility();
         ScrollToSpotlightTarget(animate: false);
         DispatcherQueue.TryEnqueue(() => _spotlightHoverPolicy.OnLayoutSettled());
         RequestSpotlightArtworkLayout();
@@ -3481,6 +3495,143 @@ public sealed partial class CatalogLandingPage : UserControl
     private void SpotlightPreviousButton_Click(object sender, RoutedEventArgs args) => MoveSpotlight(-1, false);
 
     private void SpotlightNextButton_Click(object sender, RoutedEventArgs args) => MoveSpotlight(1, false);
+
+    private bool SpotlightHasFocus => IsFocusWithin(SpotlightCarouselHost);
+
+    private void SpotlightCarousel_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        _spotlightPointerOver = true;
+        _spotlightArrowIdleTimer.Stop();
+        UpdateSpotlightArrowVisibility();
+    }
+
+    private void SpotlightCarousel_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _spotlightPointerOver = false;
+        ScheduleSpotlightArrowHide();
+    }
+
+    private void SpotlightCarousel_PointerPressed(object sender, PointerRoutedEventArgs args)
+    {
+        if (args.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch)
+        {
+            _spotlightTouchReveal = true;
+            _spotlightArrowIdleTimer.Stop();
+            UpdateSpotlightArrowVisibility();
+        }
+    }
+
+    private void SpotlightCarousel_PointerReleased(object sender, PointerRoutedEventArgs args)
+    {
+        _spotlightTouchReveal = false;
+        ScheduleSpotlightArrowHide();
+    }
+
+    private void SpotlightCarousel_GotFocus(object sender, RoutedEventArgs args)
+    {
+        _spotlightArrowIdleTimer.Stop();
+        UpdateSpotlightArrowVisibility();
+    }
+
+    private void SpotlightCarousel_LostFocus(object sender, RoutedEventArgs args) => ScheduleSpotlightArrowHide();
+
+    private void ScheduleSpotlightArrowHide()
+    {
+        _spotlightArrowIdleTimer.Stop();
+        if (!_spotlightPointerOver && !SpotlightHasFocus && !_spotlightTouchReveal) _spotlightArrowIdleTimer.Start();
+        UpdateSpotlightArrowVisibility();
+    }
+
+    private void UpdateSpotlightArrowVisibility()
+    {
+        var layout = _spotlightState.Layout;
+        var total = _spotlightCards.Count == 0 ? 0 : (_spotlightCards.Count - 1) * (layout.CollapsedWidth + SpotlightViewportState.Gap) +
+            (_spotlightState.OpenIndex is int open ? layout.OpenWidth - layout.CollapsedWidth : 0) + layout.CollapsedWidth;
+        var active = _spotlightPointerOver || SpotlightHasFocus || _spotlightTouchReveal ||
+                     _spotlightSlideTimer.IsEnabled || _spotlightIsScrolling;
+        var previous = SpotlightStripViewer.HorizontalOffset > 0.5;
+        var next = SpotlightStripViewer.HorizontalOffset < total - SpotlightStripViewer.ViewportWidth - 0.5;
+        var previousVisible = active && previous;
+        var nextVisible = active && next;
+        var focused = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
+        if ((!previousVisible && ReferenceEquals(focused, SpotlightPreviousButton)) ||
+            (!nextVisible && ReferenceEquals(focused, SpotlightNextButton)))
+            _spotlightCard?.SpotlightButton?.Focus(FocusState.Keyboard);
+        SpotlightPreviousButton.Visibility = previousVisible ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightNextButton.Visibility = nextVisible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ScrollNavRevealButton_Click(object sender, RoutedEventArgs args)
+    {
+        _scrollNavRequested = !_scrollNavRequested;
+        _scrollNavIdleTimer.Stop();
+        if (_scrollNavRequested) _scrollNavIdleTimer.Start();
+        UpdateScrollNavVisibility();
+    }
+
+    private void ScrollNavRevealButton_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        _scrollNavPointerOver = true;
+        _scrollNavIdleTimer.Stop();
+        UpdateScrollNavVisibility();
+    }
+
+    private void ScrollNavRevealButton_GotFocus(object sender, RoutedEventArgs args) => UpdateScrollNavVisibility();
+
+    private void ScrollNavRevealButton_LostFocus(object sender, RoutedEventArgs args) => UpdateScrollNavVisibility();
+
+    private void ScrollNavRevealButton_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _scrollNavPointerOver = false;
+        if (!IsFocusWithin(ScrollNavPanel))
+        {
+            _scrollNavRequested = false;
+            UpdateScrollNavVisibility();
+        }
+    }
+
+    private void ScrollNavPanel_PointerEntered(object sender, PointerRoutedEventArgs args)
+    {
+        _scrollNavPointerOver = true;
+        _scrollNavIdleTimer.Stop();
+        UpdateScrollNavVisibility();
+    }
+
+    private void ScrollNavPanel_PointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        _scrollNavPointerOver = false;
+        _scrollNavRequested = false;
+        UpdateScrollNavVisibility();
+    }
+
+    private void ScrollNavPanel_GotFocus(object sender, RoutedEventArgs args)
+    {
+        _scrollNavIdleTimer.Stop();
+        UpdateScrollNavVisibility();
+    }
+
+    private void ScrollNavPanel_LostFocus(object sender, RoutedEventArgs args)
+    {
+        _scrollNavRequested = false;
+        UpdateScrollNavVisibility();
+    }
+
+    private void UpdateScrollNavVisibility()
+    {
+        var canScroll = ActiveVerticalScrollViewer()?.ScrollableHeight > 0;
+        var focused = IsFocusWithin(ScrollNavPanel) || IsFocusWithin(ScrollNavRevealButton);
+        ScrollNavRevealButton.Visibility = canScroll ? Visibility.Visible : Visibility.Collapsed;
+        ScrollNavPanel.Visibility = canScroll && (_scrollNavPointerOver || _scrollNavRequested || focused)
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private bool IsFocusWithin(DependencyObject root)
+    {
+        if (XamlRoot is null || FocusManager.GetFocusedElement(XamlRoot) is not DependencyObject focused) return false;
+        for (var element = focused; element is not null; element = VisualTreeHelper.GetParent(element))
+            if (ReferenceEquals(element, root)) return true;
+        return false;
+    }
 
     private void SpotlightStripViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs args) =>
         RouteCatalogVerticalWheel(args, "spotlight");
@@ -3587,7 +3738,7 @@ public sealed partial class CatalogLandingPage : UserControl
             _spotlightVisibleCards.Clear();
             _spotlightVisibleFirst = _spotlightVisibleLast = -1;
             SpotlightLeadingSpace.Width = SpotlightTrailingSpace.Width = 0;
-            SpotlightPreviousButton.Visibility = SpotlightNextButton.Visibility = Visibility.Collapsed;
+            UpdateSpotlightArrowVisibility();
             return;
         }
         double WidthAt(int index) => index == _spotlightState.OpenIndex ? layout.OpenWidth : layout.CollapsedWidth;
@@ -3618,9 +3769,7 @@ public sealed partial class CatalogLandingPage : UserControl
         SpotlightLeadingSpace.Width = StartAt(first);
         var total = StartAt(_spotlightCards.Count - 1) + WidthAt(_spotlightCards.Count - 1);
         SpotlightTrailingSpace.Width = Math.Max(0, total - StartAt(last) - WidthAt(last));
-        SpotlightPreviousButton.Visibility = offset > 0.5 ? Visibility.Visible : Visibility.Collapsed;
-        SpotlightNextButton.Visibility = offset < total - _spotlightState.ViewportWidth - 0.5
-            ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSpotlightArrowVisibility();
         if (!force && first == _spotlightVisibleFirst && last == _spotlightVisibleLast) return;
         _spotlightWindowFirst = first;
         _spotlightWindowLast = last;
@@ -4671,10 +4820,22 @@ public sealed partial class CatalogLandingPage : UserControl
         _shelfScrollViewer = viewer;
         if (viewer is not null)
             viewer.ViewChanged += ShelvesScrollViewer_ViewChanged;
+        UpdateScrollNavVisibility();
     }
 
-    private void ShelvesScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs args) =>
+    private void ShelvesScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs args)
+    {
         RecordShelfScrollAndSchedule();
+        RevealScrollNavForRecentScroll();
+    }
+
+    private void RevealScrollNavForRecentScroll()
+    {
+        _scrollNavRequested = true;
+        _scrollNavIdleTimer.Stop();
+        _scrollNavIdleTimer.Start();
+        UpdateScrollNavVisibility();
+    }
 
     private void RecordShelfScrollAndSchedule()
     {
@@ -5299,14 +5460,23 @@ public sealed partial class CatalogLandingPage : UserControl
     private void AttachOpenShelfScrollViewer()
     {
         if (OpenShelfGrid.Visibility != Visibility.Visible) return;
-        _openShelfScrollViewer = FindShelfScrollViewer(OpenShelfGrid);
+        var viewer = FindShelfScrollViewer(OpenShelfGrid);
+        if (!ReferenceEquals(viewer, _openShelfScrollViewer))
+        {
+            if (_openShelfScrollViewer is { } previous) previous.ViewChanged -= ShelvesScrollViewer_ViewChanged;
+            _openShelfScrollViewer = viewer;
+            if (viewer is not null) viewer.ViewChanged += ShelvesScrollViewer_ViewChanged;
+        }
+        UpdateScrollNavVisibility();
     }
 
     private void OpenShelfGrid_Unloaded(object sender, RoutedEventArgs args)
     {
         if (sender is GridView gridView)
             gridView.LayoutUpdated -= OpenShelfGrid_LayoutUpdated;
+        if (_openShelfScrollViewer is { } viewer) viewer.ViewChanged -= ShelvesScrollViewer_ViewChanged;
         _openShelfScrollViewer = null;
+        UpdateScrollNavVisibility();
         ShelfGrid_Unloaded(sender, args);
     }
 
@@ -5456,6 +5626,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var requested = Math.Clamp(before - properties.MouseWheelDelta / 120.0 * 3 * 48,
             0, viewer.ScrollableHeight);
         viewer.ChangeView(null, requested, null, true);
+        RevealScrollNavForRecentScroll();
         args.Handled = true;
 
         var now = Environment.TickCount64;
@@ -5488,6 +5659,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var requestedOffset = Math.Clamp(target(viewer), 0, viewer.ScrollableHeight);
         LaunchDiagnostics.Write($"event=catalog.scroll-nav offset={viewer.VerticalOffset:0} target={requestedOffset:0} shelves={ShelvesItems.Items.Count} itemsSource={(ShelvesItems.ItemsSource is null ? "null" : "bound")} shelvesVisibility={ShelvesItems.Visibility} contentVisibility={ContentState.Visibility}");
         viewer.ChangeView(null, requestedOffset, null, true);
+        RevealScrollNavForRecentScroll();
     }
 
     private void ScrollTop_Click(object sender, RoutedEventArgs args) => ScrollVerticallyTo(_ => 0);
