@@ -322,6 +322,7 @@ public sealed partial class MainWindow : Window
         CompactChrome.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(CompactChrome_PointerReleased), true);
         CompactChrome.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(CompactChrome_PointerCaptureLost), true);
         CompactChrome.GotFocus += CompactChrome_GotFocus;
+        CompactDragRegion.SizeChanged += (_, _) => UpdateMiniCaptionRegions();
         WindowRoot.SizeChanged += WindowRoot_SizeChanged;
         ContentSurfaceHost.Loaded += ContentSurfaceHost_Loaded;
         ContentSurfaceHost.SizeChanged += ContentSurfaceHost_SizeChanged;
@@ -1659,7 +1660,7 @@ public sealed partial class MainWindow : Window
         {
             if (!_windowState.IsWindowMini) BeginCompactGeometryGesture(sender, args, resizeZone.Edges);
         }
-        else if (_windowState.IsWindowMini && IsVisualDescendantOf(source, CompactDragRegion) &&
+        else if (!UseMiniCaptionRegion && _windowState.IsWindowMini && IsVisualDescendantOf(source, CompactDragRegion) &&
                  !IsVisualDescendantOf(source, CompactExpandButton) &&
                  !IsVisualDescendantOf(source, CompactCloseButton) &&
                  !IsVisualDescendantOf(source, CompactMinimizeButton))
@@ -5781,6 +5782,48 @@ public sealed partial class MainWindow : Window
         ApplyPlayerLayout();
         ApplyCompactGeometryToLayout();
         PlayerPage.UpdateLayout();
+        UpdateMiniCaptionRegions();
+    }
+
+    // EXPERIMENT (opt-in with TVIVO_MINI_CAPTION=1): let Windows drive the mini-window drag via the
+    // documented InputNonClientPointerSource caption region instead of the WM_NCLBUTTONDOWN/HTCAPTION
+    // message, which can leave the move loop stuck to the mouse after release. The docs only show this
+    // alongside ExtendsContentIntoTitleBar, which we never use; this checks it works without it.
+    private static readonly bool UseMiniCaptionRegion =
+        Environment.GetEnvironmentVariable("TVIVO_MINI_CAPTION") == "1";
+
+    private void UpdateMiniCaptionRegions()
+    {
+        if (!UseMiniCaptionRegion) return;
+        try
+        {
+            var source = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
+            if (!_windowState.IsWindowMini || CompactDragRegion.ActualWidth <= 0 || Content?.XamlRoot is null)
+            {
+                source.ClearAllRegionRects();
+                return;
+            }
+            var scale = Content.XamlRoot.RasterizationScale;
+            Windows.Graphics.RectInt32 Px(FrameworkElement element)
+            {
+                var origin = element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+                return new Windows.Graphics.RectInt32(
+                    (int)Math.Round(origin.X * scale), (int)Math.Round(origin.Y * scale),
+                    (int)Math.Round(element.ActualWidth * scale), (int)Math.Round(element.ActualHeight * scale));
+            }
+            var passthrough = new List<Windows.Graphics.RectInt32>();
+            foreach (var button in new FrameworkElement[]
+                     { CompactExpandButton, CompactCloseButton, CompactMinimizeButton, CompactSleepTimerButton })
+                if (button.Visibility == Visibility.Visible && button.ActualWidth > 0) passthrough.Add(Px(button));
+            var caption = Px(CompactDragRegion);
+            source.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Caption, new[] { caption });
+            source.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, passthrough.ToArray());
+            LaunchDiagnostics.Write($"event=window-mini.caption-region rect={caption}");
+        }
+        catch (Exception exception)
+        {
+            LaunchDiagnostics.WriteException("Mini caption region could not be applied", exception);
+        }
     }
 
     private void ExitWindowMiniPlayer(bool expandToPlayer, bool enterCinema = false, Action? afterExit = null,
@@ -5792,6 +5835,7 @@ public sealed partial class MainWindow : Window
             _windowMiniGeometry = _windowState.GetCurrentWindowMiniGeometry();
             _windowMiniGeometryDirty = _windowMiniGeometry != _windowMiniGeometryAtEntry;
             _windowState.ExitWindowMini();
+            UpdateMiniCaptionRegions();
             SaveWindowMiniGeometryIfChanged();
             WindowChrome.Visibility = Visibility.Visible;
             MainHeader.Visibility = Visibility.Visible;
