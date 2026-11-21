@@ -95,11 +95,29 @@ internal sealed class CinemaCursorController : IDisposable
             // SetCursor is thread-local and another window may replace it while the
             // pointer remains idle. Reassert the hidden cursor on every poll.
             SetCursor(0);
+            ForceHiddenCursorRefresh(current);
             return false;
         }
 
         RequestShow("pointer-poll");
         return true;
+    }
+
+    // SetCursor(0) alone leaves the arrow on screen while the pointer is stationary: Windows only
+    // re-resolves the cursor on input. A same-position SetCursorPos makes it re-run WM_SETCURSOR
+    // (our popup answers with a null cursor). Rate-limited; the popup's mouse-move handler ignores
+    // it because the position equals the hide baseline.
+    private long _lastCursorRefreshTick;
+
+    private void ForceHiddenCursorRefresh(NativePoint at)
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastCursorRefreshTick < 500) return;
+        var info = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        if (!GetCursorInfo(ref info) || (info.Flags & 0x1) == 0) return;
+        _lastCursorRefreshTick = now;
+        SetCursorPos(at.X, at.Y);
+        SetCursor(0);
     }
 
     private void CreatePopupAt(NativePoint point)
@@ -392,6 +410,10 @@ internal sealed class CinemaCursorController : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint SetCursor(nint cursor);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetCursorPos(int x, int y);
 
     [DllImport("user32.dll")]
     private static extern nint GetCursor();
