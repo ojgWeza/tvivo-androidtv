@@ -220,7 +220,7 @@
                         <ColumnDefinition x:Name="PlayerSideColumn" Width="0.9*" />
                     </Grid.ColumnDefinitions>
 
-                    <Grid x:Name="PlayerContentGrid" Grid.Column="0" RowSpacing="10">
+                    <Grid x:Name="PlayerContentGrid" Grid.Column="0" RowSpacing="10" SizeChanged="PlayerContentGrid_SizeChanged">
                     <Grid.RowDefinitions>
                         <RowDefinition x:Name="PlayerVideoRow" Height="*" />
                         <RowDefinition x:Name="PlayerDetailsRow" Height="Auto" />
@@ -385,19 +385,19 @@
                                            AutomationProperties.AutomationId="CompactTitleText" />
                                 <Button x:Name="CompactSleepTimerButton" Grid.Column="2" Content="&#xE823;"
                                         FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
-                                        Style="{StaticResource AppIconButtonStyle}" MinWidth="44" MinHeight="44"
+                                        Style="{StaticResource AppPlayerIconButtonStyle}"
                                         AutomationProperties.Name="Sleep timer" AutomationProperties.AutomationId="CompactSleepTimerButton"
                                         ToolTipService.ToolTip="Sleep timer" Click="CompactSleepTimerButton_Click" />
                                 <Button x:Name="CompactMinimizeButton" Grid.Column="3" Content="&#xE921;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                         AutomationProperties.Name="Minimize" AutomationProperties.AutomationId="CompactMinimizeButton"
                                         ToolTipService.ToolTip="Minimize" Click="CompactMinimizeButton_Click" />
                                 <Button x:Name="CompactExpandButton" Grid.Column="4" Content="&#xE8A7;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                         AutomationProperties.Name="Return to player" AutomationProperties.AutomationId="CompactExpandButton"
                                         ToolTipService.ToolTip="Return to player" Click="CompactExpandButton_Click" />
                                 <Button x:Name="CompactCloseButton" Grid.Column="5" Content="&#xE8BB;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                         AutomationProperties.Name="Close and stop playback" AutomationProperties.AutomationId="CompactCloseButton"
                                         ToolTipService.ToolTip="Close and stop playback" Click="CompactCloseButton_Click" />
                             </Grid>
@@ -441,37 +441,37 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <Button x:Name="CompactPreviousButton" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                            Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
+                                            Visibility="Collapsed" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             AutomationProperties.Name="Previous episode" AutomationProperties.AutomationId="CompactPreviousButton"
                                             ToolTipService.ToolTip="Previous episode" Click="PreviousEpisode_Click" />
                                     <Button x:Name="CompactRewindButton" Grid.Column="1" Content="&#xEB9E;"
-                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds"
                                             Click="RewindButton_Click"
                                             PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
                                             PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
                                             LostFocus="SeekButton_LostFocus" />
                                     <Button x:Name="CompactPauseButton" Grid.Column="2" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                            Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Pause"
+                                            Style="{StaticResource AppPlayerIconButtonStyle}" AutomationProperties.Name="Pause"
                                             AutomationProperties.AutomationId="CompactPlayPauseButton" Click="PauseButton_Click" />
                                     <Button x:Name="CompactForwardButton" Grid.Column="3" Content="&#xEB9D;"
-                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds"
                                             Click="ForwardButton_Click"
                                             PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased"
                                             PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost"
                                             LostFocus="SeekButton_LostFocus" />
                                     <Button x:Name="CompactNextButton" Grid.Column="4" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                            Visibility="Collapsed" Style="{StaticResource AppIconButtonStyle}"
+                                            Visibility="Collapsed" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             AutomationProperties.Name="Next episode" AutomationProperties.AutomationId="CompactNextButton"
                                             ToolTipService.ToolTip="Next episode" Click="NextEpisode_Click" />
-                                    <Button x:Name="CompactSpeedButton" Grid.Column="6" Content="1x" FontSize="17" MinWidth="54"
+                                    <Button x:Name="CompactSpeedButton" Grid.Column="6" Content="1x" Style="{StaticResource AppPlayerSpeedButtonStyle}"
                                             AutomationProperties.Name="Playback speed, 1x" AutomationProperties.AutomationId="CompactSpeedButton"
                                             ToolTipService.ToolTip="Playback speed" Click="PlaybackSpeedButton_Click">
                                         <Button.Flyout><MenuFlyout x:Name="CompactSpeedFlyout" /></Button.Flyout>
                                     </Button>
                                     <Button x:Name="CompactAudioSubtitlesButton" Grid.Column="7" Content="&#xED1E;"
-                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             Visibility="Collapsed" AutomationProperties.Name="Audio and subtitles"
                                             AutomationProperties.AutomationId="CompactAudioSubtitlesButton"
                                             ToolTipService.ToolTip="Audio &amp; subtitles">
@@ -480,7 +480,7 @@
                                         </Button.Flyout>
                                     </Button>
                                     <Button x:Name="CompactMuteButton" Grid.Column="8" Content="&#xE767;"
-                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}"
+                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}"
                                             AutomationProperties.Name="Mute" AutomationProperties.AutomationId="CompactMuteButton"
                                             ToolTipService.ToolTip="Mute" Click="ToggleMute_Click" />
                                     <Slider x:Name="CompactVolumeSlider" Grid.Column="9" Width="80" Minimum="0" Maximum="100" Value="100"
@@ -586,59 +586,26 @@
 
                     <!-- Keep one app-owned transport below both playback surfaces. -->
                     <Border x:Name="VlcTransportBar" Grid.Row="2" Padding="14,10" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="10">
-                    <Border.OpacityTransition>
-                        <ScalarTransition Duration="0:0:0.25" />
-                    </Border.OpacityTransition>
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="PauseButton" Grid.Column="0" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppIconButtonStyle}" Click="PauseButton_Click" />
-                        <Button x:Name="RewindButton" Grid.Column="2" Style="{StaticResource AppIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
-                        <Grid Grid.Column="3" ColumnSpacing="10" VerticalAlignment="Center">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="ElapsedText" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
-                            <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
-                            <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
-                        </Grid>
-                        <Button x:Name="ForwardButton" Grid.Column="5" Style="{StaticResource AppIconButtonStyle}" Click="ForwardButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds" Content="&#xEB9D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
-                        <Button x:Name="PreviousEpisodeButton" Grid.Column="1" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Previous episode"
-                                Style="{StaticResource AppIconButtonStyle}" Click="PreviousEpisode_Click"
-                                AutomationProperties.Name="Previous episode" />
-                        <Button x:Name="NextEpisodeButton" Grid.Column="6" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Visibility="Collapsed" ToolTipService.ToolTip="Next episode"
-                                Style="{StaticResource AppIconButtonStyle}" Click="NextEpisode_Click"
-                                AutomationProperties.Name="Next episode" />
-                        <Button x:Name="AudioSubtitlesButton" Grid.Column="7" Content="&#xED1E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                Style="{StaticResource AppIconButtonStyle}" AutomationProperties.Name="Audio and subtitles"
-                                ToolTipService.ToolTip="Audio &amp; subtitles">
-                            <Button.Flyout>
-                                <MenuFlyout x:Name="AudioSubtitlesFlyout" />
-                            </Button.Flyout>
-                        </Button>
-                        <Button x:Name="PlaybackSpeedButton" Grid.Column="13" Content="1x" FontSize="18" MinWidth="58" MinHeight="48"
-                                Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Playback speed, 1x"
-                                AutomationProperties.AutomationId="PlaybackSpeedButton" ToolTipService.ToolTip="Playback speed"
-                                Click="PlaybackSpeedButton_Click">
-                            <Button.Flyout><MenuFlyout x:Name="PlaybackSpeedFlyout" /></Button.Flyout>
-                        </Button>
-                        <Button x:Name="VolumeButton" Grid.Column="8" Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppIconButtonStyle}" DoubleTapped="VolumeButton_DoubleTapped">
+                        <Border.OpacityTransition><ScalarTransition Duration="0:0:0.25" /></Border.OpacityTransition>
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Button x:Name="PreviousEpisodeButton" Content="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTipService.ToolTip="Previous episode" Style="{StaticResource AppPlayerIconButtonStyle}" Click="PreviousEpisode_Click" AutomationProperties.Name="Previous episode" />
+                                <Button x:Name="RewindButton" Style="{StaticResource AppPlayerIconButtonStyle}" Click="RewindButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Rewind 10 seconds" ToolTipService.ToolTip="Rewind 10 seconds" Content="&#xEB9E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                                <Button x:Name="PauseButton" Content="&#xE769;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Pause" ToolTipService.ToolTip="Pause" Style="{StaticResource AppPlayerIconButtonStyle}" Click="PauseButton_Click" />
+                                <Button x:Name="ForwardButton" Style="{StaticResource AppPlayerIconButtonStyle}" Click="ForwardButton_Click" PointerPressed="SeekButton_PointerPressed" PointerReleased="SeekButton_PointerReleased" PointerExited="SeekButton_PointerExited" PointerCaptureLost="SeekButton_PointerCaptureLost" LostFocus="SeekButton_LostFocus" AutomationProperties.Name="Forward 10 seconds" ToolTipService.ToolTip="Forward 10 seconds" Content="&#xEB9D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                                <Button x:Name="NextEpisodeButton" Content="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTipService.ToolTip="Next episode" Style="{StaticResource AppPlayerIconButtonStyle}" Click="NextEpisode_Click" AutomationProperties.Name="Next episode" />
+                            </StackPanel>
+                            <Grid Grid.Column="1" ColumnSpacing="10" VerticalAlignment="Center" Margin="16,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBlock x:Name="ElapsedText" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
+                                <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
+                                <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
+                            </Grid>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Button x:Name="PlaybackSpeedButton" Content="1x" Style="{StaticResource AppPlayerSpeedButtonStyle}" AutomationProperties.Name="Playback speed, 1x" AutomationProperties.AutomationId="PlaybackSpeedButton" ToolTipService.ToolTip="Playback speed" Click="PlaybackSpeedButton_Click"><Button.Flyout><MenuFlyout x:Name="PlaybackSpeedFlyout" /></Button.Flyout></Button>
+                                <Button x:Name="AudioSubtitlesButton" Content="&#xED1E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}" AutomationProperties.Name="Audio and subtitles" ToolTipService.ToolTip="Audio &amp; subtitles"><Button.Flyout><MenuFlyout x:Name="AudioSubtitlesFlyout" /></Button.Flyout></Button>
+                        <Button x:Name="VolumeButton"  Content="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Volume" ToolTipService.ToolTip="Volume" Style="{StaticResource AppPlayerIconButtonStyle}" DoubleTapped="VolumeButton_DoubleTapped">
                             <Button.Flyout>
                                 <Flyout x:Name="VolumeFlyout" Placement="Top" Opened="VolumeFlyout_Opened" Closed="VolumeFlyout_Closed">
                                     <Flyout.FlyoutPresenterStyle>
@@ -656,77 +623,39 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <Button x:Name="SleepTimerButton" Grid.Column="9" MinWidth="142" MinHeight="48" Padding="12,6"
-                                Style="{StaticResource AppQuietButtonStyle}" AutomationProperties.Name="Sleep timer"
-                                ToolTipService.ToolTip="Sleep timer">
-                            <Button.Content>
-                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <TextBlock Text="&#xE823;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="20" VerticalAlignment="Center" />
-                                    <TextBlock Text="Sleep timer" FontSize="18" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button.Content>
-                            <Button.Flyout>
-                                <Flyout x:Name="SleepTimerFlyout" Placement="Top" Closed="SleepTimerFlyout_Closed">
-                                    <Flyout.FlyoutPresenterStyle>
-                                        <Style TargetType="FlyoutPresenter">
-                                            <Setter Property="Padding" Value="6" />
-                                            <Setter Property="MinWidth" Value="210" />
-                                            <Setter Property="CornerRadius" Value="8" />
-                                        </Style>
-                                    </Flyout.FlyoutPresenterStyle>
-                                    <Grid>
-                                    <StackPanel x:Name="SleepTimerChoicesPanel" Spacing="2" Width="210">
-                                        <TextBlock x:Name="SleepTimerFlyoutStatusText" FontSize="16"
-                                                   Foreground="{ThemeResource AppMutedTextBrush}" Margin="8,2"
-                                                   Visibility="Collapsed" AutomationProperties.LiveSetting="Off" />
-                                        <Button Content="15 min" Tag="15" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="15 minutes" />
-                                        <Button Content="30 min" Tag="30" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="30 minutes" />
-                                        <Button Content="45 min" Tag="45" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="45 minutes" />
-                                        <Button Content="1 h" Tag="60" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour" />
-                                        <Button Content="1.5 h" Tag="90" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour 30 minutes" />
-                                        <Button Content="2 h" Tag="120" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="2 hours" />
-                                        <Button x:Name="SleepTimerEndOfItemButton" Content="End of this item"
-                                                Click="SleepTimerEndOfItem_Click" Style="{StaticResource AppQuietButtonStyle}"
-                                                HorizontalAlignment="Stretch" MinHeight="44" FontSize="18" />
-                                        <Button Content="Off" Tag="0" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Turn off sleep timer" />
-                                        <Button Content="Custom…" Click="SleepTimerChooseMinutes_Click" HorizontalAlignment="Stretch"
-                                                Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Custom sleep timer duration" />
-                                    </StackPanel>
-                                    <StackPanel x:Name="SleepTimerCustomPanel" Spacing="6" Width="210" Visibility="Collapsed">
-                                        <TextBlock Text="Custom duration" FontSize="18" FontWeight="SemiBold"
-                                                   Foreground="{ThemeResource AppTextBrush}" Margin="8,2" />
-                                        <NumberBox x:Name="SleepTimerMinutesNumberBox" Header="Minutes" Value="30"
-                                                   Minimum="5" Maximum="240" SmallChange="5" SpinButtonPlacementMode="Inline"
-                                                   AutomationProperties.Name="Minutes, from 5 to 240 in steps of 5" />
-                                        <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
-                                            <Button Content="Set" Click="SleepTimerCustomStart_Click"
-                                                    Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                            <Button Content="Back" Click="SleepTimerCustomCancel_Click"
-                                                    Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                    </Grid>
-                                </Flyout>
-                            </Button.Flyout>
-                        </Button>
-                        <Button x:Name="CinemaButton" Grid.Column="10" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppIconButtonStyle}" Click="CinemaButton_Click" />
-                        <Button x:Name="MiniPlayerButton" Grid.Column="11" Content="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                AutomationProperties.Name="Mini player" AutomationProperties.AutomationId="MiniPlayerButton"
-                                ToolTipService.ToolTip="Mini player" Style="{StaticResource AppIconButtonStyle}"
-                                Click="MiniPlayerButton_Click" />
-                        <Button x:Name="PlaylistToggleButton" Grid.Column="12" Content="&#xE8A0;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                AutomationProperties.Name="Hide playlist" AutomationProperties.AutomationId="PlaylistToggleButton"
-                                ToolTipService.ToolTip="Hide playlist" Style="{StaticResource AppIconButtonStyle}"
-                                Click="PlaylistToggleButton_Click" />
-                    </Grid>
+
+                                <Button x:Name="MorePlayerOptionsButton" Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppPlayerIconButtonStyle}" AutomationProperties.Name="More player options" ToolTipService.ToolTip="More player options">
+                                    <Button.Flyout><Flyout x:Name="MorePlayerOptionsFlyout" Placement="Top"><Flyout.FlyoutPresenterStyle><Style TargetType="FlyoutPresenter"><Setter Property="Padding" Value="10" /><Setter Property="MinWidth" Value="220" /><Setter Property="CornerRadius" Value="8" /></Style></Flyout.FlyoutPresenterStyle><StackPanel Spacing="4">
+                                        <TextBlock Text="Playback" FontWeight="SemiBold" Margin="8,4" />
+                                        <Button x:Name="MorePlaybackSpeedButton" Content="Playback speed, 1x" AutomationProperties.Name="Playback speed, 1x" Click="MorePlaybackSpeedButton_Click" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" />
+                                        <Button x:Name="MoreAudioSubtitlesButton" Content="Audio &amp; subtitles" AutomationProperties.Name="Audio and subtitles" Click="MoreAudioSubtitlesButton_Click" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" />
+                                        <TextBlock Text="Viewing" FontWeight="SemiBold" Margin="8,4" />
+                                        <Button x:Name="PlaylistToggleButton" Content="&#xE8A0;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Hide playlist" AutomationProperties.AutomationId="PlaylistToggleButton" ToolTipService.ToolTip="Hide playlist" Style="{StaticResource AppPlayerIconButtonStyle}" Click="PlaylistToggleButton_Click" />
+                                        <TextBlock Text="Window" FontWeight="SemiBold" Margin="8,4" />
+                                        <Button x:Name="MiniPlayerButton" Content="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Mini player" AutomationProperties.AutomationId="MiniPlayerButton" ToolTipService.ToolTip="Mini player" Style="{StaticResource AppPlayerIconButtonStyle}" Click="MiniPlayerButton_Click" />
+                                        <TextBlock Text="Timer" FontWeight="SemiBold" Margin="8,4" />
+                                        <Button x:Name="SleepTimerButton" Style="{StaticResource AppPlayerIconButtonStyle}" Content="&#xE823;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Sleep timer" ToolTipService.ToolTip="Sleep timer">
+                                            <Button.Flyout><Flyout x:Name="SleepTimerFlyout" Placement="Top" Closed="SleepTimerFlyout_Closed"><Flyout.FlyoutPresenterStyle><Style TargetType="FlyoutPresenter"><Setter Property="Padding" Value="6" /><Setter Property="MinWidth" Value="210" /><Setter Property="CornerRadius" Value="8" /></Style></Flyout.FlyoutPresenterStyle><Grid>
+                                                <StackPanel x:Name="SleepTimerChoicesPanel" Spacing="2" Width="210">
+                                                    <TextBlock x:Name="SleepTimerFlyoutStatusText" FontSize="16" Foreground="{ThemeResource AppMutedTextBrush}" Margin="8,2" Visibility="Collapsed" AutomationProperties.LiveSetting="Off" />
+                                                    <Button Content="15 min" Tag="15" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="15 minutes" />
+                                                    <Button Content="30 min" Tag="30" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="30 minutes" />
+                                                    <Button Content="45 min" Tag="45" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="45 minutes" />
+                                                    <Button Content="1 h" Tag="60" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour" />
+                                                    <Button Content="1.5 h" Tag="90" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="1 hour 30 minutes" />
+                                                    <Button Content="2 h" Tag="120" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="2 hours" />
+                                                    <Button x:Name="SleepTimerEndOfItemButton" Content="End of this item" Click="SleepTimerEndOfItem_Click" Style="{StaticResource AppQuietButtonStyle}" HorizontalAlignment="Stretch" MinHeight="44" FontSize="18" />
+                                                    <Button Content="Off" Tag="0" Click="SleepTimerPreset_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Turn off sleep timer" />
+                                                    <Button Content="Custom…" Click="SleepTimerChooseMinutes_Click" HorizontalAlignment="Stretch" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" AutomationProperties.Name="Custom sleep timer duration" />
+                                                </StackPanel>
+                                                <StackPanel x:Name="SleepTimerCustomPanel" Spacing="6" Width="210" Visibility="Collapsed"><TextBlock Text="Custom duration" FontSize="18" FontWeight="SemiBold" Foreground="{ThemeResource AppTextBrush}" Margin="8,2" /><NumberBox x:Name="SleepTimerMinutesNumberBox" Header="Minutes" Value="30" Minimum="5" Maximum="240" SmallChange="5" SpinButtonPlacementMode="Inline" AutomationProperties.Name="Minutes, from 5 to 240 in steps of 5" /><StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right"><Button Content="Set" Click="SleepTimerCustomStart_Click" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" /><Button Content="Back" Click="SleepTimerCustomCancel_Click" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44" FontSize="18" /></StackPanel></StackPanel>
+                                            </Grid></Flyout></Button.Flyout>
+                                        </Button>
+                                    </StackPanel></Flyout></Button.Flyout>
+                                </Button>
+                                <Button x:Name="CinemaButton" Content="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="Cinema mode" ToolTipService.ToolTip="Cinema mode" Style="{StaticResource AppPlayerIconButtonStyle}" Click="CinemaButton_Click" />
+                            </StackPanel>
+                        </Grid>
                     </Border>
                     </Grid>
 
@@ -752,22 +681,22 @@
                                         Foreground="{ThemeResource AppMutedTextBrush}"
                                         AutomationProperties.Name="Toggle series favorite"
                                         Click="SeriesFavorite_Click" />
-                            <StackPanel x:Name="PlayerPlaylistOptionsRow" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <StackPanel x:Name="PlayerPlaylistOptionsRow" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <ToggleButton x:Name="AutoplayNextToggle" Content="&#xE893;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Autoplay next"
                                               ToolTipService.ToolTip="Autoplay next"
                                               Click="PlaybackModeToggle_Click" />
                                 <ToggleButton x:Name="ShuffleToggle" Content="&#xE8B1;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Shuffle"
                                               ToolTipService.ToolTip="Shuffle"
                                               Click="PlaybackModeToggle_Click" />
                                 <ToggleButton x:Name="LoopToggle" Content="&#xE8EE;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Loop item"
                                               ToolTipService.ToolTip="Loop item"
                                               Click="PlaybackModeToggle_Click" />

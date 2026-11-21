@@ -669,6 +669,41 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetName(button, $"Playback speed, {label}");
             ToolTipService.SetToolTip(button, $"Playback speed: {label}");
         }
+        MorePlaybackSpeedButton.Content = $"Playback speed, {label}";
+        AutomationProperties.SetName(MorePlaybackSpeedButton, $"Playback speed, {label}");
+        MorePlaybackSpeedButton.IsEnabled = enabled;
+        MoreAudioSubtitlesButton.IsEnabled = AudioSubtitlesButton.IsEnabled;
+    }
+
+    private void MorePlaybackSpeedButton_Click(object sender, RoutedEventArgs args) =>
+        PlaybackSpeedFlyout.ShowAt(MorePlaybackSpeedButton);
+
+    private void MoreAudioSubtitlesButton_Click(object sender, RoutedEventArgs args) =>
+        AudioSubtitlesFlyout.ShowAt(MoreAudioSubtitlesButton);
+
+    private void PlayerContentGrid_SizeChanged(object sender, SizeChangedEventArgs args) =>
+        ApplyPlayerWidthRules(args.NewSize.Width);
+
+    private void ApplyPlayerWidthRules(double width)
+    {
+        if (double.IsNaN(width) || width <= 0) return;
+        var compact = _playerPresentation == PlayerPresentation.Compact;
+        if (compact) return;
+
+        var narrow = width < 680;
+        PlaybackSpeedButton.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        AudioSubtitlesButton.Visibility = narrow
+            ? Visibility.Collapsed
+            : (_currentSource is null ? Visibility.Collapsed : Visibility.Visible);
+        MorePlaybackSpeedButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        MoreAudioSubtitlesButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+
+        var veryNarrow = width < 520;
+        PreviousEpisodeButton.Visibility = veryNarrow ? Visibility.Collapsed : Visibility.Visible;
+        NextEpisodeButton.Visibility = veryNarrow ? Visibility.Collapsed : Visibility.Visible;
+        RewindButton.Visibility = veryNarrow ? Visibility.Collapsed : Visibility.Visible;
+        ForwardButton.Visibility = veryNarrow ? Visibility.Collapsed : Visibility.Visible;
+        ProgressSlider.MinWidth = width < 840 ? 180 : 0;
     }
 
     private void PlaybackSpeedButton_Click(object sender, RoutedEventArgs args) =>
@@ -779,9 +814,7 @@ public sealed partial class MainWindow : Window
         var hasTracks = _trackSnapshot.Audio.Count > 0 || _trackSnapshot.Subtitles.Count > 0;
         var isLiveWithoutTracks = _currentSource?.Kind == StreamKind.Live && !hasTracks;
         var inPlayer = _currentPage == ShellPage.Player && _currentSource is not null;
-        AudioSubtitlesButton.Visibility = inPlayer && !isLiveWithoutTracks
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        AudioSubtitlesButton.Visibility = inPlayer ? Visibility.Visible : Visibility.Collapsed;
         AudioSubtitlesButton.IsEnabled = inPlayer && hasTracks && _trackSelectingEngine is not null;
         var inCompact = _playerPresentation == PlayerPresentation.Compact && _currentSource is not null;
         CompactAudioSubtitlesButton.Visibility = inCompact && !isLiveWithoutTracks
@@ -2560,10 +2593,10 @@ public sealed partial class MainWindow : Window
     {
         var kind = _nowPlayingChannel?.Source.Kind;
         var hasPlaylist = kind is StreamKind.Episode or StreamKind.Movie;
-        PreviousEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
-        NextEpisodeButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
-        CompactPreviousButton.Visibility = PreviousEpisodeButton.Visibility;
-        CompactNextButton.Visibility = NextEpisodeButton.Visibility;
+        PreviousEpisodeButton.Visibility = Visibility.Visible;
+        NextEpisodeButton.Visibility = Visibility.Visible;
+        CompactPreviousButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
+        CompactNextButton.Visibility = hasPlaylist ? Visibility.Visible : Visibility.Collapsed;
         var previous = kind == StreamKind.Episode
             ? GetAdjacentEpisode(-1)
             : GetAdjacentVisiblePlaylistItem(-1);
@@ -6289,7 +6322,7 @@ public sealed partial class MainWindow : Window
     {
         CompactCloseButton, CompactMinimizeButton, CompactExpandButton, CompactSleepTimerButton,
         CompactPreviousButton, CompactRewindButton, CompactPauseButton,
-        CompactForwardButton, CompactNextButton, CompactAudioSubtitlesButton, CompactMuteButton,
+        CompactForwardButton, CompactNextButton, CompactSpeedButton, CompactAudioSubtitlesButton, CompactMuteButton,
     };
 
     private void CursorWake(string reason)
@@ -6344,7 +6377,7 @@ public sealed partial class MainWindow : Window
         _cinemaCursorController.SetHidden(_cinemaCursorHidden);
         if (_cinemaCursorHidden)
         {
-            foreach (var button in new[] { ForwardButton, RewindButton, PreviousEpisodeButton, NextEpisodeButton, SleepTimerButton })
+            foreach (var button in new[] { ForwardButton, RewindButton, PreviousEpisodeButton, NextEpisodeButton, SleepTimerButton, CompactSpeedButton })
             {
                 var toolTip = ToolTipService.GetToolTip(button);
                 if (toolTip is ToolTip openToolTip) openToolTip.IsOpen = false;
@@ -6403,7 +6436,8 @@ public sealed partial class MainWindow : Window
         // Cinema: the same transport floats over the bottom of the video instead of sitting below it.
         Grid.SetRow(VlcTransportBar, cinema ? 0 : 2);
         VlcTransportBar.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        SleepTimerButton.Visibility = compact || _windowState.IsWindowMini ? Visibility.Collapsed : Visibility.Visible;
+        MorePlayerOptionsButton.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SleepTimerButton.Visibility = _windowState.IsWindowMini ? Visibility.Collapsed : Visibility.Visible;
         VlcTransportBar.VerticalAlignment = cinema ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
         VlcTransportBar.HorizontalAlignment = HorizontalAlignment.Stretch;
         VlcTransportBar.MaxWidth = cinema ? 1100 : double.PositiveInfinity;
@@ -6425,6 +6459,7 @@ public sealed partial class MainWindow : Window
             CinemaTitleStrip.Opacity = 0;
         }
         ApplyPlayerNowNextVisibility();
+        ApplyPlayerWidthRules(PlayerContentGrid.ActualWidth);
         ApplyPlayerSurfaceColors(cinema, compact);
         NativeCinemaButton.Visibility = Visibility.Collapsed;
         NativePlayerElement.AreTransportControlsEnabled = false;
@@ -6444,7 +6479,7 @@ public sealed partial class MainWindow : Window
                  {
                      PauseButton, RewindButton, ForwardButton, PreviousEpisodeButton, NextEpisodeButton,
                      RetryPlaybackButton,
-                     AudioSubtitlesButton, VolumeButton, SleepTimerButton, CompactSleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
+                     PlaybackSpeedButton, AudioSubtitlesButton, VolumeButton, SleepTimerButton, CompactSleepTimerButton, CinemaButton, MiniPlayerButton, PlaylistToggleButton
                  })
             button.Foreground = ThemeBrush(textKey);
         StatusText.Foreground = ThemeBrush("AppTextBrush");
@@ -6457,7 +6492,7 @@ public sealed partial class MainWindow : Window
                  {
                      CompactExpandButton, CompactCloseButton, CompactMinimizeButton, CompactPreviousButton,
                      CompactRewindButton, CompactPauseButton, CompactForwardButton, CompactNextButton,
-                     CompactAudioSubtitlesButton, CompactMuteButton
+                     CompactSpeedButton, CompactAudioSubtitlesButton, CompactMuteButton
                  })
             button.Foreground = ThemeBrush(compactTextKey);
         CompactProgressSlider.Foreground = ThemeBrush(compactTextKey);
