@@ -7,6 +7,8 @@ public sealed class PlaybackModeTests
 {
     [Theory]
     [InlineData(PlaybackMode.Next, PlaybackMode.Shuffle)]
+    [InlineData(PlaybackMode.Next, PlaybackMode.Loop)]
+    [InlineData(PlaybackMode.Loop, PlaybackMode.Next)]
     [InlineData(PlaybackMode.Shuffle, PlaybackMode.Next)]
     public void Clicking_the_other_mode_then_itself_turns_the_mode_off(
         PlaybackMode current,
@@ -21,6 +23,7 @@ public sealed class PlaybackModeTests
     [Theory]
     [InlineData(PlaybackMode.Next)]
     [InlineData(PlaybackMode.Shuffle)]
+    [InlineData(PlaybackMode.Loop)]
     public void Clicking_the_active_mode_turns_playback_mode_off(PlaybackMode mode)
     {
         Assert.Equal(PlaybackMode.Off, PlaybackModeTransitions.Next(mode, mode));
@@ -29,6 +32,7 @@ public sealed class PlaybackModeTests
     [Theory]
     [InlineData(PlaybackMode.Next)]
     [InlineData(PlaybackMode.Shuffle)]
+    [InlineData(PlaybackMode.Loop)]
     public void Clicking_a_mode_while_off_activates_it(PlaybackMode clicked)
     {
         Assert.Equal(clicked, PlaybackModeTransitions.Next(PlaybackMode.Off, clicked));
@@ -44,8 +48,9 @@ public sealed class PlaybackModeTests
 
     [Theory]
     [InlineData(PlaybackMode.Off, false, false, false)]
-    [InlineData(PlaybackMode.Next, true, true, false)]
-    [InlineData(PlaybackMode.Shuffle, true, true, true)]
+    [InlineData(PlaybackMode.Next, true, false, false)]
+    [InlineData(PlaybackMode.Shuffle, true, false, true)]
+    [InlineData(PlaybackMode.Loop, false, false, false)]
     public void Mode_controls_advance_prompt_and_pick_strategy(
         PlaybackMode mode,
         bool shouldAdvance,
@@ -55,6 +60,14 @@ public sealed class PlaybackModeTests
         Assert.Equal(shouldAdvance, PlaybackModeLogic.ShouldAutoAdvance(mode));
         Assert.Equal(shouldPrompt, PlaybackModeLogic.ShouldShowNextPrompt(mode));
         Assert.Equal(shouldShuffle, PlaybackModeLogic.ShouldShuffle(mode));
+    }
+
+    [Fact]
+    public void Only_loop_mode_loops_the_item()
+    {
+        Assert.True(PlaybackModeLogic.ShouldLoopItem(PlaybackMode.Loop));
+        Assert.False(PlaybackModeLogic.ShouldLoopItem(PlaybackMode.Next));
+        Assert.False(PlaybackModeLogic.ShouldLoopItem(PlaybackMode.Off));
     }
 
     [Theory]

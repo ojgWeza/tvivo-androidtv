@@ -765,6 +765,12 @@
                                               AutomationProperties.Name="Shuffle"
                                               ToolTipService.ToolTip="Shuffle"
                                               Click="PlaybackModeToggle_Click" />
+                                <ToggleButton x:Name="LoopToggle" Content="&#xE8EE;"
+                                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                              Style="{StaticResource AppIconToggleButtonStyle}"
+                                              AutomationProperties.Name="Loop item"
+                                              ToolTipService.ToolTip="Loop item"
+                                              Click="PlaybackModeToggle_Click" />
                             </StackPanel>
                             </Grid>
                             <TextBlock x:Name="PlayerNowPlayingText" Grid.Row="1" Visibility="Collapsed" />

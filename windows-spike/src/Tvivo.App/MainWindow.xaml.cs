@@ -1035,7 +1035,9 @@ public sealed partial class MainWindow : Window
             ? PlaybackMode.Next
             : sender == ShuffleToggle
                 ? PlaybackMode.Shuffle
-                : PlaybackMode.Off;
+                : sender == LoopToggle
+                    ? PlaybackMode.Loop
+                    : PlaybackMode.Off;
         // The toggles show the mode of the kind they were last configured for; edit that one,
         // not whatever _nowPlayingChannel happens to be mid-transition (null after a stop).
         var kind = _playlistOptionsKind ?? _nowPlayingChannel?.Source.Kind;
@@ -1077,6 +1079,7 @@ public sealed partial class MainWindow : Window
     {
         AutoplayNextToggle.IsChecked = mode == PlaybackMode.Next;
         ShuffleToggle.IsChecked = mode == PlaybackMode.Shuffle;
+        LoopToggle.IsChecked = mode == PlaybackMode.Loop;
     }
 
     private StreamKind? _playlistOptionsKind;
@@ -4729,6 +4732,18 @@ public sealed partial class MainWindow : Window
                 _ = EndPlaybackForSleepTimerAsync(forceInProgress: false);
                 return;
             }
+        }
+        if (!_sleepTimerEnded && sessionIsCurrent && ended && genuineEnd && !_nextEpisodeAdvanceStarted &&
+            PlaybackModeLogic.ShouldLoopItem(GetPlaybackMode(_nowPlayingChannel?.Source.Kind)) && _nowPlayingChannel is { } loopChannel)
+        {
+            // Loop item: play the same movie/episode again from the start.
+            _nextEpisodeAdvanceStarted = true;
+            NextEpisodePrompt.Visibility = Visibility.Collapsed;
+            if (loopChannel.Source.Kind == StreamKind.Episode)
+                OpenSeriesEpisode(loopChannel, preserveCompact: _playerPresentation == PlayerPresentation.Compact, autoplayNext: true);
+            else
+                PlayRelatedChannel(loopChannel, preserveCompact: _playerPresentation == PlayerPresentation.Compact, autoplayNext: true);
+            return;
         }
         if (!_sleepTimerEnded && sessionIsCurrent && ended &&
             (_nowPlayingChannel?.Source.Kind == StreamKind.Live || genuineEnd) &&

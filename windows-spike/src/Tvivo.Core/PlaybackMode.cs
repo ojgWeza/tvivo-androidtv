@@ -8,14 +8,15 @@ public enum PlaybackMode
     Off,
     Next,
     Shuffle,
+    Loop,
 }
 
 public static class PlaybackModeTransitions
 {
     public static PlaybackMode Next(PlaybackMode current, PlaybackMode clicked)
     {
-        if (clicked is not (PlaybackMode.Next or PlaybackMode.Shuffle))
-            return current is PlaybackMode.Next or PlaybackMode.Shuffle ? current : PlaybackMode.Off;
+        if (clicked is not (PlaybackMode.Next or PlaybackMode.Shuffle or PlaybackMode.Loop))
+            return current is PlaybackMode.Next or PlaybackMode.Shuffle or PlaybackMode.Loop ? current : PlaybackMode.Off;
 
         return current == clicked ? PlaybackMode.Off : clicked;
     }
@@ -32,7 +33,11 @@ public static class PlaybackModeLogic
 {
     public static bool ShouldAutoAdvance(PlaybackMode mode) => mode is PlaybackMode.Next or PlaybackMode.Shuffle;
 
-    public static bool ShouldShowNextPrompt(PlaybackMode mode) => ShouldAutoAdvance(mode);
+    // Autoplay-next advances silently; the next-item offer is never forced on the viewer.
+    // Next/previous stay available from the playlist and the transport buttons.
+    public static bool ShouldShowNextPrompt(PlaybackMode mode) => false;
+
+    public static bool ShouldLoopItem(PlaybackMode mode) => mode == PlaybackMode.Loop;
 
     public static bool ShouldShuffle(PlaybackMode mode) => mode == PlaybackMode.Shuffle;
 
