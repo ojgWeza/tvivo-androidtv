@@ -599,7 +599,7 @@
                             <Grid Grid.Column="1" ColumnSpacing="10" VerticalAlignment="Center" Margin="16,0">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <TextBlock x:Name="ElapsedText" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
-                                <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
+                                <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1" AutomationProperties.Name="Seek" AutomationProperties.AutomationId="ProgressSlider" ValueChanged="ProgressSlider_ValueChanged" PointerPressed="ProgressSlider_PointerPressed" PointerReleased="ProgressSlider_PointerReleased" PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
                                 <TextBlock x:Name="DurationText" Grid.Column="2" VerticalAlignment="Center" Foreground="{ThemeResource AppMutedTextBrush}" Text="0:00" />
                             </Grid>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
