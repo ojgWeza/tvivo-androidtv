@@ -11,6 +11,10 @@ internal object PlaybackSessionPolicy {
     }
     enum class Action { Stop, Ignore }
 
+    fun shouldFinishStoppedSurface(isIdle: Boolean, hasCurrentItem: Boolean,
+                                   sessionConfirmed: Boolean, stopPending: Boolean): Boolean =
+        isIdle && !hasCurrentItem && sessionConfirmed && !stopPending
+
     fun routeAction(action: String, mayControlSession: Boolean): Action =
         if (mayControlSession && action == PlaybackCommands.STOP) Action.Stop else Action.Ignore
 

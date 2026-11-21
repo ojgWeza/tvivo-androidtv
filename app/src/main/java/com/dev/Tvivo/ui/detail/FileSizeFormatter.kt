@@ -3,11 +3,17 @@ package com.dev.Tvivo.ui.detail
 import com.dev.Tvivo.data.local.entities.MediaFileSizeEntity
 import java.text.NumberFormat
 import java.util.Locale
+import android.content.Context
+import androidx.core.os.ConfigurationCompat
+import android.text.BidiFormatter
 
 data class FileSizeDisplay(val text: String, val isEstimate: Boolean)
 
 /** Formats decimal file sizes. Units deliberately use decimal bytes (1 GB = 1,000,000,000). */
 object FileSizeFormatter {
+    fun appLocale(context: Context): Locale =
+        ConfigurationCompat.getLocales(context.resources.configuration)[0] ?: Locale.getDefault()
+
     fun format(bytes: Long, locale: Locale = Locale.getDefault()): String? {
         if (bytes <= 0L) return null
         val divisor = if (bytes >= 1_000_000_000L) 1_000_000_000.0 else 1_000_000.0
@@ -16,7 +22,7 @@ object FileSizeFormatter {
             minimumFractionDigits = 1
             maximumFractionDigits = 1
         }.format(bytes / divisor)
-        return "$number $unit"
+        return BidiFormatter.getInstance(locale).unicodeWrap("$number $unit")
     }
 
     fun display(row: MediaFileSizeEntity?, locale: Locale = Locale.getDefault()): FileSizeDisplay? {

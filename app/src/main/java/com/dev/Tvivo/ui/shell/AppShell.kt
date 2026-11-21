@@ -133,7 +133,9 @@ fun AppShell(
                 ShellActionButton(stringResource(R.string.nav_search), Icons.Default.Search,
                     enabled = true, onClick = { onSelect(ShellTab.Search) })
             }
-            Box(Modifier.weight(1f)) { content() }
+            // Keep the final list row/action above the compact playback surface when
+            // Android presents the player in PiP over the app.
+            Box(Modifier.weight(1f).padding(bottom = 80.dp)) { content() }
             Row(
                 modifier = Modifier.fillMaxWidth().height(64.dp).background(AppColors.Surface),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -165,6 +167,7 @@ fun AppShell(
 private fun MoreMenu(selected: ShellTab, onSelect: (ShellTab) -> Unit, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
     val label = stringResource(R.string.nav_more)
+    val iconsOnly = LocalConfiguration.current.fontScale >= 1.5f
     val isSelected = selected == ShellTab.Settings || selected == ShellTab.Downloads
     Box(modifier.heightIn(min = 48.dp).testTag("shell-More")
         .semantics { contentDescription = label; this.selected = isSelected }
@@ -172,7 +175,7 @@ private fun MoreMenu(selected: ShellTab, onSelect: (ShellTab) -> Unit, modifier:
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Default.MoreVert, contentDescription = null,
                 tint = if (isSelected) AppColors.AccentText else AppColors.Ink, modifier = Modifier.size(20.dp))
-            Text(stringResource(R.string.nav_more), color = if (isSelected) AppColors.AccentText else AppColors.Ink,
+            if (!iconsOnly) Text(label, color = if (isSelected) AppColors.AccentText else AppColors.Ink,
                 style = TvType.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -204,7 +207,7 @@ private fun TabButton(
         ShellTab.Downloads -> stringResource(R.string.nav_downloads)
     }
     val ink = if (tab == selected) AppColors.AccentText else AppColors.Ink
-    val iconsOnly = compact && LocalConfiguration.current.fontScale >= 1.6f
+    val iconsOnly = compact && LocalConfiguration.current.fontScale >= 1.5f
     val buttonModifier = modifier.testTag("shell-${tab.name}").semantics {
         contentDescription = title
         this.selected = tab == selected

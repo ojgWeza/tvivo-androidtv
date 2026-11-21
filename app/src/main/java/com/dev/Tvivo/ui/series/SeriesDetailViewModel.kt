@@ -189,7 +189,7 @@ class SeriesDetailViewModel(
         sizeJob = viewModelScope.launch {
             sizeRepo.observeEpisodes(account, seriesId, visibleIds).collect { rows ->
                 val displays = rows.mapNotNull { row ->
-                    FileSizeFormatter.display(row)?.let { row.mediaId to it }
+                    FileSizeFormatter.display(row, FileSizeFormatter.appLocale(getApplication()))?.let { row.mediaId to it }
                 }.toMap()
                 _state.update { it.copy(fileSizes = displays) }
             }

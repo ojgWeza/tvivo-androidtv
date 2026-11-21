@@ -37,6 +37,9 @@ import com.dev.Tvivo.ui.common.tvFocusFrame
 import com.dev.Tvivo.ui.theme.AppColors
 import com.dev.Tvivo.ui.theme.TvType
 import kotlinx.coroutines.launch
+import java.text.NumberFormat
+import java.util.Locale
+import android.text.BidiFormatter
 
 internal data class DownloadDisplayRow(val row: DownloadEntity, val title: String, val seriesTitle: String? = null)
 internal fun groupDownloads(rows: List<DownloadDisplayRow>): Pair<List<DownloadDisplayRow>, List<DownloadDisplayRow>> =
@@ -47,6 +50,7 @@ private const val ENABLE_DOWNLOADED_PLAY = true
 @Composable
 fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings: () -> Unit, onPlayDownloaded: (DownloadEntity, String) -> Unit = { _, _ -> }) {
     val context = LocalContext.current
+    val appLocale = androidx.core.os.ConfigurationCompat.getLocales(context.resources.configuration)[0] ?: Locale.getDefault()
     val vodCatalog = remember(context, credentials, accountId) { VodRepository(com.dev.Tvivo.data.local.AppDatabase.get(context.applicationContext), credentials, accountId) }
     val seriesCatalog = remember(context, credentials, accountId) { SeriesRepository(com.dev.Tvivo.data.local.AppDatabase.get(context.applicationContext), credentials, accountId) }
     val repo = remember(context) { DownloadDependencies.repository(context) }
@@ -80,13 +84,14 @@ fun DownloadsScreen(credentials: Credentials, accountId: String, onOpenSettings:
     val notificationsDenied = !com.dev.Tvivo.ui.adaptive.LocalIsTelevision.current && Build.VERSION.SDK_INT >= 33 &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
         context.getSharedPreferences("download-notifications", 0).getBoolean("requested", false)
-    Column(Modifier.fillMaxSize().background(AppColors.Bg).verticalScroll(rememberScrollState()).padding(20.dp),
+    Column(Modifier.fillMaxSize().background(AppColors.Bg).verticalScroll(rememberScrollState()).padding(20.dp).padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.downloads_title), color = AppColors.Ink, style = TvType.title, modifier = Modifier.weight(1f))
             Action(stringResource(R.string.downloads_settings), "downloads-settings", onOpenSettings)
         }
-        Text(stringResource(R.string.downloads_usage, usage.usedGb, usage.capGb.toDouble(), usage.reservedGb),
+        Text(stringResource(R.string.downloads_usage,
+            bidiNumber(usage.usedGb, appLocale), bidiNumber(usage.capGb.toDouble(), appLocale), bidiNumber(usage.reservedGb, appLocale)),
             color = AppColors.Dim, style = TvType.body, modifier = Modifier.testTag("downloads-usage"))
         if (notificationsDenied) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.download_notifications_hint), color = AppColors.Dim, style = TvType.label, modifier = Modifier.weight(1f))
@@ -137,6 +142,7 @@ internal fun DownloadsEmptyState() {
 @Composable
 internal fun DownloadRows(rows: List<DownloadDisplayRow>, onAction: (DownloadEntity, String) -> Unit,
     onDeleteSeries: (List<DownloadEntity>) -> Unit, onPlayDownloaded: (DownloadEntity, String) -> Unit) {
+    val appLocale = androidx.core.os.ConfigurationCompat.getLocales(LocalContext.current.resources.configuration)[0] ?: Locale.getDefault()
     val groups = rows.groupBy { if (it.row.kind == "episode") it.row.seriesId else 0 }
     groups.forEach { (_, grouped) ->
         val series = grouped.firstOrNull()?.seriesTitle.orEmpty()
@@ -151,10 +157,10 @@ internal fun DownloadRows(rows: List<DownloadDisplayRow>, onAction: (DownloadEnt
             val row = item.row
             Column(Modifier.fillMaxWidth().background(AppColors.Surface).padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(item.title, color = AppColors.Ink, style = TvType.body, maxLines = 3)
-                Text("${formatBytes(row.partialBytes)} / ${row.expectedBytes?.let(::formatBytes) ?: "—"} · ${stringResource(stateString(row))}", color = AppColors.Dim, style = TvType.label)
+                Text("${formatBytes(row.partialBytes, appLocale)} / ${row.expectedBytes?.let { formatBytes(it, appLocale) } ?: "—"} · ${stringResource(stateString(row))}", color = AppColors.Dim, style = TvType.label)
                 if (row.state == "DOWNLOADING" || row.state == "COMPLETED") {
                     val percent = if (row.state == "COMPLETED") 100 else if ((row.expectedBytes ?: 0L) > 0) ((row.partialBytes * 100 / row.expectedBytes!!).coerceIn(0, 99)).toInt() else 0
-                    Text(stringResource(R.string.downloads_progress_percent, percent), color = AppColors.Dim, style = TvType.label)
+                    Text(stringResource(R.string.downloads_progress_percent, bidiNumber(percent.toDouble(), appLocale, 0)), color = AppColors.Dim, style = TvType.label)
                 }
                 if (row.state == "FAILED") Text(stringResource(when (row.failureReason?.lowercase()) {
                     "authorization", "unauthorized", "http_401", "http_403" -> R.string.downloads_failed_authorization
@@ -191,4 +197,14 @@ private fun stateString(row: DownloadEntity) = when (row.state) {
     "PAUSED" -> R.string.download_paused; "COMPLETED" -> R.string.download_completed
     "FAILED" -> R.string.download_failed; else -> R.string.download_cancel_action
 }
-private fun formatBytes(bytes: Long): String = if (bytes >= 1_000_000_000) "%.2f GB".format(bytes / 1_000_000_000.0) else "%.0f MB".format(bytes / 1_000_000.0)
+internal fun formatBytes(bytes: Long, locale: Locale = Locale.getDefault()): String {
+    val divisor = if (bytes >= 1_000_000_000L) 1_000_000_000.0 else 1_000_000.0
+    val unit = if (bytes >= 1_000_000_000L) "GB" else "MB"
+    return BidiFormatter.getInstance(locale).unicodeWrap("${bidiNumber(bytes / divisor, locale, if (unit == "GB") 2 else 0)} $unit")
+}
+
+internal fun bidiNumber(value: Double, locale: Locale = Locale.getDefault(), fractionDigits: Int = 2): String =
+    BidiFormatter.getInstance(locale).unicodeWrap(NumberFormat.getNumberInstance(locale).apply {
+        minimumFractionDigits = fractionDigits
+        maximumFractionDigits = fractionDigits
+    }.format(value))

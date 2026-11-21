@@ -178,7 +178,7 @@ class ItemDetailViewModel(
                         launch {
                             val sizes = MediaFileSizeRepository(db.mediaFileSizeDao())
                             sizes.observeMovie(accountId, itemId).collect { rows ->
-                                _state.update { it.copy(fileSize = FileSizeFormatter.display(rows.firstOrNull())) }
+                                _state.update { it.copy(fileSize = FileSizeFormatter.display(rows.firstOrNull(), FileSizeFormatter.appLocale(getApplication()))) }
                             }
                         }
                         launch {

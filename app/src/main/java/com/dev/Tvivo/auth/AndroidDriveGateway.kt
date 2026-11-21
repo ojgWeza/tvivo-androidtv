@@ -129,7 +129,13 @@ class AndroidDriveGateway(context: Context) : DriveFlowGateway {
 
     suspend fun disconnect(session: SourceSession.Drive): Boolean {
         val auth = savedAuthorization(session)
-        return SourceStore.open(app).disconnect(session.id) { auth.revoke() }
+        return try { SourceStore.open(app).disconnect(session.id) { auth.revoke() } }
+        finally {
+            authorization = null
+            pendingRefreshToken = null
+            pendingPermissionId = null
+            pendingRootId = null
+        }
     }
 
     private suspend fun savedAuthorization(session: SourceSession.Drive): SourceAuthorization {

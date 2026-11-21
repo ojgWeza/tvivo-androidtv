@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.dev.Tvivo.download.DownloadDependencies
 import com.dev.Tvivo.download.DownloadQuota
+import com.dev.Tvivo.ui.downloads.bidiNumber
 
 /**
  * Account **actions**, and only actions.
@@ -133,6 +134,7 @@ fun SettingsScreen(
                 horizontal = if (LocalIsTelevision.current) 96.dp else spacing.outerGutter,
                 vertical = if (LocalIsTelevision.current) 64.dp else 16.dp
             )
+            .padding(bottom = if (LocalIsTelevision.current) 0.dp else 80.dp)
     ) {
         Text(text = stringResource(com.dev.Tvivo.R.string.appearance), color = AppColors.Ink, style = TvType.title)
         ActionRow(stringResource(com.dev.Tvivo.R.string.theme), stringResource(com.dev.Tvivo.R.string.theme_hint), value = stringResource(if (themeMode == ThemeMode.Dark) com.dev.Tvivo.R.string.theme_dark else com.dev.Tvivo.R.string.theme_light), onClick = {
@@ -171,6 +173,7 @@ fun SettingsScreen(
             scope.launch { preferenceStore.setSubtitles(next) }
         })
         if (!LocalIsTelevision.current) {
+            val appLocale = androidx.core.os.ConfigurationCompat.getLocales(appContext.resources.configuration)[0] ?: java.util.Locale.getDefault()
             Spacer(Modifier.height(24.dp))
             Text(text = stringResource(com.dev.Tvivo.R.string.downloads_title), color = AppColors.Ink, style = TvType.title)
             ActionRow(stringResource(com.dev.Tvivo.R.string.downloads_manage),
@@ -180,7 +183,7 @@ fun SettingsScreen(
                 Text("−", color = AppColors.Ink, style = TvType.title, modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clickable {
                     scope.launch { downloadStore.setCapGb(downloadPreferences.capGb - 1) }
                 }.semantics { role = Role.Button; contentDescription = appContext.getString(com.dev.Tvivo.R.string.downloads_cap_decrease) }.padding(horizontal = 24.dp, vertical = 8.dp))
-                Text("${downloadPreferences.capGb} GB", color = AppColors.AccentText, style = TvType.title, modifier = Modifier.testTag("downloads-cap-value"))
+                Text("${bidiNumber(downloadPreferences.capGb.toDouble(), appLocale, 0)} GB", color = AppColors.AccentText, style = TvType.title, modifier = Modifier.testTag("downloads-cap-value"))
                 Text("+", color = AppColors.Ink, style = TvType.title, modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clickable {
                     scope.launch { downloadStore.setCapGb(downloadPreferences.capGb + 1) }
                 }.semantics { role = Role.Button; contentDescription = appContext.getString(com.dev.Tvivo.R.string.downloads_cap_increase) }.padding(horizontal = 24.dp, vertical = 8.dp))
@@ -192,7 +195,7 @@ fun SettingsScreen(
                 })
             val downloadUsage = DownloadQuota.usage(downloadUsedBytes, downloadReservedBytes, downloadPreferences.capGb)
             Text(stringResource(com.dev.Tvivo.R.string.downloads_usage,
-                downloadUsage.usedGb, downloadUsage.capGb.toDouble(), downloadUsage.reservedGb),
+                bidiNumber(downloadUsage.usedGb, appLocale), bidiNumber(downloadUsage.capGb.toDouble(), appLocale), bidiNumber(downloadUsage.reservedGb, appLocale)),
                 color = AppColors.Dim, style = TvType.label, modifier = Modifier.padding(20.dp))
             if (downloadUsage.overLimit) {
                 Text(stringResource(com.dev.Tvivo.R.string.downloads_over_limit), color = AppColors.AccentText,

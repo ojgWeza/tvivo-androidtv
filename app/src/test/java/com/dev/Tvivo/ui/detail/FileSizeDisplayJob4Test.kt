@@ -29,6 +29,11 @@ class FileSizeDisplayJob4Test {
         assertEquals("1.0 GB", FileSizeFormatter.format(1_000_000_000L, Locale.US))
         assertEquals("850.0 MB", FileSizeFormatter.format(850_000_000L, Locale.US))
         assertEquals("١٫٤ GB", FileSizeFormatter.format(1_400_000_000L, Locale("ar")))
+        assertTrue(FileSizeFormatter.format(155_000_000L, Locale("ar"))!!.any {
+            Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT_ISOLATE ||
+                Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_EMBEDDING ||
+                Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT_EMBEDDING
+        })
     }
 
     @Test fun displayPrefersExactThenEstimateAndHidesUnknown() {

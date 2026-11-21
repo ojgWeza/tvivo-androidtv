@@ -174,19 +174,6 @@ fun ItemDetailScreen(
                         state.extension, state.title,
                         state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
                 }
-                if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
-                    vm?.cancelSizeProbeForPlay()
-                    scope.launch {
-                        if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
-                        if (playbackUrlOverride != null && onPlayUrlOverride != null) onPlayUrlOverride(playbackUrlOverride) else onPlay(0L, state.extension, state.title,
-                            state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
-                    }
-                }
-                DetailTextButton(stringResource(if (state.isFavourite)
-                    com.dev.Tvivo.R.string.menu_remove_favourite else com.dev.Tvivo.R.string.menu_add_favourite),
-                    Modifier.testTag("detail-favourite")) {
-                    if (vm != null) vm.toggleFavourite() else onToggleFavouriteOverride()
-                }
                 if (!isLive && !isSeries && !LocalIsTelevision.current && state.downloadState !in setOf("QUEUED", "PAUSED", "COMPLETED")) {
                     if (state.fileSize == null) {
                         Text(stringResource(com.dev.Tvivo.R.string.download_unknown), color = AppColors.Dim, style = TvType.label)
@@ -201,6 +188,19 @@ fun ItemDetailScreen(
                             } else vm?.downloadMovie()
                         }
                     }
+                }
+                if (!state.isLoading && movie.showStartOver) DetailTextButton(stringResource(com.dev.Tvivo.R.string.detail_start_over), Modifier.testTag("detail-start-over")) {
+                    vm?.cancelSizeProbeForPlay()
+                    scope.launch {
+                        if (vm != null) vm.clearResumeNow() else onClearResumeOverride()
+                        if (playbackUrlOverride != null && onPlayUrlOverride != null) onPlayUrlOverride(playbackUrlOverride) else onPlay(0L, state.extension, state.title,
+                            state.durationMs ?: state.durationMinutes?.toLong()?.times(60_000L) ?: 0L)
+                    }
+                }
+                DetailTextButton(stringResource(if (state.isFavourite)
+                    com.dev.Tvivo.R.string.menu_remove_favourite else com.dev.Tvivo.R.string.menu_add_favourite),
+                    Modifier.testTag("detail-favourite")) {
+                    if (vm != null) vm.toggleFavourite() else onToggleFavouriteOverride()
                 }
                 state.downloadState?.let { downloadState ->
                     val label = when {

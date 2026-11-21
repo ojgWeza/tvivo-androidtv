@@ -15,6 +15,17 @@ class PlaybackSessionPolicyTest {
             PlaybackSessionPolicy.routeAction("unknown", mayControlSession = true))
     }
 
+    @Test fun externalStopClosesOnlyAConfirmedEmptyPlayerSurface() {
+        assertTrue(PlaybackSessionPolicy.shouldFinishStoppedSurface(
+            isIdle = true, hasCurrentItem = false, sessionConfirmed = true, stopPending = false))
+        assertFalse(PlaybackSessionPolicy.shouldFinishStoppedSurface(
+            isIdle = true, hasCurrentItem = false, sessionConfirmed = false, stopPending = false))
+        assertFalse(PlaybackSessionPolicy.shouldFinishStoppedSurface(
+            isIdle = true, hasCurrentItem = true, sessionConfirmed = true, stopPending = false))
+        assertFalse(PlaybackSessionPolicy.shouldFinishStoppedSurface(
+            isIdle = true, hasCurrentItem = false, sessionConfirmed = true, stopPending = true))
+    }
+
     @Test fun onlyAppAndTrustedSystemControllersCanControlSession() {
         assertTrue(PlaybackSessionPolicy.mayControlSession(10, 10, trusted = false))
         assertTrue(PlaybackSessionPolicy.mayControlSession(20, 10, trusted = true))

@@ -9,6 +9,11 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import com.dev.Tvivo.home.ShellTab
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.adaptive.LocalWindowSizeClass
@@ -56,6 +61,22 @@ class DownloadsNavigationComposeTest {
         compose.onNodeWithTag("shell-More").performClick()
         compose.onNodeWithText("Settings").performClick()
         compose.runOnIdle { assertEquals(ShellTab.Settings, selected) }
+    }
+
+    @Test fun phoneAtFontScaleOnePointFiveUsesAccessibleIconsInsteadOfClippedLabels() {
+        val configuration = Configuration().apply { fontScale = 1.5f }
+        compose.setContent {
+            TvivoTheme {
+                CompositionLocalProvider(LocalIsTelevision provides false,
+                    LocalWindowSizeClass provides WindowSizeClass.Compact,
+                    LocalConfiguration provides configuration) {
+                    AppShell(ShellTab.MyTvivo, {}) {}
+                }
+            }
+        }
+        compose.onNodeWithTag("shell-MyTvivo").assertExists().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("shell-MyTvivo").assertContentDescriptionEquals("For You")
+        compose.onNodeWithText("For You").assertDoesNotExist()
     }
 
     @Test fun tabletShowsDownloadsDestinationAndSelectedState() {

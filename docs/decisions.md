@@ -2032,3 +2032,20 @@ credential blob: clearing the shared keyset would strand every saved source. A
 staged source switch first imports any legacy Xtream credential, validates the
 candidate, then writes the saved-source list and active pointer in one DataStore
 edit. The legacy credential remains until a separately reviewed removal.
+
+The movie detail route carries authenticated Xtream credentials, so its ViewModel
+uses those credentials and scopes its key by account. Reloading the legacy blob
+inside detail could leave the page at its initial loading state when that read
+returned null, even while browse had a valid route session. The original lite TV
+failure was intermittent and did not reproduce on a retained account; clean
+mock sign-in and the route-without-legacy-blob regression test now pass.
+
+Drive bootstrap uses Drive's root-parent query and an atomic multipart upload
+for each JSON file. The previous mock treated the root parent as empty and the
+client created an empty JSON file before sending an unsupported media PATCH;
+that combination hid the original error and created another eight files on
+each attempt. A pending bootstrap re-lists before creation, recovers a write
+whose response was lost, validates existing JSON, and writes library.json last.
+The mock accepts the displayed user code and implements the revoke endpoint
+used by the app. Disconnect also drops any pending authorization state, so a
+subsequent sign-in must acquire a new grant.

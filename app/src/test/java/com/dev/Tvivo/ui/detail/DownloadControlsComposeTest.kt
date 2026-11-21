@@ -8,6 +8,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import com.dev.Tvivo.download.DownloadQuota
 import com.dev.Tvivo.ui.adaptive.LocalIsTelevision
 import com.dev.Tvivo.ui.theme.TvivoTheme
@@ -105,6 +108,20 @@ class DownloadControlsComposeTest {
         }
         compose.onNodeWithTag("movie-download").assertDoesNotExist()
         compose.onNodeWithText("Size unknown — stream instead").assertExists()
+    }
+
+    @Test fun phoneDownloadActionRemainsScrollableAtFontScaleOnePointFive() {
+        val configuration = Configuration().apply { fontScale = 1.5f }
+        compose.setContent {
+            TvivoTheme {
+                CompositionLocalProvider(LocalIsTelevision provides false,
+                    LocalConfiguration provides configuration) {
+                    ItemDetailScreen(ContentType.MOVIES, 4, onPlay = { _, _, _, _ -> }, onOpenEpisodes = {},
+                        stateOverride = ItemDetailUiState(title = "Movie", fileSize = FileSizeDisplay("155.0 MB", false)))
+                }
+            }
+        }
+        compose.onNodeWithTag("movie-download").assertExists().performScrollTo().assertIsDisplayed()
     }
 
     @Test fun seriesDownloadControlsArePhoneOnly() {
