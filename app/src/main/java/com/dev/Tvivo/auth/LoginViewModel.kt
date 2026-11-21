@@ -18,6 +18,7 @@ data class LoginUiState(
     val serverFieldError: String? = null,
     val isSubmitting: Boolean = false,
     val error: AppError? = null,
+    val errorMessageOverride: String? = null,
     /** Set after a rejected login so the screen can focus and select-all the password. */
     val refocusPassword: Boolean = false,
     val authenticated: AuthenticatedAccount? = null
@@ -30,22 +31,33 @@ data class LoginUiState(
  * A single `(Application)` constructor, deliberately: `AndroidViewModelFactory` resolves
  * it reflectively, and Kotlin default arguments do not generate one.
  */
-class LoginViewModel(application: Application) : AndroidViewModel(application) {
+class LoginViewModel internal constructor(
+    application: Application,
+    private val authenticate: suspend (Credentials) -> Result<AuthenticatedAccount>,
+    private val credentialsStore: LoginCredentialStore,
+    private val sourceStore: LoginSourceStore
+) : AndroidViewModel(application) {
 
-    private val repository = AuthRepository()
-    private val store = CredentialsStore(application)
+    constructor(application: Application) : this(
+        application,
+        AuthRepository()::authenticate,
+        CredentialsStore(application).asLoginCredentialStore(),
+        LoginSourceStore { value ->
+            check(SourceStore.open(application).stageSwitch(SavedSource.xtream(value)) { true })
+        }
+    )
 
     private val _state = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = _state.asStateFlow()
 
     fun onServerChanged(value: String) =
-        _state.update { it.copy(server = value, serverFieldError = null, error = null) }
+        _state.update { it.copy(server = value, serverFieldError = null, error = null, errorMessageOverride = null) }
 
     fun onUsernameChanged(value: String) =
-        _state.update { it.copy(username = value, error = null) }
+        _state.update { it.copy(username = value, error = null, errorMessageOverride = null) }
 
     fun onPasswordChanged(value: String) =
-        _state.update { it.copy(password = value, error = null, refocusPassword = false) }
+        _state.update { it.copy(password = value, error = null, errorMessageOverride = null, refocusPassword = false) }
 
     fun onTogglePasswordVisibility() =
         _state.update { it.copy(showPassword = !it.showPassword) }
@@ -93,16 +105,36 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
                 useHttps = parsed.useHttps
             )
 
-            repository.authenticate(credentials)
+            authenticate(credentials)
                 .onSuccess { account ->
-                    store.save(account.credentials)
-                    // Authentication already succeeded; retain the legacy blob for compatibility.
-                    runCatching {
-                        SourceStore.open(getApplication()).stageSwitch(
-                            SavedSource.xtream(account.credentials)
-                        ) { true }
+                    val previous = runCatching { credentialsStore.load() }
+                    val commit = previous.fold(
+                        onSuccess = { old ->
+                            runCatching {
+                                credentialsStore.save(account.credentials)
+                                sourceStore.stage(account.credentials)
+                            }.onFailure {
+                                // Best-effort rollback prevents a failed source commit from
+                                // replacing the legacy credentials used by older startup paths.
+                                runCatching {
+                                    if (old == null) credentialsStore.wipe()
+                                    else credentialsStore.save(old)
+                                }
+                            }
+                        },
+                        onFailure = { Result.failure(it) }
+                    )
+                    if (commit.isSuccess) {
+                        _state.update { it.copy(isSubmitting = false, authenticated = account) }
+                    } else {
+                        _state.update {
+                            it.copy(
+                                isSubmitting = false,
+                                error = AppError.Unreachable,
+                                errorMessageOverride = "Could not save this account. Please try again."
+                            )
+                        }
                     }
-                    _state.update { it.copy(isSubmitting = false, authenticated = account) }
                 }
                 .onFailure { throwable ->
                     val error = (throwable as? AppErrorException)?.error ?: AppError.Unreachable
@@ -112,6 +144,7 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSubmitting = false,
                             error = error,
+                            errorMessageOverride = null,
                             refocusPassword = error is AppError.AuthFailed
                         )
                     }
@@ -119,5 +152,21 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun dismissError() = _state.update { it.copy(error = null) }
+    fun dismissError() = _state.update { it.copy(error = null, errorMessageOverride = null) }
+}
+
+internal interface LoginCredentialStore {
+    suspend fun load(): Credentials?
+    suspend fun save(value: Credentials)
+    suspend fun wipe()
+}
+
+internal fun interface LoginSourceStore {
+    suspend fun stage(value: Credentials)
+}
+
+private fun CredentialsStore.asLoginCredentialStore() = object : LoginCredentialStore {
+    override suspend fun load() = this@asLoginCredentialStore.load()
+    override suspend fun save(value: Credentials) = this@asLoginCredentialStore.save(value)
+    override suspend fun wipe() = this@asLoginCredentialStore.wipe()
 }

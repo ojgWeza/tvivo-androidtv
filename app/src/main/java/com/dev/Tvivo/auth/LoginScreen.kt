@@ -280,7 +280,7 @@ fun LoginScreen(
             // message shares this line rather than claiming a `supportingText` row under
             // the field, which would be a second variable-height element.
             Box(modifier = Modifier.fillMaxWidth().height(ERROR_LINE_HEIGHT)) {
-                val message = state.error?.let { ErrorCopy.forLogin(it).message }
+                val message = state.errorMessageOverride ?: state.error?.let { ErrorCopy.forLogin(it).message }
                     ?: state.serverFieldError
                 if (message != null) {
                     Text(
@@ -354,14 +354,14 @@ fun LoginScreen(
                     }
                 }
             }
-            if (driveSourceEnabled && !isTelevision) {
+            if (driveSourceEnabled && DRIVE_BROWSE_READY && !isTelevision) {
                 Button(onClick = onDriveSignIn,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("drive-sign-in")) {
                     Text("Sign in with Google Drive")
                 }
             }
         }
-        if (driveSourceEnabled && isTelevision) {
+        if (driveSourceEnabled && DRIVE_BROWSE_READY && isTelevision) {
             Button(onClick = { keyboard?.hide(); onDriveSignIn() },
                 modifier = Modifier.align(Alignment.TopEnd).heightIn(min = 48.dp)
                     .tvFocusFrame().testTag("drive-sign-in")) {
@@ -370,6 +370,9 @@ fun LoginScreen(
         }
     }
 }
+
+// Review report items 1/2: Drive browse is not ready, so keep its login entry hidden.
+internal const val DRIVE_BROWSE_READY = false
 
 /** 820 px at 1 dp = 2 px. */
 private val FORM_WIDTH = 410.dp

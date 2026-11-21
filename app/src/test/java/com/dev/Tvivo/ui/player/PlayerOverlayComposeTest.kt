@@ -60,6 +60,29 @@ class PlayerOverlayComposeTest {
         assertTrue(backed)
     }
 
+    @Test fun phoneVodSpeedButtonOpensSelectableTouchMenu() {
+        var selectedSpeed = 1f
+        compose.setContent {
+            TvivoTheme {
+                CompositionLocalProvider(LocalIsTelevision provides false) {
+                    PlayerOverlay(
+                        state = PlayerOverlayState(title = "Fixture playback", isLive = false,
+                            isPlaying = true, seekable = true, positionMs = 45_000, durationMs = 600_000),
+                        visible = true, onToggleOverlay = {}, onBack = {}, onPlayPause = {},
+                        onSeek = {}, onScrub = {}, onAudio = {}, onSubtitle = {}, onNext = {},
+                        onStartOver = {}, playbackSpeed = selectedSpeed,
+                        onSpeedChange = { selectedSpeed = it }
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithTag("player_speed").assertExists().assertHasClickAction()
+            .assertContentDescriptionEquals("Speed: 1.0×").performClick()
+        compose.onNodeWithText("1.5×").assertExists().performClick()
+        assertTrue(selectedSpeed == 1.5f)
+    }
+
     @Test fun playerSeekEpisodeAndStartOverButtonsRemainAvailable() {
         compose.setContent {
             TvivoTheme {

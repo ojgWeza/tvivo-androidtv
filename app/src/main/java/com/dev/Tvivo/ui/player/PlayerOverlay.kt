@@ -633,14 +633,15 @@ fun PlayerOverlay(
                             modifier = Modifier.height(48.dp).focusRequester(episodesFocus).tvFocusFrame().testTag("player_episodes")) {
                             Text(stringResource(R.string.player_episodes), color = AppColors.MediaText)
                         }
-                        if (television && !state.isLive) {
+                        if (!state.isLive) {
                             Box {
+                                val speedLabel = stringResource(R.string.player_speed_value, playbackSpeed.toString())
                                 TextButton(onClick = { speedOpen = true }, modifier = Modifier.height(48.dp)
                                     .focusRequester(speedFocus)
                                     .then(if (!controls.scrubber && !controls.startOver && !controls.audio &&
                                         !controls.subtitles && !controls.next) Modifier.focusRequester(bottomFocus) else Modifier)
-                                    .tvFocusFrame().testTag("player_speed")) {
-                                    Text(stringResource(R.string.player_speed_value, playbackSpeed.toString()), color = AppColors.MediaText)
+                                    .tvFocusFrame().semantics { contentDescription = speedLabel }.testTag("player_speed")) {
+                                    Text(speedLabel, color = AppColors.MediaText)
                                 }
                                 DropdownMenu(expanded = speedOpen, onDismissRequest = { speedOpen = false }) {
                                     PlaybackSpeed.values.forEach { speed ->

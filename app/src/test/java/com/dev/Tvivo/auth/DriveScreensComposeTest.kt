@@ -60,6 +60,21 @@ class DriveScreensComposeTest {
         assertEquals(0, refreshed)
     }
 
+    @Test fun loginHidesDriveEntryByDefaultEvenWhenDriveSourceIsConfigured() {
+        compose.setContent {
+            TvivoTheme {
+                CompositionLocalProvider(LocalIsTelevision provides false) {
+                    LoginScreen(
+                        onAuthenticated = {},
+                        driveSourceEnabled = true,
+                        viewModel = LoginViewModel(compose.activity.application)
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("drive-sign-in").assertDoesNotExist()
+    }
+
     @Test fun tvBackCancelsCodePage() {
         var cancelled = 0
         compose.setContent {

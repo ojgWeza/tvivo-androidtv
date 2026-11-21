@@ -155,6 +155,14 @@ class PlayerActivity : ComponentActivity() {
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
+            if (PlaybackSessionPolicy.shouldFinishStoppedSurface(
+                    state == Player.STATE_IDLE, player?.currentMediaItem != null,
+                    activeSessionConfirmed, stopPending)) {
+                // A notification Stop closes the service player while this Activity may
+                // still be held in PiP. Close that stale video surface with the session.
+                finish()
+                return
+            }
             when (state) {
                 Player.STATE_BUFFERING -> Unit
                 Player.STATE_READY -> Unit
@@ -1194,7 +1202,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun applyPlaybackSpeed(speed: Float) {
-        if (!isTelevisionDevice() || isLive || speed !in PlaybackSpeed.values) return
+        if (isLive || speed !in PlaybackSpeed.values) return
         playbackSpeed = speed
         player?.playbackParameters = PlaybackParameters(speed)
         rearmControls()
