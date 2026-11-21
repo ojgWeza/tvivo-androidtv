@@ -1255,29 +1255,6 @@ public sealed partial class MainWindow : Window
         UpdateTopNavigationState();
     }
 
-    private void CopyDiagnostics_Click(object sender, RoutedEventArgs args)
-    {
-        _nativeEngine.PublishPendingWarnings();
-        _vlcEngine.PublishPendingWarnings();
-        var package = new DataPackage();
-        package.SetText(LaunchDiagnostics.ExportRecent());
-        Clipboard.SetContent(package);
-        // The time makes a second copy visibly new; the note is cleared after a few seconds and whenever
-        // another title starts, so it never describes a different movie.
-        CopyDiagnosticsStatus.Text = $"Diagnostics copied {DateTime.Now:HH:mm:ss}";
-        var copyToken = ++_copyDiagnosticsNoteVersion;
-        _ = ClearCopyNoteAsync(copyToken);
-    }
-
-    private int _copyDiagnosticsNoteVersion;
-
-    private async Task ClearCopyNoteAsync(int version)
-    {
-        await Task.Delay(TimeSpan.FromSeconds(6));
-        if (version == _copyDiagnosticsNoteVersion)
-            CopyDiagnosticsStatus.Text = string.Empty;
-    }
-
     private void ShowPage(ShellPage page, bool updateTopNavigation = true)
     {
         if (page == ShellPage.Home)
@@ -3351,8 +3328,6 @@ public sealed partial class MainWindow : Window
         var openAtResume = ReferenceEquals(_engine, _vlcEngine) && source.Kind != StreamKind.Live &&
             requestedStartPosition > 5_000;
         var playSource = openAtResume ? source with { StartPositionMilliseconds = requestedStartPosition } : source;
-        _copyDiagnosticsNoteVersion++;
-        CopyDiagnosticsStatus.Text = string.Empty;
         _diagnosticOpenStartedAt = Stopwatch.GetTimestamp();
         _diagnosticLastPosition = 0;
         _diagnosticFirstProgressReported = false;

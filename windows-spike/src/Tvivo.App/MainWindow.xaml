@@ -209,10 +209,6 @@
                             Click="PlayerBackButton_Click" AutomationProperties.Name="Back to catalog" />
                     <Button x:Name="PlayerHomeButton" Content="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Go home"
                             Click="PlayerHomeButton_Click" AutomationProperties.Name="Go home" />
-                    <Button Content="Copy diagnostics" Click="CopyDiagnostics_Click"
-                            AutomationProperties.Name="Copy diagnostics" />
-                    <TextBlock x:Name="CopyDiagnosticsStatus" VerticalAlignment="Center"
-                               Foreground="{ThemeResource AppMutedTextBrush}" />
                 </StackPanel>
                 <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
                     <Grid.ColumnDefinitions>
@@ -669,20 +665,20 @@
                                         Foreground="{ThemeResource AppMutedTextBrush}"
                                         AutomationProperties.Name="Toggle series favorite"
                                         Click="SeriesFavorite_Click" />
-                            <StackPanel x:Name="PlayerPlaylistOptionsRow" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <ToggleButton x:Name="AutoplayNextToggle" Content="&#xE893;"
+                            <StackPanel x:Name="PlayerPlaylistOptionsRow" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <ToggleButton x:Name="AutoplayNextToggle" Width="36" Height="36" MinWidth="36" MinHeight="36" FontSize="16" Content="&#xE893;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                               Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Autoplay next"
                                               ToolTipService.ToolTip="Autoplay next"
                                               Click="PlaybackModeToggle_Click" />
-                                <ToggleButton x:Name="ShuffleToggle" Content="&#xE8B1;"
+                                <ToggleButton x:Name="ShuffleToggle" Width="36" Height="36" MinWidth="36" MinHeight="36" FontSize="16" Content="&#xE8B1;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                               Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Shuffle"
                                               ToolTipService.ToolTip="Shuffle"
                                               Click="PlaybackModeToggle_Click" />
-                                <ToggleButton x:Name="LoopToggle" Content="&#xE8EE;"
+                                <ToggleButton x:Name="LoopToggle" Width="36" Height="36" MinWidth="36" MinHeight="36" FontSize="16" Content="&#xE8EE;"
                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                               Style="{StaticResource AppPlayerIconToggleButtonStyle}"
                                               AutomationProperties.Name="Loop item"
