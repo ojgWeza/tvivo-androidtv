@@ -39,6 +39,99 @@ public sealed record SpotlightStripState(int OpenIndex, int ItemCount)
         index == OpenIndex && index == armedTouchIndex;
 }
 
+/// <summary>Tracks real pointer intent separately from hit-test events caused by carousel layout changes.</summary>
+public sealed class SpotlightHoverPolicy
+{
+    public readonly record struct PointerPosition(double X, double Y);
+    public readonly record struct Candidate(string ItemId, long MoveSerial, long LayoutEpoch,
+        PointerPosition StartPointer, long StartedAt);
+
+    public PointerPosition? LastRealPointer { get; private set; }
+    public PointerPosition? LastOpenPointer { get; private set; }
+    public string? LastHitItemId { get; private set; }
+    public Candidate? CurrentCandidate { get; private set; }
+    public long MoveSerial { get; private set; }
+    public long ConsumedMoveSerial { get; private set; }
+    public long LayoutEpoch { get; private set; }
+    public bool LayoutSettling { get; private set; }
+
+    public Candidate? OnPointerEntered(string itemId)
+    {
+        LastHitItemId = itemId;
+        return CurrentCandidate;
+    }
+
+    public Candidate? OnPointerMoved(PointerPosition position, string? itemId, string? openItemId,
+        long nowMilliseconds)
+    {
+        if (LastRealPointer is { } previous && previous == position) return CurrentCandidate;
+        LastRealPointer = position;
+        LastHitItemId = itemId;
+        MoveSerial++;
+        if (LayoutSettling) { ConsumedMoveSerial = MoveSerial; CurrentCandidate = null; return null; }
+        if (string.IsNullOrWhiteSpace(itemId) || itemId == openItemId ||
+            (LastOpenPointer is { } opened && DistanceSquared(opened, position) < 4))
+        { CurrentCandidate = null; ConsumedMoveSerial = MoveSerial; return null; }
+        if (CurrentCandidate is { } current && current.ItemId == itemId)
+        {
+            CurrentCandidate = current with { MoveSerial = MoveSerial };
+            return CurrentCandidate;
+        }
+        CurrentCandidate = new Candidate(itemId, MoveSerial, LayoutEpoch, position, nowMilliseconds);
+        return CurrentCandidate;
+    }
+
+    public Candidate? OnPointerExited(string itemId)
+    {
+        if (LastHitItemId == itemId) LastHitItemId = null;
+        if (CurrentCandidate?.ItemId == itemId) CurrentCandidate = null;
+        return CurrentCandidate;
+    }
+
+    public void OnLayoutStart()
+    {
+        LayoutEpoch++;
+        CurrentCandidate = null;
+        LayoutSettling = true;
+        ConsumedMoveSerial = MoveSerial;
+        LastOpenPointer = LastRealPointer;
+    }
+
+    public void OnLayoutSettled() => LayoutSettling = false;
+
+    public bool CanComplete(Candidate candidate, long renderGeneration, long currentRenderGeneration,
+        string? hitItemId, PointerPosition pointer, bool active, bool slideActive, long nowMilliseconds)
+    {
+        if (!active || slideActive || LayoutSettling || candidate != CurrentCandidate ||
+            candidate.LayoutEpoch != LayoutEpoch || renderGeneration != currentRenderGeneration ||
+            candidate.ItemId != hitItemId || pointer != LastRealPointer || MoveSerial != candidate.MoveSerial ||
+            ConsumedMoveSerial >= candidate.MoveSerial ||
+            nowMilliseconds - candidate.StartedAt < (long)SpotlightStripState.DwellDuration.TotalMilliseconds) return false;
+        return true;
+    }
+
+    public bool TryConsume(Candidate candidate)
+    {
+        if (CurrentCandidate != candidate || LayoutSettling || candidate.LayoutEpoch != LayoutEpoch) return false;
+        ConsumedMoveSerial = candidate.MoveSerial;
+        LastOpenPointer = LastRealPointer;
+        CurrentCandidate = null;
+        return true;
+    }
+
+    public void Reset()
+    {
+        CurrentCandidate = null; LastHitItemId = null; LastRealPointer = null; LastOpenPointer = null;
+        MoveSerial = 0; ConsumedMoveSerial = 0; LayoutEpoch++; LayoutSettling = false;
+    }
+
+    private static double DistanceSquared(PointerPosition a, PointerPosition b)
+    {
+        var x = a.X - b.X; var y = a.Y - b.Y;
+        return x * x + y * y;
+    }
+}
+
 public enum SpotlightStripInputMode { Idle, Hover, Focus, Move, Activated, Returned }
 
 public sealed record SpotlightVisibleItem(int Index, string Id, double Width);

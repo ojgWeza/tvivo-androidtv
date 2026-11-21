@@ -91,11 +91,12 @@ public sealed partial class CatalogLandingPage : UserControl
     // choice (hover on a new item, keys, buttons, click) restarts this timer, so the item they picked stays up
     // for a full interval before auto-rotation resumes.
     private readonly DispatcherTimer _spotlightAutoTimer = new() { Interval = TimeSpan.FromSeconds(12) };
-    private Windows.Foundation.Point _spotlightLastPointer;
+    private readonly SpotlightHoverPolicy _spotlightHoverPolicy = new();
     private double _spotlightSlideFrom;
     private double _spotlightSlideTo;
     private long _spotlightSlideStartedAt;
     private CancellationTokenSource? _spotlightDwellCts;
+    private SpotlightHoverPolicy.Candidate? _spotlightDwellCandidate;
     private CancellationTokenSource? _spotlightMetadataCts;
     private CancellationTokenSource? _spotlightResolveCts;
     private Channel? _spotlightResolvedChannel;
@@ -204,6 +205,8 @@ public sealed partial class CatalogLandingPage : UserControl
     private DispatcherQueueTimer? _shelfViewportPollTimer;
     private DispatcherQueueTimer? _shelfDeferredCommitTimer;
     private ScrollViewer? _shelfScrollViewer;
+    private ScrollViewer? _openShelfScrollViewer;
+    private long _lastWheelDiagnosticAt;
     private string _shelfViewportReason = "scroll";
     private long _lastShelfWindowLogAt;
     private readonly HashSet<(CatalogMode Mode, string ShelfId)> _shelfPreviewLoadsInFlight = new();
@@ -343,7 +346,7 @@ public sealed partial class CatalogLandingPage : UserControl
         _spotlightSlideTimer.Tick += SpotlightSlideTimer_Tick;
         _spotlightAutoTimer.Tick += SpotlightAutoTimer_Tick;
         SpotlightStripViewer.AddHandler(UIElement.PointerMovedEvent,
-            new PointerEventHandler((_, e) => _spotlightLastPointer = e.GetCurrentPoint(null).Position), true);
+            new PointerEventHandler(SpotlightStripViewer_PointerMoved), true);
         SpotlightStripViewer.AddHandler(UIElement.PointerWheelChangedEvent,
             new PointerEventHandler(SpotlightStripViewer_PointerWheelChanged), true);
         CatalogPageRoot.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(SpotlightPage_KeyDown), true);
@@ -3008,35 +3011,63 @@ public sealed partial class CatalogLandingPage : UserControl
             if ((fadedOut || (animateIncomingContent && contentApplied)) && snapshot.Mode == _activeMode &&
                 transitionGeneration == Volatile.Read(ref _modeTransitionGeneration))
                 await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: transitionGeneration);
+            else if ((fadedOut || animateIncomingContent) && !contentApplied && snapshot.Mode == _activeMode &&
+                transitionGeneration == Volatile.Read(ref _modeTransitionGeneration))
+                await FadeCatalogContentAsync(fadeOut: false, transitionGeneration: transitionGeneration);
             _modeTransitionGate.Release();
         }
     }
 
     private async Task FadeCatalogContentAsync(bool fadeOut, long transitionGeneration)
     {
-        LaunchDiagnostics.Write($"event=perf.surface timestamp={DateTimeOffset.UtcNow:O} visibility=ContentState opacity={(fadeOut ? 0 : 1)}");
         var visual = ElementCompositionPreview.GetElementVisual(ContentState);
         Interlocked.Exchange(ref _contentFadeGeneration, transitionGeneration);
-        visual.StopAnimation(nameof(Visual.Opacity));
-        var start = visual.Opacity;
-        var end = fadeOut ? 0f : 1f;
-        visual.Opacity = start;
-        var animation = visual.Compositor.CreateScalarKeyFrameAnimation();
-        animation.InsertKeyFrame(1f, end);
-        animation.Duration = TimeSpan.FromMilliseconds(110);
-        visual.StartAnimation(nameof(Visual.Opacity), animation);
-        await Task.Delay(110);
-        if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
+        try
         {
-            if (transitionGeneration == Interlocked.Read(ref _contentFadeGeneration))
+            LaunchDiagnostics.Write($"event=perf.surface timestamp={DateTimeOffset.UtcNow:O} visibility=ContentState opacity={(fadeOut ? 0 : 1)}");
+            visual.StopAnimation(nameof(Visual.Opacity));
+            var start = visual.Opacity;
+            var end = fadeOut ? 0f : 1f;
+            visual.Opacity = start;
+            var animation = visual.Compositor.CreateScalarKeyFrameAnimation();
+            animation.InsertKeyFrame(1f, end);
+            animation.Duration = TimeSpan.FromMilliseconds(110);
+            visual.StartAnimation(nameof(Visual.Opacity), animation);
+            await Task.Delay(110);
+            if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration))
+            {
+                if (transitionGeneration == Interlocked.Read(ref _contentFadeGeneration))
+                {
+                    visual.StopAnimation(nameof(Visual.Opacity));
+                    visual.Opacity = 1;
+                    ContentState.IsHitTestVisible = true;
+                }
+                return;
+            }
+            visual.StopAnimation(nameof(Visual.Opacity));
+            visual.Opacity = end;
+        }
+        catch
+        {
+            if (transitionGeneration == Volatile.Read(ref _modeTransitionGeneration) &&
+                transitionGeneration == Interlocked.Read(ref _contentFadeGeneration))
             {
                 visual.StopAnimation(nameof(Visual.Opacity));
                 visual.Opacity = 1;
+                ContentState.IsHitTestVisible = true;
             }
-            return;
+            throw;
         }
-        visual.StopAnimation(nameof(Visual.Opacity));
-        visual.Opacity = end;
+        finally
+        {
+            if (transitionGeneration != Volatile.Read(ref _modeTransitionGeneration) &&
+                transitionGeneration == Interlocked.Read(ref _contentFadeGeneration))
+            {
+                visual.StopAnimation(nameof(Visual.Opacity));
+                visual.Opacity = 1;
+                ContentState.IsHitTestVisible = true;
+            }
+        }
     }
 
     private void ResetContentFadeForGeneration(long transitionGeneration)
@@ -3044,6 +3075,7 @@ public sealed partial class CatalogLandingPage : UserControl
         var visual = ElementCompositionPreview.GetElementVisual(ContentState);
         visual.StopAnimation(nameof(Visual.Opacity));
         visual.Opacity = 1;
+        ContentState.IsHitTestVisible = true;
         Interlocked.Exchange(ref _contentFadeGeneration, transitionGeneration);
     }
 
@@ -3092,10 +3124,9 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void RenderSpotlight(IReadOnlyList<CatalogShelf> shelves)
     {
+        StartSpotlightLayout();
         Interlocked.Increment(ref _spotlightRenderGeneration);
         _spotlightMetadataCts?.Cancel();
-        _spotlightDwellCts?.Cancel();
-        _spotlightDwellCts = null;
         _spotlightWindowFirst = _spotlightWindowLast = -1;
         _spotlightSlideTimer.Stop();
         var previousIds = _spotlightState.ItemIds;
@@ -3117,6 +3148,11 @@ public sealed partial class CatalogLandingPage : UserControl
             else _spotlightCards.Add(cards[i]);
         }
         var ids = _spotlightCards.Select(card => card.Id).ToArray();
+        if (!previousIds.SequenceEqual(ids, StringComparer.Ordinal))
+        {
+            _spotlightHoverPolicy.Reset();
+            StartSpotlightLayout();
+        }
         var viewport = SpotlightStripViewer.ActualWidth > 0 ? SpotlightStripViewer.ActualWidth : 680;
         _spotlightState = previousIds.SequenceEqual(ids, StringComparer.Ordinal)
             ? previousState.Resize(viewport, !_uiSettings.AnimationsEnabled)
@@ -3145,6 +3181,8 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void ClearSpotlightCards()
     {
+        CancelSpotlightDwell();
+        _spotlightHoverPolicy.Reset();
         _spotlightSlideTimer.Stop();
         _spotlightVisibleCards.Clear();
         foreach (var card in _spotlightCards) card.SpotlightButton = null;
@@ -3177,6 +3215,7 @@ public sealed partial class CatalogLandingPage : UserControl
     {
         if (index < 0 || index >= _spotlightCards.Count) return;
         if (index == _spotlightState.OpenIndex) return;
+        StartSpotlightLayout();
         if (via != "auto") RestartSpotlightAutoRotate();
         CancelSpotlightResolution();
         _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
@@ -3223,53 +3262,104 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private Windows.Foundation.Point? _spotlightHoverAnchor;
-
-    private async void SpotlightItem_PointerEntered(object sender, PointerRoutedEventArgs args)
+    private void SpotlightItem_PointerEntered(object sender, PointerRoutedEventArgs args)
     {
         if (sender is not Button { DataContext: CatalogCard card }) return;
-        // Hover intent: opening an item widens it and re-centres the strip, which slides a different item under a
-        // motionless mouse and raises PointerEntered for it. Only a real pointer movement may start a dwell,
-        // otherwise hover chases the layout forever.
-        var position = args.GetCurrentPoint(null).Position;
-        if (_spotlightHoverAnchor is { } anchor &&
-            Math.Abs(anchor.X - position.X) < 2 && Math.Abs(anchor.Y - position.Y) < 2)
-            return;
-        _spotlightHoverAnchor = null;
-        RestartSpotlightAutoRotate();
-        _spotlightDwellCts?.Cancel();
-        var cancellation = _spotlightDwellCts = new CancellationTokenSource();
-        var renderGeneration = Interlocked.Read(ref _spotlightRenderGeneration);
-        void Complete()
-        {
-            if (ReferenceEquals(_spotlightDwellCts, cancellation)) _spotlightDwellCts = null;
-            cancellation.Dispose();
-        }
-        try
-        {
-            await Task.Delay(SpotlightStripState.DwellDuration, cancellation.Token);
-            if (!DispatcherQueue.TryEnqueue(() =>
-            {
-                try
-                {
-                    if (!cancellation.IsCancellationRequested && _isActive &&
-                        _spotlightRenderGeneration == renderGeneration &&
-                        card.SpotlightIndex != _spotlightState.OpenIndex)
-                        {
-                            _spotlightHoverAnchor = position;
-                            OpenSpotlight(card.SpotlightIndex, "hover");
-                        }
-                }
-                finally { Complete(); }
-            })) Complete();
-        }
-        catch (OperationCanceledException) { Complete(); }
+        _spotlightHoverPolicy.OnPointerEntered(card.Id);
     }
 
     private void SpotlightItem_PointerExited(object sender, PointerRoutedEventArgs args)
     {
-        _spotlightDwellCts?.Cancel();
+        if (sender is Button { DataContext: CatalogCard card })
+        {
+            _spotlightHoverPolicy.OnPointerExited(card.Id);
+            if (_spotlightHoverPolicy.CurrentCandidate is null) CancelSpotlightDwell();
+        }
+    }
+
+    private void SpotlightStripViewer_PointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (args.Pointer.PointerDeviceType is not (Microsoft.UI.Input.PointerDeviceType.Mouse or
+            Microsoft.UI.Input.PointerDeviceType.Pen)) return;
+        var position = args.GetCurrentPoint(null).Position;
+        CatalogCard? hitCard = null;
+        for (var element = args.OriginalSource as DependencyObject; element is not null &&
+             !ReferenceEquals(element, SpotlightStripViewer); element = VisualTreeHelper.GetParent(element))
+            if (element is Button { DataContext: CatalogCard card }) { hitCard = card; break; }
+        var candidate = _spotlightHoverPolicy.OnPointerMoved(
+            new SpotlightHoverPolicy.PointerPosition(position.X, position.Y), hitCard?.Id,
+            _spotlightState.OpenIndex is int open && open < _spotlightCards.Count ? _spotlightCards[open].Id : null,
+            Environment.TickCount64);
+        if (candidate is null) { CancelSpotlightDwell(); return; }
+        if (_spotlightDwellCts is not null && _spotlightDwellCandidate is { } running &&
+            running.ItemId == candidate.Value.ItemId && running.LayoutEpoch == candidate.Value.LayoutEpoch &&
+            running.StartedAt == candidate.Value.StartedAt)
+        { _spotlightDwellCandidate = candidate; return; }
+        StartSpotlightDwell(candidate.Value);
+    }
+
+    private void StartSpotlightDwell(SpotlightHoverPolicy.Candidate candidate)
+    {
+        CancelSpotlightDwell();
+        var cancellation = _spotlightDwellCts = new CancellationTokenSource();
+        _spotlightDwellCandidate = candidate;
+        var renderGeneration = Interlocked.Read(ref _spotlightRenderGeneration);
+        _ = CompleteSpotlightDwellAsync(candidate, renderGeneration, cancellation);
+    }
+
+    private async Task CompleteSpotlightDwellAsync(SpotlightHoverPolicy.Candidate candidate,
+        long renderGeneration, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(SpotlightStripState.DwellDuration, cancellation.Token);
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    var pointer = _spotlightHoverPolicy.LastRealPointer;
+                    var currentCandidate = _spotlightHoverPolicy.CurrentCandidate;
+                    if (!cancellation.IsCancellationRequested && pointer is { } latest &&
+                        currentCandidate is { } current && current.ItemId == candidate.ItemId &&
+                        current.LayoutEpoch == candidate.LayoutEpoch && current.StartedAt == candidate.StartedAt &&
+                        _spotlightHoverPolicy.CanComplete(current, renderGeneration,
+                            Interlocked.Read(ref _spotlightRenderGeneration), _spotlightHoverPolicy.LastHitItemId,
+                            latest, _isActive, _spotlightSlideTimer.IsEnabled, Environment.TickCount64) &&
+                        _spotlightHoverPolicy.TryConsume(current) &&
+                        _spotlightCards.FirstOrDefault(card => card.Id == current.ItemId) is { } card)
+                    {
+                        RestartSpotlightAutoRotate();
+                        OpenSpotlight(card.SpotlightIndex, "hover");
+                    }
+                }
+                finally { CompleteSpotlightDwell(cancellation); }
+            });
+        }
+        catch (OperationCanceledException) { CompleteSpotlightDwell(cancellation); }
+    }
+
+    private void CancelSpotlightDwell()
+    {
+        var cancellation = _spotlightDwellCts;
         _spotlightDwellCts = null;
+        _spotlightDwellCandidate = null;
+        cancellation?.Cancel();
+    }
+
+    private void StartSpotlightLayout()
+    {
+        CancelSpotlightDwell();
+        _spotlightHoverPolicy.OnLayoutStart();
+    }
+
+    private void CompleteSpotlightDwell(CancellationTokenSource cancellation)
+    {
+        if (ReferenceEquals(_spotlightDwellCts, cancellation))
+        {
+            _spotlightDwellCts = null;
+            _spotlightDwellCandidate = null;
+        }
+        cancellation.Dispose();
     }
 
     private void SpotlightItem_GotFocus(object sender, RoutedEventArgs args)
@@ -3371,16 +3461,20 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightStripViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
+        if (args.IsIntermediate && !_spotlightSlideTimer.IsEnabled) StartSpotlightLayout();
         RefreshSpotlightWindow(SpotlightStripViewer.HorizontalOffset);
         UpdateSpotlightArtworkWindow();
+        if (!args.IsIntermediate && !_spotlightSlideTimer.IsEnabled) _spotlightHoverPolicy.OnLayoutSettled();
     }
 
     private void SpotlightStripViewer_SizeChanged(object sender, SizeChangedEventArgs args)
     {
+        StartSpotlightLayout();
         _spotlightState = _spotlightState.Resize(SpotlightStripViewer.ActualWidth, !_uiSettings.AnimationsEnabled);
         UpdateSpotlightCardStates();
         RefreshSpotlightWindow(_spotlightState.Layout.ScrollTarget, force: true);
         ScrollToSpotlightTarget(animate: false);
+        DispatcherQueue.TryEnqueue(() => _spotlightHoverPolicy.OnLayoutSettled());
         RequestSpotlightArtworkLayout();
     }
 
@@ -3388,19 +3482,13 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void SpotlightNextButton_Click(object sender, RoutedEventArgs args) => MoveSpotlight(1, false);
 
-    private void SpotlightStripViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
-    {
-        // The wheel never moves the carousel. The inner ScrollViewer may mark it handled even with its
-        // vertical axis off, so restore bubbling and let the page scroll.
-        args.Handled = false;
-    }
+    private void SpotlightStripViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs args) =>
+        RouteCatalogVerticalWheel(args, "spotlight");
 
     private void SpotlightAutoTimer_Tick(object? sender, object args)
     {
         if (!_isActive || _spotlightCards.Count < 2 || _spotlightState.ActivatedItemId is not null) return;
         var current = _spotlightState.OpenIndex ?? _spotlightState.SelectedIndex;
-        // A turn changes the layout under a resting mouse; that must not read as a hover on a new item.
-        _spotlightHoverAnchor = _spotlightLastPointer;
         OpenSpotlight((Math.Max(current, -1) + 1) % _spotlightCards.Count, "auto");
     }
 
@@ -3421,6 +3509,7 @@ public sealed partial class CatalogLandingPage : UserControl
             ? _spotlightState.Focus(delta < 0 ? _spotlightVisibleFirst : _spotlightVisibleLast)
             : _spotlightState.Move(delta);
         if (next.SelectedIndex == _spotlightState.SelectedIndex && next.OpenIndex == _spotlightState.OpenIndex) return;
+        StartSpotlightLayout();
         RestartSpotlightAutoRotate();
         var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot);
         var transferFocus = keyboard || ReferenceEquals(focusedElement, SpotlightPreviousButton) ||
@@ -3460,6 +3549,7 @@ public sealed partial class CatalogLandingPage : UserControl
             Math.Abs(SpotlightStripViewer.HorizontalOffset - target) < 0.5)
         {
             SpotlightStripViewer.ChangeView(target, null, null, true);
+            DispatcherQueue.TryEnqueue(() => _spotlightHoverPolicy.OnLayoutSettled());
             return;
         }
         _spotlightSlideFrom = SpotlightStripViewer.HorizontalOffset;
@@ -3482,7 +3572,11 @@ public sealed partial class CatalogLandingPage : UserControl
         var eased = 1 - Math.Pow(1 - progress, 3);
         SpotlightStripViewer.ChangeView(_spotlightSlideFrom + (_spotlightSlideTo - _spotlightSlideFrom) * eased,
             null, null, true);
-        if (progress >= 1) _spotlightSlideTimer.Stop();
+        if (progress >= 1)
+        {
+            _spotlightSlideTimer.Stop();
+            DispatcherQueue.TryEnqueue(() => _spotlightHoverPolicy.OnLayoutSettled());
+        }
     }
 
     private void RefreshSpotlightWindow(double offset, bool force = false)
@@ -3650,9 +3744,11 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void CancelSpotlightAsyncWork()
     {
+        _spotlightHoverPolicy.Reset();
         _spotlightSlideTimer.Stop();
         _spotlightDwellCts?.Cancel();
         _spotlightDwellCts = null;
+        _spotlightDwellCandidate = null;
         _spotlightMetadataCts?.Cancel();
         _spotlightMetadataCts = null;
         _spotlightMetadataCard = null;
@@ -4005,11 +4101,21 @@ public sealed partial class CatalogLandingPage : UserControl
                 return restored;
             }
 
-            if (RestoreOnce()) { Finish(preserveScrollOffset ? "in-place" : "rebind"); return; }
+            bool TryRestore()
+            {
+                try { return RestoreOnce(); }
+                catch
+                {
+                    Finish("error");
+                    return true;
+                }
+            }
+
+            if (TryRestore()) { Finish(preserveScrollOffset ? "in-place" : "rebind"); return; }
             retryTimer.Tick += (_, _) =>
             {
                 if (_isShuttingDown || generation != Volatile.Read(ref _browseRestoreGeneration)) { retryTimer.Stop(); return; }
-                if (RestoreOnce() || attempts >= 7) Finish(preserveScrollOffset ? "in-place" : "rebind");
+                if (TryRestore() || attempts >= 7) Finish(preserveScrollOffset ? "in-place" : "rebind");
             };
             retryTimer.Start();
             timeout.Tick += (_, _) => Finish(preserveScrollOffset ? "in-place" : "rebind");
@@ -5118,7 +5224,7 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private void ShelfGrid_Loaded(object sender, RoutedEventArgs args)
+    private void ShelfPreviewGrid_Loaded(object sender, RoutedEventArgs args)
     {
         using var perfScope = PerfScope.Begin("ShelfGridLoaded");
         if (sender is not GridView gridView || !_wiredShelfGrids.Add(gridView))
@@ -5168,8 +5274,41 @@ public sealed partial class CatalogLandingPage : UserControl
         }
     }
 
-    private void OpenShelfGrid_Unloaded(object sender, RoutedEventArgs args) =>
+    private void OpenShelfGrid_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is not GridView gridView) return;
+        if (!_wiredShelfGrids.Contains(gridView))
+        {
+            // OpenShelfGrid owns vertical scrolling; it must not be routed to ShelvesItems.
+            using var perfScope = PerfScope.Begin("OpenShelfGridLoaded");
+            _wiredShelfGrids.Add(gridView);
+            gridView.ContainerContentChanging += CatalogCardContainerContentChanging;
+            gridView.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(ShelfGrid_PointerPressed), true);
+            gridView.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(ShelfGrid_ActivationKeyDown), true);
+            gridView.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(ShelfGrid_PointerMoved), true);
+            gridView.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(ShelfGrid_PointerReleased), true);
+            gridView.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(ShelfGrid_PointerCanceled), true);
+        }
+        AttachOpenShelfScrollViewer();
+        gridView.LayoutUpdated -= OpenShelfGrid_LayoutUpdated;
+        gridView.LayoutUpdated += OpenShelfGrid_LayoutUpdated;
+    }
+
+    private void OpenShelfGrid_LayoutUpdated(object? sender, object args) => AttachOpenShelfScrollViewer();
+
+    private void AttachOpenShelfScrollViewer()
+    {
+        if (OpenShelfGrid.Visibility != Visibility.Visible) return;
+        _openShelfScrollViewer = FindShelfScrollViewer(OpenShelfGrid);
+    }
+
+    private void OpenShelfGrid_Unloaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is GridView gridView)
+            gridView.LayoutUpdated -= OpenShelfGrid_LayoutUpdated;
+        _openShelfScrollViewer = null;
         ShelfGrid_Unloaded(sender, args);
+    }
 
     private void ForgetCatalogCardContainers(GridView gridView)
     {
@@ -5295,11 +5434,34 @@ public sealed partial class CatalogLandingPage : UserControl
         ResetShelfPointerState(sender as GridView);
     }
 
-    private static void ShelfGrid_PointerWheelChanged(object sender, PointerRoutedEventArgs args)
+    private void ShelfGrid_PointerWheelChanged(object sender, PointerRoutedEventArgs args) =>
+        RouteCatalogVerticalWheel(args, "preview");
+
+    private void RouteCatalogVerticalWheel(PointerRoutedEventArgs args, string source)
     {
-        // The inner ScrollViewer may mark wheel input handled even with its axes disabled.
-        // Restore bubbling so the containing page ScrollViewer receives vertical wheel input.
-        args.Handled = false;
+        var modifiers = args.KeyModifiers;
+        if ((modifiers & (Windows.System.VirtualKeyModifiers.Control | Windows.System.VirtualKeyModifiers.Shift)) != 0)
+            return;
+        var properties = args.GetCurrentPoint(this).Properties;
+        if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
+
+        var viewer = source == "preview" || source == "spotlight"
+            ? _shelfScrollViewer
+            : ActiveVerticalScrollViewer();
+        if (viewer is null || viewer.ScrollableHeight <= 0) return;
+
+        var before = viewer.VerticalOffset;
+        // A standard wheel notch is 120 units and three system-default lines. Use a 48-DIP
+        // line pitch so high-resolution wheels retain proportional movement.
+        var requested = Math.Clamp(before - properties.MouseWheelDelta / 120.0 * 3 * 48,
+            0, viewer.ScrollableHeight);
+        viewer.ChangeView(null, requested, null, true);
+        args.Handled = true;
+
+        var now = Environment.TickCount64;
+        var previous = Interlocked.Read(ref _lastWheelDiagnosticAt);
+        if (now - previous >= 250 && Interlocked.CompareExchange(ref _lastWheelDiagnosticAt, now, previous) == previous)
+            LaunchDiagnostics.Write($"event=catalog.wheel viewer={(ReferenceEquals(viewer, _openShelfScrollViewer) ? "open" : "shelves")} offset={before:0.##}/{viewer.VerticalOffset:0.##} scrollableHeight={viewer.ScrollableHeight:0.##} source={source}");
     }
 
     private void ResetShelfPointerState(GridView? gridView = null)
@@ -5317,8 +5479,8 @@ public sealed partial class CatalogLandingPage : UserControl
     // pick the scroller that is on screen rather than guessing from whether a category is open.
     private ScrollViewer? ActiveVerticalScrollViewer() =>
         OpenShelfGrid.Visibility == Visibility.Visible
-            ? FindShelfScrollViewer(OpenShelfGrid)
-            : FindShelfScrollViewer(ShelvesItems);
+            ? _openShelfScrollViewer ?? FindShelfScrollViewer(OpenShelfGrid)
+            : _shelfScrollViewer ?? FindShelfScrollViewer(ShelvesItems);
 
     private void ScrollVerticallyTo(Func<ScrollViewer, double> target)
     {
@@ -5698,6 +5860,13 @@ public sealed partial class CatalogLandingPage : UserControl
 
     private void OpenShelfGrid_KeyDown(object sender, KeyRoutedEventArgs args)
     {
+        if (args.Key is Windows.System.VirtualKey.PageUp or Windows.System.VirtualKey.PageDown)
+        {
+            ScrollVerticallyTo(viewer => viewer.VerticalOffset +
+                (args.Key == Windows.System.VirtualKey.PageUp ? -1 : 1) * viewer.ViewportHeight * 0.85);
+            args.Handled = true;
+            return;
+        }
         if (sender is GridView gridView)
             MoveFocusInGrid(gridView, args, isWrappingGrid: true);
     }

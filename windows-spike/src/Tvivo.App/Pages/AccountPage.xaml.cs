@@ -29,6 +29,29 @@ public sealed partial class AccountPage : UserControl
     private int _spotlightFolderLoadGeneration;
     private readonly Dictionary<(SpotlightPageKind Page, CatalogItemType Type), SpotlightSourceControls> _spotlightSources = new();
 
+    // Two columns when the settings column is wide enough, one column below that. Each control exists once;
+    // only the right-hand block moves between (row 0, column 1) and (row 1, column 0).
+    private void SettingsContent_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        var wide = args.NewSize.Width >= 840;
+        foreach (var (grid, right) in new (Grid, FrameworkElement)[]
+        {
+            (AccountColumns, AccountRightColumn), (ForYouColumns, ForYouRightColumn),
+            (PlayerColumns, PlayerRightColumn), (LibraryColumns, LibraryRightColumn),
+        })
+        {
+            grid.ColumnDefinitions[1].Width = wide ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+            Grid.SetColumn(right, wide ? 1 : 0);
+            Grid.SetRow(right, wide ? 0 : 1);
+            if (grid.RowDefinitions.Count < 2)
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
+            grid.ColumnSpacing = wide ? 32 : 0;
+        }
+    }
+
     public AccountPage()
     {
         InitializeComponent();

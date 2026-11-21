@@ -570,7 +570,7 @@
                                                       Visibility="{Binding PreviewVisibility}"
                                                       ItemClick="ShelfCards_ItemClick"
                                                       KeyDown="ShelfGrid_KeyDown"
-                                                      Loaded="ShelfGrid_Loaded"
+                                                      Loaded="ShelfPreviewGrid_Loaded"
                                                       Unloaded="ShelfGrid_Unloaded"
                                                       ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                                       ScrollViewer.VerticalScrollBarVisibility="Disabled"
@@ -595,8 +595,10 @@
                               Margin="-8,0,-20,0"
                               ItemClick="ShelfCards_ItemClick"
                               KeyDown="OpenShelfGrid_KeyDown"
-                              Loaded="ShelfGrid_Loaded"
-                              ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                              Loaded="OpenShelfGrid_Loaded"
+                              Unloaded="OpenShelfGrid_Unloaded"
+                              ScrollViewer.VerticalScrollMode="Enabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <GridView.ItemContainerTransitions>
                             <TransitionCollection />

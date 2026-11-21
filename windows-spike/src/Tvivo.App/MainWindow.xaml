@@ -7,7 +7,7 @@
     <Grid x:Name="WindowRoot" Background="{ThemeResource AppCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="44" />
-            <RowDefinition Height="72" />
+            <RowDefinition Height="60" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -44,7 +44,7 @@
             </StackPanel>
         </Grid>
 
-        <Border x:Name="MainHeader" Grid.Row="1" Background="{ThemeResource AppDeepBrush}" Padding="42,0">
+        <Border x:Name="MainHeader" Grid.Row="1" Background="{ThemeResource AppDeepBrush}" Padding="24,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -198,19 +198,19 @@
 
         <Grid x:Name="ContentSurfaceHost" Grid.Row="2">
             <Grid x:Name="PageHost" />
-            <Grid x:Name="PlayerPage" Canvas.ZIndex="2" Visibility="Collapsed" Padding="24" KeyDown="PlayerPage_KeyDown"
+            <Grid x:Name="PlayerPage" Canvas.ZIndex="2" Visibility="Collapsed" Padding="16" KeyDown="PlayerPage_KeyDown"
                   AutomationProperties.Name="Player" AutomationProperties.AutomationId="CompactPlayerCard">
                 <Grid.RowDefinitions>
                     <RowDefinition x:Name="PlayerNavigationRow" Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <StackPanel x:Name="PlayerNavigation" Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
+                <StackPanel x:Name="PlayerNavigation" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
                     <Button x:Name="PlayerBackButton" Content="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Back to catalog"
                             Click="PlayerBackButton_Click" AutomationProperties.Name="Back to catalog" />
                     <Button x:Name="PlayerHomeButton" Content="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Style="{StaticResource AppIconButtonStyle}" ToolTipService.ToolTip="Go home"
                             Click="PlayerHomeButton_Click" AutomationProperties.Name="Go home" />
                 </StackPanel>
-                <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="18">
+                <Grid x:Name="PlayerLayoutGrid" Grid.Row="1" ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="PlayerContentColumn" Width="2.35*" />
                         <ColumnDefinition x:Name="PlayerSideColumn" Width="0.9*" />
@@ -541,7 +541,7 @@
                                                 <Setter Property="MaxHeight" Value="340" />
                                             </Style>
                                         </Flyout.FlyoutPresenterStyle>
-                                        <Border Width="360" Height="300" MaxWidth="380" MaxHeight="340" Padding="18"
+                                        <Border Width="360" MaxWidth="380" MaxHeight="340" Padding="18"
                                                 Background="{ThemeResource AppPanelSurfaceBrush}"
                                                 CornerRadius="12">
                                             <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -643,7 +643,7 @@
                     </Border>
                     </Grid>
 
-                    <Border x:Name="PlayerSidePanel" Grid.Column="1" MinWidth="290" Padding="18" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="14">
+                    <Border x:Name="PlayerSidePanel" Grid.Column="1" MinWidth="300" Padding="12" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="14">
                         <Grid>
                             <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />

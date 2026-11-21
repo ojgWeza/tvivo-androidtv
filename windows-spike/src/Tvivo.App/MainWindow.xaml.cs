@@ -5793,7 +5793,7 @@ public sealed partial class MainWindow : Window
             SaveWindowMiniGeometryIfChanged();
             WindowChrome.Visibility = Visibility.Visible;
             MainHeader.Visibility = Visibility.Visible;
-            WindowRoot.RowDefinitions[1].Height = new GridLength(72);
+            WindowRoot.RowDefinitions[1].Height = new GridLength(60);
             SetCompactResizeZonesVisible(true);
             _currentPage = null;
             if (expandToPlayer)
@@ -6062,8 +6062,8 @@ public sealed partial class MainWindow : Window
         _cinemaPointerMoveDiagnosticWritten = false;
         ApplyWindowChromeState();
         MainHeader.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
-        ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 72);
-        PlayerPage.Padding = enabled ? new Thickness(0) : new Thickness(24);
+        ((Grid)Content).RowDefinitions[1].Height = new GridLength(enabled ? 0 : 60);
+        PlayerPage.Padding = enabled ? new Thickness(0) : new Thickness(16);
         PlayerNavigation.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         PlayerNavigationRow.Height = enabled ? new GridLength(0) : GridLength.Auto;
         var cinemaLabel = enabled ? "Exit cinema" : "Cinema mode";
@@ -6411,11 +6411,11 @@ public sealed partial class MainWindow : Window
         var cinema = _isCinemaMode;
         var compact = _playerPresentation == PlayerPresentation.Compact;
 
-        PlayerPage.Padding = cinema || compact ? new Thickness(0) : new Thickness(24);
+        PlayerPage.Padding = cinema || compact ? new Thickness(0) : new Thickness(16);
         PlayerNavigation.Visibility = cinema || compact ? Visibility.Collapsed : Visibility.Visible;
         PlayerNavigationRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
         var showPlaylist = !cinema && !compact && !_playlistHidden;
-        PlayerLayoutGrid.ColumnSpacing = showPlaylist ? 18 : 0;
+        PlayerLayoutGrid.ColumnSpacing = showPlaylist ? 12 : 0;
         PlayerContentColumn.Width = new GridLength(showPlaylist ? 2.35 : 1, GridUnitType.Star);
         PlayerSideColumn.Width = new GridLength(showPlaylist ? 0.9 : 0, GridUnitType.Star);
         PlayerSidePanel.Visibility = showPlaylist ? Visibility.Visible : Visibility.Collapsed;
@@ -6426,7 +6426,7 @@ public sealed partial class MainWindow : Window
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PlaylistToggleButton, playlistLabel);
         ToolTipService.SetToolTip(PlaylistToggleButton, playlistLabel);
 
-        PlayerContentGrid.RowSpacing = cinema || compact ? 0 : 10;
+        PlayerContentGrid.RowSpacing = cinema || compact ? 0 : 8;
         PlayerVideoRow.Height = new GridLength(1, GridUnitType.Star);
         PlayerDetailsRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;
         PlayerTransportRow.Height = cinema || compact ? new GridLength(0) : GridLength.Auto;

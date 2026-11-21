@@ -5,7 +5,8 @@
     <Grid Background="{ThemeResource AppCanvasBrush}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                       ZoomMode="Disabled" IsTabStop="False">
-        <StackPanel MaxWidth="900" HorizontalAlignment="Center" Margin="24,20" Spacing="14">
+        <StackPanel x:Name="SettingsContent" MaxWidth="1120" HorizontalAlignment="Stretch" Margin="24,12" Spacing="14"
+                    SizeChanged="SettingsContent_SizeChanged">
             <StackPanel Orientation="Horizontal" Spacing="28">
                 <Button x:Name="LibraryTabButton" Content="Library" Tag="Library"
                         Style="{StaticResource AppTopNavButtonStyle}" Padding="0,10,0,8" MinHeight="44"
@@ -26,7 +27,9 @@
             </StackPanel>
 
             <StackPanel x:Name="AccountTabPanel" Spacing="14" Visibility="Collapsed">
-                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
+                <Grid x:Name="AccountColumns" ColumnSpacing="32" RowSpacing="14">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Border x:Name="AccountLeftColumn" Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="16">
                     <StackPanel Spacing="14">
                         <StackPanel Spacing="2">
                             <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Signed in as" />
@@ -50,6 +53,7 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
+                <StackPanel x:Name="AccountRightColumn" Grid.Column="1" Spacing="14">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                     <Button x:Name="SignOutButton" Style="{StaticResource AppQuietButtonStyle}" MinHeight="44"
                             FontSize="16" Content="Sign out" AutomationProperties.Name="Sign out of this account"
@@ -63,11 +67,15 @@
                         Click="SaveDiagnostics_Click" />
                 <TextBlock x:Name="DiagnosticsStatusText" FontSize="16" TextWrapping="Wrap"
                            Foreground="{ThemeResource AppMutedTextBrush}" />
+                </StackPanel>
+                </Grid>
             </StackPanel>
 
             <StackPanel x:Name="ForYouTabPanel" Visibility="Collapsed">
-                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
-                    <StackPanel Spacing="10">
+                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="16">
+                    <Grid x:Name="ForYouColumns" ColumnSpacing="32" RowSpacing="10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel x:Name="ForYouLeftColumn" Spacing="10">
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="Choose which shelves appear on For You and the order they show in." />
                         <StackPanel x:Name="ForYouShelfList" Spacing="4" />
@@ -75,7 +83,8 @@
                                 MinHeight="44" HorizontalAlignment="Left" Content="Reset to default"
                                 AutomationProperties.Name="Reset For You shelf order to default"
                                 Click="ResetForYouLayout_Click" />
-                        <Border BorderBrush="{ThemeResource AppMutedTextBrush}" BorderThickness="0,1,0,0"
+                        </StackPanel>
+                        <Border x:Name="ForYouRightColumn" Grid.Column="1" BorderBrush="{ThemeResource AppMutedTextBrush}" BorderThickness="0,1,0,0"
                                 Margin="0,8,0,0" Padding="0,12,0,0">
                             <StackPanel Spacing="10">
                                 <TextBlock Foreground="{ThemeResource AppTextBrush}" FontSize="20"
@@ -96,7 +105,7 @@
                                 </ComboBox>
 
                                 <StackPanel x:Name="SpotlightSourcesPanel" Spacing="12" />
-                                <StackPanel Orientation="Vertical" Spacing="8" Margin="0,4,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
                                     <Button x:Name="SpotlightSaveButton" Content="Save" MinWidth="100" MinHeight="48"
                                             FontSize="16" Style="{StaticResource AppQuietButtonStyle}"
                                             AutomationProperties.Name="Save Spotlight settings"
@@ -111,13 +120,15 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
-                    </StackPanel>
+                    </Grid>
                 </Border>
             </StackPanel>
 
             <StackPanel x:Name="PlayerTabPanel" Visibility="Collapsed">
-                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
-                    <StackPanel Spacing="10">
+                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="16">
+                    <Grid x:Name="PlayerColumns" ColumnSpacing="32" RowSpacing="10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel x:Name="PlayerLeftColumn" Spacing="10">
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Playback engine" />
                         <ComboBox x:Name="PlaybackEngineSelector" MinHeight="44"
                                   MinWidth="220"
@@ -144,6 +155,8 @@
                         </ComboBox>
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="How many times Tvivo tries before giving up (default 5)." />
+                        </StackPanel>
+                        <StackPanel x:Name="PlayerRightColumn" Grid.Column="1" Spacing="10">
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16"
                                    Text="When minimizing while a video is open" />
                         <ComboBox x:Name="MinimizeToMiniSelector" MinHeight="44" MinWidth="300" FontSize="16"
@@ -169,13 +182,16 @@
                             <ComboBoxItem Content="Clear it" Tag="Clear" />
                             <ComboBoxItem Content="Keep it" Tag="Keep" />
                         </ComboBox>
-                    </StackPanel>
+                        </StackPanel>
+                    </Grid>
                 </Border>
             </StackPanel>
 
             <StackPanel x:Name="LibraryTabPanel" Visibility="Collapsed">
-                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="24">
-                    <StackPanel Spacing="10">
+                <Border Background="{ThemeResource AppPanelSurfaceBrush}" CornerRadius="16" Padding="16">
+                    <Grid x:Name="LibraryColumns" ColumnSpacing="32" RowSpacing="10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel x:Name="LibraryLeftColumn" Spacing="10">
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Most recent catalog refresh" />
                         <TextBlock x:Name="LastRefreshText" Foreground="{ThemeResource AppTextBrush}" FontSize="18" />
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" Text="Refresh catalog" />
@@ -187,6 +203,8 @@
                             <ComboBoxItem Content="If older than 7 days" Tag="OlderThanSevenDays" />
                             <ComboBoxItem Content="Every time the app opens" Tag="EveryStart" />
                         </ComboBox>
+                        </StackPanel>
+                        <StackPanel x:Name="LibraryRightColumn" Grid.Column="1" Spacing="10">
                         <Button x:Name="RefreshCatalogButton" Style="{StaticResource AppQuietButtonStyle}"
                                 FontSize="16" MinHeight="44" HorizontalAlignment="Left" Content="Refresh all"
                                 AutomationProperties.Name="Refresh all catalog content"
@@ -199,7 +217,8 @@
                                    FontSize="16" Visibility="Collapsed" />
                         <TextBlock Foreground="{ThemeResource AppMutedTextBrush}" FontSize="16" TextWrapping="Wrap"
                                    Text="Re-downloads your provider's catalog. Favorites, resume positions and visit history are kept. Large catalogs can take a few minutes." />
-                    </StackPanel>
+                        </StackPanel>
+                    </Grid>
                 </Border>
             </StackPanel>
 
